@@ -1,0 +1,20 @@
+// Copyright 2021 Oxide Computer Company
+
+#include "libdladm.h"
+#include "libdlaggr.h"
+#include "libdlbridge.h"
+#include "libdlether.h"
+#include "libdlflow.h"
+#include "libdlib.h"
+#include "libdliptun.h"
+#include "libdllink.h"
+#include "libdlmgmt.h"
+#include "libdlsim.h"
+#include "libdlstat.h"
+#include "libdlvlan.h"
+#include "libdlvnic.h"
+#include "libdlwlan.h"
+
+#include "libipadm.h"
+#include "ipadm_ipmgmt.h"
+#include "ipadm_ndpd.h"
