@@ -1,8 +1,9 @@
 // Copyright 2021 Oxide Computer Company
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use std::net::{SocketAddr, SocketAddrV6, Ipv6Addr};
-use std::sync::mpsc::Sender;
+use tokio::sync::mpsc::Sender;
 use dropshot::{
     endpoint,
     ConfigDropshot,
@@ -13,41 +14,42 @@ use dropshot::{
     RequestContext,
     HttpResponseOk,
     HttpError,
+    HttpServer,
     TypedBody,
 };
 use rift::LINKINFO_PORT;
-use rift_protocol::LinkInfo;
+use rift_protocol::lie::LIEPacket;
 
-struct LinkHandlerContext {
-    tx: Arc::<Mutex::<Sender<LinkInfo>>>,
+pub(crate) struct LinkHandlerContext {
+    tx: Arc::<Mutex::<Sender<LIEPacket>>>,
 }
 
 #[endpoint {
     method = POST,
-    path = "linkinfo"
+    path = "/linkinfo"
 }]
 async fn riftp_linkinfo(
     ctx: Arc<RequestContext<LinkHandlerContext>>,
-    rq: TypedBody<LinkInfo>,
+    rq: TypedBody<LIEPacket>,
 ) -> Result<HttpResponseOk<()>, HttpError> {
 
     let api_context = ctx.context();
-    let tx = api_context.tx.lock().unwrap();
+    let tx = api_context.tx.lock().await;
 
-    match (*tx).send(rq.into_inner()) {
+    match (*tx).send(rq.into_inner()).await {
         Ok(_) => Ok(HttpResponseOk(())),
         Err(e) => Err(HttpError::for_internal_error(format!(
-            "error consuming LinkInfo: {}", e
+            "error consuming LIEPacket: {}", e
         ))),
     }
 
 
 }
 
-pub(crate) async fn link_handler(
+pub(crate) fn link_handler(
     addr: Ipv6Addr, 
-    tx: Arc::<Mutex::<Sender<LinkInfo>>>,
-) -> Result<(), String> {
+    tx: Arc::<Mutex::<Sender<LIEPacket>>>,
+) -> Result<HttpServer<LinkHandlerContext>, String> {
 
     let sa = SocketAddr::V6(
         SocketAddrV6::new(addr, LINKINFO_PORT, 0, 0)
@@ -69,14 +71,11 @@ pub(crate) async fn link_handler(
 
     let api_context = LinkHandlerContext{tx: tx};
 
-    let server = HttpServerStarter::new(
+    Ok(HttpServerStarter::new(
         &config_dropshot,
         api,
         api_context,
         &log,
     ).map_err(|e| format!("create dropshot link server: {}", e))?
-     .start();
-
-    server.await
-
+     .start())
 }

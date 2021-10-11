@@ -2,29 +2,37 @@
 
 mod error;
 mod admin;
-mod rdp;
-mod link;
+pub mod config;
+pub mod link;
 
+use std::time::SystemTime;
+use crate::error::Error;
 use std::net::Ipv6Addr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::time::sleep;
+use std::time::{Duration};
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use platform::Platform;
-use slog::info;
-use std::sync::mpsc::{Sender, Receiver, channel};
+use slog::{trace, info};
 use link::LinkSM;
+use rift_protocol::lie::{LIEPacket, Neighbor};
 
 /// The RIFT multicast address used for bootstrapping ff02::a1f7.
 pub const RDP_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0,0,0,0,0,0, 0xa1f7);
 pub const LINKINFO_PORT: u16 = 914;
 pub const TOPOLOY_INFO_PORT: u16 = 915;
 
-#[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Peer {
     pub remote_addr: Ipv6Addr,
     pub advertisement: icmpv6::RouterAdvertisement,
+    pub lie: Option<LIEPacket>,
+    pub neighbor: Option<Neighbor>,
+    pub last_seen: u128,
 }
 
 impl Hash for Peer {
@@ -40,53 +48,77 @@ impl PartialEq for Peer {
 }
 impl Eq for Peer {}
 
-pub struct Rift<P: Platform + std::marker::Send + 'static> {
-    platform: Arc::<Mutex::<P>>,
-    peers: Arc::<Mutex::<HashSet::<Peer>>>,
-    links: Arc::<Mutex::<HashSet::<LinkSM>>>,
-    log: slog::Logger,
+impl Peer {
+    fn is_expired(&self) -> Result<bool, Error> {
+        let delta = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+            Err(e) => return runtime_error!("system time: {}", e),
+            Ok(n) => n.as_millis() - self.last_seen,
+        };
+        Ok(delta >= self.advertisement.reachable_time.into())
+    }
 }
 
-impl<P: Platform + std::marker::Send> Rift<P> {
+pub struct Rift<P: Platform + std::marker::Send + 'static> {
+    platform: Arc::<Mutex::<P>>,
+    links: Arc::<Mutex::<HashSet::<LinkSM>>>,
+    log: slog::Logger,
+    config: config::Config,
+}
+
+impl<P: Platform + std::marker::Send + std::marker::Sync> Rift<P> {
+
     pub fn new(
         platform: Arc::<Mutex::<P>>, 
         log: slog::Logger,
+        config: config::Config,
     ) -> Self {
         Rift{
             platform: platform, 
-            peers: Arc::new(Mutex::new(HashSet::new())),
             links: Arc::new(Mutex::new(HashSet::new())),
             log: log,
+            config: config,
         }
     }
 
-    pub fn run(&mut self) -> Result<(), error::Error> {
+    pub async fn run(&mut self) -> Result<(), error::Error> {
 
-        let (peer_tx, peer_rx): (Sender<Peer>, Receiver<Peer>) = channel();
-
-        info!(self.log, "starting link handler");
-        self.link_handler(peer_rx)?;
-
-        info!(self.log, "starting rdp handler");
-        self.rdp_handler(peer_tx)?;
-
+        // start admin interface
         info!(self.log, "starting adm handler");
         self.admin_handler();
 
-        info!(self.log, "entering router loop");
-        self.router_loop()
+        // collect link status from the platform
+        let links = {
+            let p = self.platform .lock().await;
+            p.get_links()?
+        };
+
+        // start link state machines
+        for l in links.iter() {
+            let mut sm = link::LinkSM::new(
+                self.log.clone(), 
+                l.name.clone(),
+                l.state,
+                self.config,
+            );
+            sm.run(self.platform.clone()).await;
+            let mut lsms = self.links.lock().await;
+            lsms.insert(sm);
+        }
+
+        self.router_loop().await?;
+
+        Ok(())
 
     }
 
-    fn router_loop(&self) -> Result<(), error::Error> {
+    async fn router_loop(&self) -> Result<(), error::Error> {
 
         loop {
-            let p = self.platform.lock().unwrap();
-            (*p).solicit_rift_routers()?;
-            (*p).advertise_rift_router()?;
-            std::thread::sleep(
-                std::time::Duration::from_secs(5),
-            );
+            //let p = self.platform.lock().unwrap();
+            //(*p).solicit_rift_routers()?;
+            //(*p).advertise_rift_router()?;
+            sleep(Duration::from_secs(10)).await;
+            trace!(self.log, "router loop");
         }
 
         #[allow(unreachable_code)]

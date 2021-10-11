@@ -20,3 +20,13 @@ pub enum Error {
 impl From<platform::error::Error> for Error {
     fn from(e: platform::error::Error) -> Error { Error::Platform(e) }
 }
+
+#[macro_export]
+macro_rules! runtime_error {
+    ($format:expr) => {
+        Err(Error::Runtime(format!($format)))
+    };
+    ($format:expr, $($args:expr)*) => {
+        Err(Error::Runtime(format!($format, $($args),*)))
+    };
+}

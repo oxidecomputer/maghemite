@@ -1,7 +1,9 @@
 // Copyright 2021 Oxide Computer Company
 
-use crate::{Rift, Peer};
-use std::sync::{Arc, Mutex};
+use crate::{Rift, link::LinkSM, link::LinkSMState};
+use tokio::sync::Mutex;
+use std::sync::Arc;
+use std::collections::{HashSet, HashMap};
 use dropshot::{
     endpoint,
     ConfigDropshot,
@@ -13,7 +15,6 @@ use dropshot::{
     HttpResponseOk,
     HttpError,
 };
-use std::collections::HashSet;
 use platform::Platform;
 use slog::error;
 use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
@@ -22,11 +23,11 @@ impl<P: Platform + std::marker::Send> Rift<P> {
 
     pub(crate) fn admin_handler(&self) {
 
-        let peers = self.peers.clone();
         let log = self.log.clone();
+        let links = self.links.clone();
 
         tokio::spawn(async move {
-            match handler(peers).await {
+            match handler(links).await {
                 Ok(_) => {},
                 Err(e) => error!(log, "failed to start adm handler {}", e),
             }
@@ -37,33 +38,33 @@ impl<P: Platform + std::marker::Send> Rift<P> {
 }
 
 struct RiftAdmContext {
-    peers: Arc::<Mutex::<HashSet::<Peer>>>,
+    links: Arc::<Mutex::<HashSet::<LinkSM>>>,
 }
 
-#[endpoint {
-    method = GET,
-    path = "/peers",
-}]
-async fn adm_api_get_peers(
+#[endpoint { method = GET, path = "/links" }]
+async fn adm_api_get_links (
     ctx: Arc<RequestContext<RiftAdmContext>>,
-) -> Result<HttpResponseOk<Vec::<Peer>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap::<String, LinkSMState>>, HttpError> {
 
     let api_context = ctx.context();
 
-    let mut vec: Vec::<Peer> = Vec::new();
-    let peers = api_context.peers.lock().unwrap();
+    let mut result: HashMap::<String, LinkSMState> = HashMap::new();
 
-    for x in (*peers).iter() {
-        vec.push(*x);
+    {
+        let links = api_context.links.lock().await;
+        for l in links.iter() {
+            let link_state = l.state.lock().await;
+            result.insert(l.link_name.clone(), link_state.clone());
+        }
     }
 
-    Ok(HttpResponseOk(vec))
+    Ok(HttpResponseOk(result))
 
 }
 
 
-async fn handler(
-    peers: Arc::<Mutex::<HashSet::<Peer>>>,
+async fn handler (
+    links: Arc::<Mutex::<HashSet::<LinkSM>>>,
 ) -> Result<(), String> {
 
     let addr = SocketAddr::V4(
@@ -82,10 +83,10 @@ async fn handler(
         .map_err(|e| format!("config dropshot logger: {}", e))?;
 
     let mut api = ApiDescription::new();
-    api.register(adm_api_get_peers).unwrap();
+    api.register(adm_api_get_links).unwrap();
 
     let api_context = RiftAdmContext{
-        peers: peers.clone(),
+        links: links.clone(),
     };
 
     let server = HttpServerStarter::new(

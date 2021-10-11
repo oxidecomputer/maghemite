@@ -1,18 +1,25 @@
 // Copyright 2021 Oxide Computer Company
 
-use std::sync::{Arc, Mutex};
-use platform::{Platform, error::Error};
+use std::sync::Arc;
 use std::mem::MaybeUninit;
-use slog::{Logger, debug, error};
-use std::{ptr};
-use crate::illumos;
+use slog::{Logger, error, debug};
 use socket2::{Socket, Domain, Type, Protocol, SockAddr};
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
 use icmpv6::{RouterSolicitation, RouterAdvertisement, RDPMessage};
-use std::sync::mpsc::{channel, Sender, Receiver};
-use std::thread;
-use rift_protocol::LinkInfo;
+use std::time::Duration;
+use tokio::{
+    spawn, select,
+    time::sleep,
+    sync::{Mutex, mpsc::{channel, Sender, Receiver}},
+};
+use rift_protocol::lie::LIEPacket;
 use rift::{LINKINFO_PORT, RDP_MADDR};
+use platform::{
+    IpIfAddr,
+    Platform, 
+    LinkStatus,
+    error::Error,
+};
 
 pub(crate) struct Illumos {
     pub(crate) log: Logger,
@@ -20,7 +27,87 @@ pub(crate) struct Illumos {
 
 impl Platform for Illumos {
 
-    fn advertise_rift_router(&self) -> Result<(), Error> {
+    fn get_links(&self) -> Result<Vec<LinkStatus>, Error> {
+
+        let links = match netadm_sys::get_links() {
+            Ok(links) => links,
+            Err(e) => return Err(Error::Platform(format!("get links: {}", e))),
+        };
+
+        let mut result = Vec::new();
+        for l in links {
+            result.push(LinkStatus{
+                name: l.name,
+                state: match l.state {
+                    netadm_sys::LinkState::Unknown => platform::LinkState::Unknown,
+                    netadm_sys::LinkState::Down => platform::LinkState::Down,
+                    netadm_sys::LinkState::Up => platform::LinkState::Up,
+                }
+            })
+        }
+
+        Ok(result)
+
+    }
+
+    fn get_link_status(&self, link_name: impl AsRef<str>) -> Result<LinkStatus, Error> {
+        let _link_name = link_name.as_ref().to_string();
+        match netadm_sys::linkname_to_id(&_link_name) {
+            Err(e) => Err(Error::Platform(format!("linkname to id: {}", e))),
+            Ok(id) => {
+                match netadm_sys::get_link(id) {
+                    Err(e) => Err(Error::Platform(format!("get link info: {}", e))),
+                    Ok(info) => Ok(LinkStatus{
+                        name: info.name,
+                        state: match info.state {
+                            netadm_sys::LinkState::Unknown => platform::LinkState::Unknown,
+                            netadm_sys::LinkState::Down => platform::LinkState::Down,
+                            netadm_sys::LinkState::Up => platform::LinkState::Up,
+                        },
+                    })
+                }
+            }
+        }
+    }
+
+    fn get_interface_v6ll(&self, interface: impl AsRef<str>) -> Result<Option<IpIfAddr>, Error> {
+
+        //TODO provide a function in netadm_sys that gets addrs for a given
+        //interface without having to iterate all the interfaces
+
+        let addr_map = match netadm_sys::get_ipaddrs() {
+            Ok(addrs) => addrs,
+            Err(e) => return Err(Error::Platform(format!("get ip addrs: {}", e))),
+        };
+
+        for (ifname, addrs) in addr_map {
+            if ifname.as_str() == interface.as_ref() {
+                for a in addrs {
+                    match a.addr {
+                        IpAddr::V4(_) => continue,
+                        IpAddr::V6(v6addr) => {
+                            if v6addr.is_unicast_link_local() {
+                                return Ok(Some(IpIfAddr{
+                                    addr: v6addr,
+                                    if_index: a.index,
+                                }))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return Ok(None)
+
+    }
+
+    fn advertise_rift_router(&self, interface: Option<IpIfAddr>) -> Result<(), Error> {
+
+        let link_id = match interface.as_ref() {
+            None => 0, // any interface
+            Some(ipifa) => ipifa.if_index,
+        };
 
         let socket = Socket::new(
             Domain::IPV6, 
@@ -35,14 +122,14 @@ impl Platform for Illumos {
                 Error::Platform(format!("diable multicast loop: {}", e))
             )?;
 
-        let sa = SockAddr::from(SocketAddrV6::new(rift::RDP_MADDR, 0, 0, 0));
+        let sa = SockAddr::from(SocketAddrV6::new(rift::RDP_MADDR, 0, 0, link_id as u32));
 
         let ra = RouterAdvertisement::new(
             1,          //hop limit
             false,      // managed address (dhcpv6)
             false,      // other stateful (stateless dhcpv6)
             0,          // not a default router
-            100,        // consider this router reachable for 100 ms
+            3000,        // consider this router reachable for 3000 ms
             0,          // No retrans timer specified
             None,       // no source address,
             Some(9216), // jumbo frames ftw
@@ -58,7 +145,12 @@ impl Platform for Illumos {
 
     }
 
-    fn solicit_rift_routers(&self) -> Result<(), Error> {
+    fn solicit_rift_routers(&self, interface: Option<IpIfAddr>) -> Result<(), Error> {
+
+        let link_id = match interface.as_ref() {
+            None => 0, // any interface
+            Some(ipifa) => ipifa.if_index,
+        };
 
         let socket = Socket::new(
             Domain::IPV6, 
@@ -73,7 +165,7 @@ impl Platform for Illumos {
                 Error::Platform(format!("diable multicast loop: {}", e))
             )?;
 
-        let sa = SockAddr::from(SocketAddrV6::new(RDP_MADDR, 0, 0, 0));
+        let sa = SockAddr::from(SocketAddrV6::new(RDP_MADDR, 0, 0, link_id as u32));
         let rs = RouterSolicitation::new(None);
         let wire = rs.wire();
 
@@ -85,7 +177,12 @@ impl Platform for Illumos {
 
     }
 
-    fn get_rdp_channel(&self) -> Result<Receiver<RDPMessage>, Error> {
+    fn get_rdp_channel(&self, interface: Option<IpIfAddr>) -> Result<Receiver<RDPMessage>, Error> {
+
+        let link_id = match interface.as_ref() {
+            None => 0, // any interface
+            Some(ipifa) => ipifa.if_index,
+        };
 
         let socket = Socket::new(
             Domain::IPV6, 
@@ -94,23 +191,32 @@ impl Platform for Illumos {
         ).map_err(|e| Error::Platform(format!("new socket: {}", e)))?;
 
         socket
-            .join_multicast_v6(&RDP_MADDR, 0)
+            .join_multicast_v6(&RDP_MADDR, link_id as u32)
             .map_err(|e| Error::Platform(format!("join multicast: {}", e)))?;
 
-        let (tx, rx): (Sender<RDPMessage>, Receiver<RDPMessage>) = channel();
+        let (tx, rx): (Sender<RDPMessage>, Receiver<RDPMessage>) = channel(32);
 
         let log = self.log.clone();
         
-        thread::spawn(move || loop {
+        spawn(async move { loop {
 
-            let mut buf: [u8; 1024] = [0;1024];
-            let mut _buf = unsafe{ 
-                &mut(*buf.as_mut_ptr().cast::<[MaybeUninit<u8>; 1024]>()) 
+            let mut _buf = [MaybeUninit::new(0); 1024];
+
+            match socket.set_nonblocking(true) {
+                Ok(_) => {}
+                Err(e) => {
+                    error!(log, "set nonblocking socket option: {}", e);
+                    break;
+                }
             };
 
-            let (sz, sender) = match socket.recv_from(_buf) {
+            let (sz, sender) = match socket.recv_from(&mut _buf) {
                 Ok(x) => x,
                 Err(e) => { 
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        sleep(Duration::from_millis(10)).await;
+                        continue;
+                    }
                     error!(log, "socket recv: {}", e);
                     continue; 
                 },
@@ -121,7 +227,9 @@ impl Platform for Illumos {
                 _ => None,
             };
 
-            let msg = match icmpv6::parse_icmpv6(&buf[..sz]) {
+            let msg = match icmpv6::parse_icmpv6(
+                unsafe{&MaybeUninit::slice_assume_init_ref(&_buf)[..sz]},
+            ) {
                 Some(packet) => RDPMessage{
                     from: senderv6,
                     packet: packet,
@@ -129,151 +237,88 @@ impl Platform for Illumos {
                 None => { continue; },
             };
 
-            match tx.send(msg) {
+            match tx.send(msg).await {
                 Ok(_) => {},
-                Err(e) => error!(log, "rdp channel send: {}", e),
+                Err(e) => {
+                    debug!(log, "rdp channel closed, exiting rdp loop: {}", e);
+                    break;
+                }
             };
 
 
-        });
+        }});
 
         Ok(rx)
     }
 
-    fn get_link_channel(&self, peer: Ipv6Addr)
-    -> Result<(Sender<LinkInfo>, Receiver<LinkInfo>), Error> {
+    fn get_link_channel(&self, local: Ipv6Addr, peer: Ipv6Addr)
+    -> Result<(Sender<LIEPacket>, Receiver<LIEPacket>), Error> {
 
-        //ingress
-        let ilog = self.log.clone();
-        let (_itx, irx): (Sender<LinkInfo>, Receiver<LinkInfo>) = channel();
+        let (_itx, irx): (Sender<LIEPacket>, Receiver<LIEPacket>) = channel(32);
         let itx = Arc::new(Mutex::new(_itx));
 
-        tokio::spawn(async move {
-            match crate::link::link_handler(peer, itx).await {
-                Ok(_) => {},
-                Err(e) => error!(ilog, "failed to start link handler: {}", e),
-            }
-        });
-
-        //egress
         let elog = self.log.clone();
-        let (etx, erx): (Sender<LinkInfo>, Receiver<LinkInfo>) = channel();
-        tokio::spawn(async move { loop {
+        let (etx, mut erx): (Sender<LIEPacket>, Receiver<LIEPacket>) = channel(32);
 
-            let msg = match erx.recv() {
-                Ok(m) => m,
+        spawn(async move { 
+
+            let mut server = match crate::link::link_handler(local, itx) {
+                Ok(s) => s,
                 Err(e) => {
-                    error!(elog, "linkinfo egress channel rx: {}", e);
-                    continue;
+                    error!(elog, "failed to crate dropshot server: {}", e);
+                    return;
                 }
             };
 
-            let client = reqwest::Client::new();
-            let resp = client
-                .post(format!("http://{}:{}/linkinfo", peer, LINKINFO_PORT))
-                .json(&msg)
-                .send()
-                .await;
+            loop {
 
-            match resp {
-                Ok(_) => {},
-                Err(e) => error!(elog, "failed to send linkinfo: {}", e),
+                select! {
+
+                    rx_msg = erx.recv() => {
+
+                        let msg = match rx_msg {
+                            Some(m) => m,
+                            None => {
+                                error!(elog, "linkinfo egress channel closed");
+                                match server.close().await {
+                                    Ok(_) => {},
+                                    Err(e) => error!(elog, "dropshot server close: {}", e),
+                                };
+                                return;
+                            }
+                        };
+
+                        let client = reqwest::Client::new();
+                        let resp = client
+                            .post(format!("http://[{}]:{}/linkinfo", peer, LINKINFO_PORT))
+                            .json(&msg)
+                            .send()
+                            .await;
+
+                        match resp {
+                            Ok(_) => {},
+                            Err(e) => error!(elog, "failed to send linkinfo: {}", e),
+                        };
+
+                    }
+
+                    srv_result = &mut server => {
+
+                        match srv_result {
+                            Ok(_) => {},
+                            Err(e) => error!(elog, "dropshot server exit: {}", e),
+                        };
+
+                    }
+
+                };
+
             }
-
-        }});
+        });
 
 
         Ok((etx, irx))
 
-    }
-
-}
-
-#[allow(dead_code)]
-const LIFC_DEFAULT: u32 = 
-    illumos::LIFC_NOXMIT | illumos::LIFC_TEMPORARY |
-    illumos::LIFC_ALLZONES | illumos::LIFC_UNDER_IPMP;
-
-impl Illumos {
-
-    #[allow(dead_code)]
-    fn ipadm_handle(&self) -> Result<illumos::ipadm_handle_t, Error> {
-
-        let mut handle: illumos::ipadm_handle_t = ptr::null_mut();
-        let status = unsafe { illumos::ipadm_open(&mut handle, 0) };
-        if status != illumos::ipadm_status_t_IPADM_SUCCESS {
-            return Err(Error::Platform(format!("ipadm_open: {}", status)))
-        }
-
-        Ok(handle)
-
-    }
-
-    #[allow(dead_code)]
-    fn get_ipv6_addrs(&self) -> Result<Vec<SysIpv6Addr>, Error> {
-        debug!(self.log, "getting ipv6 addrs");
-
-        // get address info
-        let handle = self.ipadm_handle()?;
-        let mut addrinfo: *mut illumos::ipadm_addr_info_t = ptr::null_mut();
-        let status = unsafe { illumos::ipadm_addr_info(
-            handle,
-            ptr::null(),
-            &mut addrinfo,
-            0,
-            LIFC_DEFAULT as i64,
-        ) };
-        if status != illumos::ipadm_status_t_IPADM_SUCCESS {
-            return Err(Error::Platform(format!("ipadm_addr_info: {}", status)))
-        }
-
-        // populate results from returned addresses
-        let mut result: Vec<SysIpv6Addr> = Vec::new();
-        let mut addr : *mut illumos::ifaddrs = unsafe { 
-            &mut (*addrinfo).ia_ifa 
-        };
-        loop {
-            if addr == ptr::null_mut() { break }
-
-            unsafe {
-                // only ipv6
-                if (*(*addr).ifa_addr).sa_family == illumos::AF_INET6 as u16 {
-
-                    let sin6 = (*addr).ifa_addr as *mut illumos::sockaddr_in6;
-
-                    // only link local
-                    if  (*sin6).sin6_addr._S6_un._S6_u8[0] as u8 == 0xfe &&
-                        (*sin6).sin6_addr._S6_un._S6_u8[1] as u8 == 0x80 {
-
-                        // extract address
-                        let v6addr = Ipv6Addr::from(
-                            (*sin6).sin6_addr._S6_un._S6_u8
-                        );
-
-                        // extract name
-                        let ifname = std::ffi::CString::from_raw(
-                            (*addr).ifa_name
-                        );
-                        let ifname_s = ifname.into_string()?;
-
-                        debug!(self.log, 
-                            "found ipv6-ll interface: {}/{}", 
-                            ifname_s.as_str(), 
-                            v6addr);
-
-                        result.push(SysIpv6Addr{
-                            addr: v6addr,
-                            local_link: ifname_s,
-                        })
-
-                    }
-                }
-            }
-
-            addr = unsafe { (*addr).ifa_next };
-        }
-            
-        Ok(result)
     }
 
 }

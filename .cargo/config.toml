@@ -6,3 +6,6 @@ LIBZFS_CORE_LOOKUP_WITH = "link"
 # reqwest
 OPENSSL_LIB_DIR = "/usr/lib"
 OPENSSL_INCLUDE_DIR = "/usr/include/openssl-1.1"
+
+[net]
+git-fetch-with-cli = true

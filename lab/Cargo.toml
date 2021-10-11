@@ -8,5 +8,5 @@ edition = "2018"
 [dependencies]
 libfalcon = { path = "/home/ry/falcon/lib" }
 # https://github.com/jmesmon/rust-libzfs/pull/71
-zfs-core = { git = "https://github.com/oxidecomputer/rust-libzfs" }
+#zfs-core = { git = "https://github.com/oxidecomputer/rust-libzfs" }
 anyhow = "1.0"

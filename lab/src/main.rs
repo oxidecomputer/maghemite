@@ -25,8 +25,8 @@ fn do_run() -> Result<()> {
 
     match run(&mut d) {
         RunMode::Launch => {
-           d.exec(r0, "ipadm create-addr -T addrconf duo_r0_vnic0/v6")?;
-           d.exec(r1, "ipadm create-addr -T addrconf duo_r1_vnic0/v6")?;
+           d.exec(r0, "ipadm create-addr -t -T addrconf duo_r0_vnic0/v6")?;
+           d.exec(r1, "ipadm create-addr -t -T addrconf duo_r1_vnic0/v6")?;
            Ok(())
         }
         _ => Ok(()),

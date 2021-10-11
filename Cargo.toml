@@ -4,6 +4,7 @@ members = [
     "platform",
     "rift",
     "rift_protocol",
+    "riftadm",
     "illumos",
     "lab",
     "icmpv6",

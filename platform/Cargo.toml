@@ -9,3 +9,6 @@ edition = "2018"
 thiserror = "1.0"
 icmpv6 = { path = "../icmpv6" }
 rift_protocol = { path = "../rift_protocol" }
+serde = "1.0"
+schemars = { version = "0.8.0", features = [ "uuid" ] }
+tokio = { version = "1.0", features = ["full"] }
