@@ -13,12 +13,14 @@ use tokio::{
     sync::{Mutex, mpsc::{channel, Sender, Receiver}},
 };
 use rift_protocol::lie::LIEPacket;
-use rift::{LINKINFO_PORT, RDP_MADDR};
+use rift_protocol::tie::TIEPacket;
+use rift::{LINKINFO_PORT, TOPOLOGYINFO_PORT, RDP_MADDR};
 use platform::{
     IpIfAddr,
     Platform, 
     LinkStatus,
     error::Error,
+    TIEPacketTx,
 };
 
 pub(crate) struct Illumos {
@@ -254,11 +256,13 @@ impl Platform for Illumos {
     fn get_link_channel(&self, local: Ipv6Addr, peer: Ipv6Addr)
     -> Result<(Sender<LIEPacket>, Receiver<LIEPacket>), Error> {
 
+        // ingress channels
         let (_itx, irx): (Sender<LIEPacket>, Receiver<LIEPacket>) = channel(32);
         let itx = Arc::new(Mutex::new(_itx));
 
-        let elog = self.log.clone();
+        // egress channels
         let (etx, mut erx): (Sender<LIEPacket>, Receiver<LIEPacket>) = channel(32);
+        let elog = self.log.clone();
 
         spawn(async move { 
 
@@ -318,6 +322,68 @@ impl Platform for Illumos {
 
 
         Ok((etx, irx))
+
+    }
+    
+    fn get_topology_channel(&self) -> Result<(Sender<TIEPacketTx>, Receiver<TIEPacket>), Error> {
+
+        // ingress channels
+        let (itx, irx): (Sender<TIEPacket>, Receiver<TIEPacket>) = channel(32);
+
+        // egress channels
+        let (etx, mut erx): (Sender<TIEPacketTx>, Receiver<TIEPacketTx>) = channel(32);
+
+        let log = self.log.clone();
+        spawn(async move {
+
+            let mut server = match crate::topology::topology_handler(itx) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!(log, "failed to create dropshot server: {}", e);
+                    return;
+                }
+            };
+
+            loop { select! {
+
+                rx_msg = erx.recv() => {
+                    let msg = match rx_msg {
+                        Some(m) => m,
+                        None => {
+                            error!(log, "topologyinfo egress channel closed");
+                            match server.close().await {
+                                Ok(_) => {},
+                                Err(e) => error!(log, "dropshot server close: {}", e),
+                            };
+                            return;
+                        }
+                    };
+
+                    let client = reqwest::Client::new();
+                    let resp = client
+                        .post(format!("http://[{}]:{}/topoinfo", msg.dest, TOPOLOGYINFO_PORT))
+                        .json(&msg.packet)
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(_) => {},
+                        Err(e) => error!(log, "failed to send TIE: {}", e),
+                    };
+                }
+
+                srv_result = &mut server => {
+                    match srv_result {
+                        Ok(_) => {},
+                        Err(e) => error!(log, "dropshot server exit: {}", e),
+                    };
+                }
+            }}
+        });
+
+        Ok((etx, irx))
+
+        //Err(Error::NotImplemented("get topology channel".to_string()))
 
     }
 

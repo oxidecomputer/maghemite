@@ -37,6 +37,13 @@ pub enum State {
     ThreeWay,
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum Event {
+    LinkDown,
+    AddressLost,
+    PeerExpired,
+}
+
 pub struct LinkSM {
     pub state: Arc::<Mutex::<LinkSMState>>,
     pub threads: Arc::<Mutex::<Threads>>,
@@ -58,13 +65,6 @@ pub struct LinkSMState {
     pub v6ll: Option::<IpIfAddr>,
     pub peer: Option::<Peer>,
     pub config: Config,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum Event {
-    LinkDown,
-    AddressLost,
-    PeerExpired,
 }
 
 macro_rules! loop_continue {
@@ -356,7 +356,7 @@ impl LinkSM {
         }
     }
 
-    async fn rift_entry<P: Platform + Send + Sync + 'static>(
+    async fn lie_entry<P: Platform + Send + Sync + 'static>(
         platform: Arc::<Mutex::<P>>,
         log: slog::Logger,
         link_name: String,
@@ -372,7 +372,8 @@ impl LinkSM {
             match (s.v6ll, s.peer.as_ref()) {
                 (Some(v6ll), Some(peer)) => (v6ll.addr, peer.remote_addr),
                 _ => {
-                    link_warn!(log, link_name, "cannot begin one-way adjacency without local and peer address");
+                    link_warn!(log, link_name, 
+                        "cannot begin one-way adjacency without local and peer address");
                     let mut t = threads.lock().await;
                     s.current = State::Solicit;
                     t.rift = None;
@@ -1316,7 +1317,7 @@ async fn handle_rdp_advertise<P: Platform + Send + Sync + 'static>(
             let __threads = threads.clone();
             let __event_tx = event_tx.clone();
             let mut t = threads.lock().await;
-            t.rift = Some(spawn(async move { LinkSM::rift_entry(
+            t.rift = Some(spawn(async move { LinkSM::lie_entry(
                         __platform,
                         __log,
                         __link,

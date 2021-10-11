@@ -15,6 +15,7 @@ use clap::{AppSettings, Clap};
 
 mod platform;
 mod link;
+mod topology;
 
 #[derive(Clap)]
 #[clap(

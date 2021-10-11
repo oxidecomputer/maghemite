@@ -5,12 +5,17 @@ pub mod error;
 use std::net;
 use error::Error;
 use icmpv6::RDPMessage;
-//use std::sync::mpsc::{Sender, Receiver};
 use tokio::sync::mpsc::{Sender, Receiver};
 use std::net::Ipv6Addr;
 use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
 use rift_protocol::lie::LIEPacket;
+use rift_protocol::tie::TIEPacket;
+
+pub struct TIEPacketTx {
+    pub packet: TIEPacket,
+    pub dest: Ipv6Addr,
+}
 
 pub trait Platform {
     fn get_links(&self) -> Result<Vec<LinkStatus>, Error>;
@@ -25,6 +30,7 @@ pub trait Platform {
         (Sender<LIEPacket>, Receiver<LIEPacket>),
         Error
     >;
+    fn get_topology_channel(&self) -> Result<(Sender<TIEPacketTx>, Receiver<TIEPacket>), Error>;
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]

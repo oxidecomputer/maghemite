@@ -2,6 +2,7 @@
 
 mod error;
 mod admin;
+mod topology;
 pub mod config;
 pub mod link;
 
@@ -24,7 +25,7 @@ use rift_protocol::lie::{LIEPacket, Neighbor};
 /// The RIFT multicast address used for bootstrapping ff02::a1f7.
 pub const RDP_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0,0,0,0,0,0, 0xa1f7);
 pub const LINKINFO_PORT: u16 = 914;
-pub const TOPOLOY_INFO_PORT: u16 = 915;
+pub const TOPOLOGYINFO_PORT: u16 = 915;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Peer {
@@ -105,6 +106,12 @@ impl<P: Platform + std::marker::Send + std::marker::Sync> Rift<P> {
             lsms.insert(sm);
         }
 
+        // start topology thread
+        topology::tie_entry(
+            self.log.clone(),
+            self.platform.clone(),
+        ).await;
+
         self.router_loop().await?;
 
         Ok(())
@@ -114,9 +121,6 @@ impl<P: Platform + std::marker::Send + std::marker::Sync> Rift<P> {
     async fn router_loop(&self) -> Result<(), error::Error> {
 
         loop {
-            //let p = self.platform.lock().unwrap();
-            //(*p).solicit_rift_routers()?;
-            //(*p).advertise_rift_router()?;
             sleep(Duration::from_secs(10)).await;
             trace!(self.log, "router loop");
         }
