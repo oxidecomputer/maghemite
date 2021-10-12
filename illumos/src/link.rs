@@ -7,8 +7,6 @@ use tokio::sync::mpsc::Sender;
 use dropshot::{
     endpoint,
     ConfigDropshot,
-    ConfigLogging,
-    ConfigLoggingLevel,
     ApiDescription,
     HttpServerStarter,
     RequestContext,
@@ -49,6 +47,7 @@ async fn riftp_linkinfo(
 pub(crate) fn link_handler(
     addr: Ipv6Addr, 
     tx: Arc::<Mutex::<Sender<LIEPacket>>>,
+    log: slog::Logger,
 ) -> Result<HttpServer<LinkHandlerContext>, String> {
 
     let sa = SocketAddr::V6(
@@ -58,13 +57,6 @@ pub(crate) fn link_handler(
         bind_address: sa,
         ..Default::default()
     };
-
-    let config_logging = ConfigLogging::StderrTerminal {
-        level: ConfigLoggingLevel::Info,
-    };
-    let log = config_logging
-        .to_logger("riftp_link_handler")
-        .map_err(|e| format!("config dropshot logger: {}", e))?;
 
     let mut api = ApiDescription::new();
     api.register(riftp_linkinfo).unwrap();

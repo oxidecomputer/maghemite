@@ -12,6 +12,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use slog::Drain;
 use clap::{AppSettings, Clap};
+use slog::{warn, error};
 
 mod platform;
 mod link;
@@ -45,8 +46,8 @@ async fn main() -> Result<(), String> {
     let ilu = Arc::new(Mutex::new(crate::platform::Illumos{log: log.clone()}));
     let mut riftp = Rift::new(ilu, log.clone(), Config{id: opts.id});
     match riftp.run().await {
-        Ok(()) => slog::warn!(log, "early exit?"),
-        Err(e) => slog::error!(log, "rift: {}", e),
+        Ok(()) => warn!(log, "early exit?"),
+        Err(e) => error!(log, "rift: {}", e),
     };
 
     Ok(())

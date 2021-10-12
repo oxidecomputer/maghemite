@@ -1,16 +1,12 @@
 // Copyright 2021 Oxide Computer Company
 
-use tokio::{
-    sync::mpsc::{channel, Sender, Receiver},
-};
+use tokio::sync::mpsc::Sender;
 use std::net::{SocketAddr, SocketAddrV6, Ipv6Addr};
 use rift::TOPOLOGYINFO_PORT;
 use rift_protocol::tie::TIEPacket;
 use dropshot::{
     endpoint,
     ConfigDropshot,
-    ConfigLogging,
-    ConfigLoggingLevel,
     ApiDescription,
     HttpServerStarter,
     RequestContext,
@@ -46,7 +42,10 @@ async fn riftp_topologyinfo(
 
 }
 
-pub(crate) fn topology_handler(tx: Sender<TIEPacket>)
+pub(crate) fn topology_handler(
+    tx: Sender<TIEPacket>,
+    log: slog::Logger,
+)
 -> Result<HttpServer<TopologyHandlerContext>, String> {
 
     let sa = SocketAddr::V6(
@@ -56,13 +55,6 @@ pub(crate) fn topology_handler(tx: Sender<TIEPacket>)
         bind_address: sa,
         ..Default::default()
     };
-
-    let config_logging = ConfigLogging::StderrTerminal {
-        level: ConfigLoggingLevel::Info,
-    };
-    let log = config_logging
-        .to_logger("riftp_topology_handler")
-        .map_err(|e| format!("config dropshot logger: {}", e))?;
 
     let mut api = ApiDescription::new();
     api.register(riftp_topologyinfo).unwrap();

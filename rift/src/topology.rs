@@ -51,11 +51,15 @@ fn tie_loop(
     mut _rx: Receiver<TIEPacket>,
 ) {
 
-    spawn(async move {
+    spawn(async move { loop {
+
+        // hack, force compiler to move _tx into this context so it does not get
+        // dropped
+        let __tx = &_tx;
 
         trace!(log, "TIE loop");
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-    });
+    }});
 
 }

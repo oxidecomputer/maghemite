@@ -247,7 +247,7 @@ impl LinkSM {
 
         let quit = Arc::new(AtomicBool::new(false));
 
-        link_trace!(log, link_name, "entering address event loop");
+        link_trace!(log, link_name, "starting address event loop");
 
         addr_loop(
             platform.clone(),
@@ -259,7 +259,7 @@ impl LinkSM {
             quit.clone(),
         ).await;
 
-        link_trace!(log, link_name, "exited address event loop");
+        link_trace!(log, link_name, "started address event loop");
 
         loop {
 
@@ -951,7 +951,6 @@ async fn addr_loop<P: Platform + Send + Sync + 'static>(
 ) {
 
     let _log = log.clone();
-    trace!(log, "BOJANGLES");
 
     spawn(async move { loop {
 

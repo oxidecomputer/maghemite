@@ -262,14 +262,14 @@ impl Platform for Illumos {
 
         // egress channels
         let (etx, mut erx): (Sender<LIEPacket>, Receiver<LIEPacket>) = channel(32);
-        let elog = self.log.clone();
+        let log = self.log.clone();
 
         spawn(async move { 
 
-            let mut server = match crate::link::link_handler(local, itx) {
+            let mut server = match crate::link::link_handler(local, itx, log.clone()) {
                 Ok(s) => s,
                 Err(e) => {
-                    error!(elog, "failed to crate dropshot server: {}", e);
+                    error!(log, "failed to crate dropshot server: {}", e);
                     return;
                 }
             };
@@ -283,10 +283,10 @@ impl Platform for Illumos {
                         let msg = match rx_msg {
                             Some(m) => m,
                             None => {
-                                error!(elog, "linkinfo egress channel closed");
+                                error!(log, "linkinfo egress channel closed");
                                 match server.close().await {
                                     Ok(_) => {},
-                                    Err(e) => error!(elog, "dropshot server close: {}", e),
+                                    Err(e) => error!(log, "dropshot server close: {}", e),
                                 };
                                 return;
                             }
@@ -301,7 +301,7 @@ impl Platform for Illumos {
 
                         match resp {
                             Ok(_) => {},
-                            Err(e) => error!(elog, "failed to send linkinfo: {}", e),
+                            Err(e) => error!(log, "failed to send linkinfo: {}", e),
                         };
 
                     }
@@ -310,7 +310,7 @@ impl Platform for Illumos {
 
                         match srv_result {
                             Ok(_) => {},
-                            Err(e) => error!(elog, "dropshot server exit: {}", e),
+                            Err(e) => error!(log, "dropshot server exit: {}", e),
                         };
 
                     }
@@ -336,7 +336,7 @@ impl Platform for Illumos {
         let log = self.log.clone();
         spawn(async move {
 
-            let mut server = match crate::topology::topology_handler(itx) {
+            let mut server = match crate::topology::topology_handler(itx, log.clone()) {
                 Ok(s) => s,
                 Err(e) => {
                     error!(log, "failed to create dropshot server: {}", e);
@@ -382,8 +382,6 @@ impl Platform for Illumos {
         });
 
         Ok((etx, irx))
-
-        //Err(Error::NotImplemented("get topology channel".to_string()))
 
     }
 
