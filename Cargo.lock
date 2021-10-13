@@ -346,7 +346,7 @@ dependencies = [
  "futures",
  "hostname",
  "http",
- "hyper",
+ "hyper 0.14.12",
  "indexmap",
  "openapiv3",
  "paste",
@@ -695,13 +695,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper"
+version = "0.14.13"
+source = "git+https://github.com/rcgoodfellow/hyper#4440a764a80ddf98be67dde0bed888484eeca918"
+dependencies = [
+ "bytes",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "h2",
+ "http",
+ "http-body",
+ "httparse",
+ "httpdate",
+ "itoa",
+ "pin-project-lite",
+ "socket2",
+ "tokio",
+ "tower-service",
+ "tracing",
+ "want",
+]
+
+[[package]]
 name = "hyper-tls"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6183ddfa99b85da61a140bea0efc93fdf56ceaa041b37d553518030827f9905"
 dependencies = [
  "bytes",
- "hyper",
+ "hyper 0.14.12",
  "native-tls",
  "tokio",
  "tokio-native-tls",
@@ -881,12 +904,14 @@ dependencies = [
  "bindgen",
  "clap 3.0.0-beta.4",
  "dropshot",
+ "hyper 0.14.13",
  "icmpv6",
  "netadm-sys 0.1.0",
  "platform",
  "reqwest",
  "rift",
  "rift_protocol",
+ "serde_json",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -1342,7 +1367,7 @@ dependencies = [
  "futures-util",
  "http",
  "http-body",
- "hyper",
+ "hyper 0.14.12",
  "hyper-tls",
  "ipnet",
  "js-sys",

@@ -26,7 +26,7 @@ pub trait Platform {
     fn solicit_rift_routers(&self, interface: Option<IpIfAddr>) -> Result<(), Error>;
     fn advertise_rift_router(&self, interface: Option<IpIfAddr>) -> Result<(), Error>;
     fn get_rdp_channel(&self, interface: Option<IpIfAddr>) -> Result<Receiver<RDPMessage>, Error>;
-    fn get_link_channel(&self, local: Ipv6Addr, peer: Ipv6Addr) -> Result<
+    fn get_link_channel(&self, local: Ipv6Addr, peer: Ipv6Addr, local_ifx: i32) -> Result<
         (Sender<LIEPacket>, Receiver<LIEPacket>),
         Error
     >;

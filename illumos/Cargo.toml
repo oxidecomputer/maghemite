@@ -20,6 +20,8 @@ dropshot = { git = "https://github.com/oxidecomputer/dropshot" }
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 netadm-sys = { path = "/home/ry/netadm-sys/lib" }
 clap = { version = "3.0.0-beta.4", features = ["color"] }
+hyper = { git = "https://github.com/rcgoodfellow/hyper", features = ["full"] }
+serde_json = "1"
 
 [build-dependencies]
 bindgen = "0.59"

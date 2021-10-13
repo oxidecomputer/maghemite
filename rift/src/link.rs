@@ -367,10 +367,10 @@ impl LinkSM {
 
         let quit = Arc::new(AtomicBool::new(false));
 
-        let (local_addr, peer_addr) = {
+        let (local_addr, local_ifx, peer_addr) = {
             let mut s = state.lock().await;
             match (s.v6ll, s.peer.as_ref()) {
-                (Some(v6ll), Some(peer)) => (v6ll.addr, peer.remote_addr),
+                (Some(v6ll), Some(peer)) => (v6ll.addr, v6ll.if_index, peer.remote_addr),
                 _ => {
                     link_warn!(log, link_name, 
                         "cannot begin one-way adjacency without local and peer address");
@@ -382,7 +382,7 @@ impl LinkSM {
             }
         };
 
-        let (tx, rx) = get_link_channel(&log, &link_name, &platform, local_addr, peer_addr).await;
+        let (tx, rx) = get_link_channel(&log, &link_name, &platform, local_addr, peer_addr, local_ifx).await;
 
         one_way_loop(
             log.clone(), 
@@ -922,12 +922,13 @@ async fn get_link_channel<P: Platform + Send + Sync + 'static>(
     platform: &Arc::<Mutex::<P>>,
     local_addr: Ipv6Addr,
     peer_addr: Ipv6Addr,
+    local_ifx: i32,
 ) -> (Sender<LIEPacket>, Receiver<LIEPacket>) {
 
     loop {
         let resp = {
             let p = platform.lock().await;
-            p.get_link_channel(local_addr, peer_addr)
+            p.get_link_channel(local_addr, peer_addr, local_ifx)
         };
         match resp {
             Err(e) => {

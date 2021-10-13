@@ -253,7 +253,7 @@ impl Platform for Illumos {
         Ok(rx)
     }
 
-    fn get_link_channel(&self, local: Ipv6Addr, peer: Ipv6Addr)
+    fn get_link_channel(&self, local: Ipv6Addr, peer: Ipv6Addr, local_ifx: i32)
     -> Result<(Sender<LIEPacket>, Receiver<LIEPacket>), Error> {
 
         // ingress channels
@@ -292,16 +292,33 @@ impl Platform for Illumos {
                             }
                         };
 
-                        let client = reqwest::Client::new();
-                        let resp = client
-                            .post(format!("http://[{}]:{}/linkinfo", peer, LINKINFO_PORT))
-                            .json(&msg)
-                            .send()
-                            .await;
+                        let json = match serde_json::to_string(&msg) {
+                            Ok(j) => j,
+                            Err(e) => {
+                                error!(log, "serialize LIE: {}", e);
+                                return;
+                            }
+                        };
 
+                        let uri= format!("http://[{}%{}]:{}/linkinfo", peer, local_ifx, LINKINFO_PORT);
+                        let client = hyper::Client::new();
+                        let req = match hyper::Request::builder()
+                            .method(hyper::Method::POST)
+                            .uri(&uri)
+                            .body(hyper::Body::from(json)) {
+
+                            Ok(r) => r,
+                            Err(e) => {
+                                error!(log, "hyper build request: {}", e);
+                                return;
+                            }
+
+                        };
+
+                        let resp = client.request(req).await;
                         match resp {
                             Ok(_) => {},
-                            Err(e) => error!(log, "failed to send linkinfo: {}", e),
+                            Err(e) => error!(log, "hyper send request: {}", e),
                         };
 
                     }

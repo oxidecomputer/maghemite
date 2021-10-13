@@ -107,10 +107,12 @@ impl<P: Platform + std::marker::Send + std::marker::Sync> Rift<P> {
         }
 
         // start topology thread
+        if false {
         topology::tie_entry(
             self.log.clone(),
             self.platform.clone(),
         ).await;
+        }
 
         self.router_loop().await?;
 
