@@ -10,3 +10,11 @@ libfalcon = { path = "/home/ry/falcon/lib" }
 # https://github.com/jmesmon/rust-libzfs/pull/71
 #zfs-core = { git = "https://github.com/oxidecomputer/rust-libzfs" }
 anyhow = "1.0"
+
+[[bin]]
+name = "duo"
+path = "src/duo/main.rs"
+
+[[bin]]
+name = "trio"
+path = "src/trio/main.rs"
