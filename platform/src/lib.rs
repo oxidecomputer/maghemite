@@ -15,6 +15,7 @@ use rift_protocol::tie::TIEPacket;
 pub struct TIEPacketTx {
     pub packet: TIEPacket,
     pub dest: Ipv6Addr,
+    pub local_ifx: i32,
 }
 
 pub trait Platform {

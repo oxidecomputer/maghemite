@@ -376,12 +376,30 @@ impl Platform for Illumos {
                         }
                     };
 
-                    let client = reqwest::Client::new();
-                    let resp = client
-                        .post(format!("http://[{}]:{}/topoinfo", msg.dest, TOPOLOGYINFO_PORT))
-                        .json(&msg.packet)
-                        .send()
-                        .await;
+                    let json = match serde_json::to_string(&msg.packet) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            error!(log, "serialize TIE: {}", e);
+                            return;
+                        }
+                    };
+
+                    let uri= format!("http://[{}%{}]:{}/topoinfo", msg.dest, msg.local_ifx, TOPOLOGYINFO_PORT);
+                    let client = hyper::Client::new();
+                    let req = match hyper::Request::builder()
+                        .method(hyper::Method::POST)
+                        .uri(&uri)
+                        .body(hyper::Body::from(json)) {
+
+                            Ok(r) => r,
+                            Err(e) => {
+                                error!(log, "hyper build request: {}", e);
+                                return;
+                            }
+
+                        };
+
+                    let resp = client.request(req).await;
 
                     match resp {
                         Ok(_) => {},
