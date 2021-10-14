@@ -2,7 +2,7 @@
 
 mod error;
 mod admin;
-mod topology;
+pub mod topology;
 pub mod config;
 pub mod link;
 

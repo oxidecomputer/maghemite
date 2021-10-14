@@ -37,11 +37,13 @@ use slog::{
 use std::collections::{HashSet, HashMap};
 use crate::link::LinkSM;
 use std::hash::{Hash, Hasher};
+use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 
-#[derive(Clone, Copy)]
-pub(crate) struct LSDBEndpoint {
-    system_id: SystemId,
-    link_id: LinkId,
+#[derive(Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct LSDBEndpoint {
+    pub system_id: SystemId,
+    pub link_id: LinkId,
 }
 impl Hash for LSDBEndpoint {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -56,10 +58,10 @@ impl PartialEq for LSDBEndpoint {
 }
 impl Eq for LSDBEndpoint {}
 
-#[derive(Clone, Copy)]
-pub(crate) struct LSDBEntry{
-    a: LSDBEndpoint,
-    b: LSDBEndpoint,
+#[derive(Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct LSDBEntry{
+    pub a: LSDBEndpoint,
+    pub b: LSDBEndpoint,
 }
 
 impl Hash for LSDBEntry {

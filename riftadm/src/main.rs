@@ -5,8 +5,11 @@ use std::time::SystemTime;
 use clap::{AppSettings, Clap};
 use reqwest;
 use std::io::{stdout, Write};
-use rift::link::LinkSMState;
-use std::collections::HashMap;
+use rift::{
+    link::LinkSMState,
+    topology::LSDBEntry,
+};
+use std::collections::{HashMap, HashSet};
 use tabwriter::TabWriter;
 use colored::*;
 
@@ -27,20 +30,30 @@ struct Opts {
 
 #[derive(Clap)]
 enum SubCommand {
-    Status(Status)
+    Status(Status),
+    Lsdb(Lsdb),
 }
 
 
 #[derive(Clap)]
 #[clap(setting = AppSettings::ColoredHelp)]
-struct Status { 
-}
+struct Status { }
+
+#[derive(Clap)]
+#[clap(setting = AppSettings::ColoredHelp)]
+struct Lsdb { }
 
 fn main() {
     let opts: Opts = Opts::parse();
     match opts.subcmd {
         SubCommand::Status(ref s) => {
             match status(&opts, &s) {
+                Ok(()) => {}
+                Err(e) => println!("{}", e),
+            }
+        }
+        SubCommand::Lsdb(ref l) => {
+            match lsdb(&opts, &l) {
                 Ok(()) => {}
                 Err(e) => println!("{}", e),
             }
@@ -74,7 +87,8 @@ fn status(_opts: &Opts, _s: &Status) -> Result<()> {
         "---".bright_black(),
     )?;
 
-    let response: HashMap<String, LinkSMState> = reqwest::blocking::get("http://localhost:7000/links")?.json()?;
+    let response: HashMap<String, LinkSMState> = 
+        reqwest::blocking::get("http://localhost:7000/links")?.json()?;
 
     for (link_name, info) in &response {
 
@@ -124,6 +138,46 @@ fn status(_opts: &Opts, _s: &Status) -> Result<()> {
     tw.flush()?;
 
     //println!("{:#?}", response);
+
+    Ok(())
+
+}
+
+fn lsdb(_opts: &Opts, _s: &Lsdb) -> Result<()> {
+
+    let mut tw = TabWriter::new(stdout());
+    write!(
+        &mut tw,
+        "{}\t{}\t->\t{}\t{}\n",
+        "System Id".dimmed(),
+        "Link Id".dimmed(),
+        "System Id".dimmed(),
+        "Link Id".dimmed(),
+    )?;
+    write!(
+        &mut tw,
+        "{}\t{}\t{}\t{}\t{}\n",
+        "---------".bright_black(),
+        "-------".bright_black(),
+        "--".bright_black(),
+        "---------".bright_black(),
+        "-------".bright_black(),
+    )?;
+
+    let response: HashSet<LSDBEntry> = 
+        reqwest::blocking::get("http://localhost:7000/lsdb")?.json()?;
+
+    for entry in response {
+        write!(
+            &mut tw,
+            "{}\t{}\t->\t{}\t{}\n",
+            entry.a.system_id.to_string(),
+            entry.a.link_id.to_string(),
+            entry.b.system_id.to_string(),
+            entry.b.link_id.to_string(),
+        )?;
+    }
+    tw.flush()?;
 
     Ok(())
 

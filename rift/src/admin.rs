@@ -1,6 +1,6 @@
 // Copyright 2021 Oxide Computer Company
 
-use crate::{Rift, link::LinkSM, link::LinkSMState};
+use crate::{Rift, link::LinkSM, link::LinkSMState, topology::LSDBEntry};
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::collections::{HashSet, HashMap};
@@ -25,9 +25,10 @@ impl<P: Platform + std::marker::Send> Rift<P> {
 
         let log = self.log.clone();
         let links = self.links.clone();
+        let lsdb = self.lsdb.clone();
 
         tokio::spawn(async move {
-            match handler(links).await {
+            match handler(links, lsdb).await {
                 Ok(_) => {},
                 Err(e) => error!(log, "failed to start adm handler {}", e),
             }
@@ -39,6 +40,7 @@ impl<P: Platform + std::marker::Send> Rift<P> {
 
 struct RiftAdmContext {
     links: Arc::<Mutex::<HashSet::<LinkSM>>>,
+    lsdb: Arc::<Mutex::<HashSet<LSDBEntry>>>,
 }
 
 #[endpoint { method = GET, path = "/links" }]
@@ -62,9 +64,22 @@ async fn adm_api_get_links (
 
 }
 
+#[endpoint { method = GET, path = "/lsdb" }]
+async fn adm_api_get_lsdb (
+    ctx: Arc<RequestContext<RiftAdmContext>>,
+) -> Result<HttpResponseOk<HashSet<LSDBEntry>>, HttpError> {
+
+    let api_context = ctx.context();
+    let result = api_context.lsdb.lock().await.clone();
+
+    Ok(HttpResponseOk(result))
+
+}
+
 
 async fn handler (
     links: Arc::<Mutex::<HashSet::<LinkSM>>>,
+    lsdb: Arc::<Mutex::<HashSet<LSDBEntry>>>,
 ) -> Result<(), String> {
 
     let addr = SocketAddr::V4(
@@ -83,10 +98,12 @@ async fn handler (
         .map_err(|e| format!("config dropshot logger: {}", e))?;
 
     let mut api = ApiDescription::new();
-    api.register(adm_api_get_links).unwrap();
+    api.register(adm_api_get_links).unwrap(); //TODO no unwrap
+    api.register(adm_api_get_lsdb).unwrap();  //TODO no unwrap
 
     let api_context = RiftAdmContext{
         links: links.clone(),
+        lsdb: lsdb.clone(),
     };
 
     let server = HttpServerStarter::new(
