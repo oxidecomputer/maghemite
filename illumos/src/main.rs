@@ -5,6 +5,7 @@
 
 use rift::Rift;
 use rift::config::Config;
+use rift_protocol::Level;
 use slog;
 use slog_term;
 use slog_async;
@@ -29,6 +30,7 @@ struct Opts {
     #[clap(short, long, parse(from_occurrences))]
     verbose: i32,
     id: u64,
+    level: Level,
 }
 
 
@@ -44,7 +46,10 @@ async fn main() -> Result<(), String> {
     let opts: Opts = Opts::parse();
 
     let ilu = Arc::new(Mutex::new(crate::platform::Illumos{log: log.clone()}));
-    let mut riftp = Rift::new(ilu, log.clone(), Config{id: opts.id});
+    let mut riftp = Rift::new(ilu, log.clone(), Config{
+        id: opts.id,
+        level: opts.level,
+    });
     match riftp.run().await {
         Ok(()) => warn!(log, "early exit?"),
         Err(e) => error!(log, "rift: {}", e),

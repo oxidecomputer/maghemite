@@ -10,14 +10,14 @@ use std::time::SystemTime;
 use crate::error::Error;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast};
 use tokio::time::sleep;
 use std::time::{Duration};
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use platform::Platform;
+use platform::{Platform, IpIfAddr};
 use slog::{trace, info};
 use link::LinkSM;
 use rift_protocol::lie::{LIEPacket, Neighbor};
@@ -59,6 +59,12 @@ impl Peer {
     }
 }
 
+#[derive(Debug, Clone)]
+enum PeerEvent {
+    Up((Peer, IpIfAddr)),
+    Down((Peer, IpIfAddr)),
+}
+
 pub struct Rift<P: Platform + std::marker::Send + 'static> {
     platform: Arc::<Mutex::<P>>,
     links: Arc::<Mutex::<HashSet::<LinkSM>>>,
@@ -93,6 +99,17 @@ impl<P: Platform + std::marker::Send + std::marker::Sync> Rift<P> {
             p.get_links()?
         };
 
+        let (peer_event_tx, peer_event_rx) = broadcast::channel(32);
+
+        // start topology thread
+        topology::tie_entry(
+            self.log.clone(),
+            self.platform.clone(),
+            self.links.clone(),
+            self.config,
+            peer_event_rx,
+        ).await;
+
         // start link state machines
         for l in links.iter() {
             let mut sm = link::LinkSM::new(
@@ -101,17 +118,12 @@ impl<P: Platform + std::marker::Send + std::marker::Sync> Rift<P> {
                 l.state,
                 self.config,
             );
-            sm.run(self.platform.clone()).await;
+            sm.run(
+                self.platform.clone(),
+                peer_event_tx.clone(),
+            ).await;
             let mut lsms = self.links.lock().await;
             lsms.insert(sm);
-        }
-
-        // start topology thread
-        if false {
-        topology::tie_entry(
-            self.log.clone(),
-            self.platform.clone(),
-        ).await;
         }
 
         self.router_loop().await?;

@@ -6,7 +6,6 @@ use crate::{
     Header,
     NodeCapabilities,
     LinkCapabilities,
-    HierarchyIndication,
     SystemId,
     LinkId,
 };
@@ -41,8 +40,8 @@ impl Default for LIEPacket {
             neighbor: Neighbor::default(),
             node_capabilities: NodeCapabilities{
                 protocol_minor_version: 0,
-                flood_reduction: false,
-                hierarchy_indication: HierarchyIndication::Leaf,
+                flood_reduction: None,
+                hierarchy_indication: None,
             },
             link_capabilities: LinkCapabilities{
                 bfd: false,

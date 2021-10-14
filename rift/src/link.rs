@@ -4,7 +4,10 @@ use crate::{runtime_error, config::Config};
 use std::net::Ipv6Addr;
 use rift_protocol::{lie::{LIEPacket, Neighbor}, Header};
 use crate::error::Error;
-use crate::Peer;
+use crate::{
+    Peer,
+    PeerEvent,
+};
 use platform::{
     Platform,
     IpIfAddr,
@@ -18,7 +21,8 @@ use schemars::JsonSchema;
 use icmpv6::{RDPMessage, RouterAdvertisement, RouterSolicitation};
 use std::marker::{Send, Sync};
 use tokio::{
-    spawn, select,
+    spawn, 
+    select,
     time::sleep,
     task::JoinHandle,
     sync::{Mutex, broadcast, mpsc::{Sender, Receiver}},
@@ -75,6 +79,9 @@ macro_rules! loop_continue {
 }
 
 macro_rules! link_error {
+    ($log:expr, $link:expr, $format:expr) => {
+        error!($log, "[{}]: {}", $link, $format)
+    };
     ($log:expr, $link:expr, $error:expr, $format:expr) => {
         error!($log, "[{}]: {}: {}", $link, $format, $error)
     };
@@ -158,6 +165,7 @@ impl LinkSM {
     pub(crate) async fn run<P: Platform + Send + Sync + 'static>(
         &mut self, 
         platform: Arc::<Mutex::<P>>,
+        peer_event_tx: broadcast::Sender<PeerEvent>,
     ) {
 
         // clone stuff to move into thread
@@ -169,9 +177,14 @@ impl LinkSM {
 
         let mut t = self.threads.lock().await;
         t.carrier = Some(spawn(async move {
-            Self::carrier_sm(&p, &log, &link_name, &state, &threads).await;
+            Self::carrier_sm(
+                &p,
+                &log,
+                &link_name,
+                &state,
+                &threads,
+                peer_event_tx).await;
         }));
-
 
     }
 
@@ -181,6 +194,7 @@ impl LinkSM {
         link_name: &String,
         state: &Arc::<Mutex::<LinkSMState>>,
         threads: &Arc::<Mutex::<Threads>>,
+        peer_event_tx: broadcast::Sender<PeerEvent>,
     ) {
 
         let (event_tx, _) = broadcast::channel(32);
@@ -220,6 +234,7 @@ impl LinkSM {
                 &event_tx,
                 &log,
                 &link_name,
+                &peer_event_tx,
             ).await {
                 Err(e) => {
                     link_error!(log, &link_name, e, "handle link state change");
@@ -239,6 +254,7 @@ impl LinkSM {
         state: Arc::<Mutex::<LinkSMState>>,
         threads: Arc::<Mutex::<Threads>>,
         event_tx: broadcast::Sender<Event>,
+        peer_event_tx: broadcast::Sender<PeerEvent>,
     ) {
 
         link_trace!(log, link_name, "enter v6addr sm");
@@ -257,6 +273,7 @@ impl LinkSM {
             threads.clone(),
             event_tx.clone(),
             quit.clone(),
+            peer_event_tx.clone(),
         ).await;
 
         link_trace!(log, link_name, "started address event loop");
@@ -289,6 +306,7 @@ impl LinkSM {
         state: Arc::<Mutex::<LinkSMState>>,
         threads: Arc::<Mutex::<Threads>>,
         event_tx: broadcast::Sender<Event>,
+        peer_event_tx: broadcast::Sender<PeerEvent>,
     ) {
 
         let mut event_rx = event_tx.subscribe();
@@ -326,6 +344,7 @@ impl LinkSM {
                 quit.clone(),
                 event_tx.clone(),
                 rdp_rx,
+                peer_event_tx.clone(),
             ).await;
 
             loop {
@@ -363,6 +382,7 @@ impl LinkSM {
         state: Arc::<Mutex::<LinkSMState>>,
         threads: Arc::<Mutex::<Threads>>,
         event_tx: broadcast::Sender<Event>,
+        peer_event_tx: broadcast::Sender<PeerEvent>,
     ) {
 
         let quit = Arc::new(AtomicBool::new(false));
@@ -392,6 +412,7 @@ impl LinkSM {
             quit.clone(),
             tx,
             rx,
+            peer_event_tx.clone(),
         );
 
         let mut event_rx = event_tx.subscribe();
@@ -530,6 +551,7 @@ async fn advertise_solicit_rx_loop<P: Platform + Send + Sync + 'static>(
     quit: Arc::<AtomicBool>,
     event_tx: broadcast::Sender<Event>,
     mut rdp_rx: Receiver<RDPMessage>,
+    peer_event_tx: broadcast::Sender<PeerEvent>,
 ) {
 
     spawn(async move { loop {
@@ -581,6 +603,7 @@ async fn advertise_solicit_rx_loop<P: Platform + Send + Sync + 'static>(
                     &rdp_rx,
                     from,
                     a,
+                    &peer_event_tx,
                 ).await
             }
         }
@@ -599,6 +622,7 @@ fn one_way_loop(
     quit: Arc::<AtomicBool>,
     tx: Sender<LIEPacket>,
     mut rx: Receiver<LIEPacket>,
+    peer_event_tx: broadcast::Sender<PeerEvent>,
 ) {
 
     spawn(async move {
@@ -664,6 +688,7 @@ fn one_way_loop(
                                         &quit,
                                         &tx,
                                         &mut rx,
+                                        &peer_event_tx,
                                     ).await;
                                     loop_continue!(QUANTUM);
                                 }
@@ -688,6 +713,7 @@ async fn two_way_loop(
     quit: &Arc::<AtomicBool>,
     tx: &Sender<LIEPacket>,
     rx: &mut Receiver<LIEPacket>,
+    peer_event_tx: &broadcast::Sender<PeerEvent>,
 ) {
 
     link_trace!(log, link_name, "enter two way loop");
@@ -753,6 +779,7 @@ async fn two_way_loop(
                                    quit,
                                    tx,
                                    rx,
+                                   peer_event_tx,
                                ).await;
                                loop_continue!(QUANTUM);
                         } else {
@@ -782,14 +809,54 @@ async fn three_way_loop(
     quit: &Arc::<AtomicBool>,
     tx: &Sender<LIEPacket>,
     rx: &mut Receiver<LIEPacket>,
+    peer_event_tx: &broadcast::Sender<PeerEvent>,
 ) {
 
     link_trace!(log, link_name, "enter three way loop");
+
+    let (peer, local_if) = {
+        let state = state.lock().await;
+        let peer = match &state.peer {
+            None => {
+                link_error!(log, link_name, "in three-way with no peer");
+                return;
+            }
+            Some(p) => p.clone(),
+        };
+        let v6ll = match state.v6ll {
+            None => {
+                link_error!(log, link_name, "in three-way with no v6ll");
+                return;
+            }
+            Some(a) => a,
+        };
+        (peer, v6ll)
+    };
+
+    //send peer up event
+    match peer_event_tx.send(PeerEvent::Up((peer.clone(), local_if))) {
+        Ok(_) => {}
+        Err(e) => {
+            link_error!(log, link_name, "send link up event: {}", e);
+            return;
+        }
+    };
+
     loop {
 
         if quit.load(Ordering::Relaxed) {
             let mut t = threads.lock().await;
             t.rift = None;
+
+            //send peer down event
+            match peer_event_tx.send(PeerEvent::Down((peer, local_if))) {
+                Ok(_) => {}
+                Err(e) => {
+                    link_error!(log, link_name, "send link up event: {}", e);
+                    return;
+                }
+            };
+
             break;
         }
 
@@ -820,6 +887,16 @@ async fn three_way_loop(
                 match rx_result {
                     None => {
                         link_warn!(log, link_name, "three-way LIE channel closed");
+
+                        //send peer down event
+                        match peer_event_tx.send(PeerEvent::Down((peer, local_if))) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                link_error!(log, link_name, "send link up event: {}", e);
+                                return;
+                            }
+                        };
+
                         break;
                     }
                     Some(msg) => {
@@ -846,6 +923,16 @@ async fn three_way_loop(
                             link_warn!(log, link_name, 
                                 "invalid reflection: {:#?} returning to two-way", msg.neighbor);
                             s.current = State::TwoWay;
+
+                            //send peer down event
+                            match peer_event_tx.send(PeerEvent::Down((peer, local_if))) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    link_error!(log, link_name, "send link up event: {}", e);
+                                    return;
+                                }
+                            };
+
                             return;
                         }
                     }
@@ -868,14 +955,14 @@ async fn create_lie_packet(
 ) -> Result<LIEPacket, Error> {
 
     let s = state.lock().await;
-    let (router_id, link_id) = {
+    let (router_id, link_id, level) = {
         let link_id = match s.v6ll {
             None => {
                 return runtime_error!("no local address")
             }
             Some(v6ll) => v6ll.if_index,
         };
-        (s.config.id, link_id)
+        (s.config.id, link_id, s.config.level)
     };
 
     let nbr = {
@@ -893,6 +980,7 @@ async fn create_lie_packet(
     Ok(LIEPacket{
         header: Header {
             sender: router_id,
+            level: level,
             ..Default::default()
         },
         local_id: link_id as u32,
@@ -949,6 +1037,7 @@ async fn addr_loop<P: Platform + Send + Sync + 'static>(
     threads: Arc::<Mutex::<Threads>>,
     event_tx: broadcast::Sender<Event>,
     quit: Arc::<AtomicBool>,
+    peer_event_tx: broadcast::Sender<PeerEvent>,
 ) {
 
     let _log = log.clone();
@@ -988,7 +1077,8 @@ async fn addr_loop<P: Platform + Send + Sync + 'static>(
             &threads,
             &link_name,
             &event_tx,
-            v6ll).await;
+            v6ll,
+            &peer_event_tx).await;
 
         sleep(Duration::from_secs(QUANTUM)).await;
     }});
@@ -1003,6 +1093,7 @@ async fn addr_check<P: Platform + Send + Sync + 'static>(
     link_name: &String,
     event_tx: &broadcast::Sender<Event>,
     v6ll: IpIfAddr,
+    peer_event_tx: &broadcast::Sender<PeerEvent>,
 ) {
 
     let mut s = state.lock().await ;
@@ -1031,6 +1122,7 @@ async fn addr_check<P: Platform + Send + Sync + 'static>(
             let state_ = state.clone();
             let threads_ = threads.clone();
             let event_tx_ = event_tx.clone();
+            let peer_event_tx_ = peer_event_tx.clone();
             t.rdp = Some(spawn(async move { LinkSM::solicit(
                         platform_,
                         log_,
@@ -1038,6 +1130,7 @@ async fn addr_check<P: Platform + Send + Sync + 'static>(
                         state_,
                         threads_,
                         event_tx_,
+                        peer_event_tx_,
             ).await}));
         }
         Some(_) => {
@@ -1054,6 +1147,7 @@ async fn handle_link_state_change<P: Platform + Send + Sync + 'static>(
     event_tx: &broadcast::Sender<Event>,
     log: &slog::Logger,
     link_name: &String,
+    peer_event_tx: &broadcast::Sender<PeerEvent>,
 ) -> Result<(), Error> {
 
     match link_state {
@@ -1064,7 +1158,9 @@ async fn handle_link_state_change<P: Platform + Send + Sync + 'static>(
             state, threads,
             event_tx,
             log,
-            link_name).await,
+            link_name,
+            peer_event_tx,
+         ).await,
 
         _ => handle_link_down(
             state,
@@ -1173,6 +1269,7 @@ async fn handle_link_up<P: Platform + Send + Sync + 'static>(
     event_tx: &broadcast::Sender<Event>,
     log: &slog::Logger,
     link_name: &String,
+    peer_event_tx: &broadcast::Sender<PeerEvent>,
 ) -> Result<(), Error> {
 
     link_trace!(log, link_name, "handling link up");
@@ -1191,6 +1288,7 @@ async fn handle_link_up<P: Platform + Send + Sync + 'static>(
                     state.clone(),
                     threads.clone(),
                     event_tx.clone(),
+                    peer_event_tx.clone(),
                 ).await)
             }
 
@@ -1209,6 +1307,7 @@ async fn launch_v6addr_sm_thread<P: Platform + Send + Sync + 'static>(
     state: Arc::<Mutex::<LinkSMState>>,
     threads: Arc::<Mutex::<Threads>>,
     event_tx: broadcast::Sender<Event>,
+    peer_event_tx: broadcast::Sender<PeerEvent>,
 ) -> JoinHandle<()>  {
 
     let _log = log.clone();
@@ -1223,6 +1322,7 @@ async fn launch_v6addr_sm_thread<P: Platform + Send + Sync + 'static>(
             state,
             threads,
             event_tx,
+            peer_event_tx,
     ).await})
 
 }
@@ -1274,6 +1374,7 @@ async fn handle_rdp_advertise<P: Platform + Send + Sync + 'static>(
     _rdp_rx: &Receiver<RDPMessage>,
     from: Ipv6Addr,
     a: RouterAdvertisement,
+    peer_event_tx: &broadcast::Sender<PeerEvent>,
 ) {
 
     link_trace!(log, link_name, 
@@ -1317,6 +1418,7 @@ async fn handle_rdp_advertise<P: Platform + Send + Sync + 'static>(
             let __threads = threads.clone();
             let __event_tx = event_tx.clone();
             let mut t = threads.lock().await;
+            let __peer_event_tx = peer_event_tx.clone();
             t.rift = Some(spawn(async move { LinkSM::lie_entry(
                         __platform,
                         __log,
@@ -1324,6 +1426,7 @@ async fn handle_rdp_advertise<P: Platform + Send + Sync + 'static>(
                         __state,
                         __threads,
                         __event_tx,
+                        __peer_event_tx,
             ).await}));
         }
         true => {

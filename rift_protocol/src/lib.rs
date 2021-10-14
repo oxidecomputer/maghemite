@@ -2,6 +2,8 @@
 
 use serde::{Serialize, Deserialize};
 use schemars::JsonSchema;
+use num_enum::TryFromPrimitive;
+use std::convert::TryFrom;
 
 pub mod tie;
 pub mod lie;
@@ -46,8 +48,8 @@ impl Default for Header {
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct NodeCapabilities {
     pub protocol_minor_version: u16,
-    pub flood_reduction: bool,
-    pub hierarchy_indication: HierarchyIndication,
+    pub flood_reduction: Option<bool>,
+    pub hierarchy_indication: Option<HierarchyIndication>,
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -70,10 +72,20 @@ pub enum MajorVersion {
 
 const MINOR_VERSION: u16 = 1;
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    TryFromPrimitive,
+    PartialEq,
+    PartialOrd)]
 #[repr(u8)]
 pub enum Level {
     Leaf = 0,
+    L1 = 1,
     L2 = 2,
     L3 = 3,
     L4 = 4,
@@ -102,5 +114,22 @@ pub enum Level {
 impl Default for Level {
     fn default() -> Level {
         Level::Leaf
+    }
+}
+
+impl std::str::FromStr for Level {
+
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match u8::from_str(s) {
+            Ok(i) => {
+                match Level::try_from(i) {
+                    Ok(l) => Ok(l),
+                    Err(_) => Err("Level must be 0-24"),
+                }
+            }
+            Err(_) => Err("Level must be integer")
+        }
     }
 }

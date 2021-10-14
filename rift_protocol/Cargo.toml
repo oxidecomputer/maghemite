@@ -8,3 +8,4 @@ edition = "2018"
 [dependencies]
 serde = "1.0"
 schemars = { version = "0.8.0", features = [ "uuid" ] }
+num_enum = "0.5"
