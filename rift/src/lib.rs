@@ -1,7 +1,7 @@
 // Copyright 2021 Oxide Computer Company
 
 mod error;
-mod admin;
+pub mod admin;
 pub mod topology;
 pub mod config;
 pub mod link;

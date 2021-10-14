@@ -19,6 +19,7 @@ use rift_protocol::{
         TIEId,
         TIEElement,
         TIEHeader,
+        LinkIdPair,
     },
 };
 use crate::{
@@ -129,7 +130,7 @@ async fn initial_tie_tx(
 
     // create a neighbors list to send out in Node TIEs
     let mut nbr_map = HashMap::new();
-    for (_, peer) in &nbrs {
+    for (v6ll, peer) in &nbrs {
         match &peer.lie {
             None => continue,
             Some(l) => {
@@ -138,7 +139,18 @@ async fn initial_tie_tx(
                     NeighborTIE{
                         level: l.header.level,
                         cost: None, //TODO
-                        link_ids: None, //TODO
+                        link_ids: Some([LinkIdPair{
+                            local_id: v6ll.if_index as u32,
+                            remote_id: match &peer.lie {
+                                Some(l) => l.local_id,
+                                None => 0,
+                            },
+                            local_if_index: None, //TODO
+                            local_if_name: None, //TODO
+                            outer_security_key: None, //TODO
+                            bfd_up: None, //TODO
+                            address_families: None, //TODO
+                        }].iter().cloned().collect()),
                         bandwidth: None, //TODO
                     },
                 );

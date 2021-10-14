@@ -1,6 +1,15 @@
 // Copyright 2021 Oxide Computer Company
 
-use crate::{Rift, link::LinkSM, link::LinkSMState, topology::LSDBEntry};
+use crate::{
+    Rift, 
+    link::{LinkSM, LinkSMState}, 
+    topology::LSDBEntry,
+    config::Config,
+};
+use rift_protocol::{
+    SystemId,
+};
+
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::collections::{HashSet, HashMap};
@@ -15,6 +24,8 @@ use dropshot::{
     HttpResponseOk,
     HttpError,
 };
+use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 use platform::Platform;
 use slog::error;
 use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
@@ -26,9 +37,10 @@ impl<P: Platform + std::marker::Send> Rift<P> {
         let log = self.log.clone();
         let links = self.links.clone();
         let lsdb = self.lsdb.clone();
+        let config = self.config;
 
         tokio::spawn(async move {
-            match handler(links, lsdb).await {
+            match handler(config, links, lsdb).await {
                 Ok(_) => {},
                 Err(e) => error!(log, "failed to start adm handler {}", e),
             }
@@ -39,6 +51,7 @@ impl<P: Platform + std::marker::Send> Rift<P> {
 }
 
 struct RiftAdmContext {
+    config: Config,
     links: Arc::<Mutex::<HashSet::<LinkSM>>>,
     lsdb: Arc::<Mutex::<HashSet<LSDBEntry>>>,
 }
@@ -64,13 +77,58 @@ async fn adm_api_get_links (
 
 }
 
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NodeInfo {
+    pub name: String
+}
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LSDBResult {
+    pub lsdb: HashSet<LSDBEntry>,
+    pub info: HashMap<SystemId, NodeInfo>,
+}
+
+
 #[endpoint { method = GET, path = "/lsdb" }]
 async fn adm_api_get_lsdb (
     ctx: Arc<RequestContext<RiftAdmContext>>,
-) -> Result<HttpResponseOk<HashSet<LSDBEntry>>, HttpError> {
+) -> Result<HttpResponseOk<LSDBResult>, HttpError> {
 
     let api_context = ctx.context();
-    let result = api_context.lsdb.lock().await.clone();
+    let links = api_context.links.lock().await.clone();
+    let lsdb = api_context.lsdb.lock().await.clone();
+
+    let mut info = HashMap::new();
+
+    for l in links {
+        let s = l.state.lock().await;
+        match &s.peer {
+            None => continue,
+            Some(p) => {
+                match &p.lie {
+                    None => continue,
+                    Some(l) => { info.insert(l.header.sender, NodeInfo{
+                        name: l.name.clone(),
+                    }); },
+                }
+            }
+        }
+    }
+
+    info.insert(api_context.config.id, NodeInfo{
+        name: match hostname::get() {
+            Ok(n) => match n.into_string() {
+                Ok(s) => s,
+                Err(_) => "?".to_string(),
+            },
+            Err(_) => "?".to_string(),
+        }
+    });
+
+    let result = LSDBResult{
+        lsdb: lsdb,
+        info: info,
+    };
 
     Ok(HttpResponseOk(result))
 
@@ -78,6 +136,7 @@ async fn adm_api_get_lsdb (
 
 
 async fn handler (
+    config: Config,
     links: Arc::<Mutex::<HashSet::<LinkSM>>>,
     lsdb: Arc::<Mutex::<HashSet<LSDBEntry>>>,
 ) -> Result<(), String> {
@@ -102,6 +161,7 @@ async fn handler (
     api.register(adm_api_get_lsdb).unwrap();  //TODO no unwrap
 
     let api_context = RiftAdmContext{
+        config: config,
         links: links.clone(),
         lsdb: lsdb.clone(),
     };

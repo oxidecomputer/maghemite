@@ -7,9 +7,8 @@ use reqwest;
 use std::io::{stdout, Write};
 use rift::{
     link::LinkSMState,
-    topology::LSDBEntry,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tabwriter::TabWriter;
 use colored::*;
 
@@ -148,9 +147,10 @@ fn lsdb(_opts: &Opts, _s: &Lsdb) -> Result<()> {
     let mut tw = TabWriter::new(stdout());
     write!(
         &mut tw,
-        "{}\t{}\t->\t{}\t{}\n",
+        "{}\t{}\t{}\t{}\t{}\n",
         "System Id".dimmed(),
         "Link Id".dimmed(),
+        "<~>".dimmed(),
         "System Id".dimmed(),
         "Link Id".dimmed(),
     )?;
@@ -159,20 +159,28 @@ fn lsdb(_opts: &Opts, _s: &Lsdb) -> Result<()> {
         "{}\t{}\t{}\t{}\t{}\n",
         "---------".bright_black(),
         "-------".bright_black(),
-        "--".bright_black(),
+        "---".bright_black(),
         "---------".bright_black(),
         "-------".bright_black(),
     )?;
 
-    let response: HashSet<LSDBEntry> = 
+    let response: rift::admin::LSDBResult = 
         reqwest::blocking::get("http://localhost:7000/lsdb")?.json()?;
 
-    for entry in response {
+    for entry in response.lsdb {
         write!(
             &mut tw,
-            "{}\t{}\t->\t{}\t{}\n",
+            "{} ({})\t{}\t<->\t{} ({})\t{}\n",
+            match response.info.get(&entry.a.system_id) {
+                None => "?",
+                Some(n) => &n.name,
+            },
             entry.a.system_id.to_string(),
             entry.a.link_id.to_string(),
+            match response.info.get(&entry.b.system_id) {
+                None => "?",
+                Some(n) => &n.name,
+            },
             entry.b.system_id.to_string(),
             entry.b.link_id.to_string(),
         )?;

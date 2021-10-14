@@ -48,6 +48,7 @@ pub enum Event {
     PeerExpired,
 }
 
+#[derive(Clone)]
 pub struct LinkSM {
     pub state: Arc::<Mutex::<LinkSMState>>,
     pub threads: Arc::<Mutex::<Threads>>,
