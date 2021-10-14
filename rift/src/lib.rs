@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use platform::{Platform, IpIfAddr};
 use slog::{trace, info};
 use link::LinkSM;
+use topology::LSDBEntry;
 use rift_protocol::lie::{LIEPacket, Neighbor};
 
 /// The RIFT multicast address used for bootstrapping ff02::a1f7.
@@ -70,6 +71,7 @@ pub struct Rift<P: Platform + std::marker::Send + 'static> {
     links: Arc::<Mutex::<HashSet::<LinkSM>>>,
     log: slog::Logger,
     config: config::Config,
+    lsdb: Arc::<Mutex::<HashSet<LSDBEntry>>>,
 }
 
 impl<P: Platform + std::marker::Send + std::marker::Sync> Rift<P> {
@@ -84,6 +86,7 @@ impl<P: Platform + std::marker::Send + std::marker::Sync> Rift<P> {
             links: Arc::new(Mutex::new(HashSet::new())),
             log: log,
             config: config,
+            lsdb: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -108,6 +111,7 @@ impl<P: Platform + std::marker::Send + std::marker::Sync> Rift<P> {
             self.links.clone(),
             self.config,
             peer_event_rx,
+            self.lsdb.clone(),
         ).await;
 
         // start link state machines

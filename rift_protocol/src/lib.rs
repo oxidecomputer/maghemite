@@ -8,22 +8,22 @@ use std::convert::TryFrom;
 pub mod tie;
 pub mod lie;
 
-type SystemId = u64;
-type LinkId = u32;
-type TIENumber = u32;
-type SequenceNumber = u64;
-type Lifetime = u32; //seconds
-type Metric = i32;
-type InterfaceIndex = u32;
-type OuterSecurityKeyId = u8;
-type Bandwidth = u32; //mbps
-type PodId = u32;
-type Seconds = u64;
-type IPv4Address = u32;
-type IPv6Address = u128;
-type PrefixLength = u8;
-type RouteTag = u64;
-type PrefixTransactionId = u8;
+pub type SystemId = u64;
+pub type LinkId = u32;
+pub type TIENumber = u32;
+pub type SequenceNumber = u64;
+pub type Lifetime = u32; //seconds
+pub type Metric = i32;
+pub type InterfaceIndex = u32;
+pub type OuterSecurityKeyId = u8;
+pub type Bandwidth = u32; //mbps
+pub type PodId = u32;
+pub type Seconds = u64;
+pub type IPv4Address = u32;
+pub type IPv6Address = u128;
+pub type PrefixLength = u8;
+pub type RouteTag = u64;
+pub type PrefixTransactionId = u8;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Header {

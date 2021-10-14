@@ -9,6 +9,8 @@ use tokio::{
 use rift_protocol::{
     NodeCapabilities,
     Header,
+    SystemId,
+    LinkId,
     tie::{
         TIEPacket,
         NeighborTIE,
@@ -34,6 +36,44 @@ use slog::{
 };
 use std::collections::{HashSet, HashMap};
 use crate::link::LinkSM;
+use std::hash::{Hash, Hasher};
+
+#[derive(Clone, Copy)]
+pub(crate) struct LSDBEndpoint {
+    system_id: SystemId,
+    link_id: LinkId,
+}
+impl Hash for LSDBEndpoint {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.system_id.hash(state);
+        self.link_id.hash(state);
+    }
+}
+impl PartialEq for LSDBEndpoint {
+    fn eq(&self, other: &Self) -> bool {
+        self.system_id == other.system_id && self.link_id == other.link_id
+    }
+}
+impl Eq for LSDBEndpoint {}
+
+#[derive(Clone, Copy)]
+pub(crate) struct LSDBEntry{
+    a: LSDBEndpoint,
+    b: LSDBEndpoint,
+}
+
+impl Hash for LSDBEntry {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.a.hash(state);
+        self.b.hash(state);
+    }
+}
+impl PartialEq for LSDBEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.a == other.a && self.b == other.b
+    }
+}
+impl Eq for LSDBEntry {}
 
 pub(crate) async fn tie_entry<P: Platform + Send + Sync + 'static>(
     log: slog::Logger,
@@ -41,6 +81,7 @@ pub(crate) async fn tie_entry<P: Platform + Send + Sync + 'static>(
     links: Arc::<Mutex::<HashSet::<LinkSM>>>,
     config: crate::config::Config,
     event_rx: broadcast::Receiver<PeerEvent>,
+    lsdb: Arc::<Mutex::<HashSet<LSDBEntry>>>,
 ) {
 
     trace!(log, "TIE entry");
@@ -63,7 +104,8 @@ pub(crate) async fn tie_entry<P: Platform + Send + Sync + 'static>(
         links,
         event_rx,
         config,
-    );
+        lsdb,
+    ).await;
 
 }
 
@@ -145,7 +187,7 @@ async fn initial_tie_tx(
                             origination_time: None, //TODO
                             origination_lifetime: None, //TODO
                         },
-                        tie_element: TIEElement::Node(node_tie.clone())
+                        element: TIEElement::Node(node_tie.clone())
                     },
                     dest: peer.remote_addr,
                     local_ifx: local_if.if_index,
@@ -195,23 +237,19 @@ async fn build_neighbor_map(
 }
 
 
-fn tie_loop(
+async fn tie_loop(
     log: slog::Logger,
     tx: Sender<TIEPacketTx>,
     mut rx: Receiver<TIEPacket>,
     links: Arc::<Mutex::<HashSet::<LinkSM>>>,
     mut event_rx: broadcast::Receiver<PeerEvent>,
     config: crate::config::Config,
+    lsdb: Arc::<Mutex::<HashSet<LSDBEntry>>>,
 ) {
 
     spawn(async move { loop {
 
-        // hack, force compiler to move _tx into this context so it does not get
-        // dropped
-        //let __tx = &_tx;
-
         trace!(log, "TIE loop");
-        //tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         select! {
 
@@ -223,6 +261,7 @@ fn tie_loop(
                     },
                     Some(msg) => {
                         debug!(log, "TIE received: {:#?}", msg);
+                        handle_tie_rx(&msg, &lsdb, &log).await;
                     }
                 }
             }
@@ -259,5 +298,54 @@ fn tie_loop(
 
 
     }});
+
+}
+
+async fn handle_tie_rx(
+    pkt: &TIEPacket,
+    lsdb: &Arc::<Mutex::<HashSet<LSDBEntry>>>,
+    log: &slog::Logger,
+) {
+
+    match &pkt.element {
+        TIEElement::Node(ref n) => 
+            handle_nodetie_rx(&pkt.header, &pkt.tie_header, n, lsdb, log).await,
+        TIEElement::Prefixes(_p) => { }
+        TIEElement::PositiveDisaggregationPrefixes(_p) => { }
+        TIEElement::NegativeDisaggregationPrefixes(_p) => { }
+        TIEElement::External(_x) => { }
+        TIEElement::PositiveExternalDisaggregationPrefixes(_p) => { }
+        TIEElement::KeyValues(_k) => { }
+    }
+
+}
+
+async fn handle_nodetie_rx(
+    header: &Header,
+    _tie_header: &TIEHeader,
+    node_tie: &NodeTIE,
+    lsdb: &Arc::<Mutex::<HashSet<LSDBEntry>>>,
+    log: &slog::Logger,
+) {
+
+    debug!(log, "tie: handling node TIE");
+
+    for (nbr_system_id, nbr_tie) in &node_tie.neighbors {
+        let link_ids = match &nbr_tie.link_ids {
+            None => continue,
+            Some(l) => l,
+        };
+        for link_pair in link_ids {
+            let a = LSDBEndpoint{
+                system_id: header.sender,
+                link_id: link_pair.local_id,
+            };
+            let b = LSDBEndpoint{
+                system_id: *nbr_system_id,
+                link_id: link_pair.remote_id,
+            };
+            lsdb.lock().await.insert(LSDBEntry{a: a, b: b});
+        }
+    }
 
 }

@@ -30,7 +30,7 @@ use crate::{
 pub struct TIEPacket {
     pub header: Header,
     pub tie_header: TIEHeader,
-    pub tie_element: TIEElement,
+    pub element: TIEElement,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
