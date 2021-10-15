@@ -18,3 +18,7 @@ path = "src/duo/main.rs"
 [[bin]]
 name = "trio"
 path = "src/trio/main.rs"
+
+[[bin]]
+name = "quartet"
+path = "src/quartet/main.rs"
