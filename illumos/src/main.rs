@@ -3,8 +3,10 @@
 #![feature(ip)]
 #![feature(maybe_uninit_slice)]
 
-use rift::Rift;
-use rift::config::Config;
+use rift::{
+    Rift,
+    config::{Config, Ipv6Prefix},
+};
 use rift_protocol::Level;
 use slog;
 use slog_term;
@@ -19,6 +21,7 @@ mod platform;
 mod link;
 mod topology;
 
+
 #[derive(Clap)]
 #[clap(
     version = "0.1", 
@@ -31,6 +34,7 @@ struct Opts {
     verbose: i32,
     id: u64,
     level: Level,
+    prefix: Option<Ipv6Prefix>,
 }
 
 
@@ -49,6 +53,7 @@ async fn main() -> Result<(), String> {
     let mut riftp = Rift::new(ilu, log.clone(), Config{
         id: opts.id,
         level: opts.level,
+        prefix: opts.prefix,
     });
     match riftp.run().await {
         Ok(()) => warn!(log, "early exit?"),
