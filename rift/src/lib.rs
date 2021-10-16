@@ -12,7 +12,7 @@ use std::net::Ipv6Addr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
 use tokio::time::sleep;
-use std::time::{Duration};
+use std::time::Duration;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use schemars::JsonSchema;
@@ -82,10 +82,10 @@ impl<P: Platform + std::marker::Send + std::marker::Sync> Rift<P> {
         config: config::Config,
     ) -> Self {
         Rift{
-            platform: platform, 
+            platform,
+            log,
+            config,
             links: Arc::new(Mutex::new(HashSet::new())),
-            log: log,
-            config: config,
             lsdb: Arc::new(Mutex::new(HashSet::new())),
         }
     }

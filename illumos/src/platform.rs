@@ -234,7 +234,7 @@ impl Platform for Illumos {
             ) {
                 Some(packet) => RDPMessage{
                     from: senderv6,
-                    packet: packet,
+                    packet,
                 },
                 None => { continue; },
             };

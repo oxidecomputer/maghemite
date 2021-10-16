@@ -358,7 +358,7 @@ async fn handle_nodetie_rx(
                 system_id: *nbr_system_id,
                 link_id: link_pair.remote_id,
             };
-            lsdb.lock().await.insert(LSDBEntry{a: a, b: b});
+            lsdb.lock().await.insert(LSDBEntry{a, b});
         }
     }
 

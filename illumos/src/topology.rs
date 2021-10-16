@@ -59,7 +59,7 @@ pub(crate) fn topology_handler(
     let mut api = ApiDescription::new();
     api.register(riftp_topologyinfo).unwrap();
 
-    let api_context = TopologyHandlerContext{tx: tx};
+    let api_context = TopologyHandlerContext{tx};
 
     Ok(HttpServerStarter::new(
         &config_dropshot,

@@ -164,15 +164,15 @@ impl RouterAdvertisement {
                 code: 0,
                 checksum: 0,
             },
-            hop_limit: hop_limit,
-            managed_address: managed_address,
-            other_stateful: other_stateful,
-            router_lifetime: router_lifetime,
-            reachable_time: reachable_time,
-            retransmission_timer: retransmission_timer,
+            hop_limit,
+            managed_address,
+            other_stateful,
+            router_lifetime,
+            reachable_time,
+            retransmission_timer,
             source_address: src,
-            mtu: mtu,
-            prefix_info: prefix_info
+            mtu,
+            prefix_info
         }
     }
 

@@ -148,7 +148,7 @@ fn run_watch(opts: &Opts, w: &Watch) -> Result<()> {
             Some(packet) => {
                 let m = RDPMessage{
                     from: senderv6,
-                    packet: packet,
+                     packet,
                 };
                 let pretty = PrettyConfig::new()
                     .with_separate_tuple_members(true)

@@ -141,7 +141,7 @@ impl LinkSM {
         config: Config,
     ) -> Self {
         LinkSM{
-            log: log,
+            log,
             link_name: name,
             threads: Arc::new(Mutex::new(Threads {
                 carrier: None,
@@ -158,7 +158,7 @@ impl LinkSM {
                 link_state: LinkState::Unknown,
                 peer: None,
                 v6ll: None,
-                config: config,
+                config,
             })),
         }
     }
@@ -980,8 +980,8 @@ async fn create_lie_packet(
 
     Ok(LIEPacket{
         header: Header {
+            level,
             sender: router_id,
-            level: level,
             ..Default::default()
         },
         local_id: link_id as u32,

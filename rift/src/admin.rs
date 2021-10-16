@@ -6,9 +6,7 @@ use crate::{
     topology::LSDBEntry,
     config::Config,
 };
-use rift_protocol::{
-    SystemId,
-};
+use rift_protocol::SystemId;
 
 use tokio::sync::Mutex;
 use std::sync::Arc;
@@ -125,10 +123,7 @@ async fn adm_api_get_lsdb (
         }
     });
 
-    let result = LSDBResult{
-        lsdb: lsdb,
-        info: info,
-    };
+    let result = LSDBResult{lsdb, info};
 
     Ok(HttpResponseOk(result))
 
@@ -161,7 +156,7 @@ async fn handler (
     api.register(adm_api_get_lsdb).unwrap();  //TODO no unwrap
 
     let api_context = RiftAdmContext{
-        config: config,
+        config,
         links: links.clone(),
         lsdb: lsdb.clone(),
     };
