@@ -2,7 +2,10 @@
 
 use crate::{runtime_error, config::Config};
 use std::net::Ipv6Addr;
-use rift_protocol::{lie::{LIEPacket, Neighbor}, Header};
+use rift_protocol::{
+    Header,
+    lie::{LIEPacket, Neighbor, UnderlayInit}, 
+};
 use crate::error::Error;
 use crate::{
     Peer,
@@ -861,8 +864,6 @@ async fn three_way_loop(
             break;
         }
 
-        //TODO mostly copy pasta from two_way
-        
         let tx_msg = match create_lie_packet(&log, &link_name, &state).await {
             Err(e) => {
                 link_error!(log, link_name, e, "create LIE packet");
@@ -901,6 +902,7 @@ async fn three_way_loop(
                         break;
                     }
                     Some(msg) => {
+
                         link_trace!(log, link_name, "three-way: {:#?}", msg);
                         let mut s = state.lock().await;
 
@@ -912,6 +914,14 @@ async fn three_way_loop(
                             }
                             Some(v6ll) => v6ll.if_index,
                         };
+
+                        // check for underlay init
+                        match msg.underlay_init {
+                            Some(u) => handle_underlay_init(u),
+                            None => {}
+                        }
+
+
                         // check for valid reflection
                         if msg.neighbor.originator == s.config.id && 
                            msg.neighbor.remote_id == link_id as u32 {
@@ -936,6 +946,7 @@ async fn three_way_loop(
 
                             return;
                         }
+
                     }
                 }
 
@@ -947,6 +958,9 @@ async fn three_way_loop(
 
     }
 
+}
+
+fn handle_underlay_init(underlay_init: UnderlayInit) {
 }
 
 async fn create_lie_packet(
@@ -1001,6 +1015,10 @@ async fn create_lie_packet(
             }
         },
         neighbor: nbr,
+        underlay_init: match s.config.prefix {
+            None => None,
+            Some(prefix) => Some(UnderlayInit{ prefix }),
+        },
         ..Default::default()
     })
 }

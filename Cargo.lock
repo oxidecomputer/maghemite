@@ -981,9 +981,9 @@ dependencies = [
 name = "netadm-sys"
 version = "0.1.0"
 dependencies = [
- "bindgen",
  "colored",
- "rusty-doors",
+ "libc",
+ "rusty-doors 0.1.0 (git+ssh://git@github.com/oxidecomputer/rusty-doors?branch=no-bindgen)",
  "thiserror",
  "tracing",
 ]
@@ -995,7 +995,7 @@ source = "git+ssh://git@github.com/oxidecomputer/netadm-sys#79b01cb15ca301928176
 dependencies = [
  "bindgen",
  "colored",
- "rusty-doors",
+ "rusty-doors 0.1.0 (git+ssh://git@github.com/oxidecomputer/rusty-doors)",
  "thiserror",
  "tracing",
 ]
@@ -1458,6 +1458,7 @@ dependencies = [
  "num_enum",
  "schemars",
  "serde",
+ "thiserror",
 ]
 
 [[package]]
@@ -1499,10 +1500,28 @@ checksum = "61b3909d758bb75c79f23d4736fac9433868679d3ad2ea7a61e3c25cfda9a088"
 [[package]]
 name = "rusty-doors"
 version = "0.1.0"
+source = "git+ssh://git@github.com/oxidecomputer/rusty-doors?branch=no-bindgen#4318a5951c4259cbc82428cfd1fa3e74a594dfcc"
+dependencies = [
+ "libc",
+ "rusty-doors-macros 0.1.0 (git+ssh://git@github.com/oxidecomputer/rusty-doors?branch=no-bindgen)",
+]
+
+[[package]]
+name = "rusty-doors"
+version = "0.1.0"
 source = "git+ssh://git@github.com/oxidecomputer/rusty-doors#49b8f847b979bc769ec86808c0dd51a83538fd5f"
 dependencies = [
  "bindgen",
- "rusty-doors-macros",
+ "rusty-doors-macros 0.1.0 (git+ssh://git@github.com/oxidecomputer/rusty-doors)",
+]
+
+[[package]]
+name = "rusty-doors-macros"
+version = "0.1.0"
+source = "git+ssh://git@github.com/oxidecomputer/rusty-doors?branch=no-bindgen#4318a5951c4259cbc82428cfd1fa3e74a594dfcc"
+dependencies = [
+ "quote",
+ "syn",
 ]
 
 [[package]]

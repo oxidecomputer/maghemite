@@ -7,6 +7,7 @@ use std::convert::TryFrom;
 
 pub mod tie;
 pub mod lie;
+pub mod net;
 
 pub type SystemId = u64;
 pub type LinkId = u32;

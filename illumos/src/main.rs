@@ -3,11 +3,8 @@
 #![feature(ip)]
 #![feature(maybe_uninit_slice)]
 
-use rift::{
-    Rift,
-    config::{Config, Ipv6Prefix},
-};
-use rift_protocol::Level;
+use rift::{Rift, config::Config};
+use rift_protocol::{Level, net::Ipv6Prefix};
 use slog;
 use slog_term;
 use slog_async;

@@ -8,6 +8,7 @@ use crate::{
     LinkCapabilities,
     SystemId,
     LinkId,
+    net::Ipv6Prefix,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -26,6 +27,9 @@ pub struct LIEPacket {
     pub not_ztp: bool,
     pub repeater: bool,
     pub backoff: bool,
+    
+    // NOTE begin non-standard items
+    pub underlay_init: Option<UnderlayInit>,
 }
 
 impl Default for LIEPacket {
@@ -51,6 +55,7 @@ impl Default for LIEPacket {
             not_ztp: true,
             repeater: false,
             backoff: false,
+            underlay_init: None,
         }
     }
 }
@@ -68,4 +73,11 @@ impl Default for Neighbor {
             remote_id: 0,
         }
     }
+}
+
+
+// NOTE: This is not a standard Rift protocol item.
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct UnderlayInit {
+    pub prefix: Ipv6Prefix,
 }
