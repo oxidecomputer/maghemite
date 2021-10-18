@@ -394,10 +394,16 @@ impl LinkSM {
         let (local_addr, local_ifx, peer_addr) = {
             let mut s = state.lock().await;
             match (s.v6ll, s.peer.as_ref()) {
-                (Some(v6ll), Some(peer)) => (v6ll.addr, v6ll.if_index, peer.remote_addr),
+
+                (Some(v6ll), Some(peer)) => (
+                    v6ll.addr, 
+                    v6ll.if_index, 
+                    peer.remote_addr),
+
                 _ => {
                     link_warn!(log, link_name, 
-                        "cannot begin one-way adjacency without local and peer address");
+                        "cannot begin one-way adjacency without \
+                        local and peer address");
                     let mut t = threads.lock().await;
                     s.current = State::Solicit;
                     t.rift = None;
@@ -406,7 +412,13 @@ impl LinkSM {
             }
         };
 
-        let (tx, rx) = get_link_channel(&log, &link_name, &platform, local_addr, peer_addr, local_ifx).await;
+        let (tx, rx) = get_link_channel(
+            &log,
+            &link_name,
+            &platform,
+            local_addr,
+            peer_addr,
+            local_ifx).await;
 
         one_way_loop(
             log.clone(), 
@@ -653,8 +665,10 @@ fn one_way_loop(
                 // handle transmit
                 tx_result = tx.send(tx_msg) => {
                     match tx_result {
-                        Err(e) => link_error!(log, link_name, e, "one-way: link-info send"),
-                        Ok(_) => link_trace!(log, link_name, "one-way: link-info sent"),
+                        Err(e) => link_error!(log, link_name, e,
+                            "one-way: link-info send"),
+                        Ok(_) => link_trace!(log, link_name,
+                            "one-way: link-info sent"),
                     }
                     sleep(Duration::from_secs(QUANTUM)).await;
                 }
@@ -664,7 +678,8 @@ fn one_way_loop(
 
                     match rx_result {
                         None => {
-                            link_warn!(log, link_name, "one-way: LIE channel closed");
+                            link_warn!(log, link_name, 
+                                "one-way: LIE channel closed");
                             break;
                         },
                         Some(msg) => {
@@ -672,9 +687,11 @@ fn one_way_loop(
                             let mut s = state.lock().await;
                             match &mut s.peer {
                                 None => {
-                                    // We should get kicked out of this loop by the quit atomic
-                                    // being set on the next iteration
-                                    link_warn!(log, link_name, "in one-way state with no peer");
+                                    // We should get kicked out of this loop by
+                                    // the quit atomic being set on the next 
+                                    // iteration
+                                    link_warn!(log, link_name,
+                                        "in one-way state with no peer");
                                 }
                                 Some(ref mut p) => {
                                     p.lie = Some(msg.clone());
@@ -742,8 +759,10 @@ async fn two_way_loop(
             // handle transmit
             tx_result = tx.send(tx_msg) => {
                 match tx_result {
-                    Err(e) => link_error!(log, link_name, e, "two-way: link-info send"),
-                    Ok(_) => link_trace!(log, link_name, "two-way: link-info sent"),
+                    Err(e) => link_error!(log, link_name, e, 
+                        "two-way: link-info send"),
+                    Ok(_) => link_trace!(log, link_name, 
+                        "two-way: link-info sent"),
                 }
                 sleep(Duration::from_secs(QUANTUM)).await;
             }
@@ -763,7 +782,8 @@ async fn two_way_loop(
                         let link_id = match s.v6ll {
                             None => {
                                 drop(s);
-                                link_warn!(log, link_name, "two-way: no v6ll address");
+                                link_warn!(log, link_name,
+                                    "two-way: no v6ll address");
                                 loop_continue!(QUANTUM);
                             }
                             Some(v6ll) => v6ll.if_index,
@@ -774,7 +794,8 @@ async fn two_way_loop(
                                s.current = State::ThreeWay;
                                drop(s);
                                link_debug!(log, link_name, 
-                                   "valid reflection, transitioning to three-way adjacency");
+                                   "valid reflection, \
+                                   transitioning to three-way adjacency");
                                three_way_loop(
                                    log,
                                    link_name,
@@ -788,7 +809,8 @@ async fn two_way_loop(
                                loop_continue!(QUANTUM);
                         } else {
                             link_warn!(log, link_name, 
-                                "invalid reflection: {:#?} returning to one-way", msg.neighbor);
+                                "invalid reflection: {:#?} returning to one-way", 
+                                msg.neighbor);
                             s.current = State::OneWay;
                             return;
                         }
@@ -877,8 +899,10 @@ async fn three_way_loop(
             // handle transmit
             tx_result = tx.send(tx_msg) => {
                 match tx_result {
-                    Err(e) => link_error!(log, link_name, e, "three-way: link-info send"),
-                    Ok(_) => link_trace!(log, link_name, "three-way: link-info sent"),
+                    Err(e) => link_error!(log, link_name, e,
+                        "three-way: link-info send"),
+                    Ok(_) => link_trace!(log, link_name,
+                        "three-way: link-info sent"),
                 }
                 sleep(Duration::from_secs(QUANTUM)).await;
             }
@@ -888,13 +912,16 @@ async fn three_way_loop(
 
                 match rx_result {
                     None => {
-                        link_warn!(log, link_name, "three-way LIE channel closed");
+                        link_warn!(log, link_name,
+                            "three-way LIE channel closed");
 
                         //send peer down event
-                        match peer_event_tx.send(PeerEvent::Down((peer, local_if))) {
+                        match peer_event_tx.send(
+                            PeerEvent::Down((peer, local_if))) {
                             Ok(_) => {}
                             Err(e) => {
-                                link_error!(log, link_name, "send link up event: {}", e);
+                                link_error!(log, link_name,
+                                    "send link up event: {}", e);
                                 return;
                             }
                         };
@@ -909,7 +936,8 @@ async fn three_way_loop(
                         let link_id = match s.v6ll {
                             None => {
                                 drop(s);
-                                link_warn!(log, link_name, "three-way: no v6ll address");
+                                link_warn!(log, link_name,
+                                    "three-way: no v6ll address");
                                 loop_continue!(QUANTUM);
                             }
                             Some(v6ll) => v6ll.if_index,
@@ -927,19 +955,23 @@ async fn three_way_loop(
                            msg.neighbor.remote_id == link_id as u32 {
                                drop(s);
                                link_debug!(log, link_name, 
-                                   "valid reflection, remaining in three-way adjacency");
+                                   "valid reflection, \
+                                   remaining in three-way adjacency");
                                // nothing to do, we're already here
                                loop_continue!(QUANTUM);
                         } else {
                             link_warn!(log, link_name, 
-                                "invalid reflection: {:#?} returning to two-way", msg.neighbor);
+                                "invalid reflection: {:#?} \
+                                returning to two-way", msg.neighbor);
                             s.current = State::TwoWay;
 
                             //send peer down event
-                            match peer_event_tx.send(PeerEvent::Down((peer, local_if))) {
+                            match peer_event_tx.send(
+                                PeerEvent::Down((peer, local_if))) {
                                 Ok(_) => {}
                                 Err(e) => {
-                                    link_error!(log, link_name, "send link up event: {}", e);
+                                    link_error!(log, link_name, 
+                                        "send link up event: {}", e);
                                     return;
                                 }
                             };
