@@ -148,3 +148,18 @@ impl<P: Platform + std::marker::Send + std::marker::Sync> Rift<P> {
     }
 
 }
+
+pub(crate) fn set_rack_id(addr: Ipv6Addr, rack_id: u8) -> Ipv6Addr {
+
+    let mut octets = addr.octets();
+    octets[6] = rack_id;
+    Ipv6Addr::from(octets)
+}
+
+pub(crate) fn set_compute_host_id(addr: Ipv6Addr, host_id: u8) -> Ipv6Addr {
+
+    let mut octets = addr.octets();
+    octets[7] = host_id;
+    Ipv6Addr::from(octets)
+
+}

@@ -23,6 +23,8 @@ use platform::{
     TIEPacketTx,
 };
 
+use crate::topology::topology_handler;
+
 pub(crate) struct Illumos {
     pub(crate) log: Logger,
 }
@@ -41,9 +43,14 @@ impl Platform for Illumos {
             result.push(LinkStatus{
                 name: l.name,
                 state: match l.state {
-                    netadm_sys::LinkState::Unknown => platform::LinkState::Unknown,
-                    netadm_sys::LinkState::Down => platform::LinkState::Down,
-                    netadm_sys::LinkState::Up => platform::LinkState::Up,
+                    netadm_sys::LinkState::Unknown =>
+                        platform::LinkState::Unknown,
+
+                    netadm_sys::LinkState::Down =>
+                        platform::LinkState::Down,
+
+                    netadm_sys::LinkState::Up =>
+                        platform::LinkState::Up,
                 }
             })
         }
@@ -52,19 +59,26 @@ impl Platform for Illumos {
 
     }
 
-    fn get_link_status(&self, link_name: impl AsRef<str>) -> Result<LinkStatus, Error> {
+    fn get_link_status(&self, link_name: impl AsRef<str>)
+    -> Result<LinkStatus, Error> {
         let _link_name = link_name.as_ref().to_string();
         match netadm_sys::linkname_to_id(&_link_name) {
             Err(e) => Err(Error::Platform(format!("linkname to id: {}", e))),
             Ok(id) => {
                 match netadm_sys::get_link(id) {
-                    Err(e) => Err(Error::Platform(format!("get link info: {}", e))),
+                    Err(e) => Err(
+                        Error::Platform(format!("get link info: {}", e))),
                     Ok(info) => Ok(LinkStatus{
                         name: info.name,
                         state: match info.state {
-                            netadm_sys::LinkState::Unknown => platform::LinkState::Unknown,
-                            netadm_sys::LinkState::Down => platform::LinkState::Down,
-                            netadm_sys::LinkState::Up => platform::LinkState::Up,
+                            netadm_sys::LinkState::Unknown =>
+                                platform::LinkState::Unknown,
+
+                            netadm_sys::LinkState::Down =>
+                                platform::LinkState::Down,
+
+                            netadm_sys::LinkState::Up =>
+                                platform::LinkState::Up,
                         },
                     })
                 }
@@ -72,14 +86,16 @@ impl Platform for Illumos {
         }
     }
 
-    fn get_interface_v6ll(&self, interface: impl AsRef<str>) -> Result<Option<IpIfAddr>, Error> {
+    fn get_interface_v6ll(&self, interface: impl AsRef<str>)
+    -> Result<Option<IpIfAddr>, Error> {
 
         //TODO provide a function in netadm_sys that gets addrs for a given
         //interface without having to iterate all the interfaces
 
         let addr_map = match netadm_sys::get_ipaddrs() {
             Ok(addrs) => addrs,
-            Err(e) => return Err(Error::Platform(format!("get ip addrs: {}", e))),
+            Err(e) => return Err(
+                Error::Platform(format!("get ip addrs: {}", e))),
         };
 
         for (ifname, addrs) in addr_map {
@@ -104,7 +120,8 @@ impl Platform for Illumos {
 
     }
 
-    fn advertise_rift_router(&self, interface: Option<IpIfAddr>) -> Result<(), Error> {
+    fn advertise_rift_router(&self, interface: Option<IpIfAddr>)
+    -> Result<(), Error> {
 
         let link_id = match interface.as_ref() {
             None => 0, // any interface
@@ -124,7 +141,8 @@ impl Platform for Illumos {
                 Error::Platform(format!("diable multicast loop: {}", e))
             )?;
 
-        let sa = SockAddr::from(SocketAddrV6::new(rift::RDP_MADDR, 0, 0, link_id as u32));
+        let sa = SockAddr::from(
+            SocketAddrV6::new(rift::RDP_MADDR, 0, 0, link_id as u32));
 
         let ra = RouterAdvertisement::new(
             1,          //hop limit
@@ -147,7 +165,8 @@ impl Platform for Illumos {
 
     }
 
-    fn solicit_rift_routers(&self, interface: Option<IpIfAddr>) -> Result<(), Error> {
+    fn solicit_rift_routers(&self, interface: Option<IpIfAddr>)
+    -> Result<(), Error> {
 
         let link_id = match interface.as_ref() {
             None => 0, // any interface
@@ -167,7 +186,8 @@ impl Platform for Illumos {
                 Error::Platform(format!("diable multicast loop: {}", e))
             )?;
 
-        let sa = SockAddr::from(SocketAddrV6::new(RDP_MADDR, 0, 0, link_id as u32));
+        let sa = SockAddr::from(
+            SocketAddrV6::new(RDP_MADDR, 0, 0, link_id as u32));
         let rs = RouterSolicitation::new(None);
         let wire = rs.wire();
 
@@ -179,7 +199,8 @@ impl Platform for Illumos {
 
     }
 
-    fn get_rdp_channel(&self, interface: Option<IpIfAddr>) -> Result<Receiver<RDPMessage>, Error> {
+    fn get_rdp_channel(&self, interface: Option<IpIfAddr>)
+    -> Result<Receiver<RDPMessage>, Error> {
 
         let link_id = match interface.as_ref() {
             None => 0, // any interface
@@ -257,22 +278,23 @@ impl Platform for Illumos {
     -> Result<(Sender<LIEPacket>, Receiver<LIEPacket>), Error> {
 
         // ingress channels
-        let (_itx, irx): (Sender<LIEPacket>, Receiver<LIEPacket>) = channel(32);
+        let (_itx, irx) = channel(32);
         let itx = Arc::new(Mutex::new(_itx));
 
         // egress channels
-        let (etx, mut erx): (Sender<LIEPacket>, Receiver<LIEPacket>) = channel(32);
+        let (etx, mut erx) = channel(32);
         let log = self.log.clone();
 
         spawn(async move { 
 
-            let mut server = match crate::link::link_handler(local, itx, log.clone()) {
-                Ok(s) => s,
-                Err(e) => {
-                    error!(log, "failed to crate dropshot server: {}", e);
-                    return;
-                }
-            };
+            let mut server = 
+                match crate::link::link_handler(local, itx, log.clone()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!(log, "failed to crate dropshot server: {}", e);
+                        return;
+                    }
+                };
 
             loop {
 
@@ -286,7 +308,8 @@ impl Platform for Illumos {
                                 error!(log, "linkinfo egress channel closed");
                                 match server.close().await {
                                     Ok(_) => {},
-                                    Err(e) => error!(log, "dropshot server close: {}", e),
+                                    Err(e) => error!(
+                                        log, "dropshot server close: {}", e),
                                 };
                                 return;
                             }
@@ -300,7 +323,12 @@ impl Platform for Illumos {
                             }
                         };
 
-                        let uri= format!("http://[{}%{}]:{}/linkinfo", peer, local_ifx, LINKINFO_PORT);
+                        let uri= format!(
+                            "http://[{}%{}]:{}/linkinfo",
+                            peer,
+                            local_ifx,
+                            LINKINFO_PORT);
+
                         let client = hyper::Client::new();
                         let req = match hyper::Request::builder()
                             .method(hyper::Method::POST)
@@ -327,7 +355,8 @@ impl Platform for Illumos {
 
                         match srv_result {
                             Ok(_) => {},
-                            Err(e) => error!(log, "dropshot server exit: {}", e),
+                            Err(e) => error!(log, 
+                                "dropshot server exit: {}", e),
                         };
 
                     }
@@ -341,19 +370,50 @@ impl Platform for Illumos {
         Ok((etx, irx))
 
     }
+
+    fn create_address(
+        &self,
+        interface: impl AsRef<str>,
+        addr: IpAddr,
+        mask: u8,
+    ) -> Result<(), Error> {
+
+        netadm_sys::create_ipaddr(
+            interface,
+            match addr {
+                IpAddr::V4(a) => netadm_sys::IpPrefix::V4(
+                    netadm_sys::Ipv4Prefix{
+                        addr: a,
+                        mask: mask,
+                    }
+                ),
+                IpAddr::V6(a) => netadm_sys::IpPrefix::V6(
+                    netadm_sys::Ipv6Prefix{
+                        addr: a,
+                        mask: mask,
+                    }
+                ),
+            }
+        ).map_err(|e| platform::error::Error::Platform(
+            format!("{}", e)
+        ))
+
+    }
     
-    fn get_topology_channel(&self) -> Result<(Sender<TIEPacketTx>, Receiver<TIEPacket>), Error> {
+    fn get_topology_channel(&self)
+    -> Result<(Sender<TIEPacketTx>, Receiver<TIEPacket>), Error> {
 
         // ingress channels
-        let (itx, irx): (Sender<TIEPacket>, Receiver<TIEPacket>) = channel(32);
+        let (itx, irx) = channel(32);
 
         // egress channels
-        let (etx, mut erx): (Sender<TIEPacketTx>, Receiver<TIEPacketTx>) = channel(32);
+        let (etx, mut erx): (Sender<TIEPacketTx>, Receiver<TIEPacketTx>) =
+            channel(32);
 
         let log = self.log.clone();
         spawn(async move {
 
-            let mut server = match crate::topology::topology_handler(itx, log.clone()) {
+            let mut server = match topology_handler(itx, log.clone()) {
                 Ok(s) => s,
                 Err(e) => {
                     error!(log, "failed to create dropshot server: {}", e);
@@ -370,7 +430,8 @@ impl Platform for Illumos {
                             error!(log, "topologyinfo egress channel closed");
                             match server.close().await {
                                 Ok(_) => {},
-                                Err(e) => error!(log, "dropshot server close: {}", e),
+                                Err(e) => error!(log, 
+                                    "dropshot server close: {}", e),
                             };
                             return;
                         }
@@ -384,7 +445,12 @@ impl Platform for Illumos {
                         }
                     };
 
-                    let uri= format!("http://[{}%{}]:{}/topoinfo", msg.dest, msg.local_ifx, TOPOLOGYINFO_PORT);
+                    let uri= format!(
+                        "http://[{}%{}]:{}/topoinfo",
+                        msg.dest,
+                        msg.local_ifx,
+                        TOPOLOGYINFO_PORT);
+
                     let client = hyper::Client::new();
                     let req = match hyper::Request::builder()
                         .method(hyper::Method::POST)

@@ -1,7 +1,15 @@
 // Copyright 2021 Oxide Computer Company
 
-use crate::{runtime_error, config::Config};
-use std::net::Ipv6Addr;
+use crate::{
+    runtime_error, 
+    config::Config,
+    set_rack_id,
+    set_compute_host_id,
+};
+use std::net::{
+    IpAddr,
+    Ipv6Addr,
+};
 use rift_protocol::{
     Header,
     lie::{LIEPacket, Neighbor, UnderlayInit}, 
@@ -241,7 +249,8 @@ impl LinkSM {
                 &peer_event_tx,
             ).await {
                 Err(e) => {
-                    link_error!(log, &link_name, e, "handle link state change");
+                    link_error!(
+                        log, &link_name, e, "handle link state change");
                     loop_continue!(QUANTUM);
                 }
                 Ok(_) => {},
@@ -318,13 +327,14 @@ impl LinkSM {
 
             link_trace!(log, link_name, "solicit");
 
-            let (v6ll, rdp_rx) = match get_rdp_channel(&state, &platform).await {
-                Ok(r) => r,
-                Err(e) => {
-                    link_error!(log, link_name, e, "get rdp channel");
-                    loop_continue!(QUANTUM);
-                }
-            };
+            let (v6ll, rdp_rx) =
+                match get_rdp_channel(&state, &platform).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        link_error!(log, link_name, e, "get rdp channel");
+                        loop_continue!(QUANTUM);
+                    }
+                };
 
             let quit = Arc::new(AtomicBool::new(false));
 
@@ -368,7 +378,8 @@ impl LinkSM {
                 link_trace!(log, link_name, "solicit: event received");
                 match event {
                     Event::LinkDown => {
-                        link_warn!(log, link_name, "link lost exiting solicit");
+                        link_warn!(
+                            log, link_name, "link lost exiting solicit");
                         quit.store(true, Ordering::Relaxed);
                         return
                     }
@@ -421,6 +432,7 @@ impl LinkSM {
             local_ifx).await;
 
         one_way_loop(
+            platform.clone(),
             log.clone(), 
             link_name.clone(), 
             state.clone(),
@@ -630,7 +642,8 @@ async fn advertise_solicit_rx_loop<P: Platform + Send + Sync + 'static>(
 
 }
 
-fn one_way_loop(
+fn one_way_loop<P: Platform + Send + Sync + 'static>(
+    platform: Arc::<Mutex::<P>>,
     log: slog::Logger,
     link_name: String,
     state: Arc::<Mutex::<LinkSMState>>,
@@ -652,7 +665,8 @@ fn one_way_loop(
                 break;
             }
 
-            let tx_msg = match create_lie_packet(&log, &link_name, &state).await {
+            let tx_msg = match create_lie_packet(
+                &log, &link_name, &state).await {
                 Err(e) => {
                     link_error!(log, link_name, e, "create LIE packet");
                     loop_continue!(QUANTUM);
@@ -702,6 +716,7 @@ fn one_way_loop(
                                     s.current = State::TwoWay;
                                     drop(s);
                                     two_way_loop(
+                                        &platform,
                                         &log,
                                         &link_name,
                                         &state,
@@ -726,7 +741,8 @@ fn one_way_loop(
 
 }
 
-async fn two_way_loop(
+async fn two_way_loop<P: Platform + Send + Sync + 'static>(
+    platform: &Arc::<Mutex::<P>>,
     log: &slog::Logger,
     link_name: &String,
     state: &Arc::<Mutex::<LinkSMState>>,
@@ -772,7 +788,8 @@ async fn two_way_loop(
 
                 match rx_result {
                     None => {
-                        link_warn!(log, link_name, "two-way LIE channel closed");
+                        link_warn!(log, link_name, 
+                            "two-way LIE channel closed");
                         break;
                     }
                     Some(msg) => {
@@ -797,6 +814,7 @@ async fn two_way_loop(
                                    "valid reflection, \
                                    transitioning to three-way adjacency");
                                three_way_loop(
+                                   platform,
                                    log,
                                    link_name,
                                    state,
@@ -809,7 +827,8 @@ async fn two_way_loop(
                                loop_continue!(QUANTUM);
                         } else {
                             link_warn!(log, link_name, 
-                                "invalid reflection: {:#?} returning to one-way", 
+                                "invalid reflection: {:#?}\
+                                returning to one-way", 
                                 msg.neighbor);
                             s.current = State::OneWay;
                             return;
@@ -827,7 +846,8 @@ async fn two_way_loop(
 
 }
 
-async fn three_way_loop(
+async fn three_way_loop<P: Platform + Send + Sync + 'static>(
+    platform: &Arc::<Mutex::<P>>,
     log: &slog::Logger,
     link_name: &String,
     state: &Arc::<Mutex::<LinkSMState>>,
@@ -945,7 +965,9 @@ async fn three_way_loop(
 
                         // check for underlay init
                         match msg.underlay_init {
-                            Some(u) => handle_underlay_init(u),
+                            Some(u) => {
+                                handle_underlay_init(platform, log, u).await;
+                            }
                             None => {}
                         }
 
@@ -992,7 +1014,29 @@ async fn three_way_loop(
 
 }
 
-fn handle_underlay_init(underlay_init: UnderlayInit) {
+async fn handle_underlay_init<P: Platform + Send + Sync + 'static>(
+    platform: &Arc::<Mutex::<P>>,
+    log: &slog::Logger,
+    underlay_init: UnderlayInit,
+) {
+
+    let prefix = u128::from(underlay_init.prefix.addr);
+    let addr = Ipv6Addr::from(prefix + 1);
+
+    match platform.lock().await.create_address(
+        //TODO assuming loopback zero
+        "lo0/underlay",
+        IpAddr::V6(addr),
+        underlay_init.prefix.mask,
+    ) {
+
+        Ok(()) => {}
+        Err(e) => {
+            error!(log, "create underlay address: {}", e);
+        }
+
+    }
+
 }
 
 async fn create_lie_packet(
@@ -1047,9 +1091,14 @@ async fn create_lie_packet(
             }
         },
         neighbor: nbr,
-        underlay_init: match s.config.prefix {
+        underlay_init: match s.config.rack_router {
             None => None,
-            Some(prefix) => Some(UnderlayInit{ prefix }),
+            Some(rr) => {
+                let mut prefix = rr.prefix;
+                prefix.addr = set_rack_id(prefix.addr, rr.rack_id);
+                prefix.addr = set_compute_host_id(prefix.addr, link_id as u8);
+                Some(UnderlayInit{ prefix })
+            },
         },
         ..Default::default()
     })

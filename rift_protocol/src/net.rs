@@ -14,7 +14,7 @@ pub struct Ipv6Prefix {
 
 #[derive(Debug, Error)]
 pub enum Ipv6PrefixParseError {
-    #[error("expected CIDR representation <addr>/<mask")]
+    #[error("expected CIDR representation <addr>/<mask>")]
     Cidr,
 
     #[error("address parse error: {0}")]

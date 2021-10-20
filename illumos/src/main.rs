@@ -3,7 +3,10 @@
 #![feature(ip)]
 #![feature(maybe_uninit_slice)]
 
-use rift::{Rift, config::Config};
+use rift::{
+    Rift, 
+    config::{Config, RackRouterConfig},
+};
 use rift_protocol::{Level, net::Ipv6Prefix};
 use slog;
 use slog_term;
@@ -29,9 +32,35 @@ mod topology;
 struct Opts {
     #[clap(short, long, parse(from_occurrences))]
     verbose: i32,
+
+    #[clap(subcommand)]
+    subcmd: SubCommand,
+}
+
+#[derive(Clap)]
+#[clap(setting = AppSettings::ColoredHelp)]
+#[clap(setting = AppSettings::InferSubcommands)]
+struct ComputeRouter {
     id: u64,
     level: Level,
-    prefix: Option<Ipv6Prefix>,
+}
+
+#[derive(Clap)]
+#[clap(setting = AppSettings::ColoredHelp)]
+#[clap(setting = AppSettings::InferSubcommands)]
+struct RackRouter {
+    id: u64,
+    level: Level,
+    rack_id: u8,
+    prefix: Ipv6Prefix,
+}
+
+#[derive(Clap)]
+enum SubCommand {
+    #[clap(about = "run as a rack router")]
+    Rack(RackRouter),
+    #[clap(about = "run as a compute host router")]
+    Compute(ComputeRouter),
 }
 
 
@@ -43,15 +72,30 @@ async fn main() -> Result<(), String> {
     let drain = slog_envlogger::new(drain).fuse();
     let drain = slog_async::Async::new(drain).build().fuse();
     let log = slog::Logger::root(drain, slog::o!());
+    let ilu = Arc::new(Mutex::new(crate::platform::Illumos{log: log.clone()}));
 
     let opts: Opts = Opts::parse();
 
-    let ilu = Arc::new(Mutex::new(crate::platform::Illumos{log: log.clone()}));
-    let mut riftp = Rift::new(ilu, log.clone(), Config{
-        id: opts.id,
-        level: opts.level,
-        prefix: opts.prefix,
-    });
+    let mut riftp = match opts.subcmd {
+        SubCommand::Rack(r) => {
+            Rift::new(ilu, log.clone(), Config{
+                id: r.id,
+                level: r.level,
+                rack_router: Some(RackRouterConfig{
+                    prefix: r.prefix,
+                    rack_id: r.rack_id,
+                }),
+            })
+        }
+        SubCommand::Compute(c) => {
+            Rift::new(ilu, log.clone(), Config{
+                id: c.id,
+                level: c.level,
+                rack_router: None,
+            })
+        }
+    };
+
     match riftp.run().await {
         Ok(()) => warn!(log, "early exit?"),
         Err(e) => error!(log, "rift: {}", e),

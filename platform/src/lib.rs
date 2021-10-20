@@ -7,11 +7,14 @@ use std::hash::{Hash, Hasher};
 use error::Error;
 use icmpv6::RDPMessage;
 use tokio::sync::mpsc::{Sender, Receiver};
-use std::net::Ipv6Addr;
 use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
 use rift_protocol::lie::LIEPacket;
 use rift_protocol::tie::TIEPacket;
+use std::net::{
+    IpAddr,
+    Ipv6Addr,
+};
 
 pub struct TIEPacketTx {
     pub packet: TIEPacket,
@@ -22,20 +25,37 @@ pub struct TIEPacketTx {
 pub trait Platform {
     // Local platform state
     fn get_links(&self) -> Result<Vec<LinkStatus>, Error>;
-    fn get_link_status(&self, link_name: impl AsRef<str>) -> Result<LinkStatus, Error>;
-    fn get_interface_v6ll(&self, interface: impl AsRef<str>) -> Result<Option<IpIfAddr>, Error>;
+
+    fn get_link_status(&self, link_name: impl AsRef<str>)
+    -> Result<LinkStatus, Error>;
+
+    fn get_interface_v6ll(&self, interface: impl AsRef<str>)
+    -> Result<Option<IpIfAddr>, Error>;
+
+    fn create_address(
+        &self,
+        interface: impl AsRef<str>,
+        addr: IpAddr,
+        mask: u8,
+    ) -> Result<(), Error>;
 
     // IPv6 RDP
-    fn solicit_rift_routers(&self, interface: Option<IpIfAddr>) -> Result<(), Error>;
-    fn advertise_rift_router(&self, interface: Option<IpIfAddr>) -> Result<(), Error>;
-    fn get_rdp_channel(&self, interface: Option<IpIfAddr>) -> Result<Receiver<RDPMessage>, Error>;
+    fn solicit_rift_routers(&self, interface: Option<IpIfAddr>)
+    -> Result<(), Error>;
+
+    fn advertise_rift_router(&self, interface: Option<IpIfAddr>)
+    -> Result<(), Error>;
+
+    fn get_rdp_channel(&self, interface: Option<IpIfAddr>)
+    -> Result<Receiver<RDPMessage>, Error>;
 
     // RIFT Link Element Exchange (LIE)
     fn get_link_channel(&self, local: Ipv6Addr, peer: Ipv6Addr, local_ifx: i32) 
     -> Result<(Sender<LIEPacket>, Receiver<LIEPacket>), Error>;
 
     // RIFT Topology Element Exchange (TIE)
-    fn get_topology_channel(&self) -> Result<(Sender<TIEPacketTx>, Receiver<TIEPacket>), Error>;
+    fn get_topology_channel(&self)
+    -> Result<(Sender<TIEPacketTx>, Receiver<TIEPacket>), Error>;
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]

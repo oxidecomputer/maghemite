@@ -44,11 +44,19 @@ fn do_run() -> Result<()> {
 
            d.exec(h0, "ipadm create-addr -t -T addrconf quartet_h0_vnic0/v6")?;
            d.exec(h0, "ipadm create-addr -t -T addrconf quartet_h0_vnic1/v6")?;
-           d.exec(h0, "ipadm create-addr -t -T static fd00:1701:d:101::1/64 lo0/underlay")?;
+           /*XXX via automatic underlay init now
+           d.exec(h0,
+               "ipadm create-addr -t -T static \
+               -a fd00:1701:d:101::1/64 lo0/underlay")?;
+           */
 
            d.exec(h1, "ipadm create-addr -t -T addrconf quartet_h1_vnic0/v6")?;
            d.exec(h1, "ipadm create-addr -t -T addrconf quartet_h1_vnic1/v6")?;
-           d.exec(h1, "ipadm create-addr -t -T static fd00:1701:d:102::1/64 lo0/underlay")?;
+           /*XXX via automatic underlay init now
+           d.exec(h1,
+               "ipadm create-addr -t -T \
+               static -a fd00:1701:d:102::1/64 lo0/underlay")?;
+           */
            Ok(())
         }
         _ => Ok(()),
