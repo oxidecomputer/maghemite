@@ -371,12 +371,21 @@ impl Platform for Illumos {
 
     }
 
-    fn create_address(
+    fn ensure_address_present(
         &self,
         interface: impl AsRef<str>,
         addr: IpAddr,
         mask: u8,
     ) -> Result<(), Error> {
+
+        let exists = netadm_sys::ipaddr_exists(interface.as_ref())
+            .map_err(|e| platform::error::Error::Platform(
+                    format!("{}", e)
+            ))?;
+
+        if exists {
+            return Ok(());
+        }
 
         netadm_sys::create_ipaddr(
             interface,

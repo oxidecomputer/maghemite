@@ -32,7 +32,7 @@ pub trait Platform {
     fn get_interface_v6ll(&self, interface: impl AsRef<str>)
     -> Result<Option<IpIfAddr>, Error>;
 
-    fn create_address(
+    fn ensure_address_present(
         &self,
         interface: impl AsRef<str>,
         addr: IpAddr,

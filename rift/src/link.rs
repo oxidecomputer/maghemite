@@ -1023,7 +1023,7 @@ async fn handle_underlay_init<P: Platform + Send + Sync + 'static>(
     let prefix = u128::from(underlay_init.prefix.addr);
     let addr = Ipv6Addr::from(prefix + 1);
 
-    match platform.lock().await.create_address(
+    match platform.lock().await.ensure_address_present(
         //TODO assuming loopback zero
         "lo0/underlay",
         IpAddr::V6(addr),
