@@ -1,15 +1,8 @@
 // Copyright 2021 Oxide Computer Company
 
-use libfalcon::{cli::{run, RunMode}, Deployment};
-use anyhow::{Result};
+use libfalcon::{cli::{run, RunMode}, error::Error, Deployment};
 
-fn main() {
-
-    println!("{:?}", do_run());
-
-}
-
-fn do_run() -> Result<()> {
+fn main() -> Result<(), Error> {
 
     let mut d = Deployment::new("duo");
 
@@ -24,12 +17,15 @@ fn do_run() -> Result<()> {
     d.link(r0, r1);
 
     match run(&mut d) {
-        RunMode::Launch => {
-           d.exec(r0, "ipadm create-addr -t -T addrconf duo_r0_vnic0/v6")?;
-           d.exec(r1, "ipadm create-addr -t -T addrconf duo_r1_vnic0/v6")?;
-           Ok(())
+        Ok(mode) => match mode {
+            RunMode::Launch => {
+                d.exec(r0, "ipadm create-addr -t -T addrconf duo_r0_vnic0/v6")?;
+                d.exec(r1, "ipadm create-addr -t -T addrconf duo_r1_vnic0/v6")?;
+                Ok(())
+            }
+            RunMode::Destroy => Ok(()),
         }
-        _ => Ok(()),
+        Err(e) => Err(e),
     }
 
 }
