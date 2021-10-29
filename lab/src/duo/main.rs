@@ -19,8 +19,8 @@ async fn main() -> Result<(), Error> {
 
     match run(&mut d).await? {
         RunMode::Launch => {
-            d.exec(r0, "ipadm create-addr -t -T addrconf duo_r0_vnic0/v6")?;
-            d.exec(r1, "ipadm create-addr -t -T addrconf duo_r1_vnic0/v6")?;
+            d.exec(r0, "ipadm create-addr -t -T addrconf duo_r0_vnic0/v6").await?;
+            d.exec(r1, "ipadm create-addr -t -T addrconf duo_r1_vnic0/v6").await?;
             Ok(())
         }
         RunMode::Destroy => Ok(()),

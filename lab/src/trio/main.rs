@@ -22,10 +22,10 @@ async fn main() -> Result<(), Error> {
 
     match run(&mut d).await? {
         RunMode::Launch => {
-            d.exec(r, "ipadm create-addr -t -T addrconf trio_r_vnic0/v6")?;
-            d.exec(r, "ipadm create-addr -t -T addrconf trio_r_vnic1/v6")?;
-            d.exec(h0, "ipadm create-addr -t -T addrconf trio_h0_vnic0/v6")?;
-            d.exec(h1, "ipadm create-addr -t -T addrconf trio_h1_vnic0/v6")?;
+            d.exec(r, "ipadm create-addr -t -T addrconf trio_r_vnic0/v6").await?;
+            d.exec(r, "ipadm create-addr -t -T addrconf trio_r_vnic1/v6").await?;
+            d.exec(h0, "ipadm create-addr -t -T addrconf trio_h0_vnic0/v6").await?;
+            d.exec(h1, "ipadm create-addr -t -T addrconf trio_h1_vnic0/v6").await?;
             Ok(())
         },
         RunMode::Destroy => Ok(()),

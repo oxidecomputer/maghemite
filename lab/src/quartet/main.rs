@@ -26,26 +26,26 @@ async fn main() -> Result<(), Error> {
 
     match run(&mut d).await? {
         RunMode::Launch => {
-            d.exec(r0, "ipadm create-addr -t -T addrconf quartet_r0_vnic0/v6")?;
-            d.exec(r0, "ipadm create-addr -t -T addrconf quartet_r0_vnic1/v6")?;
-            d.exec(r0, "routeadm -e ipv6-forwarding")?;
-            d.exec(r0, "routeadm -u")?;
+            d.exec(r0, "ipadm create-addr -t -T addrconf quartet_r0_vnic0/v6").await?;
+            d.exec(r0, "ipadm create-addr -t -T addrconf quartet_r0_vnic1/v6").await?;
+            d.exec(r0, "routeadm -e ipv6-forwarding").await?;
+            d.exec(r0, "routeadm -u").await?;
 
-            d.exec(r1, "ipadm create-addr -t -T addrconf quartet_r1_vnic0/v6")?;
-            d.exec(r1, "ipadm create-addr -t -T addrconf quartet_r1_vnic1/v6")?;
-            d.exec(r1, "routeadm -e ipv6-forwarding")?;
-            d.exec(r1, "routeadm -u")?;
+            d.exec(r1, "ipadm create-addr -t -T addrconf quartet_r1_vnic0/v6").await?;
+            d.exec(r1, "ipadm create-addr -t -T addrconf quartet_r1_vnic1/v6").await?;
+            d.exec(r1, "routeadm -e ipv6-forwarding").await?;
+            d.exec(r1, "routeadm -u").await?;
 
-            d.exec(h0, "ipadm create-addr -t -T addrconf quartet_h0_vnic0/v6")?;
-            d.exec(h0, "ipadm create-addr -t -T addrconf quartet_h0_vnic1/v6")?;
+            d.exec(h0, "ipadm create-addr -t -T addrconf quartet_h0_vnic0/v6").await?;
+            d.exec(h0, "ipadm create-addr -t -T addrconf quartet_h0_vnic1/v6").await?;
             /*XXX via automatic underlay init now
               d.exec(h0,
               "ipadm create-addr -t -T static \
               -a fd00:1701:d:101::1/64 lo0/underlay")?;
               */
 
-            d.exec(h1, "ipadm create-addr -t -T addrconf quartet_h1_vnic0/v6")?;
-            d.exec(h1, "ipadm create-addr -t -T addrconf quartet_h1_vnic1/v6")?;
+            d.exec(h1, "ipadm create-addr -t -T addrconf quartet_h1_vnic0/v6").await?;
+            d.exec(h1, "ipadm create-addr -t -T addrconf quartet_h1_vnic1/v6").await?;
             /*XXX via automatic underlay init now
               d.exec(h1,
               "ipadm create-addr -t -T \

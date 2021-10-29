@@ -37,7 +37,7 @@ pub trait Platform {
     fn get_interface_v6ll(&self, interface: impl AsRef<str>)
     -> Result<Option<IpIfAddr>, Error>;
 
-    /// Ensure that the provide address is present for the named interface
+    /// Ensure that the provided address is present for the named interface
     fn ensure_address_present(
         &self,
         interface: impl AsRef<str>,
@@ -45,9 +45,13 @@ pub trait Platform {
         mask: u8,
     ) -> Result<(), Error>;
 
-
+    /// Get all current routes
     fn get_routes(&self) -> Result<Vec::<Route>, Error>;
+
+    /// Set a route
     fn set_route(&self, route: Route) -> Result<(), Error>;
+
+    /// Clear a route
     fn clear_route(&self, route: Route) -> Result<(), Error>;
 
     // IPv6 RDP
