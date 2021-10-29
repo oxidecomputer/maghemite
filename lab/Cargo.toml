@@ -8,6 +8,7 @@ edition = "2018"
 [dependencies]
 libfalcon = { path = "/home/ry/falcon/lib" }
 anyhow = "1.0"
+tokio = { version = "1", features = ["full"] }
 
 [[bin]]
 name = "duo"

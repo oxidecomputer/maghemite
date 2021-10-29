@@ -1,21 +1,16 @@
 // Copyright 2021 Oxide Computer Company
 
-use libfalcon::{cli::{run, RunMode}, error::Error, Deployment};
+use libfalcon::{cli::{run, RunMode}, error::Error, Runner};
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), Error> {
 
-    println!("{:?}", do_run());
-
-}
-
-fn do_run() -> Result<(), Error> {
-
-    let mut d = Deployment::new("trio");
+    let mut d = Runner::new("trio");
 
     // nodes
-    let r = d.zone("r");
-    let h0 = d.zone("h0");
-    let h1 = d.zone("h1");
+    let r = d.node("r", "helios");
+    let h0 = d.node("h0", "helios");
+    let h1 = d.node("h1", "helios");
 
     d.mount("..", "/opt/maghemite", r)?;
     d.mount("..", "/opt/maghemite", h0)?;
@@ -25,18 +20,15 @@ fn do_run() -> Result<(), Error> {
     d.link(r, h0);
     d.link(r, h1);
 
-    match run(&mut d) {
-        Ok(mode) => match mode {
-            RunMode::Launch => {
-                d.exec(r, "ipadm create-addr -t -T addrconf trio_r_vnic0/v6")?;
-                d.exec(r, "ipadm create-addr -t -T addrconf trio_r_vnic1/v6")?;
-                d.exec(h0, "ipadm create-addr -t -T addrconf trio_h0_vnic0/v6")?;
-                d.exec(h1, "ipadm create-addr -t -T addrconf trio_h1_vnic0/v6")?;
-                Ok(())
-            },
-            RunMode::Destroy => Ok(()),
-        }
-        Err(e) => Err(e),
+    match run(&mut d).await? {
+        RunMode::Launch => {
+            d.exec(r, "ipadm create-addr -t -T addrconf trio_r_vnic0/v6")?;
+            d.exec(r, "ipadm create-addr -t -T addrconf trio_r_vnic1/v6")?;
+            d.exec(h0, "ipadm create-addr -t -T addrconf trio_h0_vnic0/v6")?;
+            d.exec(h1, "ipadm create-addr -t -T addrconf trio_h1_vnic0/v6")?;
+            Ok(())
+        },
+        RunMode::Destroy => Ok(()),
     }
 
 }

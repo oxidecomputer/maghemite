@@ -21,6 +21,7 @@ use platform::{
     LinkStatus,
     error::Error,
     TIEPacketTx,
+    Route,
 };
 
 use crate::topology::topology_handler;
@@ -407,6 +408,18 @@ impl Platform for Illumos {
             format!("{}", e)
         ))
 
+    }
+
+    fn get_routes(&self) -> Result<Vec::<Route>, Error> {
+        Err(Error::NotImplemented("get_routes".to_string()))
+    }
+
+    fn set_route(&self, _route: Route) -> Result<(), Error> {
+        Err(Error::NotImplemented("set_route".to_string()))
+    }
+
+    fn clear_route(&self, _route: Route) -> Result<(), Error> {
+        Err(Error::NotImplemented("clear_route".to_string()))
     }
     
     fn get_topology_channel(&self)
