@@ -13,10 +13,10 @@ async fn main() -> Result<(), Error> {
     let h0 = d.node("h0", "helios");
     let h1 = d.node("h1", "helios");
 
-    d.mount("..", "/opt/maghemite", r0)?;
-    d.mount("..", "/opt/maghemite", r1)?;
-    d.mount("..", "/opt/maghemite", h0)?;
-    d.mount("..", "/opt/maghemite", h1)?;
+    d.mount("./cargo-bay", "/opt/cargo-bay", r0)?;
+    d.mount("./cargo-bay", "/opt/cargo-bay", r1)?;
+    d.mount("./cargo-bay", "/opt/cargo-bay", h0)?;
+    d.mount("./cargo-bay", "/opt/cargo-bay", h1)?;
 
     // links
     d.link(r0, h0);
@@ -26,31 +26,21 @@ async fn main() -> Result<(), Error> {
 
     match run(&mut d).await? {
         RunMode::Launch => {
-            d.exec(r0, "ipadm create-addr -t -T addrconf quartet_r0_vnic0/v6").await?;
-            d.exec(r0, "ipadm create-addr -t -T addrconf quartet_r0_vnic1/v6").await?;
+            d.exec(r0, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
+            d.exec(r0, "ipadm create-addr -t -T addrconf vioif1/v6").await?;
             d.exec(r0, "routeadm -e ipv6-forwarding").await?;
             d.exec(r0, "routeadm -u").await?;
 
-            d.exec(r1, "ipadm create-addr -t -T addrconf quartet_r1_vnic0/v6").await?;
-            d.exec(r1, "ipadm create-addr -t -T addrconf quartet_r1_vnic1/v6").await?;
+            d.exec(r1, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
+            d.exec(r1, "ipadm create-addr -t -T addrconf vioif1/v6").await?;
             d.exec(r1, "routeadm -e ipv6-forwarding").await?;
             d.exec(r1, "routeadm -u").await?;
 
-            d.exec(h0, "ipadm create-addr -t -T addrconf quartet_h0_vnic0/v6").await?;
-            d.exec(h0, "ipadm create-addr -t -T addrconf quartet_h0_vnic1/v6").await?;
-            /*XXX via automatic underlay init now
-              d.exec(h0,
-              "ipadm create-addr -t -T static \
-              -a fd00:1701:d:101::1/64 lo0/underlay")?;
-              */
+            d.exec(h0, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
+            d.exec(h0, "ipadm create-addr -t -T addrconf vioif1/v6").await?;
 
-            d.exec(h1, "ipadm create-addr -t -T addrconf quartet_h1_vnic0/v6").await?;
-            d.exec(h1, "ipadm create-addr -t -T addrconf quartet_h1_vnic1/v6").await?;
-            /*XXX via automatic underlay init now
-              d.exec(h1,
-              "ipadm create-addr -t -T \
-              static -a fd00:1701:d:102::1/64 lo0/underlay")?;
-              */
+            d.exec(h1, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
+            d.exec(h1, "ipadm create-addr -t -T addrconf vioif1/v6").await?;
             Ok(())
         },
         RunMode::Destroy => Ok(()),

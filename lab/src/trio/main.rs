@@ -12,9 +12,9 @@ async fn main() -> Result<(), Error> {
     let h0 = d.node("h0", "helios");
     let h1 = d.node("h1", "helios");
 
-    d.mount("..", "/opt/maghemite", r)?;
-    d.mount("..", "/opt/maghemite", h0)?;
-    d.mount("..", "/opt/maghemite", h1)?;
+    d.mount("./cargo-bay", "/opt/cargo-bay", r)?;
+    d.mount("./cargo-bay", "/opt/cargo-bay", h0)?;
+    d.mount("./cargo-bay", "/opt/cargo-bay", h1)?;
 
     // links
     d.link(r, h0);
@@ -22,10 +22,10 @@ async fn main() -> Result<(), Error> {
 
     match run(&mut d).await? {
         RunMode::Launch => {
-            d.exec(r, "ipadm create-addr -t -T addrconf trio_r_vnic0/v6").await?;
-            d.exec(r, "ipadm create-addr -t -T addrconf trio_r_vnic1/v6").await?;
-            d.exec(h0, "ipadm create-addr -t -T addrconf trio_h0_vnic0/v6").await?;
-            d.exec(h1, "ipadm create-addr -t -T addrconf trio_h1_vnic0/v6").await?;
+            d.exec(r, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
+            d.exec(r, "ipadm create-addr -t -T addrconf vioif1/v6").await?;
+            d.exec(h0, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
+            d.exec(h1, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
             Ok(())
         },
         RunMode::Destroy => Ok(()),

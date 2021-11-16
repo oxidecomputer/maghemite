@@ -11,16 +11,16 @@ async fn main() -> Result<(), Error> {
     let r0 = d.node("r0", "helios");
     let r1 = d.node("r1", "helios");
 
-    d.mount("..", "/opt/maghemite", r0)?;
-    d.mount("..", "/opt/maghemite", r1)?;
+    d.mount("./cargo-bay", "/opt/cargo-bay", r0)?;
+    d.mount("./cargo-bay", "/opt/cargo-bay", r1)?;
 
     // links
     d.link(r0, r1);
 
     match run(&mut d).await? {
         RunMode::Launch => {
-            d.exec(r0, "ipadm create-addr -t -T addrconf duo_r0_vnic0/v6").await?;
-            d.exec(r1, "ipadm create-addr -t -T addrconf duo_r1_vnic0/v6").await?;
+            d.exec(r0, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
+            d.exec(r1, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
             Ok(())
         }
         RunMode::Destroy => Ok(()),
