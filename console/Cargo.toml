@@ -1,0 +1,8 @@
+[package]
+name = "mg-console"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tui = "0.16"
+termion = "1.5"

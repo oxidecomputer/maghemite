@@ -1,8 +1,10 @@
 use std::collections::{HashMap, BTreeSet};
 use std::cmp::{Eq, Ord};
 use std::hash::Hash;
+use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct Graph<Key: Eq + Hash> {
     // a -> b @ cost
     pub adj: HashMap<Key, HashMap<Key, u64>>,

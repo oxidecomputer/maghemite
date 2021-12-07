@@ -20,6 +20,7 @@ use crate::{router_info};
 use crate::config::Config;
 use crate::router::{RouterState, PeerStatus, RouterInfo};
 use crate::net::Ipv6Prefix;
+use crate::graph::Graph;
 
 pub struct ArcAdmContext {
     pub config: Config,
@@ -36,7 +37,7 @@ async fn adm_ping(
 
 }
 
-#[endpoint { method = GET, path = "/peers"}]
+#[endpoint { method = GET, path = "/peers" }]
 async fn get_peers(
     ctx: Arc<RequestContext<ArcAdmContext>>,
 ) -> Result<HttpResponseOk<HashMap::<String, PeerStatus>>, HttpError> {
@@ -47,7 +48,7 @@ async fn get_peers(
 
 }
 
-#[endpoint { method = GET, path = "/remote_prefixes"}]
+#[endpoint { method = GET, path = "/remote_prefixes" }]
 async fn get_remote_prefixes(
     ctx: Arc<RequestContext<ArcAdmContext>>,
 ) -> Result<HttpResponseOk<
@@ -59,6 +60,17 @@ async fn get_remote_prefixes(
 
     Ok(HttpResponseOk(api_context.state.lock().await.remote_prefixes.clone()))
 
+}
+
+#[endpoint { method = GET, path = "/graph" }]
+async fn get_graph(
+    ctx: Arc<RequestContext<ArcAdmContext>>,
+) -> Result<HttpResponseOk<Graph::<String>>, HttpError> {
+
+    let api_context = ctx.context();
+
+    Ok(HttpResponseOk(api_context.state.lock().await.graph.clone()))
+    
 }
 
 #[endpoint { method = PUT, path = "/prefix" }]
@@ -104,6 +116,7 @@ pub(crate) async fn handler(
     api.register(get_peers)?;
     api.register(advertise_prefix)?;
     api.register(get_remote_prefixes)?;
+    api.register(get_graph)?;
 
     let api_context = ArcAdmContext{config, state, local_prefix_notifier};
 

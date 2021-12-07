@@ -82,7 +82,9 @@ pub struct Peer {
 impl Router {
 
     pub fn new(name: String, kind: RouterKind) -> Self {
-        let (tx, _) = broadcast::channel(0x20);
+        // TODO This channel should not need to be anywhere near this big ....
+        // .    some major contention going on somehwere
+        let (tx, _) = broadcast::channel(0x2000);
         Router{
             info: RouterInfo{name, kind},
             state: Arc::new(Mutex::new(RouterState::new())),
@@ -298,16 +300,18 @@ impl Router {
 
 
         // send out periodic link state updates
-        if peer.kind == RouterKind::Transit {
+        {
             let local = local.clone();
             let tx = tx.clone();
             let log = log.clone();
+            let state = state.clone();
+            let lsupdate = lsupdate.clone();
             spawn(async move { loop {
 
                 // TODO we should only send out a link update when there is
                 // actually some delta from our last, but we need rate info
                 // to determine that, so just fire at will for now.
-                let link_update = SrpMessage::Link(SrpLink{
+                let link = SrpLink{
                     origin: local.name.clone(),
                     neighbor: peer.name.clone(),
                     capacity: 0, // TODO
@@ -315,16 +319,56 @@ impl Router {
                     ingress_rate: 0, // TODO
                     // TODO not yet sure what Ordering should be here
                     serial: linkstate_counter.fetch_add(1, Ordering::Relaxed),
-                }); 
+                };
+
+                // first update our own state
+                // locked region
+                if local.kind == RouterKind::Transit {
+                    let mut locked_state = state.lock().await;
+                    locked_state.links.insert(link.clone());
+                    locked_state.graph.one_way_insert(
+                        link.origin.clone(),
+                        link.neighbor.clone(),
+                        link.ingress_rate,
+                    );
+                }
 
 
-                match tx.send(link_update).await {
-                    Ok(_) => {},
-                    Err(e) => {
-                        router_error!(
-                            log, local.name, e, "send arc link update: {}");
+                /*
+
+                TODO this only works if transit routers relay link state
+                     messages. Which is something we should probably consider
+                     anyhow. In fact it may be necessary in some cases. A
+                     single Oxide rack is a bipartite graph with one set being
+                     the servers and the other being the sidecars. In this case
+                     it's clear that without link-state message relay by the
+                     server-level routers, the rack level routers will never
+                     observe each others link state.
+
+                let link_update = SrpMessage::Link(link.clone()); 
+                if peer.kind == RouterKind::Transit {
+                    match tx.send(link_update).await {
+                        Ok(_) => {},
+                        Err(e) => {
+                            router_error!(
+                                log, local.name, e, "send arc link update: {}");
+                        }
                     }
                 }
+                */
+                // broadcast to transit peers
+                match lsupdate.send(link) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        router_error!(
+                            log, 
+                            local.name, 
+                            e,
+                            "lsupdate send"
+                        )
+                    }
+                }
+
 
                 sleep(Duration::from_millis(100)).await;
 
@@ -409,7 +453,7 @@ impl Router {
                 match rx.recv().await {
                     Some(msg) => {
 
-                        router_info!(log, local.name, "arc rx: {:?}", msg);
+                        router_trace!(log, local.name, "srp rx: {:?}", msg);
 
                         match msg {
                             SrpMessage::Prefix(p) => {
@@ -435,6 +479,9 @@ impl Router {
                             }
 
                             SrpMessage::Link(l) => {
+                                router_trace!(
+                                    log, local.name, "srp link rx: {:?}", l);
+
                                 if local.kind != RouterKind::Transit {
                                     router_warn!(
                                         log,
@@ -472,7 +519,7 @@ impl Router {
                                     );
                                 }
 
-                                // push the update out our other peers
+                                // push the update to our other peers
                                 match lsupdate.send(l) {
                                     Ok(_) => {}
                                     Err(e) => {
@@ -503,7 +550,7 @@ impl Router {
                         }
                     }
                     None => {
-                        router_warn!(log, local.name, "arc rx none?");
+                        router_warn!(log, local.name, "srp rx none?");
                     }
                 }
             }});
@@ -575,6 +622,7 @@ mod test {
     use crate::router::PeerStatus;
     use crate::net::Ipv6Prefix;
     use crate::protocol::RouterKind;
+    use crate::graph::{Graph, shortest_path};
 
     use tokio::time::sleep;
 
@@ -584,13 +632,13 @@ mod test {
 
     use slog_term;
     use slog_async;
-    use slog::Drain;
+    use slog::{info, Drain};
 
     fn test_logger() -> slog::Logger {
         let decorator = slog_term::TermDecorator::new().build();
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
         let drain = slog_envlogger::new(drain).fuse();
-        let drain = slog_async::Async::new(drain).build().fuse();
+        let drain = slog_async::Async::new(drain).chan_size(5000).build().fuse();
         let log = slog::Logger::root(drain, slog::o!());
         log
     }
@@ -705,13 +753,13 @@ mod test {
         // rack 0
         let mut t0 = Vec::new();
         for i in 0..2 {
-            let n = mimos::Node::new(format!("tr1{}", i), RouterKind::Transit);
+            let n = mimos::Node::new(format!("tr0{}", i), RouterKind::Transit);
             t0.push(n);
         }
         // rack 1
         let mut t1 = Vec::new();
         for i in 0..2 {
-            let n = mimos::Node::new(format!("tr0{}", i), RouterKind::Transit);
+            let n = mimos::Node::new(format!("tr1{}", i), RouterKind::Transit);
             t1.push(n);
         }
 
@@ -751,6 +799,19 @@ mod test {
         }
 
         sleep(Duration::from_secs(5)).await;
+
+        // get the network graph from t0
+        let client = hyper::Client::new();
+        let uri = "http://127.0.0.1:4718/graph".parse()?;
+        let resp = client.get(uri).await?;
+        assert_eq!(resp.status(), 200);
+        let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
+        let g: Graph::<String> = serde_json::from_slice(&body_bytes)?;
+        info!(log, "{:#?}", g);
+
+        let p = shortest_path(&g, "sr02".to_string(), "sr12".to_string());
+        info!(log, "{:?}", p);
+
 
         Ok(())
     }

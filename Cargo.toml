@@ -9,5 +9,6 @@ members = [
     #"lab",
     "icmpv6",
     "srp",
+    "console",
     #"tools/rdpx"
 ]
