@@ -2,11 +2,13 @@ use std::io::{Result, ErrorKind, Error};
 use std::sync::Arc;
 use std::time::Duration;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::{spawn, select};
 use tokio::time::sleep;
 use tokio::sync::{Mutex, Notify};
 use tokio::sync::mpsc::Sender;
+use tokio::sync::broadcast;
 use slog::{self, debug, trace, info, warn, error, Logger};
 use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
@@ -37,6 +39,10 @@ pub struct Router {
     pub info: RouterInfo,
     pub state: Arc::<Mutex::<RouterState>>,
     pub local_prefix_update: Arc::<Notify>,
+    pub linkstate_update: broadcast::Sender<SrpLink>,
+
+    linkstate_counter: Arc::<AtomicU64>,
+    prefix_counter: Arc::<AtomicU64>,
 }
 
 pub struct RouterState {
@@ -44,6 +50,10 @@ pub struct RouterState {
     pub local_prefixes: HashSet::<Ipv6Prefix>,
     pub remote_prefixes: HashMap::<String, HashSet::<Ipv6Prefix>>,
     pub graph: Graph<String>,
+
+    // most recent messages
+    prefixes: HashSet::<SrpPrefix>,
+    links: HashSet::<SrpLink>,
 }
 
 impl RouterState {
@@ -53,6 +63,8 @@ impl RouterState {
             local_prefixes: HashSet::new(),
             remote_prefixes: HashMap::new(),
             graph: Graph::new(),
+            prefixes: HashSet::new(),
+            links: HashSet::new(),
         }
     }
 }
@@ -70,10 +82,14 @@ pub struct Peer {
 impl Router {
 
     pub fn new(name: String, kind: RouterKind) -> Self {
+        let (tx, _) = broadcast::channel(0x20);
         Router{
             info: RouterInfo{name, kind},
             state: Arc::new(Mutex::new(RouterState::new())),
             local_prefix_update: Arc::new(Notify::new()),
+            linkstate_update: tx,
+            linkstate_counter: Arc::new(AtomicU64::new(0)),
+            prefix_counter: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -91,6 +107,8 @@ impl Router {
         let state = self.state.clone();
         let local_prefix_notifier = self.local_prefix_update.clone();
         let info = self.info.clone();
+        let lsupdate = self.linkstate_update.clone();
+        let linkstate_counter = self.linkstate_counter.clone();
 
         spawn(async move{
             router_info!(log, &info.name, "running router");
@@ -99,8 +117,11 @@ impl Router {
                 p,
                 state,
                 local_prefix_notifier,
+                lsupdate,
                 config,
-                log.clone()).await {
+                log.clone(),
+                linkstate_counter,
+            ).await {
                 Ok(()) => {},
                 Err(e) => {
                     router_error!(log, &info.name, e, "run");
@@ -116,8 +137,10 @@ impl Router {
         p: Arc::<Mutex::<Platform>>,
         state: Arc::<Mutex::<RouterState>>,
         local_prefix_notifier: Arc::<Notify>,
+        lsupdate: broadcast::Sender<SrpLink>,
         config: Config,
         log: Logger,
+        linkstate_counter: Arc::<AtomicU64>,
     )
     -> Result<()>
     where
@@ -131,8 +154,11 @@ impl Router {
                 p.clone(),
                 state.clone(),
                 local_prefix_notifier.clone(),
+                lsupdate.clone(),
                 port,
-                log.clone()).await;
+                log.clone(),
+                linkstate_counter.clone(),
+            ).await;
         }
 
         admin::handler(
@@ -151,8 +177,10 @@ impl Router {
         p: Arc::<Mutex::<Platform>>,
         state: Arc::<Mutex::<RouterState>>,
         local_prefix_notifier: Arc::<Notify>,
+        lsupdate: broadcast::Sender<SrpLink>,
         port: Port,
         log: Logger,
+        linkstate_counter: Arc::<AtomicU64>,
     )
     where
         Platform: platform::Full + Send + 'static
@@ -221,8 +249,10 @@ impl Router {
                                                 &log,
                                                 &state,
                                                 local_prefix_notifier.clone(),
+                                                lsupdate.clone(),
                                                 &p,
                                                 port,
+                                                linkstate_counter.clone(),
                                             ).await;
                                         }
                                     }
@@ -247,8 +277,10 @@ impl Router {
         p: Arc::<Mutex::<Platform>>,
         state: Arc::<Mutex::<RouterState>>,
         local_prefix_notifier: Arc::<Notify>,
+        lsupdate: broadcast::Sender<SrpLink>,
         port: Port,
         log: Logger,
+        linkstate_counter: Arc::<AtomicU64>,
     )
     where
         Platform: platform::Full + Send + 'static
@@ -271,13 +303,20 @@ impl Router {
             let tx = tx.clone();
             let log = log.clone();
             spawn(async move { loop {
+
+                // TODO we should only send out a link update when there is
+                // actually some delta from our last, but we need rate info
+                // to determine that, so just fire at will for now.
                 let link_update = SrpMessage::Link(SrpLink{
                     origin: local.name.clone(),
                     neighbor: peer.name.clone(),
-                    capacity: 0,
-                    egress_rate: 0,
-                    ingress_rate: 0,
+                    capacity: 0, // TODO
+                    egress_rate: 0, // TODO
+                    ingress_rate: 0, // TODO
+                    // TODO not yet sure what Ordering should be here
+                    serial: linkstate_counter.fetch_add(1, Ordering::Relaxed),
                 }); 
+
 
                 match tx.send(link_update).await {
                     Ok(_) => {},
@@ -313,12 +352,49 @@ impl Router {
                 let msg = SrpPrefix{
                     origin, 
                     prefixes,
+                    serial: 0,
                 };
 
                 match tx.send(SrpMessage::Prefix(msg)).await {
                     Ok(_) => {},
                     Err(e) => {
                         router_error!(log, local.name, e, "arc prefix tx");
+                    }
+                }
+
+            }});
+        }
+
+        // handle lsupdate messages 
+        {
+            let mut rx = lsupdate.subscribe();
+            let tx = tx.clone();
+            let log = log.clone();
+            let local = local.clone();
+
+            spawn(async move { loop {
+
+                match rx.recv().await {
+                    Ok(msg) => {
+                        match tx.send(SrpMessage::Link(msg)).await {
+                            Ok(_) => {}
+                            Err(e) => {
+                                router_error!(
+                                    log,
+                                    local.name,
+                                    e,
+                                    "flood link tx"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        router_error!(
+                            log,
+                            local.name,
+                            e,
+                            "flood link rx"
+                        );
                     }
                 }
 
@@ -369,17 +445,45 @@ impl Router {
                                     continue;
                                 }
 
-                                // Add to local link-state DB
-                                let g = &mut state
-                                    .lock()
-                                    .await
-                                    .graph;
+                                // locked state region
+                                {
+                                    let mut locked_state = state.lock().await;
 
-                                g.one_way_insert(
-                                    l.origin,
-                                    l.neighbor,
-                                    l.ingress_rate
-                                );
+                                    // ignore updates that are older than what
+                                    // we currently have
+                                    match locked_state.links.get(&l) {
+                                        Some(current) => {
+                                            if current.serial >= l.serial {
+                                                    continue
+                                            }
+                                        }
+                                        None => { }
+                                    }
+
+                                    // update the most recent link update from
+                                    // this peer
+                                    locked_state.links.insert(l.clone());
+
+                                    // update the link state graph
+                                    locked_state.graph.one_way_insert(
+                                        l.origin.clone(),
+                                        l.neighbor.clone(),
+                                        l.ingress_rate
+                                    );
+                                }
+
+                                // push the update out our other peers
+                                match lsupdate.send(l) {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        router_error!(
+                                            log, 
+                                            local.name, 
+                                            e,
+                                            "lsupdate send"
+                                        )
+                                    }
+                                }
 
                                 // Signal retransmit for other peers
                                 // we need something like a vector clock
@@ -387,6 +491,14 @@ impl Router {
                                 // or rather, we are at the part of the lsdb
                                 // algorithm where we need to enforce some
                                 // sort of flooding/consistency model
+                            }
+
+                            SrpMessage::SyncRequest(_) => {
+                                //TODO
+                            }
+
+                            SrpMessage::SyncResponse(_) => {
+                                //TODO
                             }
                         }
                     }
@@ -426,8 +538,10 @@ async fn handle_pong<Platform>(
     log: &Logger,
     state: &Arc::<Mutex::<RouterState>>,
     local_prefix_notifier: Arc::<Notify>,
+    lsupdate: broadcast::Sender<SrpLink>,
     p: &Arc::<Mutex::<Platform>>,
     port: Port,
+    linkstate_counter: Arc::<AtomicU64>,
 ) 
 where
     Platform: platform::Full + Send + 'static
@@ -448,8 +562,11 @@ where
         p.clone(),
         state.clone(),
         local_prefix_notifier,
+        lsupdate,
         port,
-        log.clone()).await;
+        log.clone(),
+        linkstate_counter,
+    ).await;
 }
 
 #[cfg(test)]
@@ -571,7 +688,7 @@ mod test {
     #[tokio::test]
     async fn mimos_12_router_paths() -> anyhow::Result<()> {
 
-        let log = test_logger();
+        let _log = test_logger();
 
         // routers
 

@@ -301,6 +301,7 @@ mod test {
         prefixes.insert(Ipv6Prefix::from_str("fd00::1701/64")?);
         let a_to_b = SrpMessage::Prefix(SrpPrefix{
             origin: "a".to_string(),
+            serial: 0,
             prefixes,
         });
         a_arc_tx.send(a_to_b.clone()).await?;
@@ -309,6 +310,7 @@ mod test {
         prefixes.insert(Ipv6Prefix::from_str("fd00::1702/64")?);
         let b_to_a = SrpMessage::Prefix(SrpPrefix{
             origin: "b".to_string(),
+            serial: 0,
             prefixes,
         });
         b_arc_tx.send(b_to_a.clone()).await?;
