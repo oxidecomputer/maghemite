@@ -366,7 +366,7 @@ impl Router {
         }
 
         // handle lsupdate messages 
-        {
+        if peer.kind == RouterKind::Transit {
             let mut rx = lsupdate.subscribe();
             let tx = tx.clone();
             let log = log.clone();
@@ -401,7 +401,7 @@ impl Router {
             }});
         }
 
-        // handle arc messages
+        // handle srp messages
         {
             let log = log.clone();
 
@@ -572,15 +572,12 @@ where
 #[cfg(test)]
 mod test {
     use crate::mimos;
-    use crate::router::{Router, PeerStatus};
-    use crate::config::Config;
+    use crate::router::PeerStatus;
     use crate::net::Ipv6Prefix;
     use crate::protocol::RouterKind;
 
-    use tokio::sync::Mutex;
     use tokio::time::sleep;
 
-    use std::sync::Arc;
     use std::time::Duration;
     use std::collections::{HashMap, HashSet};
     use std::str::FromStr;
@@ -594,7 +591,8 @@ mod test {
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
         let drain = slog_envlogger::new(drain).fuse();
         let drain = slog_async::Async::new(drain).build().fuse();
-        slog::Logger::root(drain, slog::o!())
+        let log = slog::Logger::root(drain, slog::o!());
+        log
     }
 
     #[tokio::test]
@@ -603,14 +601,13 @@ mod test {
         let log = test_logger();
 
         // topology
-        let mut a = mimos::Node::new();
-        let mut b = mimos::Node::new();
-        mimos::connect(&mut a, &mut b);
+        let mut a = mimos::Node::new("a".into(), RouterKind::Server);
+        let mut b = mimos::Node::new("b".into(), RouterKind::Server);
+        mimos::connect(&mut a, &mut b).await;
 
-        // routers
-        let r = Router::new("a".into(), RouterKind::Server);
-        r.run(Arc::new(Mutex::new(a)), Config{port: 4705}, log.clone())?;
-        r.run(Arc::new(Mutex::new(b)), Config{port: 4706}, log.clone())?;
+        // run routers
+        a.run(4705, log.clone())?;
+        b.run(4706, log.clone())?;
 
         // wait for peering to take place
         sleep(Duration::from_secs(1)).await;
@@ -636,16 +633,13 @@ mod test {
         let log = test_logger();
 
         // topology
-        let mut a = mimos::Node::new();
-        let mut b = mimos::Node::new();
-        mimos::connect(&mut a, &mut b);
+        let mut a = mimos::Node::new("a".into(), RouterKind::Server);
+        let mut b = mimos::Node::new("b".into(), RouterKind::Server);
+        mimos::connect(&mut a, &mut b).await;
 
-        // routers
-        let ra = Router::new("a".into(), RouterKind::Server);
-        ra.run(Arc::new(Mutex::new(a)), Config{port: 4707}, log.clone())?;
-
-        let rb = Router::new("b".into(), RouterKind::Server);
-        rb.run(Arc::new(Mutex::new(b)), Config{port: 4708}, log.clone())?;
+        // run routers
+        a.run(4707, log.clone())?;
+        b.run(4708, log.clone())?;
 
         // wait for peering to take place
         sleep(Duration::from_secs(1)).await;
@@ -688,50 +682,75 @@ mod test {
     #[tokio::test]
     async fn mimos_12_router_paths() -> anyhow::Result<()> {
 
-        let _log = test_logger();
+        let log = test_logger();
 
         // routers
+
+        let mut port = 4710;
 
         // server routers
         // rack 0
         let mut s0 = Vec::new();
-        for _ in 0..4 {
-            s0.push(mimos::Node::new());
+        for i in 0..4 {
+            let n = mimos::Node::new(format!("sr0{}", i), RouterKind::Server);
+            s0.push(n);
         }
         //rack 1
         let mut s1 = Vec::new();
-        for _ in 0..4 {
-            s1.push(mimos::Node::new());
+        for i in 0..4 {
+            let n = mimos::Node::new(format!("sr1{}", i), RouterKind::Server);
+            s1.push(n);
         }
         // transit routers
         // rack 0
         let mut t0 = Vec::new();
-        for _ in 0..2 {
-            t0.push(mimos::Node::new());
+        for i in 0..2 {
+            let n = mimos::Node::new(format!("tr1{}", i), RouterKind::Transit);
+            t0.push(n);
         }
         // rack 1
         let mut t1 = Vec::new();
-        for _ in 0..2 {
-            t1.push(mimos::Node::new());
+        for i in 0..2 {
+            let n = mimos::Node::new(format!("tr0{}", i), RouterKind::Transit);
+            t1.push(n);
         }
 
         // connections
 
         // rack 1
-        for x in &mut s0 {
-            mimos::connect(x, &mut t0[0]);
-            mimos::connect(x, &mut t0[1]);
+        for mut x in &mut s0 {
+            mimos::connect(&mut x, &mut t0[0]).await;
+            mimos::connect(&mut x, &mut t0[1]).await;
         }
         // rack 2
-        for x in &mut s1 {
-            mimos::connect(x, &mut t1[0]);
-            mimos::connect(x, &mut t1[1]);
+        for mut x in &mut s1 {
+            mimos::connect(&mut x, &mut t1[0]).await;
+            mimos::connect(&mut x, &mut t1[1]).await;
         }
         // cross rack
-        for x in &mut t0 {
-            mimos::connect(x, &mut t1[0]);
-            mimos::connect(x, &mut t1[1]);
+        for mut x in &mut t0 {
+            mimos::connect(&mut x, &mut t1[0]).await;
+            mimos::connect(&mut x, &mut t1[1]).await;
         }
+
+        for x in &mut s0 {
+            x.run(port, log.clone())?;
+            port += 1;
+        }
+        for x in &mut s1 {
+            x.run(port, log.clone())?;
+            port += 1;
+        }
+        for x in &mut t0 {
+            x.run(port, log.clone())?;
+            port += 1;
+        }
+        for x in &mut t1 {
+            x.run(port, log.clone())?;
+            port += 1;
+        }
+
+        sleep(Duration::from_secs(5)).await;
 
         Ok(())
     }

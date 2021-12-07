@@ -9,9 +9,9 @@ use crate::platform;
 use crate::port::Port;
 use crate::flowstat::PortStats;
 use crate::rdp::RdpMessage;
-use crate::protocol::{SrpMessage, PeerMessage};
-use crate::router::Route;
-
+use crate::protocol::{SrpMessage, PeerMessage, RouterKind};
+use crate::router::{Route, Router};
+use crate::config::Config;
 pub struct RdpChannel {
     pub rx: Receiver<RdpMessage>,
     pub tx: Sender<RdpMessage>,
@@ -34,18 +34,38 @@ pub struct Neighbor {
 }
 
 pub struct Node {
-    neighbors: Vec<Neighbor>,
+    pub name: String,
+    pub platform: Arc::<Mutex::<Platform>>,
+    pub router: Router,
 }
 
 impl Node {
-    pub fn new() -> Self {
+    pub fn new(name: String, kind: RouterKind) -> Self {
         Node{
+            name: name.clone(),
+            platform: Arc::new(Mutex::new(Platform::new())),
+            router: Router::new(name, kind)
+        }
+    }
+    
+    pub fn run(&self, port: u16, log: slog::Logger) -> Result<()> {
+        self.router.run(self.platform.clone(), Config{port}, log)
+    }
+}
+
+pub struct Platform {
+    neighbors: Vec<Neighbor>,
+}
+
+impl Platform {
+    pub fn new() -> Self {
+        Platform{
             neighbors: Vec::new(),
         }
     }
 }
 
-pub fn connect(a: &mut Node, b: &mut Node) {
+pub async fn connect(a: &mut Node, b: &mut Node) {
 
     let (rdp_tx_ab, rdp_rx_ab) = channel(0x20);
     let (rdp_tx_ba, rdp_rx_ba) = channel(0x20);
@@ -56,7 +76,7 @@ pub fn connect(a: &mut Node, b: &mut Node) {
     let (peer_tx_ab, peer_rx_ab) = channel(0x20);
     let (peer_tx_ba, peer_rx_ba) = channel(0x20);
 
-    a.neighbors.push(Neighbor{
+    a.platform.lock().await.neighbors.push(Neighbor{
         rdp_ch: Arc::new(Mutex::new(RdpChannel{
             rx: rdp_rx_ba,
             tx: rdp_tx_ab,
@@ -71,7 +91,7 @@ pub fn connect(a: &mut Node, b: &mut Node) {
         }))
     });
 
-    b.neighbors.push(Neighbor{
+    b.platform.lock().await.neighbors.push(Neighbor{
         rdp_ch: Arc::new(Mutex::new(RdpChannel{
             rx: rdp_rx_ab,
             tx: rdp_tx_ba,
@@ -88,7 +108,7 @@ pub fn connect(a: &mut Node, b: &mut Node) {
 
 }
 
-impl platform::Ports for Node {
+impl platform::Ports for Platform {
     fn ports(&self) -> Result<Vec<Port>> {
         let mut result = Vec::new();
         for (index, _) in self.neighbors.iter().enumerate() {
@@ -98,13 +118,13 @@ impl platform::Ports for Node {
     }
 }
 
-impl platform::FlowStat for Node {
+impl platform::FlowStat for Platform {
     fn stats(&self, _: Port) -> Result<PortStats> { 
         Ok(PortStats{})
     }
 }
 
-impl platform::Rdp for Node {
+impl platform::Rdp for Platform {
     fn rdp_channel(&self, p: Port)
     -> Result<(Sender<RdpMessage>, Receiver<RdpMessage>)> {
 
@@ -152,7 +172,7 @@ impl platform::Rdp for Node {
     }
 }
 
-impl platform::Srp for Node {
+impl platform::Srp for Platform {
 
     fn peer_channel(&self, p: Port) 
     -> Result<(Sender<PeerMessage>, Receiver<PeerMessage>)> {
@@ -243,7 +263,7 @@ impl platform::Srp for Node {
     }
 }
 
-impl platform::Router for Node {
+impl platform::Router for Platform {
     fn get_routes(&self) -> Result<Vec<Route>> {
         todo!();
     }
@@ -263,7 +283,7 @@ mod test {
     use crate::port::Port;
     use crate::platform::{Rdp, Srp};
     use crate::rdp::RdpMessage;
-    use crate::protocol::{SrpMessage, SrpPrefix};
+    use crate::protocol::{SrpMessage, SrpPrefix, RouterKind};
     use crate::net::Ipv6Prefix;
 
     use std::str::FromStr;
@@ -273,17 +293,21 @@ mod test {
     async fn mimos_2_router_msg() -> anyhow::Result<()> {
 
         // topology
-        let mut a = mimos::Node::new();
-        let mut b = mimos::Node::new();
-        mimos::connect(&mut a, &mut b);
+        let mut a = mimos::Node::new("a".into(), RouterKind::Server);
+        let mut b = mimos::Node::new("a".into(), RouterKind::Server);
+        mimos::connect(&mut a, &mut b).await;
 
         // get RDP channel
-        let (a_rdp_tx, mut a_rdp_rx) = a.rdp_channel(Port{index: 0}).unwrap();
-        let (b_rdp_tx, mut b_rdp_rx) = b.rdp_channel(Port{index: 0}).unwrap();
+        let (a_rdp_tx, mut a_rdp_rx) =
+            a.platform.lock().await.rdp_channel(Port{index: 0}).unwrap();
+        let (b_rdp_tx, mut b_rdp_rx) = 
+            b.platform.lock().await.rdp_channel(Port{index: 0}).unwrap();
 
         // get ARC channel
-        let (a_arc_tx, mut a_arc_rx) = a.arc_channel(Port{index: 0}).unwrap();
-        let (b_arc_tx, mut b_arc_rx) = b.arc_channel(Port{index: 0}).unwrap();
+        let (a_arc_tx, mut a_arc_rx) = 
+            a.platform.lock().await.arc_channel(Port{index: 0}).unwrap();
+        let (b_arc_tx, mut b_arc_rx) =
+            b.platform.lock().await.arc_channel(Port{index: 0}).unwrap();
 
         // send some RDP messages
         a_rdp_tx.send(RdpMessage{content: "rdp test 1".into()}).await?;

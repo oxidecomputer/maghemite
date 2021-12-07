@@ -124,14 +124,10 @@ pub(crate) async fn handler(
 #[cfg(test)]
 mod test {
     use crate::mimos;
-    use crate::config::Config;
-    use crate::router::Router;
     use crate::protocol::RouterKind;
 
     use tokio::time::sleep;
     use std::time::Duration;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
 
     use slog_term;
     use slog_async;
@@ -146,9 +142,8 @@ mod test {
         let drain = slog_async::Async::new(drain).build().fuse();
         let log = slog::Logger::root(drain, slog::o!());
 
-        let a = Arc::new(Mutex::new(mimos::Node::new()));
-        let r = Router::new("a".into(), RouterKind::Server);
-        r.run(a, Config{port: 4710}, log)?;
+        let a = mimos::Node::new("a".into(), RouterKind::Server);
+        a.run(4710, log)?;
 
         sleep(Duration::from_secs(1)).await;
 
