@@ -1,0 +1,20 @@
+[package]
+name = "srp"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "1.14", features = ["full"] }
+anyhow = "1"
+slog = "2.7"
+slog-term = "2.7"
+slog-async = "2.7"
+slog-envlogger = "2.2"
+dropshot = { git = "https://github.com/oxidecomputer/dropshot" }
+schemars = { version = "0.8.0", features = [ "uuid" ] }
+serde = "1.0"
+serde_json = "1.0"
+hyper = { version = "0.14", features = ["full"] }
+thiserror = "1.0"

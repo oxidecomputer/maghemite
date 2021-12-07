@@ -1,12 +1,13 @@
 [workspace]
 
 members = [
-    "platform",
-    "rift",
-    "rift_protocol",
-    "riftadm",
-    "illumos",
-    "lab",
+    #"platform",
+    #"rift",
+    #"rift_protocol",
+    #"riftadm",
+    #"illumos",
+    #"lab",
     "icmpv6",
-    "tools/rdpx"
+    "srp",
+    #"tools/rdpx"
 ]
