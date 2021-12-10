@@ -30,7 +30,7 @@ pub struct PeerChannel {
 pub struct Neighbor {
     pub rdp_ch: Arc::<Mutex::<RdpChannel>>,
     pub peer_ch: Arc::<Mutex::<PeerChannel>>,
-    pub arc_ch: Arc::<Mutex::<SrpChannel>>,
+    pub srp_ch: Arc::<Mutex::<SrpChannel>>,
 }
 
 pub struct Node {
@@ -70,8 +70,8 @@ pub async fn connect(a: &mut Node, b: &mut Node) {
     let (rdp_tx_ab, rdp_rx_ab) = channel(0x20);
     let (rdp_tx_ba, rdp_rx_ba) = channel(0x20);
 
-    let (arc_tx_ab, arc_rx_ab) = channel(0x20);
-    let (arc_tx_ba, arc_rx_ba) = channel(0x20);
+    let (srp_tx_ab, srp_rx_ab) = channel(0x20);
+    let (srp_tx_ba, srp_rx_ba) = channel(0x20);
 
     let (peer_tx_ab, peer_rx_ab) = channel(0x20);
     let (peer_tx_ba, peer_rx_ba) = channel(0x20);
@@ -81,9 +81,9 @@ pub async fn connect(a: &mut Node, b: &mut Node) {
             rx: rdp_rx_ba,
             tx: rdp_tx_ab,
         })),
-        arc_ch: Arc::new(Mutex::new(SrpChannel{
-            rx: arc_rx_ba,
-            tx: arc_tx_ab,
+        srp_ch: Arc::new(Mutex::new(SrpChannel{
+            rx: srp_rx_ba,
+            tx: srp_tx_ab,
         })),
         peer_ch: Arc::new(Mutex::new(PeerChannel{
             rx: peer_rx_ba,
@@ -96,9 +96,9 @@ pub async fn connect(a: &mut Node, b: &mut Node) {
             rx: rdp_rx_ab,
             tx: rdp_tx_ba,
         })),
-        arc_ch: Arc::new(Mutex::new(SrpChannel{
-            rx: arc_rx_ab,
-            tx: arc_tx_ba,
+        srp_ch: Arc::new(Mutex::new(SrpChannel{
+            rx: srp_rx_ab,
+            tx: srp_tx_ba,
         })),
         peer_ch: Arc::new(Mutex::new(PeerChannel{
             rx: peer_rx_ab,
@@ -120,7 +120,7 @@ impl platform::Ports for Platform {
 
 impl platform::FlowStat for Platform {
     fn stats(&self, _: Port) -> Result<PortStats> { 
-        Ok(PortStats{})
+        Ok(PortStats::new())
     }
 }
 
@@ -218,24 +218,24 @@ impl platform::Srp for Platform {
         Ok((etx, irx))
     }
 
-    fn arc_channel(&self, p: Port) 
+    fn srp_channel(&self, p: Port) 
     -> Result<(Sender<SrpMessage>, Receiver<SrpMessage>)> {
         let (itx, irx) = channel(0x20);
         let (etx, mut erx) = channel(0x20);
 
-        let arc = self.neighbors[p.index].arc_ch.clone();
+        let srp = self.neighbors[p.index].srp_ch.clone();
 
         spawn(async move{
-            let mut arc = arc.lock().await;
+            let mut srp = srp.lock().await;
             loop {
                 select!(
-                    msg = arc.rx.recv() => {
+                    msg = srp.rx.recv() => {
                         match msg {
                             Some(m) => {
                                 match itx.send(m).await {
                                     Ok(()) => {}
                                     Err(e) => {
-                                        println!("arc ingress send: {}", e)
+                                        println!("srp ingress send: {}", e)
                                     }
                                 }
                             }
@@ -245,10 +245,10 @@ impl platform::Srp for Platform {
                     msg = erx.recv() => {
                         match msg {
                             Some(m) => {
-                                match arc.tx.send(m).await {
+                                match srp.tx.send(m).await {
                                     Ok(()) => {}
                                     Err(e) => {
-                                        println!("arc egress send: {}", e)
+                                        println!("srp egress send: {}", e)
                                     }
                                 }
                             }
@@ -303,11 +303,11 @@ mod test {
         let (b_rdp_tx, mut b_rdp_rx) = 
             b.platform.lock().await.rdp_channel(Port{index: 0}).unwrap();
 
-        // get ARC channel
-        let (a_arc_tx, mut a_arc_rx) = 
-            a.platform.lock().await.arc_channel(Port{index: 0}).unwrap();
-        let (b_arc_tx, mut b_arc_rx) =
-            b.platform.lock().await.arc_channel(Port{index: 0}).unwrap();
+        // get SRP channel
+        let (a_srp_tx, mut a_srp_rx) = 
+            a.platform.lock().await.srp_channel(Port{index: 0}).unwrap();
+        let (b_srp_tx, mut b_srp_rx) =
+            b.platform.lock().await.srp_channel(Port{index: 0}).unwrap();
 
         // send some RDP messages
         a_rdp_tx.send(RdpMessage{content: "rdp test 1".into()}).await?;
@@ -320,7 +320,7 @@ mod test {
         let msg = b_rdp_rx.recv().await;
         assert_eq!(msg, Some(RdpMessage{content: "rdp test 1".into()}));
 
-        // send some ARC messages
+        // send some SRP messages
         let mut prefixes = HashSet::new();
         prefixes.insert(Ipv6Prefix::from_str("fd00::1701/64")?);
         let a_to_b = SrpMessage::Prefix(SrpPrefix{
@@ -328,7 +328,7 @@ mod test {
             serial: 0,
             prefixes,
         });
-        a_arc_tx.send(a_to_b.clone()).await?;
+        a_srp_tx.send(a_to_b.clone()).await?;
 
         let mut prefixes = HashSet::new();
         prefixes.insert(Ipv6Prefix::from_str("fd00::1702/64")?);
@@ -337,13 +337,13 @@ mod test {
             serial: 0,
             prefixes,
         });
-        b_arc_tx.send(b_to_a.clone()).await?;
+        b_srp_tx.send(b_to_a.clone()).await?;
 
-        // receive ARC messages
-        let msg = a_arc_rx.recv().await;
+        // receive SRP messages
+        let msg = a_srp_rx.recv().await;
         assert_eq!(msg.unwrap(), b_to_a);
 
-        let msg = b_arc_rx.recv().await;
+        let msg = b_srp_rx.recv().await;
         assert_eq!(msg.unwrap(), a_to_b);
 
         Ok(())

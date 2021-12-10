@@ -1,4 +1,5 @@
 #![feature(map_first_last)]
+#![feature(hash_drain_filter)]
 
 pub mod router;
 pub mod graph;

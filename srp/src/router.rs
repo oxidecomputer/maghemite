@@ -23,8 +23,9 @@ use crate::protocol::{
     SrpLink, SrpMessage, SrpPrefix,
 };
 use crate::net::Ipv6Prefix;
-use crate::graph::Graph;
+use crate::graph::{Graph, shortest_path};
 use crate::{router_info, router_warn, router_debug, router_error, router_trace};
+use crate::flowstat::PortStats;
 
 pub struct Route {
 }
@@ -38,8 +39,9 @@ pub struct RouterInfo {
 pub struct Router {
     pub info: RouterInfo,
     pub state: Arc::<Mutex::<RouterState>>,
-    pub local_prefix_update: Arc::<Notify>,
+    //pub local_prefix_update: Arc::<Notify>,
     pub linkstate_update: broadcast::Sender<SrpLink>,
+    pub prefix_update: broadcast::Sender<SrpPrefix>,
 
     linkstate_counter: Arc::<AtomicU64>,
     prefix_counter: Arc::<AtomicU64>,
@@ -52,8 +54,10 @@ pub struct RouterState {
     pub graph: Graph<String>,
 
     // most recent messages
-    prefixes: HashSet::<SrpPrefix>,
-    links: HashSet::<SrpLink>,
+    pub(crate) prefixes: HashSet::<SrpPrefix>,
+    pub(crate) links: HashSet::<SrpLink>,
+
+    pub(crate) path_map: HashMap::<String, Vec::<String>>,
 }
 
 impl RouterState {
@@ -65,12 +69,14 @@ impl RouterState {
             graph: Graph::new(),
             prefixes: HashSet::new(),
             links: HashSet::new(),
+            path_map: HashMap::new(),
         }
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct PeerStatus {
+    kind: RouterKind,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -84,12 +90,14 @@ impl Router {
     pub fn new(name: String, kind: RouterKind) -> Self {
         // TODO This channel should not need to be anywhere near this big ....
         // .    some major contention going on somehwere
-        let (tx, _) = broadcast::channel(0x2000);
+        let (lstx, _) = broadcast::channel(0x2000);
+        let (pftx, _) = broadcast::channel(0x2000);
         Router{
             info: RouterInfo{name, kind},
             state: Arc::new(Mutex::new(RouterState::new())),
-            local_prefix_update: Arc::new(Notify::new()),
-            linkstate_update: tx,
+            //local_prefix_update: Arc::new(Notify::new()),
+            linkstate_update: lstx,
+            prefix_update: pftx,
             linkstate_counter: Arc::new(AtomicU64::new(0)),
             prefix_counter: Arc::new(AtomicU64::new(0)),
         }
@@ -106,30 +114,68 @@ impl Router {
         Platform: platform::Full + Send + Sync + 'static
     {
 
-        let state = self.state.clone();
-        let local_prefix_notifier = self.local_prefix_update.clone();
-        let info = self.info.clone();
-        let lsupdate = self.linkstate_update.clone();
-        let linkstate_counter = self.linkstate_counter.clone();
+        {
+            // run the I/O thread, this starts with peering and then makes its 
+            // way to SRP protocol I/O with linkstate messages and such.
+            let state = self.state.clone();
+            //let local_prefix_notifier = self.local_prefix_update.clone();
+            let info = self.info.clone();
+            let lsupdate = self.linkstate_update.clone();
+            let pfupdate = self.prefix_update.clone();
+            let linkstate_counter = self.linkstate_counter.clone();
+            let log = log.clone();
 
-        spawn(async move{
-            router_info!(log, &info.name, "running router");
-            match Self::run_thread(
-                info.clone(),
-                p,
-                state,
-                local_prefix_notifier,
-                lsupdate,
-                config,
-                log.clone(),
-                linkstate_counter,
-            ).await {
-                Ok(()) => {},
-                Err(e) => {
-                    router_error!(log, &info.name, e, "run");
+            spawn(async move{
+                router_info!(log, &info.name, "running router");
+                match Self::run_thread(
+                    info.clone(),
+                    p,
+                    state,
+                    pfupdate,
+                    lsupdate,
+                    config,
+                    log.clone(),
+                    linkstate_counter,
+                ).await {
+                    Ok(()) => {},
+                    Err(e) => {
+                        router_error!(log, &info.name, e, "run");
+                    }
                 }
+            });
+        }
+
+        if self.info.kind == RouterKind::Transit {
+
+            // run the path calculator thread
+            {
+                let log = log.clone();
+                let state = self.state.clone();
+                let info = self.info.clone();
+                spawn(async move {
+                    Self::run_path_calculator(log, info, state).await;
+                });
             }
-        });
+
+            // run the state estimator thread
+            {
+                let log = log.clone();
+                let state = self.state.clone();
+                spawn(async move {
+                    Self::run_state_estimator(log, state).await;
+                });
+            }
+
+            // run the prefix delegator thread
+            {
+                let log = log.clone();
+                let state = self.state.clone();
+                spawn(async move {
+                    Self::run_prefix_distributor(log, state).await;
+                });
+            }
+
+        }
 
         Ok(())
     }
@@ -138,7 +184,7 @@ impl Router {
         info: RouterInfo,
         p: Arc::<Mutex::<Platform>>,
         state: Arc::<Mutex::<RouterState>>,
-        local_prefix_notifier: Arc::<Notify>,
+        pfupdate: broadcast::Sender<SrpPrefix>,
         lsupdate: broadcast::Sender<SrpLink>,
         config: Config,
         log: Logger,
@@ -155,7 +201,7 @@ impl Router {
                 info.clone(),
                 p.clone(),
                 state.clone(),
-                local_prefix_notifier.clone(),
+                pfupdate.clone(),
                 lsupdate.clone(),
                 port,
                 log.clone(),
@@ -166,7 +212,7 @@ impl Router {
         admin::handler(
             info,
             config, state.clone(),
-            local_prefix_notifier.clone(),
+            pfupdate.clone(),
             log.clone()).await
             .map_err(|e| Error::new(ErrorKind::Other, e))?;
 
@@ -178,7 +224,7 @@ impl Router {
         info: RouterInfo,
         p: Arc::<Mutex::<Platform>>,
         state: Arc::<Mutex::<RouterState>>,
-        local_prefix_notifier: Arc::<Notify>,
+        pfupdate: broadcast::Sender<SrpPrefix>,
         lsupdate: broadcast::Sender<SrpLink>,
         port: Port,
         log: Logger,
@@ -250,7 +296,7 @@ impl Router {
                                                 &pong,
                                                 &log,
                                                 &state,
-                                                local_prefix_notifier.clone(),
+                                                pfupdate.clone(),
                                                 lsupdate.clone(),
                                                 &p,
                                                 port,
@@ -273,12 +319,71 @@ impl Router {
 
     }
 
-    async fn run_arc_sm<Platform>(
+    async fn run_path_calculator(
+        log: Logger,
+        info: RouterInfo,
+        state: Arc::<Mutex::<RouterState>>,
+    ) {
+        router_info!(log, info.name, "starting path calculator");
+
+        loop {
+            // get a sanpshot of our current peers and the net graph
+            let (mut prefixes, graph) = {
+                let state = state.lock().await;
+                let prefixes = state.prefixes.clone();
+                let graph = state.graph.clone();
+                (prefixes, graph)
+            };
+
+            // we are only interested in paths to server routers
+
+            // local path map
+            let mut path_map = HashMap::new();
+
+            // find shortest path from this router to every server router
+            // TODO: do this on concurrent threads?
+            for p in prefixes {
+                let name = p.origin;
+                let p = shortest_path(&graph, info.name.clone(), name.clone());
+                if p.len() < 2 {
+                    router_warn!(log, info.name, "no path to {}", &name);
+                }
+                path_map.insert(name.clone(), p);
+            }
+
+            // update the path map
+            {
+                let mut state = state.lock().await;
+                for (k,v) in path_map {
+                    state.path_map.insert(k, v);
+                }
+            }
+
+            sleep(Duration::from_millis(100)).await;
+        }
+
+    }
+
+    async fn run_state_estimator(
+        _log: Logger,
+        _state: Arc::<Mutex::<RouterState>>,
+    ) {
+        // TOOD
+    }
+
+    async fn run_prefix_distributor(
+        _log: Logger,
+        _state: Arc::<Mutex::<RouterState>>,
+    ) {
+        // TOOD
+    }
+
+    async fn run_srp_io_sm<Platform>(
         local: RouterInfo,
         peer: RouterInfo,
         p: Arc::<Mutex::<Platform>>,
         state: Arc::<Mutex::<RouterState>>,
-        local_prefix_notifier: Arc::<Notify>,
+        pfupdate: broadcast::Sender<SrpPrefix>,
         lsupdate: broadcast::Sender<SrpLink>,
         port: Port,
         log: Logger,
@@ -288,13 +393,13 @@ impl Router {
         Platform: platform::Full + Send + 'static
     {
 
-        // get arc channel
-        let (tx, mut rx) = match p.lock().await.arc_channel(port) {
+        // get srp channel
+        let (tx, mut rx) = match p.lock().await.srp_channel(port) {
             Ok(pair) =>  pair,
             Err(e) => {
                 router_error!(
-                    log, local.name, e, "get arc channel for {:?}", port);
-                panic!("failed to get arc channel");
+                    log, local.name, e, "get srp channel for {:?}", port);
+                panic!("failed to get srp channel");
             }
         };
 
@@ -302,11 +407,18 @@ impl Router {
         // send out periodic link state updates
         {
             let local = local.clone();
-            let tx = tx.clone();
             let log = log.clone();
             let state = state.clone();
             let lsupdate = lsupdate.clone();
             spawn(async move { loop {
+
+                let stats = match p.lock().await.stats(port) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        router_error!(log, local.name, e, "get link stats");
+                        PortStats::new()
+                    }
+                };
 
                 // TODO we should only send out a link update when there is
                 // actually some delta from our last, but we need rate info
@@ -315,8 +427,8 @@ impl Router {
                     origin: local.name.clone(),
                     neighbor: peer.name.clone(),
                     capacity: 0, // TODO
-                    egress_rate: 0, // TODO
-                    ingress_rate: 0, // TODO
+                    egress_rate: stats.egress_rate,
+                    ingress_rate: stats.ingresss_rate,
                     // TODO not yet sure what Ordering should be here
                     serial: linkstate_counter.fetch_add(1, Ordering::Relaxed),
                 };
@@ -351,7 +463,7 @@ impl Router {
                         Ok(_) => {},
                         Err(e) => {
                             router_error!(
-                                log, local.name, e, "send arc link update: {}");
+                                log, local.name, e, "send srp link update: {}");
                         }
                     }
                 }
@@ -381,30 +493,50 @@ impl Router {
             let tx = tx.clone();
             let log = log.clone();
             let state= state.clone();
+            let mut rx = pfupdate.subscribe();
 
             spawn(async move { loop {
 
-                local_prefix_notifier.notified().await;
-
-                router_debug!(
-                    log, local.name, "local prefix update notification");
-                let origin = local.name.clone();
-
-                let prefixes = 
-                    state.lock().await.local_prefixes.clone();
-
-                let msg = SrpPrefix{
-                    origin, 
-                    prefixes,
-                    serial: 0,
-                };
-
-                match tx.send(SrpMessage::Prefix(msg)).await {
-                    Ok(_) => {},
+                match rx.recv().await {
                     Err(e) => {
-                        router_error!(log, local.name, e, "arc prefix tx");
+                        router_error!(
+                            log, 
+                            local.name,
+                            e,
+                            "pfupdate rx",
+                        );
                     }
+                    Ok(msg) => {
+
+                        router_debug!(
+                            log, local.name, "local prefix update notification");
+                        let mut origin = local.name.clone();
+
+                        let prefixes = 
+                            state.lock().await.local_prefixes.clone();
+
+                        // XXX gross hack, get the data flow right
+                        if msg.origin.as_str() != "" {
+                            origin = msg.origin
+                        }
+
+                        let msg = SrpPrefix{
+                            origin, 
+                            prefixes,
+                            serial: 0,
+                        };
+
+                        match tx.send(SrpMessage::Prefix(msg)).await {
+                            Ok(_) => {},
+                            Err(e) => {
+                                router_error!(log, local.name, e, "srp prefix tx");
+                            }
+                        }
+
+                    }
+
                 }
+
 
             }});
         }
@@ -457,24 +589,46 @@ impl Router {
 
                         match msg {
                             SrpMessage::Prefix(p) => {
-                                let prefixes = &mut state
-                                    .lock()
-                                    .await
-                                    .remote_prefixes;
 
-                                match prefixes.get_mut(&p.origin) {
-                                    Some(prefix_set) => {
-                                        for x in p.prefixes {
-                                            prefix_set.insert(x);
+                                {
+                                    let mut state = state.lock().await;
+
+                                    //TODO do we actually need this, or is just
+                                    // .   prefix fine
+                                    // update remote prefixes
+                                    match state.remote_prefixes.get_mut(&p.origin) {
+                                        Some(prefix_set) => {
+                                            for x in &p.prefixes {
+                                                prefix_set.insert(*x);
+                                            }
+                                        }
+                                        None => {
+                                            let mut set = HashSet::new();
+                                            for x in &p.prefixes {
+                                                set.insert(*x);
+                                            }
+                                            state.remote_prefixes.insert(
+                                                p.origin.clone(), set);
                                         }
                                     }
-                                    None => {
-                                        let mut set = HashSet::new();
-                                        for x in p.prefixes {
-                                            set.insert(x);
+
+                                    // update prefixes
+                                    if !state.prefixes.contains(&p) {
+                                        state.prefixes.insert(p.clone());
+                                        // push update to other peers
+                                        match pfupdate.send(p) {
+                                            Ok(_) => {}
+                                            Err(e) => {
+                                                router_error!(
+                                                    log, 
+                                                    local.name, 
+                                                    e,
+                                                    "pfupdate send"
+                                                )
+                                            }
                                         }
-                                        prefixes.insert(p.origin, set);
                                     }
+
                                 }
                             }
 
@@ -584,7 +738,7 @@ async fn handle_pong<Platform>(
     pong: &PeerPong,
     log: &Logger,
     state: &Arc::<Mutex::<RouterState>>,
-    local_prefix_notifier: Arc::<Notify>,
+    pfupdate: broadcast::Sender<SrpPrefix>,
     lsupdate: broadcast::Sender<SrpLink>,
     p: &Arc::<Mutex::<Platform>>,
     port: Port,
@@ -595,12 +749,13 @@ where
 {
     router_trace!(log, info.name, "pong: {:?}", pong);
     let prev = state.lock().await.peers.insert(
-        pong.sender.clone(), PeerStatus{}
+        pong.sender.clone(), PeerStatus{ kind: pong.kind }
     );
     if prev.is_none() {
         router_info!(log, info.name, "added new peer {}", &pong.sender);
     }
-    Router::run_arc_sm(
+
+    Router::run_srp_io_sm(
         info,
         RouterInfo{
             name: pong.sender.clone(),
@@ -608,7 +763,7 @@ where
         },
         p.clone(),
         state.clone(),
-        local_prefix_notifier,
+        pfupdate,
         lsupdate,
         port,
         log.clone(),
@@ -798,10 +953,32 @@ mod test {
             port += 1;
         }
 
+
+        // wait for routers to start
+        sleep(Duration::from_secs(3)).await;
+
+        let client = hyper::Client::new();
+
+        // advertise a prefix at each server
+        for i in 10..18 {
+            let mut request = HashSet::new();
+            request.insert(Ipv6Prefix::from_str(
+                &format!("fd00::1701:{}/64", i)
+            )?);
+            let body = serde_json::to_string(&request)?;
+
+            let req = hyper::Request::builder()
+                .method(hyper::Method::PUT)
+                .uri(format!("http://127.0.0.1:47{}/prefix", i))
+                .body(hyper::Body::from(body))
+                .expect("request builder");
+
+            client.request(req).await?;
+        }
+
         sleep(Duration::from_secs(5)).await;
 
         // get the network graph from t0
-        let client = hyper::Client::new();
         let uri = "http://127.0.0.1:4718/graph".parse()?;
         let resp = client.get(uri).await?;
         assert_eq!(resp.status(), 200);
@@ -811,6 +988,15 @@ mod test {
 
         let p = shortest_path(&g, "sr02".to_string(), "sr12".to_string());
         info!(log, "{:?}", p);
+
+        // get the path map from t0
+        let uri = "http://127.0.0.1:4718/paths".parse()?;
+        let resp = client.get(uri).await?;
+        assert_eq!(resp.status(), 200);
+        let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
+        let g: HashMap::<String, Vec::<String>> = 
+            serde_json::from_slice(&body_bytes)?;
+        info!(log, "{:#?}", g);
 
 
         Ok(())

@@ -25,7 +25,7 @@ pub trait Srp {
     fn peer_channel(&self, p: Port)
     -> Result<(Sender<PeerMessage>, Receiver<PeerMessage>)>;
 
-    fn arc_channel(&self, p: Port)
+    fn srp_channel(&self, p: Port)
     -> Result<(Sender<SrpMessage>, Receiver<SrpMessage>)>;
 }
 

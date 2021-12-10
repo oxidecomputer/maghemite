@@ -79,6 +79,14 @@ impl<Key: Eq + Hash + Ord> std::cmp::Ord for WeightedVertex<Key> {
 }
 
 // bog standard Dijkstra's algorithm
+//
+// TODOs:
+// .   Under the right conditions, since this is just a bog standard Dijkstra's
+// .   algorithm, we may calculate paths through server routers, e.g. a server
+// .   is providing transit. We don't want that. But the question is do we have
+// .   some sort of hard coded logic in the algorithm itlsef to prevent that...
+// .   or should this be the responsiblity of the elements computing the link
+// .   weights to ensure that this situation never happens?
 pub fn shortest_path<Key: Eq + Hash + Ord + Clone>(g: &Graph::<Key>, a: Key, b: Key) -> Vec<Key> {
     let mut dist = HashMap::<Key, u64>::new();
     let mut prev = HashMap::<Key, Option<Key>>::new();

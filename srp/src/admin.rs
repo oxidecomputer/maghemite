@@ -9,7 +9,7 @@ use dropshot::{
     TypedBody,
 };
 
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, broadcast};
 use std::sync::Arc;
 use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
 use std::collections::{HashSet, HashMap};
@@ -21,11 +21,12 @@ use crate::config::Config;
 use crate::router::{RouterState, PeerStatus, RouterInfo};
 use crate::net::Ipv6Prefix;
 use crate::graph::Graph;
+use crate::protocol::SrpPrefix;
 
 pub struct ArcAdmContext {
     pub config: Config,
     pub state: Arc::<Mutex::<RouterState>>,
-    pub local_prefix_notifier: Arc::<Notify>,
+    pub pfupdate: broadcast::Sender<SrpPrefix>,
 }
 
 #[endpoint { method = GET, path = "/ping" }]
@@ -73,6 +74,17 @@ async fn get_graph(
     
 }
 
+#[endpoint { method = GET, path = "/paths" }]
+async fn get_paths(
+    ctx: Arc<RequestContext<ArcAdmContext>>,
+) -> Result<HttpResponseOk<HashMap::<String, Vec::<String>>>, HttpError> {
+
+    let api_context = ctx.context();
+
+    Ok(HttpResponseOk(api_context.state.lock().await.path_map.clone()))
+    
+}
+
 #[endpoint { method = PUT, path = "/prefix" }]
 async fn advertise_prefix(
     ctx: Arc<RequestContext<ArcAdmContext>>,
@@ -83,11 +95,19 @@ async fn advertise_prefix(
     let body: HashSet<Ipv6Prefix> = body_param.into_inner();
 
     let local_prefixes = &mut api_context.state.lock().await.local_prefixes;
-    for x in body {
-        local_prefixes.insert(x);
+    for x in &body {
+        local_prefixes.insert(*x);
     }
 
-    api_context.local_prefix_notifier.notify_one();
+    //TODO: like lsupdate
+    //api_context.local_prefix_notifier.notify_one();
+    api_context.pfupdate.send(
+        SrpPrefix{
+            origin: "".into(),
+            prefixes: body.clone(),
+            serial: 0,
+        }
+    );
 
     Ok(HttpResponseOk(()))
 
@@ -98,7 +118,7 @@ pub(crate) async fn handler(
     info: RouterInfo,
     config: Config,
     state: Arc::<Mutex::<RouterState>>,
-    local_prefix_notifier: Arc::<Notify>,
+    pfupdate: broadcast::Sender<SrpPrefix>,
     log: Logger,
 ) -> Result<(), String> {
 
@@ -117,8 +137,9 @@ pub(crate) async fn handler(
     api.register(advertise_prefix)?;
     api.register(get_remote_prefixes)?;
     api.register(get_graph)?;
+    api.register(get_paths)?;
 
-    let api_context = ArcAdmContext{config, state, local_prefix_notifier};
+    let api_context = ArcAdmContext{config, state, pfupdate};
 
     let server = HttpServerStarter::new(
         &config_dropshot,

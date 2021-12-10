@@ -1,8 +1,10 @@
 use crate::net::Ipv6Prefix;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+use serde::{Serialize, Deserialize};
+use schemars::JsonSchema;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 pub enum RouterKind {
     Server,
     Transit,
