@@ -74,8 +74,8 @@ pub async fn connect(a: &mut Node, b: &mut Node) {
     let (rdp_tx_ab, rdp_rx_ab) = channel(0x20);
     let (rdp_tx_ba, rdp_rx_ba) = channel(0x20);
 
-    let (srp_tx_ab, srp_rx_ab) = channel(0x20);
-    let (srp_tx_ba, srp_rx_ba) = channel(0x20);
+    let (srp_tx_ab, srp_rx_ab) = channel(0x200);
+    let (srp_tx_ba, srp_rx_ba) = channel(0x200);
 
     let (peer_tx_ab, peer_rx_ab) = channel(0x20);
     let (peer_tx_ba, peer_rx_ba) = channel(0x20);

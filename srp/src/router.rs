@@ -57,7 +57,7 @@ pub(crate) struct RouterRuntime<Platform: platform::Full> {
 }
 
 pub struct RouterState {
-    pub peers: HashMap::<String, PeerStatus>,
+    pub peers: HashMap::<String, Arc::<Mutex::<PeerStatus>>>,
     pub local_prefixes: HashSet::<Ipv6Prefix>,
     pub remote_prefixes: HashMap::<String, HashSet::<Ipv6Prefix>>,
     pub graph: Graph<String>,
@@ -83,7 +83,7 @@ impl RouterState {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct PeerStatus {
     kind: RouterKind,
     ls_sent: u128,
@@ -109,14 +109,11 @@ pub struct Peer {
 impl Router {
 
     pub fn new(name: String, kind: RouterKind) -> Self {
-        // TODO This channel should not need to be anywhere near this big ....
-        // .    some major contention going on somehwere
-        let (lstx, _) = broadcast::channel(0x2000);
-        let (pftx, _) = broadcast::channel(0x2000);
+        let (lstx, _) = broadcast::channel(0x20);
+        let (pftx, _) = broadcast::channel(0x20);
         Router{
             info: RouterInfo{name, kind},
             state: Arc::new(Mutex::new(RouterState::new())),
-            //local_prefix_update: Arc::new(Notify::new()),
             linkstate_update: lstx,
             prefix_update: pftx,
             linkstate_counter: Arc::new(AtomicU64::new(0)),
@@ -362,6 +359,7 @@ impl Router {
         r: RouterRuntime<Platform>,
         port: Port,
         peer: RouterInfo,
+        peer_status: Arc::<Mutex::<PeerStatus>>,
     )
     where
         Platform: platform::Full
@@ -546,7 +544,22 @@ impl Router {
                         }
                         //router_debug!(log, local.name, "T: {}", msg.serial);
                         match tx.send(SrpMessage::Link(msg.1)).await {
-                            Ok(_) => { }
+                            Ok(_) => { 
+                                let mut g = peer_status.lock().await;
+                                let x: &mut PeerStatus = &mut *g;
+                                //peer_status.lock().await.ls_sent += 1;
+                                x.ls_sent += 1;
+                                //let x = peer_status.lock().await.ls_sent;
+                                if local.name == "tr00" && x.ls_sent % 100 == 0 {
+                                    router_warn!(
+                                        log, 
+                                        local.name,
+                                        "Sent: {} {}",
+                                        name,
+                                        x.ls_sent
+                                    );
+                                }
+                            }
                             Err(e) => {
                                 router_error!(
                                     log,
@@ -741,26 +754,33 @@ where
     Platform: platform::Full
 {
     router_trace!(r.log, r.router.info.name, "pong: {:?}", pong);
-    let prev = r.router.state.lock().await.peers.insert(
-        pong.sender.clone(), PeerStatus::new(pong.kind)
-    );
-    if prev.is_none() {
-        router_info!(
-            r.log,
-            r.router.info.name,
-            "added new peer {}",
-            &pong.sender
-        );
-    }
+        let mut state = r.router.state.lock().await;
+        let prev = state.peers.get(&pong.sender);
+        match prev {
+            Some(_) => {}
+            None => {
+                let new = Arc::new(Mutex::new(PeerStatus::new(pong.kind)));
+                state.peers.insert(
+                    pong.sender.clone(), new.clone(),
+                );
+                router_info!(
+                    r.log,
+                    r.router.info.name,
+                    "added new peer {}",
+                    &pong.sender
+                );
+                Router::run_srp_io_sm(
+                    r.clone(),
+                    port,
+                    RouterInfo{
+                        name: pong.sender.clone(),
+                        kind: pong.kind,
+                    },
+                    new,
+                ).await;
+            }
+        }
 
-    Router::run_srp_io_sm(
-        r.clone(),
-        port,
-        RouterInfo{
-            name: pong.sender.clone(),
-            kind: pong.kind,
-        },
-    ).await;
 }
 
 #[cfg(test)]
@@ -987,6 +1007,15 @@ mod test {
         assert_eq!(resp.status(), 200);
         let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
         let g: HashMap::<String, Vec::<String>> = 
+            serde_json::from_slice(&body_bytes)?;
+        info!(log, "{:#?}", g);
+
+        // get peers from t0
+        let uri = "http://127.0.0.1:4718/peers".parse()?;
+        let resp = client.get(uri).await?;
+        assert_eq!(resp.status(), 200);
+        let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
+        let g: HashMap::<String, PeerStatus> = 
             serde_json::from_slice(&body_bytes)?;
         info!(log, "{:#?}", g);
 

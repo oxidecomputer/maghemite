@@ -46,7 +46,14 @@ async fn get_peers(
 
     let api_context = ctx.context();
 
-    Ok(HttpResponseOk(api_context.state.lock().await.peers.clone()))
+    let peers = api_context.state.lock().await.peers.clone();
+    let mut result = HashMap::new();
+
+    for (k,v) in peers {
+        result.insert(k, *v.lock().await); 
+    }
+
+    Ok(HttpResponseOk(result))
 
 }
 
