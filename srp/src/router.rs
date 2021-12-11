@@ -2,14 +2,14 @@ use std::io::{Result, ErrorKind, Error};
 use std::sync::Arc;
 use std::time::Duration;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use tokio::{spawn, select};
 use tokio::time::sleep;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::broadcast;
-use slog::{self, debug, trace, info, warn, error, Logger};
+use slog::{self, trace, info, warn, error, Logger};
 use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
 
@@ -24,7 +24,7 @@ use crate::protocol::{
 };
 use crate::net::Ipv6Prefix;
 use crate::graph::{Graph, shortest_path};
-use crate::{router_info, router_warn, router_debug, router_error, router_trace};
+use crate::{router_info, router_warn, router_error, router_trace};
 use crate::flowstat::PortStats;
 
 pub struct Route {
@@ -40,11 +40,20 @@ pub struct Router {
     pub info: RouterInfo,
     pub state: Arc::<Mutex::<RouterState>>,
     //pub local_prefix_update: Arc::<Notify>,
-    pub linkstate_update: broadcast::Sender<SrpLink>,
+    pub linkstate_update: broadcast::Sender<(String, SrpLink)>,
     pub prefix_update: broadcast::Sender<SrpPrefix>,
 
     linkstate_counter: Arc::<AtomicU64>,
     prefix_counter: Arc::<AtomicU64>,
+}
+
+
+#[derive(Clone)]
+pub(crate) struct RouterRuntime<Platform: platform::Full> {
+    pub(crate) router: Arc::<Router>,
+    pub(crate) platform: Arc::<Mutex::<Platform>>,
+    pub(crate) config: Config,
+    pub(crate) log: Logger,
 }
 
 pub struct RouterState {
@@ -77,6 +86,18 @@ impl RouterState {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct PeerStatus {
     kind: RouterKind,
+    ls_sent: u128,
+    ls_recvd: u128,
+}
+
+impl PeerStatus {
+    fn new(kind: RouterKind) -> Self {
+        PeerStatus{
+            kind,
+            ls_sent: 0,
+            ls_recvd: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -104,54 +125,46 @@ impl Router {
     }
 
     pub fn run<Platform>(
-        &self,
+        r: Arc::<Router>,
         p: Arc::<Mutex::<Platform>>,
         config: Config,
         log: Logger,
     )
     -> Result<()>
     where
-        Platform: platform::Full + Send + Sync + 'static
+        Platform: platform::Full
     {
 
         {
+            let r = RouterRuntime{
+                router: r.clone(),
+                platform: p,
+                config: config,
+                log: log.clone()
+            };
+
             // run the I/O thread, this starts with peering and then makes its 
             // way to SRP protocol I/O with linkstate messages and such.
-            let state = self.state.clone();
-            //let local_prefix_notifier = self.local_prefix_update.clone();
-            let info = self.info.clone();
-            let lsupdate = self.linkstate_update.clone();
-            let pfupdate = self.prefix_update.clone();
-            let linkstate_counter = self.linkstate_counter.clone();
-            let log = log.clone();
-
             spawn(async move{
-                router_info!(log, &info.name, "running router");
-                match Self::run_thread(
-                    info.clone(),
-                    p,
-                    state,
-                    pfupdate,
-                    lsupdate,
-                    config,
-                    log.clone(),
-                    linkstate_counter,
-                ).await {
+
+                router_info!(r.log, &r.router.info.name, "running router");
+                match Self::run_thread(r.clone()).await {
                     Ok(()) => {},
                     Err(e) => {
-                        router_error!(log, &info.name, e, "run");
+                        router_error!(r.log, &r.router.info.name, e, "run");
                     }
                 }
+
             });
         }
 
-        if self.info.kind == RouterKind::Transit {
+        if r.info.kind == RouterKind::Transit {
 
             // run the path calculator thread
             {
                 let log = log.clone();
-                let state = self.state.clone();
-                let info = self.info.clone();
+                let state = r.state.clone();
+                let info = r.info.clone();
                 spawn(async move {
                     Self::run_path_calculator(log, info, state).await;
                 });
@@ -160,7 +173,7 @@ impl Router {
             // run the state estimator thread
             {
                 let log = log.clone();
-                let state = self.state.clone();
+                let state = r.state.clone();
                 spawn(async move {
                     Self::run_state_estimator(log, state).await;
                 });
@@ -169,7 +182,7 @@ impl Router {
             // run the prefix delegator thread
             {
                 let log = log.clone();
-                let state = self.state.clone();
+                let state = r.state.clone();
                 spawn(async move {
                     Self::run_prefix_distributor(log, state).await;
                 });
@@ -180,66 +193,39 @@ impl Router {
         Ok(())
     }
 
-    async fn run_thread<Platform>(
-        info: RouterInfo,
-        p: Arc::<Mutex::<Platform>>,
-        state: Arc::<Mutex::<RouterState>>,
-        pfupdate: broadcast::Sender<SrpPrefix>,
-        lsupdate: broadcast::Sender<SrpLink>,
-        config: Config,
-        log: Logger,
-        linkstate_counter: Arc::<AtomicU64>,
-    )
-    -> Result<()>
+    async fn run_thread<Platform>(r: RouterRuntime<Platform>) -> Result<()>
     where
-        Platform: platform::Full + Send + 'static
+        Platform: platform::Full
     {
-        let ports = p.lock().await.ports()?;
-
+        let ports = r.platform.lock().await.ports()?;
         for port in ports {
-            Router::run_peer_sm(
-                info.clone(),
-                p.clone(),
-                state.clone(),
-                pfupdate.clone(),
-                lsupdate.clone(),
-                port,
-                log.clone(),
-                linkstate_counter.clone(),
-            ).await;
+            Router::run_peer_sm(r.clone(), port).await;
         }
 
-        admin::handler(
-            info,
-            config, state.clone(),
-            pfupdate.clone(),
-            log.clone()).await
+        admin::handler(r.clone())
+            .await
             .map_err(|e| Error::new(ErrorKind::Other, e))?;
 
         Ok(())
 
     }
 
-    async fn run_peer_sm<Platform>(
-        info: RouterInfo,
-        p: Arc::<Mutex::<Platform>>,
-        state: Arc::<Mutex::<RouterState>>,
-        pfupdate: broadcast::Sender<SrpPrefix>,
-        lsupdate: broadcast::Sender<SrpLink>,
-        port: Port,
-        log: Logger,
-        linkstate_counter: Arc::<AtomicU64>,
-    )
+    async fn run_peer_sm<Platform>(r: RouterRuntime<Platform>, port: Port)
     where
-        Platform: platform::Full + Send + 'static
+        Platform: platform::Full
     {
 
         // get peer channel
-        let (tx, mut rx) = match p.lock().await.peer_channel(port) {
+        let (tx, mut rx) = match r.platform.lock().await.peer_channel(port) {
             Ok(pair) =>  pair,
             Err(e) => {
                 router_error!(
-                    log, info.name, e, "get peer channel for {:?}", port);
+                    r.log,
+                    r.router.info.name,
+                    e,
+                    "get peer channel for {:?}",
+                    port
+                );
                 panic!("failed to get peer channel");
             }
         };
@@ -247,9 +233,9 @@ impl Router {
 
         // send out periodic peer pings
         {
-            let info = info.clone();
+            let info = r.router.info.clone();
             let tx = tx.clone();
-            let log = log.clone();
+            let log = r.log.clone();
 
             spawn(async move { loop {
 
@@ -271,9 +257,9 @@ impl Router {
 
         // handle peer messages
         {
-            let info = info.clone();
+            let info = r.router.info.clone();
             let tx = tx.clone();
-            let log = log.clone();
+            let log = r.log.clone();
 
             spawn(async move { loop {
                     router_trace!(log, info.name, "sending ping");
@@ -292,15 +278,9 @@ impl Router {
                                         }
                                         PeerMessage::Pong(pong) => {
                                             handle_pong(
-                                                info.clone(),
-                                                &pong,
-                                                &log,
-                                                &state,
-                                                pfupdate.clone(),
-                                                lsupdate.clone(),
-                                                &p,
+                                                r.clone(),
                                                 port,
-                                                linkstate_counter.clone(),
+                                                pong,
                                             ).await;
                                         }
                                     }
@@ -328,7 +308,7 @@ impl Router {
 
         loop {
             // get a sanpshot of our current peers and the net graph
-            let (mut prefixes, graph) = {
+            let (prefixes, graph) = {
                 let state = state.lock().await;
                 let prefixes = state.prefixes.clone();
                 let graph = state.graph.clone();
@@ -379,37 +359,42 @@ impl Router {
     }
 
     async fn run_srp_io_sm<Platform>(
-        local: RouterInfo,
-        peer: RouterInfo,
-        p: Arc::<Mutex::<Platform>>,
-        state: Arc::<Mutex::<RouterState>>,
-        pfupdate: broadcast::Sender<SrpPrefix>,
-        lsupdate: broadcast::Sender<SrpLink>,
+        r: RouterRuntime<Platform>,
         port: Port,
-        log: Logger,
-        linkstate_counter: Arc::<AtomicU64>,
+        peer: RouterInfo,
     )
     where
-        Platform: platform::Full + Send + 'static
+        Platform: platform::Full
     {
 
         // get srp channel
-        let (tx, mut rx) = match p.lock().await.srp_channel(port) {
-            Ok(pair) =>  pair,
-            Err(e) => {
-                router_error!(
-                    log, local.name, e, "get srp channel for {:?}", port);
-                panic!("failed to get srp channel");
+        let (tx, mut rx) = {
+                match r.platform.lock().await.srp_channel(port) {
+                Ok(pair) =>  pair,
+                Err(e) => {
+                    router_error!(
+                        r.log,
+                        r.router.info.name,
+                        e,
+                        "get srp channel for {:?}",
+                        port
+                    );
+                    panic!("failed to get srp channel");
+                }
             }
         };
 
 
         // send out periodic link state updates
         {
-            let local = local.clone();
-            let log = log.clone();
-            let state = state.clone();
-            let lsupdate = lsupdate.clone();
+            let local = r.router.info.clone();
+            let log = r.log.clone();
+            let state = r.router.state.clone();
+            let lsupdate = r.router.linkstate_update.clone();
+            let mut counter = 0u64;
+            let peername = peer.name.clone();
+            let p = r.platform;
+
             spawn(async move { loop {
 
                 let stats = match p.lock().await.stats(port) {
@@ -425,13 +410,15 @@ impl Router {
                 // to determine that, so just fire at will for now.
                 let link = SrpLink{
                     origin: local.name.clone(),
-                    neighbor: peer.name.clone(),
+                    neighbor: peername.clone(),
                     capacity: 0, // TODO
                     egress_rate: stats.egress_rate,
                     ingress_rate: stats.ingresss_rate,
                     // TODO not yet sure what Ordering should be here
-                    serial: linkstate_counter.fetch_add(1, Ordering::Relaxed),
+                    //serial: linkstate_counter.fetch_add(1, Ordering::Relaxed),
+                    serial: counter,
                 };
+                counter += 1;
 
                 // first update our own state
                 // locked region
@@ -469,7 +456,7 @@ impl Router {
                 }
                 */
                 // broadcast to transit peers
-                match lsupdate.send(link) {
+                match lsupdate.send(("".into(), link)) {
                     Ok(_) => {}
                     Err(e) => {
                         router_error!(
@@ -481,7 +468,6 @@ impl Router {
                     }
                 }
 
-
                 sleep(Duration::from_millis(100)).await;
 
             }});
@@ -489,11 +475,11 @@ impl Router {
 
         // propagate local prefix updates
         {
-            let local = local.clone();
+            let local = r.router.info.clone();
             let tx = tx.clone();
-            let log = log.clone();
-            let state= state.clone();
-            let mut rx = pfupdate.subscribe();
+            let log = r.log.clone();
+            let state= r.router.state.clone();
+            let mut rx = r.router.prefix_update.subscribe();
 
             spawn(async move { loop {
 
@@ -508,8 +494,8 @@ impl Router {
                     }
                     Ok(msg) => {
 
-                        router_debug!(
-                            log, local.name, "local prefix update notification");
+                        router_trace!(
+                            log, local.name, "local prefix update");
                         let mut origin = local.name.clone();
 
                         let prefixes = 
@@ -543,17 +529,24 @@ impl Router {
 
         // handle lsupdate messages 
         if peer.kind == RouterKind::Transit {
-            let mut rx = lsupdate.subscribe();
+            let mut rx = r.router.linkstate_update.subscribe();
             let tx = tx.clone();
-            let log = log.clone();
-            let local = local.clone();
+            let log = r.log.clone();
+            let local = r.router.info.clone();
+            let name = peer.name.clone();
 
             spawn(async move { loop {
 
                 match rx.recv().await {
                     Ok(msg) => {
-                        match tx.send(SrpMessage::Link(msg)).await {
-                            Ok(_) => {}
+
+                        // do not flood messages back to sender
+                        if msg.0 == name {
+                            continue
+                        }
+                        //router_debug!(log, local.name, "T: {}", msg.serial);
+                        match tx.send(SrpMessage::Link(msg.1)).await {
+                            Ok(_) => { }
                             Err(e) => {
                                 router_error!(
                                     log,
@@ -579,7 +572,11 @@ impl Router {
 
         // handle srp messages
         {
-            let log = log.clone();
+            let log = r.log.clone();
+            let local = r.router.info.clone();
+            let state = r.router.state.clone();
+            let pfupdate = r.router.prefix_update.clone();
+            let lsupdate = r.router.linkstate_update.clone();
 
             spawn(async move { loop {
                 match rx.recv().await {
@@ -674,7 +671,9 @@ impl Router {
                                 }
 
                                 // push the update to our other peers
-                                match lsupdate.send(l) {
+                                // TODO this is causing a storm up link state
+                                // updates
+                                match lsupdate.send((peer.name.clone(), l)) {
                                     Ok(_) => {}
                                     Err(e) => {
                                         router_error!(
@@ -734,40 +733,33 @@ async fn handle_ping(
 }
 
 async fn handle_pong<Platform>(
-    info: RouterInfo,
-    pong: &PeerPong,
-    log: &Logger,
-    state: &Arc::<Mutex::<RouterState>>,
-    pfupdate: broadcast::Sender<SrpPrefix>,
-    lsupdate: broadcast::Sender<SrpLink>,
-    p: &Arc::<Mutex::<Platform>>,
+    r: RouterRuntime<Platform>,
     port: Port,
-    linkstate_counter: Arc::<AtomicU64>,
+    pong: PeerPong,
 ) 
 where
-    Platform: platform::Full + Send + 'static
+    Platform: platform::Full
 {
-    router_trace!(log, info.name, "pong: {:?}", pong);
-    let prev = state.lock().await.peers.insert(
-        pong.sender.clone(), PeerStatus{ kind: pong.kind }
+    router_trace!(r.log, r.router.info.name, "pong: {:?}", pong);
+    let prev = r.router.state.lock().await.peers.insert(
+        pong.sender.clone(), PeerStatus::new(pong.kind)
     );
     if prev.is_none() {
-        router_info!(log, info.name, "added new peer {}", &pong.sender);
+        router_info!(
+            r.log,
+            r.router.info.name,
+            "added new peer {}",
+            &pong.sender
+        );
     }
 
     Router::run_srp_io_sm(
-        info,
+        r.clone(),
+        port,
         RouterInfo{
             name: pong.sender.clone(),
             kind: pong.kind,
         },
-        p.clone(),
-        state.clone(),
-        pfupdate,
-        lsupdate,
-        port,
-        log.clone(),
-        linkstate_counter,
     ).await;
 }
 

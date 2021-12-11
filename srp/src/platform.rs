@@ -35,5 +35,26 @@ pub trait Router {
     fn delete_route(&self, r: Route) -> Result<()>;
 }
 
-pub trait Full: Ports + FlowStat + Rdp + Srp + Router {}
-impl<T: Ports + FlowStat + Rdp + Srp + Router> Full for T {}
+pub trait Full:
+    Ports +
+    FlowStat +
+    Rdp +
+    Srp +
+    Router +
+    Sync +
+    Send +
+    Clone +
+    'static
+{}
+
+impl<T: 
+    Ports +
+    FlowStat +
+    Rdp +
+    Srp +
+    Router +
+    Sync +
+    Send +
+    Clone +
+    'static
+> Full for T {}

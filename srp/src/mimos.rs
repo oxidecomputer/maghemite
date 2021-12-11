@@ -27,6 +27,7 @@ pub struct PeerChannel {
     pub tx: Sender<PeerMessage>,
 }
 
+#[derive(Clone)]
 pub struct Neighbor {
     pub rdp_ch: Arc::<Mutex::<RdpChannel>>,
     pub peer_ch: Arc::<Mutex::<PeerChannel>>,
@@ -36,7 +37,7 @@ pub struct Neighbor {
 pub struct Node {
     pub name: String,
     pub platform: Arc::<Mutex::<Platform>>,
-    pub router: Router,
+    pub router: Arc::<Router>,
 }
 
 impl Node {
@@ -44,15 +45,18 @@ impl Node {
         Node{
             name: name.clone(),
             platform: Arc::new(Mutex::new(Platform::new())),
-            router: Router::new(name, kind)
+            router: Arc::new(Router::new(name, kind)),
         }
     }
     
     pub fn run(&self, port: u16, log: slog::Logger) -> Result<()> {
-        self.router.run(self.platform.clone(), Config{port}, log)
+        //self.router.run(self.platform.clone(), Config{port}, log)
+        Router::run(
+            self.router.clone(), self.platform.clone(), Config{port}, log)
     }
 }
 
+#[derive(Clone)]
 pub struct Platform {
     neighbors: Vec<Neighbor>,
 }

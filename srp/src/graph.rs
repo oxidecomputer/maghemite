@@ -139,7 +139,11 @@ pub fn shortest_path<Key: Eq + Hash + Ord + Clone>(g: &Graph::<Key>, a: Key, b: 
     let mut result = vec![b.clone()];
     let mut x = b;
     loop {
-        let u = prev.get(&x).unwrap();
+        let _u = prev.get(&x);
+        if _u.is_none() {
+            break;
+        }
+        let u = _u.unwrap();
         if u.is_none() {
             break
         }

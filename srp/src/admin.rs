@@ -9,19 +9,20 @@ use dropshot::{
     TypedBody,
 };
 
-use tokio::sync::{Mutex, Notify, broadcast};
+use tokio::sync::{Mutex, broadcast};
 use std::sync::Arc;
 use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
 use std::collections::{HashSet, HashMap};
 
-use slog::{info, Logger};
+use slog::info;
 
 use crate::{router_info};
 use crate::config::Config;
-use crate::router::{RouterState, PeerStatus, RouterInfo};
+use crate::router::{RouterState, PeerStatus, RouterRuntime};
 use crate::net::Ipv6Prefix;
 use crate::graph::Graph;
 use crate::protocol::SrpPrefix;
+use crate::platform;
 
 pub struct ArcAdmContext {
     pub config: Config,
@@ -107,23 +108,19 @@ async fn advertise_prefix(
             prefixes: body.clone(),
             serial: 0,
         }
-    );
+    ).map_err(|e| HttpError::for_internal_error(format!("{}", e)))?;
 
     Ok(HttpResponseOk(()))
 
 }
 
 
-pub(crate) async fn handler(
-    info: RouterInfo,
-    config: Config,
-    state: Arc::<Mutex::<RouterState>>,
-    pfupdate: broadcast::Sender<SrpPrefix>,
-    log: Logger,
+pub(crate) async fn handler<Platform: platform::Full>(
+    r: RouterRuntime<Platform>
 ) -> Result<(), String> {
 
     let addr = SocketAddr::V4(
-        SocketAddrV4::new(Ipv4Addr::new(127,0,0,1), config.port)
+        SocketAddrV4::new(Ipv4Addr::new(127,0,0,1), r.config.port)
     );
 
     let config_dropshot = ConfigDropshot{
@@ -139,17 +136,21 @@ pub(crate) async fn handler(
     api.register(get_graph)?;
     api.register(get_paths)?;
 
-    let api_context = ArcAdmContext{config, state, pfupdate};
+    let api_context = ArcAdmContext{
+        config: r.config,
+        state: r.router.state.clone(),
+        pfupdate: r.router.prefix_update.clone(),
+    };
 
     let server = HttpServerStarter::new(
         &config_dropshot,
         api,
         api_context,
-        &log,
+        &r.log,
     ).map_err(|e| format!("create dropshot adm server: {}", e))?
     .start();
 
-    router_info!(log, info.name, "starting adm server");
+    router_info!(r.log, r.router.info.name, "starting adm server");
 
     server.await
 
