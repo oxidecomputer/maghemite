@@ -1,7 +1,7 @@
 use std::io;
-use termion::raw::IntoRawMode;
+//use termion::raw::IntoRawMode;
 use tui::Terminal;
-use tui::backend::TermionBackend;
+use tui::backend::CrosstermBackend;
 use tui::widgets::{Block, Borders, Table, Row};
 use tui::layout::{Layout, Constraint, Direction};
 use tui::style::{Style, Color};
@@ -13,8 +13,9 @@ use std::io::Read;
 
 fn main() -> Result<(), io::Error> {
 
-    let stdout = io::stdout().into_raw_mode()?;
-    let backend = TermionBackend::new(stdout);
+    //let stdout = io::stdout().into_raw_mode()?;
+    let stdout = io::stdout();
+    let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
     terminal.draw(|f| {

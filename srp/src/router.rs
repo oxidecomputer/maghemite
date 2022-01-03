@@ -9,7 +9,7 @@ use tokio::time::sleep;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::broadcast;
-use slog::{self, trace, info, warn, error, Logger};
+use slog::{self, trace, debug, info, warn, error, Logger};
 use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
 
@@ -24,7 +24,7 @@ use crate::protocol::{
 };
 use crate::net::Ipv6Prefix;
 use crate::graph::{Graph, shortest_path};
-use crate::{router_info, router_warn, router_error, router_trace};
+use crate::{router_info, router_warn, router_error, router_trace, router_debug};
 use crate::flowstat::PortStats;
 
 pub struct Route {
@@ -43,8 +43,8 @@ pub struct Router {
     pub linkstate_update: broadcast::Sender<(String, SrpLink)>,
     pub prefix_update: broadcast::Sender<SrpPrefix>,
 
-    linkstate_counter: Arc::<AtomicU64>,
-    prefix_counter: Arc::<AtomicU64>,
+    _linkstate_counter: Arc::<AtomicU64>,
+    _prefix_counter: Arc::<AtomicU64>,
 }
 
 
@@ -116,8 +116,8 @@ impl Router {
             state: Arc::new(Mutex::new(RouterState::new())),
             linkstate_update: lstx,
             prefix_update: pftx,
-            linkstate_counter: Arc::new(AtomicU64::new(0)),
-            prefix_counter: Arc::new(AtomicU64::new(0)),
+            _linkstate_counter: Arc::new(AtomicU64::new(0)),
+            _prefix_counter: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -492,8 +492,8 @@ impl Router {
                     }
                     Ok(msg) => {
 
-                        router_trace!(
-                            log, local.name, "local prefix update");
+                        router_debug!(
+                            log, local.name, "local prefix update {:?}", msg);
                         let mut origin = local.name.clone();
 
                         let prefixes = 
@@ -602,6 +602,9 @@ impl Router {
 
                                 {
                                     let mut state = state.lock().await;
+
+                                    router_debug!(
+                                        log, local.name, "new prefix: {:?}", p);
 
                                     //TODO do we actually need this, or is just
                                     // .   prefix fine
@@ -1018,6 +1021,154 @@ mod test {
         let g: HashMap::<String, PeerStatus> = 
             serde_json::from_slice(&body_bytes)?;
         info!(log, "{:#?}", g);
+
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mimos_12_router_adv() -> anyhow::Result<()> {
+
+        let log = test_logger();
+
+        // routers
+
+        let mut port = 4720;
+
+        // server routers
+        // rack 0
+        let mut s0 = Vec::new();
+        for i in 0..4 {
+            let n = mimos::Node::new(format!("sr0{}", i), RouterKind::Server);
+            s0.push(n);
+        }
+        //rack 1
+        let mut s1 = Vec::new();
+        for i in 0..4 {
+            let n = mimos::Node::new(format!("sr1{}", i), RouterKind::Server);
+            s1.push(n);
+        }
+        // transit routers
+        // rack 0
+        let mut t0 = Vec::new();
+        for i in 0..2 {
+            let n = mimos::Node::new(format!("tr0{}", i), RouterKind::Transit);
+            t0.push(n);
+        }
+        // rack 1
+        let mut t1 = Vec::new();
+        for i in 0..2 {
+            let n = mimos::Node::new(format!("tr1{}", i), RouterKind::Transit);
+            t1.push(n);
+        }
+
+        // connections
+
+        // rack 1
+        for mut x in &mut s0 {
+            mimos::connect(&mut x, &mut t0[0]).await;
+            mimos::connect(&mut x, &mut t0[1]).await;
+        }
+        // rack 2
+        for mut x in &mut s1 {
+            mimos::connect(&mut x, &mut t1[0]).await;
+            mimos::connect(&mut x, &mut t1[1]).await;
+        }
+        // cross rack
+        for mut x in &mut t0 {
+            mimos::connect(&mut x, &mut t1[0]).await;
+            mimos::connect(&mut x, &mut t1[1]).await;
+        }
+
+        for x in &mut s0 {
+            x.run(port, log.clone())?;
+            port += 1;
+        }
+        for x in &mut s1 {
+            x.run(port, log.clone())?;
+            port += 1;
+        }
+        for x in &mut t0 {
+            x.run(port, log.clone())?;
+            port += 1;
+        }
+        for x in &mut t1 {
+            x.run(port, log.clone())?;
+            port += 1;
+        }
+
+
+        // wait for routers to start
+        sleep(Duration::from_secs(3)).await;
+
+        let client = hyper::Client::new();
+
+        // advertise a prefix at each server
+        for i in 20..28 {
+            let mut request = HashSet::new();
+            request.insert(Ipv6Prefix::from_str(
+                &format!("fd00::1701:{}/64", i)
+            )?);
+            let body = serde_json::to_string(&request)?;
+
+            let req = hyper::Request::builder()
+                .method(hyper::Method::PUT)
+                .uri(format!("http://127.0.0.1:47{}/prefix", i))
+                .body(hyper::Body::from(body))
+                .expect("request builder");
+
+            client.request(req).await?;
+        }
+
+        sleep(Duration::from_secs(8)).await;
+
+        // look for the advertised prefixes
+        let uri = "http://127.0.0.1:4720/remote_prefixes".parse()?; 
+        let resp = client.get(uri).await?;
+        assert_eq!(resp.status(), 200);
+        let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
+        let prefixes: HashMap<String, HashSet::<Ipv6Prefix>> =
+            serde_json::from_slice(&body_bytes)?;
+        println!("prefixes: {:#?}", prefixes);
+        assert_eq!(8, prefixes.len());
+
+        for host in &["sr00", "sr01", "sr02", "sr03", "sr10", "sr11", "sr12", "sr13"] {
+            let host = host.to_string();
+            let mut expected = HashSet::new();
+            expected.insert(Ipv6Prefix::from_str("fd00::1701/64")?);
+            assert_eq!(prefixes.get(&host), Some(&expected));
+        }
+
+        /*
+        // get the network graph from t0
+        let uri = "http://127.0.0.1:4718/graph".parse()?;
+        let resp = client.get(uri).await?;
+        assert_eq!(resp.status(), 200);
+        let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
+        let g: Graph::<String> = serde_json::from_slice(&body_bytes)?;
+        info!(log, "{:#?}", g);
+
+        let p = shortest_path(&g, "sr02".to_string(), "sr12".to_string());
+        info!(log, "{:?}", p);
+
+        // get the path map from t0
+        let uri = "http://127.0.0.1:4718/paths".parse()?;
+        let resp = client.get(uri).await?;
+        assert_eq!(resp.status(), 200);
+        let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
+        let g: HashMap::<String, Vec::<String>> = 
+            serde_json::from_slice(&body_bytes)?;
+        info!(log, "{:#?}", g);
+
+        // get peers from t0
+        let uri = "http://127.0.0.1:4718/peers".parse()?;
+        let resp = client.get(uri).await?;
+        assert_eq!(resp.status(), 200);
+        let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
+        let g: HashMap::<String, PeerStatus> = 
+            serde_json::from_slice(&body_bytes)?;
+        info!(log, "{:#?}", g);
+        */
 
 
         Ok(())
