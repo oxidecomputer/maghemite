@@ -86,7 +86,7 @@ impl Router {
     where
         Platform: platform::Full
     {
-        let ports = r.platform.lock().await.ports()?;
+        let ports = r.platform.lock().await.ports().await?;
         for port in ports {
             Router::run_peer_sm(r.clone(), port).await;
         }
@@ -105,7 +105,7 @@ impl Router {
     {
 
         // get peer channel
-        let (tx, mut rx) = match r.platform.lock().await.peer_channel(port) {
+        let (tx, mut rx) = match r.platform.lock().await.peer_channel(port).await {
             Ok(pair) =>  pair,
             Err(e) => {
                 router_error!(
@@ -198,7 +198,7 @@ impl Router {
 
         // get ddm channel
         let (tx, mut rx) = {
-                match r.platform.lock().await.ddm_channel(port) {
+                match r.platform.lock().await.ddm_channel(port).await {
                 Ok(pair) =>  pair,
                 Err(e) => {
                     router_error!(

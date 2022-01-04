@@ -1,3 +1,6 @@
+#![feature(ip)]
+#![feature(maybe_uninit_slice)]
+
 pub mod router;
 pub mod mimos;
 pub mod platform;
@@ -7,6 +10,9 @@ pub mod rdp;
 pub mod protocol;
 pub mod net;
 pub mod admin;
+pub mod illumos;
+pub mod peer;
+pub mod exchange;
 
 #[macro_export]
 macro_rules! router_error {

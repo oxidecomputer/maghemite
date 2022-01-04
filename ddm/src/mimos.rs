@@ -4,16 +4,18 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{Sender, Receiver, channel};
 use tokio::{spawn, select};
 use tokio::sync::Mutex;
+use icmpv6::RDPMessage;
+use async_trait::async_trait;
 
 use crate::platform;
-use crate::port::Port;
-use crate::rdp::RdpMessage;
+use crate::port::{Port, PortState};
 use crate::protocol::{DdmMessage, PeerMessage, RouterKind};
 use crate::router::{Route, Router};
 use crate::config::Config;
+
 pub struct RdpChannel {
-    pub rx: Receiver<RdpMessage>,
-    pub tx: Sender<RdpMessage>,
+    pub rx: Receiver<RDPMessage>,
+    pub tx: Sender<RDPMessage>,
 }
 
 pub struct DdmChannel {
@@ -111,19 +113,22 @@ pub async fn connect(a: &mut Node, b: &mut Node) {
 
 }
 
+#[async_trait]
 impl platform::Ports for Platform {
-    fn ports(&self) -> Result<Vec<Port>> {
+    async fn ports(&self) -> Result<Vec<Port>> {
         let mut result = Vec::new();
         for (index, _) in self.neighbors.iter().enumerate() {
-            result.push(Port{index})
+            let state = PortState::Up;
+            result.push(Port{index, state})
         }
         Ok(result)
     }
 }
 
+#[async_trait]
 impl platform::Rdp for Platform {
-    fn rdp_channel(&self, p: Port)
-    -> Result<(Sender<RdpMessage>, Receiver<RdpMessage>)> {
+    async fn rdp_channel(&self, p: Port)
+    -> Result<(Sender<RDPMessage>, Receiver<RDPMessage>)> {
 
         let (itx, irx) = channel(0x20);
         let (etx, mut erx) = channel(0x20);
@@ -169,9 +174,10 @@ impl platform::Rdp for Platform {
     }
 }
 
+#[async_trait]
 impl platform::Ddm for Platform {
 
-    fn peer_channel(&self, p: Port) 
+    async fn peer_channel(&self, p: Port) 
     -> Result<(Sender<PeerMessage>, Receiver<PeerMessage>)> {
         let (itx, irx) = channel(0x20);
         let (etx, mut erx) = channel(0x20);
@@ -215,7 +221,7 @@ impl platform::Ddm for Platform {
         Ok((etx, irx))
     }
 
-    fn ddm_channel(&self, p: Port) 
+    async fn ddm_channel(&self, p: Port) 
     -> Result<(Sender<DdmMessage>, Receiver<DdmMessage>)> {
         let (itx, irx) = channel(0x20);
         let (etx, mut erx) = channel(0x20);
@@ -260,16 +266,17 @@ impl platform::Ddm for Platform {
     }
 }
 
+#[async_trait]
 impl platform::Router for Platform {
-    fn get_routes(&self) -> Result<Vec<Route>> {
+    async fn get_routes(&self) -> Result<Vec<Route>> {
         todo!();
     }
 
-    fn set_route(&self, _r: Route) -> Result<()> {
+    async fn set_route(&self, _r: Route) -> Result<()> {
         todo!();
     }
 
-    fn delete_route(&self, _r: Route) -> Result<()> {
+    async fn delete_route(&self, _r: Route) -> Result<()> {
         todo!();
     }
 }
@@ -294,28 +301,40 @@ mod test {
         let mut b = mimos::Node::new("a".into(), RouterKind::Server);
         mimos::connect(&mut a, &mut b).await;
 
+        let state = PortState::Up;
+        let index = 0;
+
         // get RDP channel
         let (a_rdp_tx, mut a_rdp_rx) =
-            a.platform.lock().await.rdp_channel(Port{index: 0}).unwrap();
+            a.platform.lock().await.rdp_channel(Port{index, state}).await.unwrap();
         let (b_rdp_tx, mut b_rdp_rx) = 
-            b.platform.lock().await.rdp_channel(Port{index: 0}).unwrap();
+            b.platform.lock().await.rdp_channel(Port{index, state}).await.unwrap();
 
         // get DDM channel
         let (a_ddm_tx, mut a_ddm_rx) = 
-            a.platform.lock().await.ddm_channel(Port{index: 0}).unwrap();
+            a.platform.lock().await.ddm_channel(Port{index, state}).await.unwrap();
         let (b_ddm_tx, mut b_ddm_rx) =
-            b.platform.lock().await.ddm_channel(Port{index: 0}).unwrap();
+            b.platform.lock().await.ddm_channel(Port{index, state}).await.unwrap();
+
+        let pkt = 
+            packet: ICMPv6Packet::RouterSolicitation(RouterSolicitation::new(None));
 
         // send some RDP messages
-        a_rdp_tx.send(RdpMessage{content: "rdp test 1".into()}).await?;
-        b_rdp_tx.send(RdpMessage{content: "rdp test 2".into()}).await?;
+        a_rdp_tx.send(RDPMessage{from: None, packet: pkt.clone()}).await?;
+        b_rdp_tx.send(RDPMessage{from: None, packet: pkt.clone()}).await?;
 
         // receive RDP messages
         let msg = a_rdp_rx.recv().await;
-        assert_eq!(msg, Some(RdpMessage{content: "rdp test 2".into()}));
+        assert_eq!(msg, Some(RDPMessage{
+            from: None,
+            packet: packet.clone(),
+        }));
 
         let msg = b_rdp_rx.recv().await;
-        assert_eq!(msg, Some(RdpMessage{content: "rdp test 1".into()}));
+        assert_eq!(msg, Some(RDPMessage{
+            from: None,
+            packet: packet.clone(),
+        }));
 
         // send some DDM messages
         let mut prefixes = HashSet::new();

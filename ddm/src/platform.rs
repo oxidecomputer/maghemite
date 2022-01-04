@@ -1,33 +1,38 @@
 use std::io::Result;
 
 use tokio::sync::mpsc::{Sender, Receiver};
+use icmpv6::RDPMessage;
+use async_trait::async_trait;
 
 use crate::protocol::{DdmMessage, PeerMessage};
-use crate::rdp::RdpMessage;
 use crate::port::Port;
 use crate::router::Route;
 
+#[async_trait]
 pub trait Ports {
-    fn ports(&self) -> Result<Vec<Port>>;
+    async fn ports(&self) -> Result<Vec<Port>>;
 }
 
+#[async_trait]
 pub trait Rdp {
-    fn rdp_channel(&self, p: Port)
-    -> Result<(Sender<RdpMessage>, Receiver<RdpMessage>)>;
+    async fn rdp_channel(&self, p: Port)
+    -> Result<(Sender<RDPMessage>, Receiver<RDPMessage>)>;
 }
 
+#[async_trait]
 pub trait Ddm {
-    fn peer_channel(&self, p: Port)
+    async fn peer_channel(&self, p: Port)
     -> Result<(Sender<PeerMessage>, Receiver<PeerMessage>)>;
 
-    fn ddm_channel(&self, p: Port)
+    async fn ddm_channel(&self, p: Port)
     -> Result<(Sender<DdmMessage>, Receiver<DdmMessage>)>;
 }
 
+#[async_trait]
 pub trait Router {
-    fn get_routes(&self) -> Result<Vec<Route>>;
-    fn set_route(&self, r: Route) -> Result<()>;
-    fn delete_route(&self, r: Route) -> Result<()>;
+    async fn get_routes(&self) -> Result<Vec<Route>>;
+    async fn set_route(&self, r: Route) -> Result<()>;
+    async fn delete_route(&self, r: Route) -> Result<()>;
 }
 
 pub trait Full:

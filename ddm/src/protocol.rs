@@ -1,8 +1,16 @@
-use crate::net::Ipv6Prefix;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+use std::net::Ipv6Addr;
+
 use serde::{Serialize, Deserialize};
 use schemars::JsonSchema;
+
+use crate::net::Ipv6Prefix;
+
+/// The DDM multicast address used for bootstrapping ff02::dd;
+pub const RDP_MCAST_ADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0,0,0,0,0,0, 0xdd);
+pub const PEERING_PORT: u16 = 0x1dd0;
+pub const PREFIX_EXCHANGE_PORT: u16 = 0x1dd1;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 pub enum RouterKind {
@@ -10,13 +18,13 @@ pub enum RouterKind {
     Transit,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum PeerMessage {
     Ping(PeerPing),
     Pong(PeerPong),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PeerPing {
     pub sender: String,
     // TODO: include the serial of the last ddm messages received,
@@ -27,14 +35,14 @@ pub struct PeerPing {
     // .     messages.
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PeerPong {
     pub sender: String,
     pub origin: String,
     pub kind: RouterKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub enum DdmMessage {
     Prefix(DdmPrefix),
 }
