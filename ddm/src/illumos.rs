@@ -18,7 +18,6 @@ use slog::{Logger, debug, warn, error};
 use icmpv6::{
     RDPMessage,
     ICMPv6Packet,
-    RouterSolicitation, RouterAdvertisement,
 };
 use async_trait::async_trait;
 
@@ -61,6 +60,12 @@ impl Platform {
     }
 }
 
+impl platform::Capabilities for Platform {
+    fn discovery() -> bool {
+        true
+    }
+}
+
 #[async_trait]
 impl platform::Ports for Platform {
     async fn ports(&self) -> Result<Vec<Port>> {
@@ -83,27 +88,52 @@ impl platform::Ports for Platform {
 
         let mut result = Vec::new();
         for l in links {
-            let p = Port{
+            let mut p = Port{
                 index: l.id as usize,
                 state: PortState::Up,
             };
             let addr = match addrs.get(&l.name) {
                 Some(addr_infos) => {
-                    let ifname = format!("{}/v6", &l.name);
-                    let mut result = Ipv6Addr::UNSPECIFIED;
+
+                    let mut result = None;
                     for addr_info in addr_infos{
-                        if addr_info.ifname == ifname {
+                        if addr_info.ifname == l.name {
                             match addr_info.addr {
-                                IpAddr::V6(addr) => result = addr,
+                                IpAddr::V6(addr) => {
+                                    if !addr.is_unicast_link_local() {
+                                        continue;
+                                    }
+                                    p.index = addr_info.index as usize;
+                                    result = Some(addr);
+                                    break;
+                                }
                                 _ => {}
                             }
                         }
                     }
-                    debug!(self.log, "found v6 address, using {}", l.name);
-                    result
+                    match result {
+                        Some(addr) => {
+                            debug!(
+                                self.log,
+                                "found link local v6 address, using {} {}",
+                                l.name,
+                                addr,
+                            );
+                            addr
+                        }
+                        None => {
+                            warn!(
+                                self.log, 
+                                "no link local v6 address for {}, skipping",
+                                l.name
+                            );
+                            continue;
+                        }
+                    }
+
                 }
                 None => {
-                    warn!(self.log, "no v6 address for {}, skipping", l.name);
+                    warn!(self.log, "no v6 addresses for {}, skipping", l.name);
                     continue;
                 }
             };
@@ -210,8 +240,7 @@ impl platform::Rdp for Platform {
                     let sa = SockAddr::from(
                         SocketAddrV6::new(RDP_MCAST_ADDR, 0, 0, p.index as u32));
                     match m.packet {
-                        ICMPv6Packet::RouterSolicitation(_rs) => {
-                            let rs = RouterSolicitation::new(None);
+                        ICMPv6Packet::RouterSolicitation(rs) => {
                             let wire = rs.wire();
                             match socket_tx.send_to(wire.as_slice(), &sa) {
                                 Ok(_) => {},
@@ -221,18 +250,7 @@ impl platform::Rdp for Platform {
                                 ),
                             };
                         }
-                        ICMPv6Packet::RouterAdvertisement(_ra) => {
-                            let ra = RouterAdvertisement::new(
-                                1,          //hop limit
-                                false,      // managed address (dhcpv6)
-                                false,      // other stateful (stateless dhcpv6)
-                                0,          // not a default router
-                                3000,       // consider this router reachable for 3000 ms
-                                0,          // No retrans timer specified
-                                None,       // no source address,
-                                Some(9216), // TODO(parameterize) jumbo frames ftw
-                                None,       // no prefix info
-                            );
+                        ICMPv6Packet::RouterAdvertisement(ra) => {
                             let wire = ra.wire();
                             match socket_tx.send_to(wire.as_slice(), &sa) {
                                 Ok(_) => {},
@@ -314,7 +332,7 @@ impl platform::Ddm for Platform {
                             }
                         };
 
-                        let uri= format!(
+                        let uri = format!(
                             "http://[{}%{}]:{}/peer",
                             peer,
                             p.index,
@@ -337,7 +355,12 @@ impl platform::Ddm for Platform {
                         let resp = client.request(req).await;
                         match resp {
                             Ok(_) => {},
-                            Err(e) => error!(log, "hyper send request: {}", e),
+                            Err(e) => error!(
+                                log, 
+                                "hyper send request to {}: {}", 
+                                &uri,
+                                e,
+                            ),
                         };
 
                     }

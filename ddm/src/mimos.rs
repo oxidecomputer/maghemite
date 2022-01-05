@@ -113,6 +113,12 @@ pub async fn connect(a: &mut Node, b: &mut Node) {
 
 }
 
+impl platform::Capabilities for Platform {
+    fn discovery() -> bool {
+        false
+    }
+}
+
 #[async_trait]
 impl platform::Ports for Platform {
     async fn ports(&self) -> Result<Vec<Port>> {

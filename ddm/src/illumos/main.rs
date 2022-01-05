@@ -60,7 +60,7 @@ fn init_logger() -> Logger {
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::FullFormat::new(decorator).build().fuse();
     let drain = slog_envlogger::new(drain).fuse();
-    let drain = slog_async::Async::new(drain).build().fuse();
+    let drain = slog_async::Async::new(drain).chan_size(0x2000).build().fuse();
     slog::Logger::root(drain, slog::o!())
 
 }

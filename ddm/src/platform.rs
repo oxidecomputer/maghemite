@@ -8,6 +8,10 @@ use crate::protocol::{DdmMessage, PeerMessage};
 use crate::port::Port;
 use crate::router::Route;
 
+pub trait Capabilities {
+    fn discovery() -> bool;
+}
+
 #[async_trait]
 pub trait Ports {
     async fn ports(&self) -> Result<Vec<Port>>;
@@ -36,6 +40,7 @@ pub trait Router {
 }
 
 pub trait Full:
+    Capabilities +
     Ports +
     Rdp +
     Ddm +
@@ -47,6 +52,7 @@ pub trait Full:
 {}
 
 impl<T: 
+    Capabilities +
     Ports +
     Rdp +
     Ddm +

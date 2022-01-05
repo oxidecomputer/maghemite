@@ -18,6 +18,7 @@ use crate::config::Config;
 use crate::protocol::{RouterKind, DdmMessage, DdmPrefix, PeerMessage, PeerPing, PeerPong};
 use crate::{router_info, router_warn, router_error, router_trace, router_debug};
 use crate::port::Port;
+use icmpv6::{RDPMessage, ICMPv6Packet, RouterAdvertisement};
 
 #[derive(Clone)]
 pub(crate) struct RouterRuntime<Platform: platform::Full> {
@@ -56,30 +57,12 @@ impl Router {
     {
 
         {
-            /*
-            let r = RouterRuntime{
-                router: r.clone(),
-                platform: p,
-                config: config,
-                log: log.clone()
-            };
-            */
-
-            // run the I/O thread, this starts with peering and then makes its 
-            // way to DDP prefix exchange.
             spawn(async move{
 
-                Self::run_sync(r, p, config, log).await;
-
-                /*
-                router_info!(r.log, &r.router.info.name, "running router");
-                match Self::run_thread(r.clone()).await {
-                    Ok(()) => {},
-                    Err(e) => {
-                        router_error!(r.log, &r.router.info.name, e, "run");
-                    }
-                }
-                */
+                match Self::run_sync(r, p, config, log.clone()).await {
+                    Ok(_) => {},
+                    Err(e) => error!(log, "run: {}", e),
+                };
 
             });
         }
@@ -107,6 +90,8 @@ impl Router {
                 log: log.clone()
             };
 
+            // run the I/O thread, this starts with peering and then makes its 
+            // way to DDP prefix exchange.
             router_info!(r.log, &r.router.info.name, "running router");
             match Self::run_thread(r.clone()).await {
                 Ok(()) => {},
@@ -127,7 +112,11 @@ impl Router {
     {
         let ports = r.platform.lock().await.ports().await?;
         for port in ports {
-            Router::run_peer_sm(r.clone(), port).await;
+            if Platform::discovery() {
+                Router::run_rdp_sm(r.clone(), port).await;
+            } else {
+                Router::run_peer_sm(r.clone(), port).await;
+            }
         }
 
         admin::handler(r.clone())
@@ -137,6 +126,89 @@ impl Router {
         Ok(())
 
     }
+
+    async fn run_rdp_sm<Platform>(r: RouterRuntime<Platform>, port: Port)
+    where
+        Platform: platform::Full
+    {
+        // get rdp channel
+        let (tx, mut rx) = match r.platform.lock().await.rdp_channel(port).await {
+            Ok(pair) =>  pair,
+            Err(e) => {
+                router_error!(
+                    r.log,
+                    r.router.info.name,
+                    e,
+                    "get rdp channel for {:?}",
+                    port
+                );
+                panic!("failed to get peer channel");
+            }
+        };
+
+        // handle advertisements
+        {
+            let log = r.log.clone();
+            let r = r.clone();
+            let port = port.clone();
+
+            spawn(async move { loop {
+                match rx.recv().await {
+                    Some(m) => {
+                        debug!(log, "rx adv {:?}", m);
+                        // launch the peering sm
+                        let mut state = r.router.state.lock().await;
+                        let r = r.clone();
+                        if !state.peer_sm_running {
+                            state.peer_sm_running = true;
+                            spawn(async move {
+                                Self::run_peer_sm(r, port).await;
+                            });
+                        }
+                    }
+                    None => { 
+                        warn!(log, "rx adv none");
+                    }
+                }
+            }});
+        }
+
+
+        // send out periodic advertisements
+        {
+            let log = r.log.clone();
+            spawn(async move { loop {
+
+                let adv = RDPMessage{
+                    from: None,
+                    packet: ICMPv6Packet::RouterAdvertisement(
+                        RouterAdvertisement::new(
+                            1,          //hop limit
+                            false,      // managed address (dhcpv6)
+                            false,      // other stateful (stateless dhcpv6)
+                            0,          // not a default router
+                            3000,       // consider this router reachable for 3000 ms
+                            0,          // No retrans timer specified
+                            None,       // no source address,
+                            Some(9216), // TODO(parameterize) jumbo frames ftw
+                            None,       // no prefix info
+                        )
+                    ),
+                };
+
+                match tx.send(adv).await {
+                    Ok(_) => trace!(log, "sent adv on port {:?}", port),
+                    Err(e) => error!(log, "adv send: {}", e),
+                }
+
+                sleep(Duration::from_millis(1000)).await;
+
+            }});
+        }
+
+
+    }
+
 
     async fn run_peer_sm<Platform>(r: RouterRuntime<Platform>, port: Port)
     where
@@ -158,36 +230,12 @@ impl Router {
             }
         };
 
-
-        // send out periodic peer pings
-        {
-            let info = r.router.info.clone();
-            let tx = tx.clone();
-            let log = r.log.clone();
-
-            spawn(async move { loop {
-
-                let ping = PeerMessage::Ping(
-                    PeerPing{sender :info.name.clone()});
-
-                match tx.send(ping).await {
-                    Ok(_) => {},
-                    Err(e) => {
-                        router_error!(log, info.name, e, "send peer msg");
-                    }
-                }
-
-                sleep(Duration::from_millis(100)).await;
-
-            }});
-
-        }
-
         // handle peer messages
         {
             let info = r.router.info.clone();
             let tx = tx.clone();
             let log = r.log.clone();
+            let r = r.clone();
 
             spawn(async move { loop {
                     router_trace!(log, info.name, "sending ping");
@@ -214,8 +262,8 @@ impl Router {
                                     }
                                 }
                                 None => {
-                                    router_warn!(
-                                        log, info.name, "recv pong none?");
+                                    //router_warn!(
+                                    //    log, info.name, "recv pong none?");
                                 }
                             }
                         }
@@ -223,6 +271,30 @@ impl Router {
                     };
 
             }});
+        }
+
+        // send out periodic peer pings
+        {
+            let info = r.router.info.clone();
+            let tx = tx.clone();
+            let log = r.log.clone();
+
+            spawn(async move { loop {
+
+                let ping = PeerMessage::Ping(
+                    PeerPing{sender :info.name.clone()});
+
+                match tx.send(ping).await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        router_error!(log, info.name, e, "send peer msg");
+                    }
+                }
+
+                sleep(Duration::from_millis(1000)).await;
+
+            }});
+
         }
 
     }
@@ -401,6 +473,7 @@ pub struct RouterInfo {
 }
 
 pub struct RouterState {
+    peer_sm_running: bool,
     pub peers: HashMap::<String, Arc::<Mutex::<PeerStatus>>>,
     pub(crate) prefixes: HashSet::<DdmPrefix>,
 }
@@ -408,6 +481,7 @@ pub struct RouterState {
 impl RouterState {
     pub fn new() -> Self {
         RouterState{
+            peer_sm_running: false,
             peers: HashMap::new(),
             prefixes: HashSet::new(),
         }
