@@ -21,7 +21,6 @@ use crate::config::Config;
 use crate::router::{RouterState, PeerStatus, RouterRuntime, RouterInfo, Route};
 use crate::net::Ipv6Prefix;
 use crate::protocol::DdmPrefix;
-use crate::port::Port;
 use crate::platform;
 
 pub struct ArcAdmContext {

@@ -507,14 +507,12 @@ impl platform::Router for Platform {
     async fn set_route(&self, r: Route) -> Result<()> {
 
         let gw = r.gw;
-        match netadm_sys::add_route(r.into(), gw) {
-            Ok(rs) => rs,
+        match netadm_sys::ensure_route_present(r.into(), gw) {
+            Ok(_) => Ok(()),
             Err(e) => return Err(
                 Error::new(ErrorKind::Other, format!("set route: {}", e))
             ),
         }
-                
-        Ok(())
 
     }
 
@@ -522,12 +520,11 @@ impl platform::Router for Platform {
 
         let gw = r.gw;
         match netadm_sys::delete_route(r.into(), gw) {
-            Ok(rs) => rs,
+            Ok(_) => Ok(()),
             Err(e) => return Err(
                 Error::new(ErrorKind::Other, format!("set route: {}", e))
             ),
         }
                 
-        Ok(())
     }
 }

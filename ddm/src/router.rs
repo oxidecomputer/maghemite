@@ -17,10 +17,12 @@ use netadm_sys::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
 use crate::admin;
 use crate::platform;
 use crate::config::Config;
-use crate::protocol::{RouterKind, DdmMessage, DdmPrefix, PeerMessage, PeerPing, PeerPong};
+use crate::protocol::{
+    RouterKind, DdmMessage, DdmPrefix, PeerMessage, PeerPing, PeerPong
+};
 use crate::{router_info, router_warn, router_error, router_trace, router_debug};
 use crate::port::Port;
-use icmpv6::{RDPMessage, ICMPv6Packet, RouterAdvertisement, RouterSolicitation};
+use icmpv6::{RDPMessage, ICMPv6Packet, RouterAdvertisement};
 
 #[derive(Clone)]
 pub(crate) struct RouterRuntime<Platform: platform::Full> {
@@ -403,9 +405,55 @@ impl Router {
                             DdmMessage::Prefix(p) => {
 
                                 let mut state = state.lock().await;
+                                let gw = match state.peers.get(&port) {
+                                    Some(p) => p.lock().await.addr,
+                                    None => {
+                                        warn!(log, 
+                                            "bug: ddm_io: port {:?} has no peer",
+                                            port,
+                                        );
+                                        drop(state);
+                                        continue;
+
+                                    }
+                                };
+
+                                let gw = match gw {
+                                    Some(a) => a,
+                                    None => {
+                                        warn!(log, 
+                                            "ddm_io: port {:?} has no peer address",
+                                            port,
+                                        );
+                                        drop(state);
+                                        continue;
+                                    }
+                                };
 
                                 router_debug!(
                                     log, local.name, "new prefix: {:?}", p);
+
+                                // don't add self routes
+                                if p.origin != r.router.info.name {
+                                    // add the route to the local system
+                                    for pfx in &p.prefixes {
+
+                                        let rte = Route{
+                                            dest: IpAddr::V6(pfx.addr),
+                                            prefix_len: pfx.mask,
+                                            gw: IpAddr::V6(gw),
+                                        };
+
+                                        warn!(log, "adding route: {:?}", &rte);
+                                        match r.platform.lock().await.set_route(rte).await {
+                                            Ok(_) => {},
+                                            Err(e) => {
+                                                error!(log, "set route: {}", e)
+                                            }
+                                        }
+                                    }
+                                }
+
 
                                 // update prefixes
                                 if !state.prefixes.contains(&p) {
