@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
 use std::collections::{HashSet, HashMap};
 
-use slog::info;
+use slog::{error, info};
 
 use crate::router_info;
 use crate::config::Config;
@@ -87,9 +87,13 @@ async fn advertise_prefix(
         serial: 0,
     };
     prefixes.insert(x.clone());
-    api_context.pfupdate.send(
-        x.clone()
-    ).map_err(|e| HttpError::for_internal_error(format!("{}", e)))?;
+    match api_context.pfupdate.send(x.clone()) {
+        Ok(_) => {}, 
+        Err(e) => {
+            error!(ctx.log, "{}", e);
+            return Err(HttpError::for_internal_error(format!("{}", e)));
+        }
+    }
 
 
     Ok(HttpResponseOk(()))

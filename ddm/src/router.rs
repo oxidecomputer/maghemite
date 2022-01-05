@@ -470,8 +470,15 @@ where
     match prev {
         Some(ref mut p) => {
             let mut ps = p.lock().await;
+            let launch = ps.name == None;
             ps.name = Some(pong.sender);
             ps.kind = Some(pong.kind);
+            if launch {
+                Router::run_ddm_io_sm(
+                    r.clone(),
+                    port,
+                ).await;
+            }
         }
         None => {
             let new = Arc::new(Mutex::new(PeerStatus::new(
