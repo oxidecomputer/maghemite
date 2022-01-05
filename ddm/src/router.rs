@@ -2,6 +2,7 @@ use std::io::{Result, ErrorKind, Error};
 use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
+use std::net::Ipv6Addr;
 
 use tokio::{
     spawn, select,
@@ -18,7 +19,7 @@ use crate::config::Config;
 use crate::protocol::{RouterKind, DdmMessage, DdmPrefix, PeerMessage, PeerPing, PeerPong};
 use crate::{router_info, router_warn, router_error, router_trace, router_debug};
 use crate::port::Port;
-use icmpv6::{RDPMessage, ICMPv6Packet, RouterAdvertisement};
+use icmpv6::{RDPMessage, ICMPv6Packet, RouterAdvertisement, RouterSolicitation};
 
 #[derive(Clone)]
 pub(crate) struct RouterRuntime<Platform: platform::Full> {
@@ -154,16 +155,40 @@ impl Router {
 
             spawn(async move { loop {
                 match rx.recv().await {
-                    Some(m) => {
-                        debug!(log, "rx adv {:?}", m);
-                        // launch the peering sm
-                        let mut state = r.router.state.lock().await;
-                        let r = r.clone();
-                        if !state.peer_sm_running {
-                            state.peer_sm_running = true;
-                            spawn(async move {
-                                Self::run_peer_sm(r, port).await;
-                            });
+                    Some(msg) => {
+                        match msg.packet {
+                            ICMPv6Packet::RouterAdvertisement(ra) => {
+                                debug!(log, "rx adv {:?}", ra);
+                                let mut state = r.router.state.lock().await;
+
+                                // fill in peer info
+                                let mut prev = state.peers.get(&port);
+                                match prev {
+                                    Some(ref mut p) => {
+                                        let mut ps = p.lock().await;
+                                        ps.addr = msg.from;
+                                    }
+                                    None => {
+                                        let new = Arc::new(Mutex::new(PeerStatus::new(
+                                                    None,
+                                                    None,
+                                                    msg.from,
+                                        )));
+                                        state.peers.insert(port, new.clone());
+                                    }
+                                }
+
+
+                                // launch the peering sm
+                                let r = r.clone();
+                                if !state.peer_sm_running {
+                                    state.peer_sm_running = true;
+                                    spawn(async move {
+                                        Self::run_peer_sm(r, port).await;
+                                    });
+                                }
+                            }
+                            ICMPv6Packet::RouterSolicitation(_) => { }
                         }
                     }
                     None => { 
@@ -443,14 +468,20 @@ where
 {
     router_trace!(r.log, r.router.info.name, "pong: {:?}", pong);
     let mut state = r.router.state.lock().await;
-    let prev = state.peers.get(&pong.sender);
+    let mut prev = state.peers.get(&port);
     match prev {
-        Some(_) => {}
+        Some(ref mut p) => {
+            let mut ps = p.lock().await;
+            ps.name = Some(pong.sender);
+            ps.kind = Some(pong.kind);
+        }
         None => {
-            let new = Arc::new(Mutex::new(PeerStatus::new(pong.kind)));
-            state.peers.insert(
-                pong.sender.clone(), new.clone(),
-            );
+            let new = Arc::new(Mutex::new(PeerStatus::new(
+                Some(pong.sender.clone()),
+                Some(pong.kind),
+                None,
+            )));
+            state.peers.insert(port, new.clone());
             router_info!(
                 r.log,
                 r.router.info.name,
@@ -474,7 +505,7 @@ pub struct RouterInfo {
 
 pub struct RouterState {
     peer_sm_running: bool,
-    pub peers: HashMap::<String, Arc::<Mutex::<PeerStatus>>>,
+    pub peers: HashMap::<Port, Arc::<Mutex::<PeerStatus>>>,
     pub(crate) prefixes: HashSet::<DdmPrefix>,
 }
 
@@ -488,19 +519,23 @@ impl RouterState {
     }
 }
 
-#[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct PeerStatus {
-    kind: RouterKind,
-    ls_sent: u128,
-    ls_recvd: u128,
+    name: Option<String>,
+    kind: Option<RouterKind>,
+    addr: Option<Ipv6Addr>,
 }
 
 impl PeerStatus {
-    fn new(kind: RouterKind) -> Self {
+    fn new(
+        name: Option<String>, 
+        kind: Option<RouterKind>,
+        addr: Option<Ipv6Addr>,
+    ) -> Self {
         PeerStatus{
+            name,
             kind,
-            ls_sent: 0,
-            ls_recvd: 0,
+            addr,
         }
     }
 }

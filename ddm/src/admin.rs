@@ -21,6 +21,7 @@ use crate::config::Config;
 use crate::router::{RouterState, PeerStatus, RouterRuntime, RouterInfo};
 use crate::net::Ipv6Prefix;
 use crate::protocol::DdmPrefix;
+use crate::port::Port;
 use crate::platform;
 
 pub struct ArcAdmContext {
@@ -42,7 +43,7 @@ async fn adm_ping(
 #[endpoint { method = GET, path = "/peers" }]
 async fn get_peers(
     ctx: Arc<RequestContext<ArcAdmContext>>,
-) -> Result<HttpResponseOk<HashMap::<String, PeerStatus>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap::<usize, PeerStatus>>, HttpError> {
 
     let api_context = ctx.context();
 
@@ -50,8 +51,10 @@ async fn get_peers(
     let mut result = HashMap::new();
 
     for (k,v) in peers {
-        result.insert(k, *v.lock().await); 
+        result.insert(k.index, v.lock().await.clone()); 
     }
+
+    info!(ctx.log, "kerplop {:#?}", result);
 
     Ok(HttpResponseOk(result))
 

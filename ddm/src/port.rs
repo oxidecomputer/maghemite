@@ -10,7 +10,7 @@ pub enum PortState {
     Up,
 }
 
-#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Port {
     pub index: usize,
     pub state: PortState,
