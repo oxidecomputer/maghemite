@@ -2,7 +2,7 @@ use std::io::{Result, ErrorKind, Error};
 use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv6Addr};
 
 use tokio::{
     spawn, select,
@@ -12,6 +12,7 @@ use tokio::{
 use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
 use slog::{self, trace, debug, info, warn, error, Logger};
+use netadm_sys::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
 
 use crate::admin;
 use crate::platform;
@@ -544,7 +545,54 @@ impl PeerStatus {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Route {
+    pub dest: IpAddr,
+    pub prefix_len: u8,
+    pub gw: IpAddr,
+}
+
+impl From<netadm_sys::route::Route> for Route {
+    fn from(r: netadm_sys::route::Route) -> Self {
+        Self {
+            dest: r.dest,
+            //TODO netadm_sys should return a u8 as nothing > 128 is a valid
+            //mask
+            prefix_len: r.mask.try_into().unwrap(),
+            gw: r.gw,
+        }
+    }
+}
+
+impl Into<netadm_sys::route::Route> for Route {
+    fn into(self) -> netadm_sys::route::Route {
+        netadm_sys::route::Route {
+            dest: self.dest,
+            //TODO netadm_sys should return a u8 as nothing > 128 is a valid
+            //mask
+            mask: self.prefix_len as u32,
+            gw: self.gw,
+        }
+    }
+}
+
+impl Into<IpPrefix> for Route {
+    fn into(self) -> IpPrefix {
+        match self.dest {
+            IpAddr::V4(a) => {
+                IpPrefix::V4(Ipv4Prefix{
+                    addr: a,
+                    mask: self.prefix_len,
+                })
+            }
+            IpAddr::V6(a) => {
+                IpPrefix::V6(Ipv6Prefix{
+                    addr: a,
+                    mask: self.prefix_len,
+                })
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -18,7 +18,8 @@ hyper = { version = "0.14", features = ["full"] }
 thiserror = "1.0"
 rand = "0.8"
 rand_distr = "0.4"
-netadm-sys = { git = "ssh://git@github.com/oxidecomputer/netadm-sys", branch = "routing" }
+#netadm-sys = { git = "ssh://git@github.com/oxidecomputer/netadm-sys", branch = "routing" }
+netadm-sys = { path = "/home/ry/src/netadm-sys/lib" }
 socket2 = { version = "0.4", features = ["all"] }
 icmpv6 = { path = "../icmpv6" }
 async-trait = "0.1.52"

@@ -486,14 +486,48 @@ impl platform::Ddm for Platform {
 #[async_trait]
 impl platform::Router for Platform {
     async fn get_routes(&self) -> Result<Vec<Route>> {
-        todo!();
+
+        let mut result = Vec::new();
+
+        let routes = match netadm_sys::get_routes() {
+            Ok(rs) => rs,
+            Err(e) => return Err(
+                Error::new(ErrorKind::Other, format!("get routes: {}", e))
+            ),
+        };
+
+        for r in routes {
+            result.push(r.into());
+        }
+
+        Ok(result)
+
     }
 
-    async fn set_route(&self, _r: Route) -> Result<()> {
-        todo!();
+    async fn set_route(&self, r: Route) -> Result<()> {
+
+        let gw = r.gw;
+        match netadm_sys::add_route(r.into(), gw) {
+            Ok(rs) => rs,
+            Err(e) => return Err(
+                Error::new(ErrorKind::Other, format!("set route: {}", e))
+            ),
+        }
+                
+        Ok(())
+
     }
 
-    async fn delete_route(&self, _r: Route) -> Result<()> {
-        todo!();
+    async fn delete_route(&self, r: Route) -> Result<()> {
+
+        let gw = r.gw;
+        match netadm_sys::delete_route(r.into(), gw) {
+            Ok(rs) => rs,
+            Err(e) => return Err(
+                Error::new(ErrorKind::Other, format!("set route: {}", e))
+            ),
+        }
+                
+        Ok(())
     }
 }

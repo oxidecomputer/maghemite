@@ -18,7 +18,7 @@ use slog::{error, info};
 
 use crate::router_info;
 use crate::config::Config;
-use crate::router::{RouterState, PeerStatus, RouterRuntime, RouterInfo};
+use crate::router::{RouterState, PeerStatus, RouterRuntime, RouterInfo, Route};
 use crate::net::Ipv6Prefix;
 use crate::protocol::DdmPrefix;
 use crate::port::Port;
@@ -28,6 +28,7 @@ pub struct ArcAdmContext {
     pub config: Config,
     pub info: RouterInfo,
     pub state: Arc::<Mutex::<RouterState>>,
+    pub platform: Arc::<Mutex::<dyn platform::FullDyn>>,
     pub pfupdate: broadcast::Sender<DdmPrefix>,
 }
 
@@ -68,6 +69,24 @@ async fn get_prefixes(
     let api_context = ctx.context();
 
     Ok(HttpResponseOk(api_context.state.lock().await.prefixes.clone()))
+
+}
+
+#[endpoint { method = GET, path = "/routes" }]
+async fn get_routes(
+    ctx: Arc<RequestContext<ArcAdmContext>>,
+) -> Result<HttpResponseOk<Vec::<Route>>, HttpError> {
+
+    let api_context = ctx.context();
+    let routes = match api_context.platform.lock().await.get_routes().await {
+        Ok(rs) => rs.clone(),
+        Err(e) => {
+            error!(ctx.log, "{}", e);
+            return Err(HttpError::for_internal_error(format!("{}", e)));
+        }
+    };
+
+    Ok(HttpResponseOk(routes))
 
 }
 
@@ -119,11 +138,13 @@ pub(crate) async fn handler<Platform: platform::Full>(
     api.register(get_peers)?;
     api.register(advertise_prefix)?;
     api.register(get_prefixes)?;
+    api.register(get_routes)?;
 
     let api_context = ArcAdmContext{
         config: r.config,
         info: r.router.info.clone(),
         state: r.router.state.clone(),
+        platform: r.platform.clone(),
         pfupdate: r.router.prefix_update.clone(),
     };
 

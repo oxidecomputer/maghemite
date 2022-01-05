@@ -62,3 +62,23 @@ impl<T:
     Clone +
     'static
 > Full for T {}
+
+pub trait FullDyn:
+    Ports +
+    Rdp +
+    Ddm +
+    Router +
+    Sync +
+    Send +
+    'static
+{}
+
+impl<T: 
+    Ports +
+    Rdp +
+    Ddm +
+    Router +
+    Sync +
+    Send +
+    'static
+> FullDyn for T {}

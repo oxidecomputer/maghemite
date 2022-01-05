@@ -482,7 +482,7 @@ dependencies = [
  "hostname",
  "hyper",
  "icmpv6",
- "netadm-sys",
+ "netadm-sys 0.1.0",
  "rand",
  "rand_distr",
  "schemars",
@@ -1084,7 +1084,7 @@ dependencies = [
  "futures",
  "home",
  "libc",
- "netadm-sys",
+ "netadm-sys 0.1.0 (git+ssh://git@github.com/oxidecomputer/netadm-sys?branch=routing)",
  "portpicker",
  "propolis-client",
  "propolis-server",
@@ -1188,6 +1188,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9f1c5b025cda876f66ef43a113f91ebc9f4ccef34843000e0adf6ebbab84e21"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "netadm-sys"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "colored",
+ "libc",
+ "nvpair",
+ "nvpair-sys",
+ "rusty-doors",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
