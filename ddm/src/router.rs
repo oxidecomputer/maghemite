@@ -456,18 +456,21 @@ impl Router {
 
 
                                 // update prefixes
-                                if !state.prefixes.contains(&p) {
-                                    state.prefixes.insert(p.clone());
-                                    // push update to other peers
-                                    match pfupdate.send(p) {
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            router_error!(
-                                                log, 
-                                                local.name, 
-                                                e,
-                                                "pfupdate send"
-                                            )
+                                if r.router.info.kind == RouterKind::Transit ||
+                                    p.origin == r.router.info.name {
+                                    if !state.prefixes.contains(&p) {
+                                        state.prefixes.insert(p.clone());
+                                        // push update to other peers
+                                        match pfupdate.send(p) {
+                                            Ok(_) => {}
+                                            Err(e) => {
+                                                router_error!(
+                                                    log, 
+                                                    local.name, 
+                                                    e,
+                                                    "pfupdate send"
+                                                )
+                                            }
                                         }
                                     }
                                 }
