@@ -12,7 +12,7 @@ slog = "2.7"
 slog-term = "2.7"
 slog-async = "2.7"
 slog-envlogger = "2.2"
-dropshot = { git = "https://github.com/oxidecomputer/dropshot" }
+dropshot = { git = "https://github.com/oxidecomputer/dropshot", branch = "main" }
 schemars = { version = "0.8.0", features = [ "uuid" ] }
 serde = "1.0"
 serde_json = "1.0"

@@ -99,7 +99,7 @@ pub(crate) async fn handler<Platform: platform::Full>(
 ) -> Result<(), String> {
 
     let addr = SocketAddr::V4(
-        SocketAddrV4::new(Ipv4Addr::new(127,0,0,1), r.config.port)
+        SocketAddrV4::new(Ipv4Addr::new(127,0,0,1), r.config.admin_port)
     );
 
     let config_dropshot = ConfigDropshot{

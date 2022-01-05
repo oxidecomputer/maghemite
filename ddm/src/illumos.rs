@@ -14,7 +14,7 @@ use tokio::{
     },
 };
 use socket2::{Socket, Domain, Type, Protocol, SockAddr};
-use slog::{Logger, error, debug};
+use slog::{Logger, debug, warn, error};
 use icmpv6::{
     RDPMessage,
     ICMPv6Packet,
@@ -38,13 +38,27 @@ struct PortInfo {
 
 pub struct PlatformState {
     portinfo: BTreeMap::<Port, PortInfo>,
-    
+}
+
+impl PlatformState {
+    pub fn new() -> Self {
+        PlatformState{ portinfo: BTreeMap::new() }
+    }
 }
 
 #[derive(Clone)]
 pub struct Platform { 
     pub(crate) log: Logger,
     pub(crate) state: Arc::<Mutex::<PlatformState>>,
+}
+
+impl Platform {
+    pub fn new(log: Logger) -> Self {
+        Platform{
+            log,
+            state: Arc::new(Mutex::new(PlatformState::new())),
+        }
+    }
 }
 
 #[async_trait]
@@ -85,10 +99,13 @@ impl platform::Ports for Platform {
                             }
                         }
                     }
+                    debug!(self.log, "found v6 address, using {}", l.name);
                     result
                 }
-                //TODO warn?
-                None => Ipv6Addr::UNSPECIFIED,
+                None => {
+                    warn!(self.log, "no v6 address for {}, skipping", l.name);
+                    continue;
+                }
             };
             {
                 let state = self.state.clone();

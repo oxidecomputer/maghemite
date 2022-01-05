@@ -3,10 +3,8 @@ name = "lab"
 version = "0.1.0"
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-libfalcon = { path = "/home/ry/falcon/lib" }
+libfalcon = { path = "/home/ry/src/falcon/lib" }
 anyhow = "1.0"
 tokio = { version = "1", features = ["full"] }
 
@@ -21,3 +19,7 @@ path = "src/trio/main.rs"
 [[bin]]
 name = "quartet"
 path = "src/quartet/main.rs"
+
+[[bin]]
+name = "mg2x2"
+path = "src/2x2/main.rs"

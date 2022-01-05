@@ -1,6 +1,6 @@
 // Copyright 2021 Oxide Computer Company
 
-use libfalcon::{cli::{run, RunMode}, error::Error, Runner};
+use libfalcon::{cli::{run, RunMode}, error::Error, Runner, unit::gb};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -8,10 +8,10 @@ async fn main() -> Result<(), Error> {
     let mut d = Runner::new("quartet");
 
     // nodes
-    let r0 = d.node("r0", "helios");
-    let r1 = d.node("r1", "helios");
-    let h0 = d.node("h0", "helios");
-    let h1 = d.node("h1", "helios");
+    let r0 = d.node("r0", "helios", 4, gb(4));
+    let r1 = d.node("r1", "helios", 4, gb(4));
+    let h0 = d.node("h0", "helios", 4, gb(4));
+    let h1 = d.node("h1", "helios", 4, gb(4));
 
     d.mount("./cargo-bay", "/opt/cargo-bay", r0)?;
     d.mount("./cargo-bay", "/opt/cargo-bay", r1)?;
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Error> {
             d.exec(h1, "ipadm create-addr -t -T addrconf vioif1/v6").await?;
             Ok(())
         },
-        RunMode::Destroy => Ok(()),
+        _ => Ok(()),
     }
 
 }

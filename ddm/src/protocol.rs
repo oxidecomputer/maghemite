@@ -18,6 +18,18 @@ pub enum RouterKind {
     Transit,
 }
 
+impl std::str::FromStr  for RouterKind {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.to_lowercase();
+        match s.as_str()  {
+            "server" => Ok(RouterKind::Server),
+            "transit" => Ok(RouterKind::Transit),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum PeerMessage {
     Ping(PeerPing),

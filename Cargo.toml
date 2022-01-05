@@ -6,7 +6,7 @@ members = [
     #"rift_protocol",
     #"riftadm",
     #"illumos",
-    #"lab",
+    "lab",
     "icmpv6",
     "srp",
     "ddm",

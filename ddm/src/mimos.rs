@@ -50,10 +50,10 @@ impl Node {
         }
     }
     
-    pub fn run(&self, port: u16, log: slog::Logger) -> Result<()> {
+    pub fn run(&self, admin_port: u16, log: slog::Logger) -> Result<()> {
         //self.router.run(self.platform.clone(), Config{port}, log)
         Router::run(
-            self.router.clone(), self.platform.clone(), Config{port}, log)
+            self.router.clone(), self.platform.clone(), Config{admin_port}, log)
     }
 }
 
@@ -284,11 +284,12 @@ impl platform::Router for Platform {
 #[cfg(test)]
 mod test {
     use crate::mimos;
-    use crate::port::Port;
+    use crate::port::{Port, PortState};
     use crate::platform::{Rdp, Ddm};
     use crate::rdp::RdpMessage;
     use crate::protocol::{DdmMessage, DdmPrefix, RouterKind};
     use crate::net::Ipv6Prefix;
+    use icmpv6::{ICMPv6Packet, RouterSolicitation, RDPMessage,};
 
     use std::str::FromStr;
     use std::collections::HashSet;
@@ -317,7 +318,7 @@ mod test {
             b.platform.lock().await.ddm_channel(Port{index, state}).await.unwrap();
 
         let pkt = 
-            packet: ICMPv6Packet::RouterSolicitation(RouterSolicitation::new(None));
+            ICMPv6Packet::RouterSolicitation(RouterSolicitation::new(None));
 
         // send some RDP messages
         a_rdp_tx.send(RDPMessage{from: None, packet: pkt.clone()}).await?;
@@ -327,13 +328,13 @@ mod test {
         let msg = a_rdp_rx.recv().await;
         assert_eq!(msg, Some(RDPMessage{
             from: None,
-            packet: packet.clone(),
+            packet: pkt.clone(),
         }));
 
         let msg = b_rdp_rx.recv().await;
         assert_eq!(msg, Some(RDPMessage{
             from: None,
-            packet: packet.clone(),
+            packet: pkt.clone(),
         }));
 
         // send some DDM messages

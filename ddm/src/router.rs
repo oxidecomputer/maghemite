@@ -56,17 +56,22 @@ impl Router {
     {
 
         {
+            /*
             let r = RouterRuntime{
                 router: r.clone(),
                 platform: p,
                 config: config,
                 log: log.clone()
             };
+            */
 
             // run the I/O thread, this starts with peering and then makes its 
             // way to DDP prefix exchange.
             spawn(async move{
 
+                Self::run_sync(r, p, config, log).await;
+
+                /*
                 router_info!(r.log, &r.router.info.name, "running router");
                 match Self::run_thread(r.clone()).await {
                     Ok(()) => {},
@@ -74,8 +79,42 @@ impl Router {
                         router_error!(r.log, &r.router.info.name, e, "run");
                     }
                 }
+                */
 
             });
+        }
+
+        Ok(())
+
+    }
+
+    pub async fn run_sync<Platform>(
+        r: Arc::<Router>,
+        p: Arc::<Mutex::<Platform>>,
+        config: Config,
+        log: Logger,
+    )
+    -> Result<()>
+    where
+        Platform: platform::Full
+    {
+
+        {
+            let r = RouterRuntime{
+                router: r.clone(),
+                platform: p,
+                config: config,
+                log: log.clone()
+            };
+
+            router_info!(r.log, &r.router.info.name, "running router");
+            match Self::run_thread(r.clone()).await {
+                Ok(()) => {},
+                Err(e) => {
+                    router_error!(r.log, &r.router.info.name, e, "run");
+                }
+            }
+
         }
 
         Ok(())
