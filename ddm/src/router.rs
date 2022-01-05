@@ -175,18 +175,16 @@ impl Router {
                                                     msg.from,
                                         )));
                                         state.peers.insert(port, new.clone());
+
+                                        // launch the peering sm
+                                        let r = r.clone();
+                                        spawn(async move {
+                                            Self::run_peer_sm(r, port).await;
+                                        });
                                     }
                                 }
 
 
-                                // launch the peering sm
-                                let r = r.clone();
-                                if !state.peer_sm_running {
-                                    state.peer_sm_running = true;
-                                    spawn(async move {
-                                        Self::run_peer_sm(r, port).await;
-                                    });
-                                }
                             }
                             ICMPv6Packet::RouterSolicitation(_) => { }
                         }
@@ -263,7 +261,6 @@ impl Router {
             let r = r.clone();
 
             spawn(async move { loop {
-                    router_trace!(log, info.name, "sending ping");
                     router_trace!(log, info.name, "waiting for pong");
                     select! {
                         resp = rx.recv() => {
@@ -287,8 +284,8 @@ impl Router {
                                     }
                                 }
                                 None => {
-                                    //router_warn!(
-                                    //    log, info.name, "recv pong none?");
+                                    router_warn!(
+                                        log, info.name, "recv pong none?");
                                 }
                             }
                         }
@@ -304,6 +301,7 @@ impl Router {
             let tx = tx.clone();
             let log = r.log.clone();
 
+            router_trace!(log, info.name, "sending ping");
             spawn(async move { loop {
 
                 let ping = PeerMessage::Ping(
@@ -488,6 +486,7 @@ where
                 "added new peer {}",
                 &pong.sender
             );
+            drop(state);
             Router::run_ddm_io_sm(
                 r.clone(),
                 port,
@@ -504,7 +503,6 @@ pub struct RouterInfo {
 }
 
 pub struct RouterState {
-    peer_sm_running: bool,
     pub peers: HashMap::<Port, Arc::<Mutex::<PeerStatus>>>,
     pub(crate) prefixes: HashSet::<DdmPrefix>,
 }
@@ -512,7 +510,6 @@ pub struct RouterState {
 impl RouterState {
     pub fn new() -> Self {
         RouterState{
-            peer_sm_running: false,
             peers: HashMap::new(),
             prefixes: HashSet::new(),
         }
