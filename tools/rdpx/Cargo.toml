@@ -3,8 +3,6 @@ name = "rdpx"
 version = "0.1.0"
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 anyhow = "1.0"
 socket2 = { version = "0.4", features = ["all"] }
@@ -13,4 +11,4 @@ rift = { path = "../../rift" }
 clap = { version = "3.0.0-beta.4", features = ["color"] }
 serde = "1.0"
 ron = "0.6"
-libfalcon = { path = "/home/ry/falcon/lib" }
+libfalcon = { git = "ssh://git@github.com/oxidecomputer/falcon" }

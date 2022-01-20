@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-libfalcon = { path = "/home/ry/src/falcon/lib" }
+libfalcon = { git = "ssh://git@github.com/oxidecomputer/falcon" }
 anyhow = "1.0"
 tokio = { version = "1", features = ["full"] }
 
