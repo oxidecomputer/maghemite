@@ -3,6 +3,7 @@
 
 pub mod router;
 pub mod mimos;
+pub mod local;
 pub mod platform;
 pub mod port;
 pub mod config;

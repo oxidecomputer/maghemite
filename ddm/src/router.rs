@@ -425,8 +425,10 @@ impl Router {
                                             "ddm_io: port {:?} has no peer address",
                                             port,
                                         );
-                                        drop(state);
-                                        continue;
+                                        Ipv6Addr::UNSPECIFIED
+                                        //drop(state);
+                                        //continue;
+
                                     }
                                 };
 
@@ -456,10 +458,9 @@ impl Router {
 
 
                                 // update prefixes
-                                if r.router.info.kind == RouterKind::Transit ||
-                                    p.origin == r.router.info.name {
                                     if !state.prefixes.contains(&p) {
                                         state.prefixes.insert(p.clone());
+                                        if r.router.info.kind == RouterKind::Transit || p.origin == r.router.info.name {
                                         // push update to other peers
                                         match pfupdate.send(p) {
                                             Ok(_) => {}

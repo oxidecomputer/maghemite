@@ -5,6 +5,7 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use slog::{Logger, debug, warn, error};
 use tokio::{
     spawn, select,
     time::sleep,
@@ -13,13 +14,10 @@ use tokio::{
         mpsc::{Sender, Receiver, channel},
     },
 };
-use socket2::{Socket, Domain, Type, Protocol, SockAddr};
-use slog::{Logger, debug, warn, error};
-use icmpv6::{
-    RDPMessage,
-    ICMPv6Packet,
-};
+use icmpv6::{RDPMessage, ICMPv6Packet};
 use async_trait::async_trait;
+use netadm_sys::{delete_ipaddr, create_ipaddr, IpPrefix, Ipv6Prefix};
+use socket2::{Socket, Domain, Type, Protocol, SockAddr};
 
 use crate::platform;
 use crate::port::{Port, PortState};
@@ -27,132 +25,95 @@ use crate::protocol::{
     DdmMessage, PeerMessage, 
     RDP_MCAST_ADDR, PEERING_PORT, PREFIX_EXCHANGE_PORT,
 };
-use crate::router::{Route};
+use crate::router::Route;
 
-pub struct PortInfo {
-    pub name: String,
-    pub local: Ipv6Addr,
-    pub peer: Ipv6Addr,
-}
-
-pub struct PlatformState {
-    portinfo: BTreeMap::<Port, PortInfo>,
-}
-
-impl PlatformState {
-    pub fn new() -> Self {
-        PlatformState{ portinfo: BTreeMap::new() }
-    }
-}
-
-#[derive(Clone)]
-pub struct Platform { 
+/// This is a local testing platform. 
+///
+/// A set of link-local addresses on the system's lo0 loopback device in the 
+/// following format will be created
+///
+///     lo0/mgX_N fe80:1de::X:N
+///
+/// where X is the user provided id of the platform and N is the index of the
+/// port the address was created for.
+///     
+pub struct Platform {
+    pub id: u16,
     pub(crate) log: Logger,
     pub(crate) state: Arc::<Mutex::<PlatformState>>,
 }
 
+pub struct PlatformState {
+    ports: BTreeMap::<Port, PortInfo>,
+}
+
+#[derive(Clone)]
+pub struct PortInfo {
+    pub addr: Ipv6Prefix,
+    pub name: String,
+    pub peer: Ipv6Addr,
+}
+
 impl Platform {
-    pub fn new(log: Logger) -> Self {
-        Platform{
-            log,
-            state: Arc::new(Mutex::new(PlatformState::new())),
+    
+    pub fn new(log: Logger, id: u16, radix: u16) -> Result<Self> {
+        let mut ports = BTreeMap::new();
+        for i in 0..radix {
+            let (port, info) = Self::create_port(id, i)?;
+            ports.insert(port, info);
         }
+        let state = Arc::new(Mutex::new(PlatformState{ ports }));
+        Ok(Platform{ id, state, log })
     }
+
+    pub fn create_port(id: u16, i: u16) -> Result<(Port, PortInfo)> {
+
+        let name = format!("lo0/mg{}_{}", id, i);
+        let addr = Ipv6Prefix{
+            addr: Ipv6Addr::new(0xfe80, 0x1de, 0, 0, 0, 0, id, i),
+            mask: 10,
+        };
+
+        let index = create_ipaddr(&name, IpPrefix::V6(addr)).map_err(|e| {
+            Error::new(
+                ErrorKind::Other, 
+                format!("create port {}: {}", i, e.to_string()),
+            )
+        })? as usize;
+
+        let port = Port{ index: index, state: PortState::Up};
+        let info = PortInfo{ addr, name, peer: Ipv6Addr::UNSPECIFIED };
+        Ok((port, info))
+
+    }
+
+    pub async fn teardown(&self) -> Result<()> {
+        for (p, info) in &self.state.lock().await.ports {
+            delete_ipaddr(&info.name)
+                .map_err(|e| {
+                    Error::new(
+                        ErrorKind::Other, 
+                        format!("create port {}: {}", p.index, e.to_string()),
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
 }
 
 impl platform::Capabilities for Platform {
-    fn discovery() -> bool {
-        true
-    }
+    fn discovery() -> bool { true }
 }
+
 
 #[async_trait]
 impl platform::Ports for Platform {
+
     async fn ports(&self) -> Result<Vec<Port>> {
-
-        let links = match netadm_sys::get_links() {
-            Ok(links) => links,
-            Err(e) => return Err(
-                Error::new(ErrorKind::Other, format!("get links: {}", e))
-            ),
-        };
-
-        // try to get v6 link local addresses and add them to the platform state
-        // while we are collecting ports
-        let addrs = match netadm_sys::get_ipaddrs() {
-            Ok(addrs) => addrs,
-            Err(e) => return Err(
-                Error::new(ErrorKind::Other, format!("get addrs: {}", e))
-            ),
-        };
-
-        let mut result = Vec::new();
-        for l in links {
-            let mut p = Port{
-                index: l.id as usize,
-                state: PortState::Up,
-            };
-            let addr = match addrs.get(&l.name) {
-                Some(addr_infos) => {
-
-                    let mut result = None;
-                    for addr_info in addr_infos{
-                        if addr_info.ifname == l.name {
-                            match addr_info.addr {
-                                IpAddr::V6(addr) => {
-                                    if !addr.is_unicast_link_local() {
-                                        continue;
-                                    }
-                                    p.index = addr_info.index as usize;
-                                    result = Some(addr);
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    match result {
-                        Some(addr) => {
-                            debug!(
-                                self.log,
-                                "found link local v6 address, using {} {}",
-                                l.name,
-                                addr,
-                            );
-                            addr
-                        }
-                        None => {
-                            warn!(
-                                self.log, 
-                                "no link local v6 address for {}, skipping",
-                                l.name
-                            );
-                            continue;
-                        }
-                    }
-
-                }
-                None => {
-                    warn!(self.log, "no v6 addresses for {}, skipping", l.name);
-                    continue;
-                }
-            };
-            {
-                let state = self.state.clone();
-                let mut s = state.lock().await;
-                if !s.portinfo.contains_key(&p) {
-                    s.portinfo.insert(p, PortInfo{
-                        name: l.name.clone(),
-                        local: addr,
-                        peer: Ipv6Addr::UNSPECIFIED,
-                    });
-                }
-            }
-            result.push(p)
-        }
-
-        Ok(result)
+        Ok(self.state.lock().await.ports.clone().into_keys().collect::<Vec<Port>>())
     }
+
 }
 
 #[async_trait]
@@ -162,7 +123,9 @@ impl platform::Rdp for Platform {
     -> Result<(Sender<RDPMessage>, Receiver<RDPMessage>)> {
 
         // ingress
-        let (itx, irx) = channel(0x20);
+        let (itx, irx):
+            (Sender::<RDPMessage>, Receiver::<RDPMessage>) = channel(0x20);
+
         // egress
         let (etx, mut erx): 
             (Sender::<RDPMessage>, Receiver::<RDPMessage>) = channel(0x20);
@@ -200,7 +163,7 @@ impl platform::Rdp for Platform {
 
             let senderv6 = match sender.as_socket_ipv6() {
                 Some(v6) => {
-                    match state.lock().await.portinfo.get_mut(&p) {
+                    match state.lock().await.ports.get_mut(&p) {
                         Some(pi) => {
                             pi.peer = *v6.ip();
                         }
@@ -282,8 +245,8 @@ impl platform::Ddm for Platform {
     -> Result<(Sender<PeerMessage>, Receiver<PeerMessage>)> {
 
         // get addresses from platform state
-        let (local, peer) = match self.state.lock().await.portinfo.get(&p) {
-            Some(port_info) => (port_info.local, port_info.peer),
+        let (local, peer) = match self.state.lock().await.ports.get(&p) {
+            Some(port_info) => (port_info.addr.addr, port_info.peer),
             None => return Err(
                 Error::new(ErrorKind::Other, format!("no port info for {:?}", p))
             )
@@ -380,14 +343,17 @@ impl platform::Ddm for Platform {
         });
 
         Ok((etx, irx))
+
+
+
     }
 
     async fn ddm_channel(&self, p: Port) 
     -> Result<(Sender<DdmMessage>, Receiver<DdmMessage>)> {
 
         // get addresses from platform state
-        let (local, peer) = match self.state.lock().await.portinfo.get(&p) {
-            Some(port_info) => (port_info.local, port_info.peer),
+        let (local, peer) = match self.state.lock().await.ports.get(&p) {
+            Some(port_info) => (port_info.addr.addr, port_info.peer),
             None => return Err(
                 Error::new(ErrorKind::Other, format!("no port info for {:?}", p))
             )
@@ -479,6 +445,7 @@ impl platform::Ddm for Platform {
         });
 
         Ok((etx, irx))
+
     }
 
 }
@@ -486,45 +453,14 @@ impl platform::Ddm for Platform {
 #[async_trait]
 impl platform::Router for Platform {
     async fn get_routes(&self) -> Result<Vec<Route>> {
-
-        let mut result = Vec::new();
-
-        let routes = match netadm_sys::get_routes() {
-            Ok(rs) => rs,
-            Err(e) => return Err(
-                Error::new(ErrorKind::Other, format!("get routes: {}", e))
-            ),
-        };
-
-        for r in routes {
-            result.push(r.into());
-        }
-
-        Ok(result)
-
+        Ok(Vec::new())
     }
 
-    async fn set_route(&self, r: Route) -> Result<()> {
-
-        let gw = r.gw;
-        match netadm_sys::ensure_route_present(r.into(), gw) {
-            Ok(_) => Ok(()),
-            Err(e) => return Err(
-                Error::new(ErrorKind::Other, format!("set route: {}", e))
-            ),
-        }
-
+    async fn set_route(&self, _r: Route) -> Result<()> {
+        Ok(())
     }
 
-    async fn delete_route(&self, r: Route) -> Result<()> {
-
-        let gw = r.gw;
-        match netadm_sys::delete_route(r.into(), gw) {
-            Ok(_) => Ok(()),
-            Err(e) => return Err(
-                Error::new(ErrorKind::Other, format!("set route: {}", e))
-            ),
-        }
-                
+    async fn delete_route(&self, _r: Route) -> Result<()> {
+        Ok(())
     }
 }

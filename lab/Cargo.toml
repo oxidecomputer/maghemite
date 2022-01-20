@@ -9,6 +9,10 @@ anyhow = "1.0"
 tokio = { version = "1", features = ["full"] }
 
 [[bin]]
+name = "solo"
+path = "src/solo/main.rs"
+
+[[bin]]
 name = "duo"
 path = "src/duo/main.rs"
 

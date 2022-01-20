@@ -1,3 +1,6 @@
 target
 *.sw*
 rusty-tags.vi
+cargo-bay
+*.out
+*.falcon

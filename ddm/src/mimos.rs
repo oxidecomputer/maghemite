@@ -275,15 +275,18 @@ impl platform::Ddm for Platform {
 #[async_trait]
 impl platform::Router for Platform {
     async fn get_routes(&self) -> Result<Vec<Route>> {
-        todo!();
+        Ok(Vec::new())
+        //todo!();
     }
 
     async fn set_route(&self, _r: Route) -> Result<()> {
-        todo!();
+        Ok(())
+        //todo!();
     }
 
     async fn delete_route(&self, _r: Route) -> Result<()> {
-        todo!();
+        Ok(())
+        //todo!();
     }
 }
 
