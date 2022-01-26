@@ -4,6 +4,10 @@ use tokio::sync::Mutex;
 use slog::{info, warn, error, Logger, Drain};
 use structopt::StructOpt;
 use structopt::clap::AppSettings::*;
+use netadm_sys::{
+    connect_simnet_peers,
+    LinkHandle,
+};
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -16,9 +20,6 @@ struct Opt {
     /// Id of this router
     id: u16,
 
-    /// Radix of this router
-    radix: u16,
-
     /// Port to use for admin server
     admin_port: u16,
 
@@ -27,8 +28,39 @@ struct Opt {
 }
 #[derive(Debug, StructOpt)]
 enum SubCommand {
-    Server,
-    Transit,
+    Server(ServerCommand),
+    Transit(TransitCommand),
+}
+
+#[derive(Debug, StructOpt)]
+struct TransitCommand {
+    /// Radix of this router
+    radix: u16,
+}
+
+#[derive(Debug)]
+struct PortRef {
+    id: u16,
+    port: u16,
+}
+
+impl std::str::FromStr for PortRef {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(":").collect();
+        Ok(PortRef{
+            id: parts[0].parse::<u16>()?,
+            port: parts[1].parse::<u16>()?,
+        })
+    }
+
+}
+
+#[derive(Debug, StructOpt)]
+struct ServerCommand {
+    /// List of transit router ports to connect to in form of <id>:<port-num>
+    ports: Vec<PortRef>
 }
 
 #[tokio::main]
@@ -39,16 +71,32 @@ async fn main() -> Result<(), String> {
     let log = init_logger();
     info!(log, "starting local ddm control plane");
 
-    let kind = match opt.subcommand {
-        SubCommand::Server => ddm::protocol::RouterKind::Server,
-        SubCommand::Transit=> ddm::protocol::RouterKind::Transit,
+    let (radix, kind) = match opt.subcommand {
+        SubCommand::Server(ref s) => {
+            (s.ports.len() as u16, ddm::protocol::RouterKind::Server)
+        }
+        SubCommand::Transit(ref t) => {
+            (t.radix, ddm::protocol::RouterKind::Transit)
+        }
     };
 
     let p = ddm::local::Platform::new(
         log.clone(),
         opt.id,
-        opt.radix,
+        radix,
     ).map_err(|e| format!("new platform: {}", e))?;
+
+    match opt.subcommand {
+        SubCommand::Server(s) => {
+            for (i, p) in s.ports.iter().enumerate() {
+                connect_simnet_peers(
+                    &LinkHandle::Name(format!("mg{}_sim{}", opt.id, i)),
+                    &LinkHandle::Name(format!("mg{}_sim{}", p.id, p.port)),
+                ).map_err(|e| { format!("connect simnet: {}", e.to_string()) })?;
+            }
+        }
+        _ => {}
+    }
 
     let p = Arc::new(Mutex::new(p));
     let r = Arc::new(ddm::router::Router::new(
