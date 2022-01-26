@@ -29,3 +29,7 @@ structopt = "0.3"
 [[bin]]
 name = "ddm-illumos"
 path = "src/illumos/main.rs"
+
+[[bin]]
+name = "ddm-local"
+path = "src/local/main.rs"

@@ -146,7 +146,7 @@ impl Router {
                     "get rdp channel for {:?}",
                     port
                 );
-                panic!("failed to get peer channel");
+                panic!("failed to get rdp channel");
             }
         };
 

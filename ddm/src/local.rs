@@ -5,7 +5,7 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use slog::{Logger, debug, warn, error};
+use slog::{Logger, debug, error, trace};
 use tokio::{
     spawn, select,
     time::sleep,
@@ -16,7 +16,14 @@ use tokio::{
 };
 use icmpv6::{RDPMessage, ICMPv6Packet};
 use async_trait::async_trait;
-use netadm_sys::{delete_ipaddr, create_ipaddr, IpPrefix, Ipv6Prefix};
+use netadm_sys::{
+    create_simnet_link,
+    get_ipaddr_info,
+    delete_ipaddr,
+    enable_v6_link_local,
+    Ipv6Prefix,
+    LinkFlags,
+};
 use socket2::{Socket, Domain, Type, Protocol, SockAddr};
 
 use crate::platform;
@@ -37,6 +44,7 @@ use crate::router::Route;
 /// where X is the user provided id of the platform and N is the index of the
 /// port the address was created for.
 ///     
+#[derive(Clone)]
 pub struct Platform {
     pub id: u16,
     pub(crate) log: Logger,
@@ -59,29 +67,55 @@ impl Platform {
     pub fn new(log: Logger, id: u16, radix: u16) -> Result<Self> {
         let mut ports = BTreeMap::new();
         for i in 0..radix {
-            let (port, info) = Self::create_port(id, i)?;
+            let (port, info) = Self::create_port(&log, id, i)?;
             ports.insert(port, info);
         }
         let state = Arc::new(Mutex::new(PlatformState{ ports }));
         Ok(Platform{ id, state, log })
     }
 
-    pub fn create_port(id: u16, i: u16) -> Result<(Port, PortInfo)> {
+    pub fn create_port(log: &Logger, id: u16, i: u16) -> Result<(Port, PortInfo)> {
 
-        let name = format!("lo0/mg{}_{}", id, i);
-        let addr = Ipv6Prefix{
-            addr: Ipv6Addr::new(0xfe80, 0x1de, 0, 0, 0, 0, id, i),
-            mask: 10,
-        };
+        let name = format!("mg{}_sim{}", id, i);
+        create_simnet_link(&name, LinkFlags::Active).map_err(|e| {
+            Error::new(
+                ErrorKind::Other, 
+                format!("create simnet link {}: {}", i, e.to_string()),
+            )
+        })?;
 
-        let index = create_ipaddr(&name, IpPrefix::V6(addr)).map_err(|e| {
+        enable_v6_link_local(&name).map_err(|e| {
             Error::new(
                 ErrorKind::Other, 
                 format!("create port {}: {}", i, e.to_string()),
             )
-        })? as usize;
+        })?;
 
-        let port = Port{ index: index, state: PortState::Up};
+
+        let objname = format!("{}/v6", name);
+        let info = get_ipaddr_info(&objname).map_err(|e| {
+            Error::new(
+                ErrorKind::Other, 
+                format!("get ip info {}: {}", i, e.to_string()),
+            )
+        })?;
+        let addr = match info.addr {
+            IpAddr::V6(pfx) => pfx,
+            _ => {
+                return Err(Error::new(
+                        ErrorKind::Other, 
+                        format!("expected ipv6 address"),
+                ))
+            }
+        };
+        let addr = Ipv6Prefix{
+            addr: addr,
+            mask: info.mask as u8,
+        };
+
+        debug!(log, "created ip {} {:?}", objname, info);
+
+        let port = Port{ index: info.index as usize, state: PortState::Up};
         let info = PortInfo{ addr, name, peer: Ipv6Addr::UNSPECIFIED };
         Ok((port, info))
 
@@ -206,7 +240,7 @@ impl platform::Rdp for Platform {
                         ICMPv6Packet::RouterSolicitation(rs) => {
                             let wire = rs.wire();
                             match socket_tx.send_to(wire.as_slice(), &sa) {
-                                Ok(_) => {},
+                                Ok(_) => trace!(log, "sent solicit"),
                                 Err(e) => error!(log,
                                     "failed to send router solicitation {}",
                                     e,
@@ -216,7 +250,7 @@ impl platform::Rdp for Platform {
                         ICMPv6Packet::RouterAdvertisement(ra) => {
                             let wire = ra.wire();
                             match socket_tx.send_to(wire.as_slice(), &sa) {
-                                Ok(_) => {},
+                                Ok(_) => trace!(log, "sent advertisement"),
                                 Err(e) => error!(log,
                                     "failed to send router advertisement {}",
                                     e,
