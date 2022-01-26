@@ -1,18 +1,25 @@
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::{
+    select,
+    signal::unix::{signal, SignalKind},
+    sync::Mutex,
+};
 use slog::{info, warn, error, Logger, Drain};
 use structopt::StructOpt;
 use structopt::clap::AppSettings::*;
 use netadm_sys::{
     connect_simnet_peers,
+    delete_link,
+    delete_ipaddr,
     LinkHandle,
+    LinkFlags,
 };
 
 #[derive(Debug, StructOpt)]
 #[structopt(
     name = "ddm-local",
-    about = "A DDM control plane that runs on just one host for testing purposes.",
+    about = "A DDM control plane router that runs locally for testing purposes",
     global_setting(ColorAuto),
     global_setting(ColoredHelp)
 )]
@@ -87,7 +94,7 @@ async fn main() -> Result<(), String> {
     ).map_err(|e| format!("new platform: {}", e))?;
 
     match opt.subcommand {
-        SubCommand::Server(s) => {
+        SubCommand::Server(ref s) => {
             for (i, p) in s.ports.iter().enumerate() {
                 connect_simnet_peers(
                     &LinkHandle::Name(format!("mg{}_sim{}", opt.id, i)),
@@ -108,14 +115,51 @@ async fn main() -> Result<(), String> {
         admin_port: opt.admin_port,
     };
 
-    match ddm::router::Router::run_sync(r, p, config, log.clone()).await {
-        Ok(_) => warn!(log, "early exit?"),
-        Err(e) => error!(log, "ddm: {}", e),
+    ddm::router::Router::run(r, p, config, log.clone())
+        .map_err(|e| e.to_string())?;
+
+    info!(log, "waiting for shutdown");
+
+    let mut sigterm = signal(SignalKind::terminate())
+        .map_err(|e| e.to_string())?;
+
+    let mut sigint = signal(SignalKind::interrupt())
+        .map_err(|e| e.to_string())?;
+
+    select! {
+        _ = sigterm.recv() => warn!(log, "caught SIGTERM, shutting down"),
+        _ = sigint.recv() => warn!(log, "caught SIGINT, shutting down"),
     };
 
+    cleanup(&log, &opt);
+
+    drop(log);
 
     Ok(())
 
+}
+
+fn cleanup(log: &Logger, opt: &Opt) {
+    let radix = match opt.subcommand {
+        SubCommand::Transit(ref t) => t.radix.into(),
+        SubCommand::Server(ref s) => s.ports.len(),
+    };
+    for i in 0..radix {
+        let link = format!("mg{}_sim{}", opt.id, i);
+        let addr = format!("{}/v6", link);
+
+        // delete address
+        match delete_ipaddr(&addr) {
+            Ok(()) => {}
+            Err(e) => error!(log, "delete addr {}: {}", addr, e)
+        };
+
+        // delete interface
+        match delete_link(&LinkHandle::Name(link.clone()), LinkFlags::Active) {
+            Ok(()) => {}
+            Err(e) => error!(log, "delete link {}: {}", link, e)
+        };
+    }
 }
 
 fn init_logger() -> Logger {
