@@ -33,3 +33,7 @@ path = "src/illumos/main.rs"
 [[bin]]
 name = "ddm-local"
 path = "src/local/main.rs"
+
+[[bin]]
+name = "ddm-apigen"
+path = "src/apigen/main.rs"

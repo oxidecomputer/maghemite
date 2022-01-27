@@ -10,6 +10,8 @@ members = [
     "icmpv6",
     "srp",
     "ddm",
+    "ddmadm",
+    "ddm-admin-client",
     "console",
     #"tools/rdpx"
 ]

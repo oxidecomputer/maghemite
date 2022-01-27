@@ -118,6 +118,16 @@ async fn advertise_prefix(
 
 }
 
+pub fn api_description() -> Result<ApiDescription<ArcAdmContext>, String> {
+    let mut api = ApiDescription::new();
+    api.register(adm_ping)?;
+    api.register(get_peers)?;
+    api.register(advertise_prefix)?;
+    api.register(get_prefixes)?;
+    api.register(get_routes)?;
+    Ok(api)
+}
+
 
 pub(crate) async fn handler<Platform: platform::Full>(
     r: RouterRuntime<Platform>
@@ -132,12 +142,7 @@ pub(crate) async fn handler<Platform: platform::Full>(
         ..Default::default()
     };
 
-    let mut api = ApiDescription::new();
-    api.register(adm_ping)?;
-    api.register(get_peers)?;
-    api.register(advertise_prefix)?;
-    api.register(get_prefixes)?;
-    api.register(get_routes)?;
+    let api = api_description()?;
 
     let api_context = ArcAdmContext{
         config: r.config,
