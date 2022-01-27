@@ -6,5 +6,8 @@ members = [
     "ddm",
     "ddmadm",
     "ddm-admin-client",
+    "ddm-local",
+    "ddm-apigen",
+    "ddm-illumos",
     "console",
 ]

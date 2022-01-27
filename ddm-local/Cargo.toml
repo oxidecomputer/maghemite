@@ -1,0 +1,15 @@
+[package]
+name = "ddm-local"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.14", features = ["full"] }
+structopt = "0.3"
+slog = "2.7"
+slog-term = "2.7"
+slog-async = "2.7"
+slog-envlogger = "2.2"
+netadm-sys = { path = "/home/ry/src/netadm-sys/lib" }
+ddm = { path = "../ddm" }
+hostname = "0.3"

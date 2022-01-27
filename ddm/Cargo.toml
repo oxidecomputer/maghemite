@@ -5,11 +5,9 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1.14", features = ["full"] }
-anyhow = "1"
 slog = "2.7"
 slog-term = "2.7"
 slog-async = "2.7"
-slog-envlogger = "2.2"
 dropshot = { git = "https://github.com/oxidecomputer/dropshot", branch = "main" }
 schemars = { version = "0.8.0", features = [ "uuid" ] }
 serde = "1.0"
@@ -22,16 +20,3 @@ socket2 = { version = "0.4", features = ["all"] }
 icmpv6 = { path = "../icmpv6" }
 async-trait = "0.1.52"
 hostname = "0.3"
-structopt = "0.3"
-
-[[bin]]
-name = "ddm-illumos"
-path = "src/illumos/main.rs"
-
-[[bin]]
-name = "ddm-local"
-path = "src/local/main.rs"
-
-[[bin]]
-name = "ddm-apigen"
-path = "src/apigen/main.rs"

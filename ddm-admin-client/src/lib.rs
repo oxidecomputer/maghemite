@@ -1,5 +1,5 @@
 progenitor::generate_api!(
-    spec = "../ddm/openapi/ddm-admin.json",
+    spec = "../ddm-openapi/ddm-admin.json",
     inner_type = slog::Logger,
     pre_hook = (|log: &slog::Logger, request: &reqwest::Request| {
         slog::debug!(log, "client request";

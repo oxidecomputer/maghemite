@@ -536,7 +536,6 @@ dependencies = [
 name = "ddm"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "dropshot",
  "hostname",
@@ -548,10 +547,8 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-async",
- "slog-envlogger",
  "slog-term",
  "socket2",
- "structopt",
  "thiserror",
  "tokio",
 ]
@@ -569,6 +566,43 @@ dependencies = [
  "slog",
  "typify-impl",
  "typify-macro",
+]
+
+[[package]]
+name = "ddm-apigen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ddm",
+]
+
+[[package]]
+name = "ddm-illumos"
+version = "0.1.0"
+dependencies = [
+ "ddm",
+ "hostname",
+ "slog",
+ "slog-async",
+ "slog-envlogger",
+ "slog-term",
+ "structopt",
+ "tokio",
+]
+
+[[package]]
+name = "ddm-local"
+version = "0.1.0"
+dependencies = [
+ "ddm",
+ "hostname",
+ "netadm-sys 0.1.0",
+ "slog",
+ "slog-async",
+ "slog-envlogger",
+ "slog-term",
+ "structopt",
+ "tokio",
 ]
 
 [[package]]
