@@ -9,6 +9,32 @@ setting up and connecting [simnet](https://zinascii.com/2019/simnet-basics.html)
 links between routers. DDM local should automatically clean up these interfaces
 when a router is shut down.
 
+A diagram of how control plane software might use the admin API of a DDM router
+is depicted below.
+
+```
+┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐               ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+  server 1                          server 2         
+│                 │               │                 │
+   ┌─────────┐       ┌─────────┐      ┌─────────┐    
+│  │ Server  │    │  │ Transit │  │   │ Server  │   │
+   │ Router  │◀─────▶│ Router  │◀────▶│ Router  │    
+│  └─────────┘    │  └─────────┘  │   └─────────┘   │
+        ▲                                  ▲         
+│       │         │               │        │        │
+        │ advertise-prefix            ┌─────────┐    
+│       │ get-peers               │   │ Control │   │
+        │ get-prefixes                │  Plane  │    
+│       │ get-routes              │   │Software │   │
+        │                             └─────────┘    
+│  ┌─────────┐    │               │                 │
+   │ Control │                                       
+│  │  Plane  │    │               │                 │
+   │Software │                                       
+│  └─────────┘    │               │                 │
+ ─ ─ ─ ─ ─ ─ ─ ─ ─                 ─ ─ ─ ─ ─ ─ ─ ─ ─ 
+```
+
 ## Usage
 
 DDM routers come in two types
