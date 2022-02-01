@@ -35,6 +35,8 @@ is depicted below.
  ─ ─ ─ ─ ─ ─ ─ ─ ─                 ─ ─ ─ ─ ─ ─ ─ ─ ─ 
 ```
 
+With ddm-local, all of this happens on a single server for ease of testing.
+
 ## Usage
 
 DDM routers come in two types
