@@ -16,7 +16,7 @@ use tokio::{
 };
 use icmpv6::{RDPMessage, ICMPv6Packet};
 use async_trait::async_trait;
-use netadm_sys::{
+use libnet::{
     create_simnet_link,
     get_ipaddr_info,
     delete_ipaddr,

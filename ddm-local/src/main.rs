@@ -8,7 +8,7 @@ use tokio::{
 use slog::{info, warn, error, Logger, Drain};
 use structopt::StructOpt;
 use structopt::clap::AppSettings::*;
-use netadm_sys::{
+use libnet::{
     connect_simnet_peers,
     delete_link,
     delete_ipaddr,

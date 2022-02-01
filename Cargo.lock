@@ -541,7 +541,7 @@ dependencies = [
  "hostname",
  "hyper",
  "icmpv6",
- "netadm-sys 0.1.0",
+ "libnet",
  "schemars",
  "serde",
  "serde_json",
@@ -564,8 +564,6 @@ dependencies = [
  "serde",
  "serde_json",
  "slog",
- "typify-impl",
- "typify-macro",
 ]
 
 [[package]]
@@ -596,7 +594,7 @@ version = "0.1.0"
 dependencies = [
  "ddm",
  "hostname",
- "netadm-sys 0.1.0",
+ "libnet",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -671,16 +669,23 @@ dependencies = [
 [[package]]
 name = "dlpi"
 version = "0.1.0"
+source = "git+ssh://git@github.com/oxidecomputer/netadm-sys?branch=routing#563b85a6392ef0a8b574370ace3d892b56e4fca4"
 dependencies = [
  "libc",
+ "num_enum",
+ "pretty-hex",
+ "thiserror",
 ]
 
 [[package]]
 name = "dlpi"
 version = "0.1.0"
-source = "git+ssh://git@github.com/oxidecomputer/netadm-sys?branch=routing#563b85a6392ef0a8b574370ace3d892b56e4fca4"
+source = "git+https://github.com/oxidecomputer/dlpi-sys#0cc34b488374eb7a5c4904759b45c70285c4f049"
 dependencies = [
  "libc",
+ "num_enum",
+ "pretty-hex",
+ "thiserror",
 ]
 
 [[package]]
@@ -1297,7 +1302,7 @@ dependencies = [
  "futures",
  "home",
  "libc",
- "netadm-sys 0.1.0 (git+ssh://git@github.com/oxidecomputer/netadm-sys?branch=routing)",
+ "netadm-sys",
  "portpicker",
  "propolis-client",
  "propolis-server",
@@ -1317,6 +1322,23 @@ dependencies = [
  "toml",
  "uuid",
  "zone",
+]
+
+[[package]]
+name = "libnet"
+version = "0.1.0"
+source = "git+ssh://git@github.com/oxidecomputer/netadm-sys#1f44810613cedbba69301e89fb3bdeabbbcef26a"
+dependencies = [
+ "anyhow",
+ "colored",
+ "dlpi 0.1.0 (git+https://github.com/oxidecomputer/dlpi-sys)",
+ "libc",
+ "nvpair",
+ "nvpair-sys",
+ "rusty-doors 0.1.0 (git+https://github.com/oxidecomputer/rusty-doors)",
+ "socket2",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -1428,21 +1450,6 @@ dependencies = [
 [[package]]
 name = "netadm-sys"
 version = "0.1.0"
-dependencies = [
- "anyhow",
- "colored",
- "dlpi 0.1.0",
- "libc",
- "nvpair",
- "nvpair-sys",
- "rusty-doors",
- "thiserror",
- "tracing",
-]
-
-[[package]]
-name = "netadm-sys"
-version = "0.1.0"
 source = "git+ssh://git@github.com/oxidecomputer/netadm-sys?branch=routing#563b85a6392ef0a8b574370ace3d892b56e4fca4"
 dependencies = [
  "anyhow",
@@ -1451,7 +1458,7 @@ dependencies = [
  "libc",
  "nvpair",
  "nvpair-sys",
- "rusty-doors",
+ "rusty-doors 0.1.0 (git+ssh://git@github.com/oxidecomputer/rusty-doors)",
  "thiserror",
  "tracing",
 ]
@@ -1759,6 +1766,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eb9f9e6e233e5c4a35559a617bf40a4ec447db2e84c20b55a6f83167b7e57872"
 
 [[package]]
+name = "pretty-hex"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc5c99d529f0d30937f6f4b8a86d988047327bb88d04d2c4afc356de74722131"
+
+[[package]]
 name = "proc-macro-crate"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1804,6 +1817,7 @@ dependencies = [
 [[package]]
 name = "progenitor"
 version = "0.0.0"
+source = "git+https://github.com/oxidecomputer/progenitor#f1f9e2e93850713908f4e6494808a07f3b253108"
 dependencies = [
  "anyhow",
  "getopts",
@@ -1817,6 +1831,7 @@ dependencies = [
 [[package]]
 name = "progenitor-impl"
 version = "0.0.0"
+source = "git+https://github.com/oxidecomputer/progenitor#f1f9e2e93850713908f4e6494808a07f3b253108"
 dependencies = [
  "anyhow",
  "convert_case",
@@ -1833,14 +1848,13 @@ dependencies = [
  "syn",
  "thiserror",
  "typify",
- "typify-impl",
- "typify-macro",
  "unicode-xid",
 ]
 
 [[package]]
 name = "progenitor-macro"
 version = "0.0.0"
+source = "git+https://github.com/oxidecomputer/progenitor#f1f9e2e93850713908f4e6494808a07f3b253108"
 dependencies = [
  "openapiv3",
  "proc-macro2",
@@ -2154,13 +2168,31 @@ version = "0.1.0"
 source = "git+ssh://git@github.com/oxidecomputer/rusty-doors#2c599220530aea759d5cd17b822c4e5d7d522496"
 dependencies = [
  "libc",
- "rusty-doors-macros",
+ "rusty-doors-macros 0.1.0 (git+ssh://git@github.com/oxidecomputer/rusty-doors)",
+]
+
+[[package]]
+name = "rusty-doors"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/rusty-doors#c9c064efbb686af124264ee6995d9db7082b249d"
+dependencies = [
+ "libc",
+ "rusty-doors-macros 0.1.0 (git+https://github.com/oxidecomputer/rusty-doors)",
 ]
 
 [[package]]
 name = "rusty-doors-macros"
 version = "0.1.0"
 source = "git+ssh://git@github.com/oxidecomputer/rusty-doors#2c599220530aea759d5cd17b822c4e5d7d522496"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "rusty-doors-macros"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/rusty-doors#c9c064efbb686af124264ee6995d9db7082b249d"
 dependencies = [
  "quote",
  "syn",
@@ -2951,6 +2983,7 @@ checksum = "dcf81ac59edc17cc8697ff311e8f5ef2d99fcbd9817b34cec66f90b6c3dfd987"
 [[package]]
 name = "typify"
 version = "0.0.6-dev"
+source = "git+https://github.com/oxidecomputer/typify#b712fe6d643a8cf88fc1d5020cb0583a69a76c9b"
 dependencies = [
  "typify-impl",
  "typify-macro",
@@ -2959,6 +2992,7 @@ dependencies = [
 [[package]]
 name = "typify-impl"
 version = "0.0.6-dev"
+source = "git+https://github.com/oxidecomputer/typify#b712fe6d643a8cf88fc1d5020cb0583a69a76c9b"
 dependencies = [
  "convert_case",
  "log",
@@ -2975,6 +3009,7 @@ dependencies = [
 [[package]]
 name = "typify-macro"
 version = "0.0.6-dev"
+source = "git+https://github.com/oxidecomputer/typify#b712fe6d643a8cf88fc1d5020cb0583a69a76c9b"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -12,7 +12,7 @@ use tokio::{
 use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
 use slog::{self, trace, debug, info, warn, error, Logger};
-use netadm_sys::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
+use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
 
 use crate::admin;
 use crate::platform;
@@ -604,11 +604,11 @@ pub struct Route {
     pub gw: IpAddr,
 }
 
-impl From<netadm_sys::route::Route> for Route {
-    fn from(r: netadm_sys::route::Route) -> Self {
+impl From<libnet::route::Route> for Route {
+    fn from(r: libnet::route::Route) -> Self {
         Self {
             dest: r.dest,
-            //TODO netadm_sys should return a u8 as nothing > 128 is a valid
+            //TODO libnet should return a u8 as nothing > 128 is a valid
             //mask
             prefix_len: r.mask.try_into().unwrap(),
             gw: r.gw,
@@ -616,11 +616,11 @@ impl From<netadm_sys::route::Route> for Route {
     }
 }
 
-impl Into<netadm_sys::route::Route> for Route {
-    fn into(self) -> netadm_sys::route::Route {
-        netadm_sys::route::Route {
+impl Into<libnet::route::Route> for Route {
+    fn into(self) -> libnet::route::Route {
+        libnet::route::Route {
             dest: self.dest,
-            //TODO netadm_sys should return a u8 as nothing > 128 is a valid
+            //TODO libnet should return a u8 as nothing > 128 is a valid
             //mask
             mask: self.prefix_len as u32,
             gw: self.gw,

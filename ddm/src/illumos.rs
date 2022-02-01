@@ -70,7 +70,7 @@ impl platform::Capabilities for Platform {
 impl platform::Ports for Platform {
     async fn ports(&self) -> Result<Vec<Port>> {
 
-        let links = match netadm_sys::get_links() {
+        let links = match libnet::get_links() {
             Ok(links) => links,
             Err(e) => return Err(
                 Error::new(ErrorKind::Other, format!("get links: {}", e))
@@ -79,7 +79,7 @@ impl platform::Ports for Platform {
 
         // try to get v6 link local addresses and add them to the platform state
         // while we are collecting ports
-        let addrs = match netadm_sys::get_ipaddrs() {
+        let addrs = match libnet::get_ipaddrs() {
             Ok(addrs) => addrs,
             Err(e) => return Err(
                 Error::new(ErrorKind::Other, format!("get addrs: {}", e))
@@ -489,7 +489,7 @@ impl platform::Router for Platform {
 
         let mut result = Vec::new();
 
-        let routes = match netadm_sys::get_routes() {
+        let routes = match libnet::get_routes() {
             Ok(rs) => rs,
             Err(e) => return Err(
                 Error::new(ErrorKind::Other, format!("get routes: {}", e))
@@ -507,7 +507,7 @@ impl platform::Router for Platform {
     async fn set_route(&self, r: Route) -> Result<()> {
 
         let gw = r.gw;
-        match netadm_sys::ensure_route_present(r.into(), gw) {
+        match libnet::ensure_route_present(r.into(), gw) {
             Ok(_) => Ok(()),
             Err(e) => return Err(
                 Error::new(ErrorKind::Other, format!("set route: {}", e))
@@ -519,7 +519,7 @@ impl platform::Router for Platform {
     async fn delete_route(&self, r: Route) -> Result<()> {
 
         let gw = r.gw;
-        match netadm_sys::delete_route(r.into(), gw) {
+        match libnet::delete_route(r.into(), gw) {
             Ok(_) => Ok(()),
             Err(e) => return Err(
                 Error::new(ErrorKind::Other, format!("set route: {}", e))

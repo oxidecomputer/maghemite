@@ -14,8 +14,7 @@ serde = "1.0"
 serde_json = "1.0"
 hyper = { version = "0.14", features = ["full"] }
 thiserror = "1.0"
-netadm-sys = { path = "/home/ry/src/netadm-sys/lib" }
-#netadm-sys = { git = "ssh://git@github.com/oxidecomputer/netadm-sys", branch = "routing" }
+libnet = { git = "ssh://git@github.com/oxidecomputer/netadm-sys" }
 socket2 = { version = "0.4", features = ["all"] }
 icmpv6 = { path = "../icmpv6" }
 async-trait = "0.1.52"
