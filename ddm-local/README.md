@@ -122,7 +122,7 @@ at the second server router
 
 ```
 # Ask the second server router for the prefixes it knows about
-ddmadm -p 8002 get-prefixes
+ddmadm -p 8003 get-prefixes
 ```
 ```
 [
