@@ -13,6 +13,9 @@ use structopt::clap::AppSettings::*;
     global_setting(ColoredHelp)
 )]
 struct Opt {
+    /// Port to use for admin server
+    admin_port: u16,
+
     #[structopt(subcommand)]
     subcommand: SubCommand
 }
@@ -42,7 +45,7 @@ async fn main() -> Result<(), String> {
     ));
 
     let config = ddm::config::Config{
-        admin_port: 1947,
+        admin_port: opt.admin_port,
     };
 
     match ddm::router::Router::run_sync(r, p, config, log.clone()).await {

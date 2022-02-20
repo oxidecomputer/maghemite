@@ -303,7 +303,8 @@ impl platform::Ddm for Platform {
                 match crate::peer::peer_handler(local, itx, log.clone()) {
                     Ok(s) => s,
                     Err(e) => {
-                        error!(log, "failed to crate dropshot peer server: {}", e);
+                        error!(log,
+                            "failed to crate dropshot peer server: {}", e);
                         return;
                     }
                 };
@@ -407,7 +408,8 @@ impl platform::Ddm for Platform {
                 match crate::exchange::prefix_handler(local, itx, log.clone()) {
                     Ok(s) => s,
                     Err(e) => {
-                        error!(log, "failed to crate dropshot prefix server: {}", e);
+                        error!(log,
+                            "failed to crate dropshot prefix server: {}", e);
                         return;
                     }
                 };
@@ -421,8 +423,8 @@ impl platform::Ddm for Platform {
                                 error!(log, "prefix egress channel closed");
                                 match server.close().await {
                                     Ok(_) => {},
-                                    Err(e) => error!(
-                                        log, "dropshot prefix server close: {}", e),
+                                    Err(e) => error!(log, 
+                                        "dropshot prefix server close: {}", e),
                                 };
                                 return;
                             }

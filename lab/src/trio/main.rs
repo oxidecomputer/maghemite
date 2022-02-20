@@ -8,9 +8,9 @@ async fn main() -> Result<(), Error> {
     let mut d = Runner::new("trio");
 
     // nodes
-    let r = d.node("r", "helios", 4, gb(4));
-    let h0 = d.node("h0", "helios", 4, gb(4));
-    let h1 = d.node("h1", "helios", 4, gb(4));
+    let r = d.node("r", "helios-1.0", 4, gb(4));
+    let h0 = d.node("h0", "helios-1.0", 4, gb(4));
+    let h1 = d.node("h1", "helios-1.0", 4, gb(4));
 
     d.mount("./cargo-bay", "/opt/cargo-bay", r)?;
     d.mount("./cargo-bay", "/opt/cargo-bay", h0)?;

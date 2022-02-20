@@ -8,10 +8,10 @@ async fn main() -> Result<(), Error> {
     let mut d = Runner::new("quartet");
 
     // nodes
-    let r0 = d.node("r0", "helios", 4, gb(4));
-    let r1 = d.node("r1", "helios", 4, gb(4));
-    let h0 = d.node("h0", "helios", 4, gb(4));
-    let h1 = d.node("h1", "helios", 4, gb(4));
+    let r0 = d.node("r0", "helios-1.0", 4, gb(4));
+    let r1 = d.node("r1", "helios-1.0", 4, gb(4));
+    let h0 = d.node("h0", "helios-1.0", 4, gb(4));
+    let h1 = d.node("h1", "helios-1.0", 4, gb(4));
 
     d.mount("./cargo-bay", "/opt/cargo-bay", r0)?;
     d.mount("./cargo-bay", "/opt/cargo-bay", r1)?;
