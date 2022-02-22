@@ -4,6 +4,14 @@ use std::time::Duration;
 use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+//XXX everything going through protod use dpd_api as dpd;
+use dendrite_common::{Cidr, Ipv6Cidr}; // dendrite common
+
+// TODO this shoudl go in dpd_api
+pub enum IpFamily {
+    V4,
+    V6,
+}
 
 use tokio::{
     spawn, select,
@@ -49,13 +57,24 @@ impl PlatformState {
 pub struct Platform { 
     pub(crate) log: Logger,
     pub(crate) state: Arc::<Mutex::<PlatformState>>,
+    dendrite: bool,
+    protod_host: String,
+    dpd_host: String,
 }
 
 impl Platform {
-    pub fn new(log: Logger) -> Self {
+    pub fn new(
+        log: Logger,
+        dendrite: bool,
+        protod_host: String,
+        dpd_host: String,
+    ) -> Self {
         Platform{
             log,
             state: Arc::new(Mutex::new(PlatformState::new())),
+            dendrite,
+            protod_host,
+            dpd_host,
         }
     }
 }
@@ -485,9 +504,8 @@ impl platform::Ddm for Platform {
 
 }
 
-#[async_trait]
-impl platform::Router for Platform {
-    async fn get_routes(&self) -> Result<Vec<Route>> {
+impl Platform {
+    fn get_routes_kernel(&self) -> Result<Vec<Route>> {
 
         let mut result = Vec::new();
 
@@ -506,7 +524,39 @@ impl platform::Router for Platform {
 
     }
 
-    async fn set_route(&self, r: Route) -> Result<()> {
+    fn get_routes_dendrite(&self) -> Result<Vec<Route>> {
+        let api = protod_api::Api::new(
+            self.protod_host.clone(),
+            protod_api::default_port(),
+        )?;
+
+        let mut cookie = "".to_string();
+        let routes = api.route_ipv6_get_range(None, &mut cookie)?;
+        let mut result = Vec::new();
+
+        for r in routes {
+            let gw = match r.nexthop {
+                Some(IpAddr::V6(addr)) => addr.into(),
+                _ => Ipv6Addr::UNSPECIFIED.into(),
+            };
+            let (dest, prefix_len) = match r.cidr {
+                Cidr::V6(cidr) => 
+                    (cidr.prefix.into(), cidr.prefix_len),
+                _ => continue,
+            };
+            let egress_port = r.egress_port;
+            result.push(Route{
+                dest,
+                prefix_len,
+                gw,
+                egress_port,
+            });
+        }
+
+        Ok(result)
+    }
+
+    fn set_route_kernel(&self, r: Route) -> Result<()> {
 
         let gw = r.gw;
         match libnet::ensure_route_present(r.into(), gw) {
@@ -518,7 +568,61 @@ impl platform::Router for Platform {
 
     }
 
-    async fn delete_route(&self, r: Route) -> Result<()> {
+    fn set_route_dendrite(&self, r: Route) -> Result<()> {
+
+        let cidr = match r.dest {
+            IpAddr::V6(addr) => Ipv6Cidr{
+                prefix: addr,
+                prefix_len: r.prefix_len,
+            },
+            _ => { 
+                error!(self.log, "unsupported dst: {:?}", r.dest);
+                return Err(Error::new(ErrorKind::Unsupported, "dst")) 
+            }
+        };
+
+        let protod_api = protod_api::Api::new(
+            self.protod_host.clone(),
+            protod_api::default_port(),
+        )?;
+
+        let gw = match r.gw {
+            IpAddr::V6(gw) => gw,
+            _ => { 
+                error!(self.log, "unsupported gw: {:?}", r.gw);
+                return Err(Error::new(ErrorKind::Unsupported, "gw")) 
+            }
+        };
+
+        let egress_port = match protod_api.ndp_get(gw) {
+            Ok(nbr) => {
+                debug!(self.log, 
+                    "found neighbor port: {:?} -> {:?}", gw, nbr.port_id);
+                nbr.port_id
+            }
+            Err(e) => {
+                // TODO(ry) there are a number of reasons why an ndp entry may
+                // be transiently unavailable, there should be some (possibly
+                // asynchronous) retry logic here.
+                error!(self.log, "ndp get: {:?}", e);
+                return Err(Error::new(
+                        ErrorKind::Other, 
+                        format!("ndp get{:?}", e))
+                );
+            }
+        };
+
+        protod_api.route_ipv6_add(
+            &cidr,
+            egress_port,
+            None,
+        )?;
+
+        Ok(())
+
+    }
+
+    fn delete_route_kernel(&self, r: Route) -> Result<()> {
 
         let gw = r.gw;
         match libnet::delete_route(r.into(), gw) {
@@ -528,5 +632,52 @@ impl platform::Router for Platform {
             ),
         }
                 
+    }
+
+    fn delete_route_dendrite(&self, r: Route) -> Result<()> {
+
+        let api = protod_api::Api::new(
+            self.protod_host.clone(),
+            protod_api::default_port(),
+        )?;
+        let cidr = match r.dest {
+            IpAddr::V6(addr) => Ipv6Cidr{
+                prefix: addr,
+                prefix_len: r.prefix_len,
+            },
+            _ => { return Err(Error::from(ErrorKind::Unsupported)) }
+        };
+
+
+        api.route_ipv6_del(&cidr)?;
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl platform::Router for Platform {
+    async fn get_routes(&self) -> Result<Vec<Route>> {
+        if self.dendrite {
+            self.get_routes_dendrite()
+        } else {
+            self.get_routes_kernel()
+        }
+    }
+
+    async fn set_route(&self, r: Route) -> Result<()> {
+        if self.dendrite {
+            self.set_route_dendrite(r)
+        } else {
+            self.set_route_kernel(r)
+        }
+    }
+
+    async fn delete_route(&self, r: Route) -> Result<()> {
+        if self.dendrite {
+            self.delete_route_dendrite(r)
+        } else {
+            self.delete_route_kernel(r)
+        }
     }
 }

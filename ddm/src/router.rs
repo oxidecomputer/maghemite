@@ -444,6 +444,7 @@ impl Router {
                                             dest: IpAddr::V6(pfx.addr),
                                             prefix_len: pfx.mask,
                                             gw: IpAddr::V6(gw),
+                                            egress_port: 0,
                                         };
 
                                         warn!(log, "adding route: {:?}", &rte);
@@ -602,6 +603,7 @@ pub struct Route {
     pub dest: IpAddr,
     pub prefix_len: u8,
     pub gw: IpAddr,
+    pub egress_port: u16,
 }
 
 impl From<libnet::route::Route> for Route {
@@ -612,6 +614,7 @@ impl From<libnet::route::Route> for Route {
             //mask
             prefix_len: r.mask.try_into().unwrap(),
             gw: r.gw,
+            egress_port: 0,
         }
     }
 }
