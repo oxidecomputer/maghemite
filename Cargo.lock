@@ -565,7 +565,7 @@ dependencies = [
  "hostname",
  "hyper 0.14.16",
  "icmpv6",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
  "protod-api",
  "schemars",
  "serde",
@@ -619,7 +619,7 @@ version = "0.1.0"
 dependencies = [
  "ddm",
  "hostname",
- "libnet",
+ "libnet 0.1.0 (git+ssh://git@github.com/oxidecomputer/netadm-sys)",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -1461,6 +1461,23 @@ dependencies = [
 name = "libnet"
 version = "0.1.0"
 source = "git+ssh://git@github.com/oxidecomputer/netadm-sys#1f44810613cedbba69301e89fb3bdeabbbcef26a"
+dependencies = [
+ "anyhow",
+ "colored",
+ "dlpi 0.1.0 (git+https://github.com/oxidecomputer/dlpi-sys)",
+ "libc",
+ "nvpair",
+ "nvpair-sys",
+ "rusty-doors 0.1.0 (git+https://github.com/oxidecomputer/rusty-doors)",
+ "socket2 0.4.3",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "libnet"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/netadm-sys#fb2e1843e299fedd490b644ada9d80bb16739887"
 dependencies = [
  "anyhow",
  "colored",
