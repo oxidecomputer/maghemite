@@ -19,7 +19,6 @@ socket2 = { version = "0.4", features = ["all"] }
 icmpv6 = { path = "../icmpv6" }
 async-trait = "0.1.52"
 hostname = "0.3"
-dpd-api = { git = "ssh://git@github.com/oxidecomputer/dendrite", branch = "ry-working" }
 protod-api = { git = "ssh://git@github.com/oxidecomputer/dendrite", branch = "ry-working" }
 dendrite-common = { git = "ssh://git@github.com/oxidecomputer/dendrite", branch = "ry-working", package = "common" }
 

@@ -31,8 +31,6 @@ struct Transit {
     dendrite: bool,
     #[structopt(long)]
     protod_host: Option<String>,
-    #[structopt(long)]
-    dpd_host: Option<String>,
 }
 
 #[tokio::main]
@@ -44,18 +42,16 @@ async fn main() -> Result<(), String> {
     info!(log, "starting illumos ddm control plane");
 
 
-    let (kind, dendrite, protod, dpd) = match opt.subcommand {
+    let (kind, dendrite, protod) = match opt.subcommand {
         SubCommand::Server => (
             ddm::protocol::RouterKind::Server,
             false,
-            "".into(),
             "".into(),
         ),
         SubCommand::Transit(t) => (
             ddm::protocol::RouterKind::Transit,
             t.dendrite,
             t.protod_host.unwrap_or("localhost".into()),
-            t.dpd_host.unwrap_or("localhost".into()),
         ),
     };
 
@@ -64,7 +60,6 @@ async fn main() -> Result<(), String> {
                 log.clone(),
                 dendrite,
                 protod,
-                dpd,
         ))
     );
     let r = Arc::new(ddm::router::Router::new(

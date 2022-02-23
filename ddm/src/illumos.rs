@@ -4,14 +4,7 @@ use std::time::Duration;
 use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-//XXX everything going through protod use dpd_api as dpd;
 use dendrite_common::{Cidr, Ipv6Cidr}; // dendrite common
-
-// TODO this shoudl go in dpd_api
-pub enum IpFamily {
-    V4,
-    V6,
-}
 
 use tokio::{
     spawn, select,
@@ -59,7 +52,6 @@ pub struct Platform {
     pub(crate) state: Arc::<Mutex::<PlatformState>>,
     dendrite: bool,
     protod_host: String,
-    dpd_host: String,
 }
 
 impl Platform {
@@ -67,14 +59,12 @@ impl Platform {
         log: Logger,
         dendrite: bool,
         protod_host: String,
-        dpd_host: String,
     ) -> Self {
         Platform{
             log,
             state: Arc::new(Mutex::new(PlatformState::new())),
             dendrite,
             protod_host,
-            dpd_host,
         }
     }
 }

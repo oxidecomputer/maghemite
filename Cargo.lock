@@ -561,7 +561,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "common",
- "dpd-api",
  "dropshot",
  "hostname",
  "hyper 0.14.16",
@@ -722,20 +721,6 @@ checksum = "9e6b21a1211455e82b1245d6e1b024f30606afbb734c114515d40d0e0b34ce81"
 dependencies = [
  "thiserror",
  "zerocopy",
-]
-
-[[package]]
-name = "dpd-api"
-version = "0.1.0"
-source = "git+ssh://git@github.com/oxidecomputer/dendrite?branch=ry-working#fa168c7bedf71e22ab7bfd51def99fdcbaa16028"
-dependencies = [
- "chrono",
- "common",
- "http",
- "reqwest 0.10.10",
- "schemars",
- "serde",
- "serde_json",
 ]
 
 [[package]]
