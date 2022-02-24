@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
     match opt.subcommand {
         SubCommand::Ping => {
             match client.adm_ping().await {
-                Ok(msg) => info!(log, "{}", msg),
+                Ok(msg) => info!(log, "{:?}", msg),
                 Err(e) => error!(log, "{}", e),
             };
         }
