@@ -10,6 +10,7 @@
 #: ]
 #: access_repos = [
 #:   "oxidecomputer/dendrite",
+#:   "oxidecomputer/falcon",
 #: ]
 #:
 
