@@ -27,6 +27,8 @@ banner "build ddm-illumos"
 ptime -m cargo build
 ptime -m cargo build --release
 
+popd
+
 for x in debug release
 do
     mkdir -p /work/$x
@@ -34,11 +36,12 @@ do
 done
 
 banner "build ddmadm"
-popd
 pushd ddmadm
 
 ptime -m cargo build
 ptime -m cargo build --release
+
+popd
 
 for x in debug release
 do
