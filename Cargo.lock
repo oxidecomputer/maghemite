@@ -622,7 +622,7 @@ version = "0.1.0"
 dependencies = [
  "ddm",
  "hostname",
- "libnet 0.1.0 (git+ssh://git@github.com/oxidecomputer/netadm-sys)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -1444,23 +1444,6 @@ dependencies = [
 name = "libnet"
 version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#fb2e1843e299fedd490b644ada9d80bb16739887"
-dependencies = [
- "anyhow",
- "colored",
- "dlpi",
- "libc",
- "nvpair",
- "nvpair-sys",
- "rusty-doors",
- "socket2 0.4.4",
- "thiserror",
- "tracing",
-]
-
-[[package]]
-name = "libnet"
-version = "0.1.0"
-source = "git+ssh://git@github.com/oxidecomputer/netadm-sys#fb2e1843e299fedd490b644ada9d80bb16739887"
 dependencies = [
  "anyhow",
  "colored",

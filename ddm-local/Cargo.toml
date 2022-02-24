@@ -10,6 +10,6 @@ slog = "2.7"
 slog-term = "2.7"
 slog-async = "2.7"
 slog-envlogger = "2.2"
-libnet = { git = "ssh://git@github.com/oxidecomputer/netadm-sys" }
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
 ddm = { path = "../ddm" }
 hostname = "0.3"
