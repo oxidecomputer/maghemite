@@ -605,7 +605,7 @@ impl Platform {
         protod_api.route_ipv6_add(
             &cidr,
             egress_port,
-            None,
+            Some(gw),
         )?;
 
         Ok(())
