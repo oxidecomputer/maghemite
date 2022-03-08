@@ -354,7 +354,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=ry-working#f6b624d78db22ee3b6d9f89a2fd0af67ea00e3d9"
+source = "git+https://github.com/oxidecomputer/dendrite#6946b9a6cbbcc824de8ed50da4342d878d242200"
 dependencies = [
  "rand",
  "schemars",
@@ -2162,7 +2162,7 @@ dependencies = [
 [[package]]
 name = "protod-api"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=ry-working#f6b624d78db22ee3b6d9f89a2fd0af67ea00e3d9"
+source = "git+https://github.com/oxidecomputer/dendrite#6946b9a6cbbcc824de8ed50da4342d878d242200"
 dependencies = [
  "chrono",
  "common",
