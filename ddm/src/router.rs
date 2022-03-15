@@ -160,8 +160,8 @@ impl Router {
                 match rx.recv().await {
                     Some(msg) => {
                         match msg.packet {
-                            ICMPv6Packet::RouterAdvertisement(ra) => {
-                                debug!(log, "rx adv {:?}", ra);
+                            ICMPv6Packet::RouterAdvertisement(_) => {
+                                debug!(log, "rx adv {:?}", msg);
                                 let mut state = r.router.state.lock().await;
 
                                 // fill in peer info
@@ -304,11 +304,12 @@ impl Router {
             let tx = tx.clone();
             let log = r.log.clone();
 
-            router_trace!(log, info.name, "sending ping");
             spawn(async move { loop {
 
+                router_trace!(log, info.name, "sending ping");
+
                 let ping = PeerMessage::Ping(
-                    PeerPing{sender :info.name.clone()});
+                    PeerPing{sender: info.name.clone()});
 
                 match tx.send(ping).await {
                     Ok(_) => {},
@@ -459,9 +460,10 @@ impl Router {
 
 
                                 // update prefixes
-                                    if !state.prefixes.contains(&p) {
-                                        state.prefixes.insert(p.clone());
-                                        if r.router.info.kind == RouterKind::Transit || p.origin == r.router.info.name {
+                                if !state.prefixes.contains(&p) {
+                                    state.prefixes.insert(p.clone());
+                                    if r.router.info.kind == RouterKind::Transit ||
+                                        p.origin == r.router.info.name {
                                         // push update to other peers
                                         match pfupdate.send(p) {
                                             Ok(_) => {}

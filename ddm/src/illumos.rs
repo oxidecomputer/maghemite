@@ -15,7 +15,7 @@ use tokio::{
     },
 };
 use socket2::{Socket, Domain, Type, Protocol, SockAddr};
-use slog::{Logger, debug, warn, error};
+use slog::{Logger, debug, warn, error, trace};
 use icmpv6::{
     RDPMessage,
     ICMPv6Packet,
@@ -348,6 +348,10 @@ impl platform::Ddm for Platform {
                             p.index,
                             PEERING_PORT);
 
+                        trace!(log, "SEND PEER MSG: {:?} to {}", msg, uri);
+
+
+
                         let client = hyper::Client::new();
                         let req = match hyper::Request::builder()
                             .method(hyper::Method::POST)
@@ -362,16 +366,21 @@ impl platform::Ddm for Platform {
 
                         };
 
-                        let resp = client.request(req).await;
-                        match resp {
-                            Ok(_) => {},
-                            Err(e) => error!(
-                                log, 
-                                "hyper send request to {}: {}", 
-                                &uri,
-                                e,
-                            ),
-                        };
+                        let resp = client.request(req);
+
+                        match tokio::time::timeout(Duration::from_millis(250), resp).await {
+                            Ok(resp) => match resp {
+                                Ok(_) => {},
+                                Err(e) => error!(
+                                    log,
+                                    "hyper send request to {}: {}",
+                                    &uri,
+                                    e,
+                                ),
+                            },
+                            Err(_) => error!(log, "peer request timeout to {}", uri),
+                        }
+
 
                     }
 
