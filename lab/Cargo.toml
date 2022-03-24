@@ -3,10 +3,27 @@ name = "lab"
 version = "0.1.0"
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-libfalcon = { path = "/home/ry/falcon/lib" }
-# https://github.com/jmesmon/rust-libzfs/pull/71
-#zfs-core = { git = "https://github.com/oxidecomputer/rust-libzfs" }
+libfalcon = { git = "https://github.com/oxidecomputer/falcon" }
 anyhow = "1.0"
+tokio = { version = "1", features = ["full"] }
+
+[[bin]]
+name = "solo"
+path = "src/solo/main.rs"
+
+[[bin]]
+name = "duo"
+path = "src/duo/main.rs"
+
+[[bin]]
+name = "trio"
+path = "src/trio/main.rs"
+
+[[bin]]
+name = "quartet"
+path = "src/quartet/main.rs"
+
+[[bin]]
+name = "mg2x2"
+path = "src/2x2/main.rs"

@@ -6,20 +6,20 @@ use std::mem::size_of;
 use serde::{Serialize, Deserialize};
 use schemars::JsonSchema;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct RDPMessage {
     pub from: Option<Ipv6Addr>,
     pub packet: ICMPv6Packet,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct ICMPv6Header {
     pub typ: ICMPv6Type,
     pub code: u8,
     pub checksum: u16,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[repr(u8)]
 pub enum ICMPv6Type {
     Reserved = 0,
@@ -82,7 +82,7 @@ pub enum NDPOptionType {
     MTU = 5,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[repr(C)]
 pub struct RouterSolicitation {
     pub icmpv6_header: ICMPv6Header,
@@ -130,7 +130,7 @@ impl RouterSolicitation {
 
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct RouterAdvertisement {
     pub icmpv6_header: ICMPv6Header,
     pub hop_limit: u8,
@@ -164,15 +164,15 @@ impl RouterAdvertisement {
                 code: 0,
                 checksum: 0,
             },
-            hop_limit: hop_limit,
-            managed_address: managed_address,
-            other_stateful: other_stateful,
-            router_lifetime: router_lifetime,
-            reachable_time: reachable_time,
-            retransmission_timer: retransmission_timer,
+            hop_limit,
+            managed_address,
+            other_stateful,
+            router_lifetime,
+            reachable_time,
+            retransmission_timer,
             source_address: src,
-            mtu: mtu,
-            prefix_info: prefix_info
+            mtu,
+            prefix_info
         }
     }
 
@@ -225,7 +225,7 @@ impl RouterAdvertisement {
 
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct PrefixInfo {
     pub length: u8,
     pub on_link: bool,
@@ -236,7 +236,7 @@ pub struct PrefixInfo {
 
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ICMPv6Packet {
     RouterSolicitation(RouterSolicitation),
     RouterAdvertisement(RouterAdvertisement),

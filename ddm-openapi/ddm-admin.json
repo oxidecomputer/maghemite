@@ -1,0 +1,226 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "DDM Admin",
+    "version": "v0.1.0"
+  },
+  "paths": {
+    "/peers": {
+      "get": {
+        "operationId": "get_peers",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_PeerStatus",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/PeerStatus"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ping": {
+      "get": {
+        "operationId": "adm_ping",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "String",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/prefix": {
+      "put": {
+        "operationId": "advertise_prefix",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_Ipv6Prefix",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Ipv6Prefix"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Null",
+                  "type": "string",
+                  "enum": [
+                    null
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/prefixes": {
+      "get": {
+        "operationId": "get_prefixes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_DdmPrefix",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DdmPrefix"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/routes": {
+      "get": {
+        "operationId": "get_routes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_Route",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Route"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DdmPrefix": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string"
+          },
+          "prefixes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ipv6Prefix"
+            },
+            "uniqueItems": true
+          },
+          "serial": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "origin",
+          "prefixes",
+          "serial"
+        ]
+      },
+      "Ipv6Prefix": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "mask": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "addr",
+          "mask"
+        ]
+      },
+      "PeerStatus": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "nullable": true,
+            "type": "string",
+            "format": "ipv6"
+          },
+          "kind": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RouterKind"
+              }
+            ]
+          },
+          "name": {
+            "nullable": true,
+            "type": "string"
+          }
+        }
+      },
+      "Route": {
+        "type": "object",
+        "properties": {
+          "dest": {
+            "type": "string",
+            "format": "ip"
+          },
+          "gw": {
+            "type": "string",
+            "format": "ip"
+          },
+          "prefix_len": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "dest",
+          "gw",
+          "prefix_len"
+        ]
+      },
+      "RouterKind": {
+        "type": "string",
+        "enum": [
+          "Server",
+          "Transit"
+        ]
+      }
+    }
+  }
+}
