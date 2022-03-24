@@ -6,3 +6,6 @@ zone = true
 [[package.mg-ddm.paths]]
 from = "smf/ddm"
 to = "/var/svc/manifest/site/mg-ddm"
+[[package.mg-ddm.paths]]
+from = "smf/ddm_method_script.sh"
+to = "/opt/oxide/mg-ddm/bin/ddm_method_script.sh"

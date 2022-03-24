@@ -11,20 +11,16 @@
   </dependency>
 
   <exec_method type='method' name='start'
-      exec='ctrun -l child -o noorphan,regent /opt/oxide/mg-ddm/bin/ddm-illumos %{config/admin_port} %{config/mode} %{config/flags} &amp;'
+    exec='ctrun -l child -o noorphan,regent /opt/oxide/mg-ddm/bin/ddm_method_script.sh &amp;'
     timeout_seconds='0' />
   <exec_method type='method' name='stop' exec=':kill' timeout_seconds='0' />
 
   <property_group name='config' type='application'>
     <propval name='admin_port' type='count' value='8000' />
-  </property_group>
-
-  <property_group name='config' type='application'>
     <propval name='mode' type='astring' value='server' />
-  </property_group>
-
-  <property_group name='config' type='application'>
-    <propval name='flags' type='astring' value='' />
+    <propval name='dendrite' type='boolean' value='false' />
+    <propval name='protod' type='astring' value='' />
+    <propval name='log' type='astring' value='info' />
   </property_group>
 
   <property_group name='startd' type='framework'>
