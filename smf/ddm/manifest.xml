@@ -4,6 +4,7 @@
 <service_bundle type='manifest' name='mg-ddm'>
 
 <service name='system/illumos/mg-ddm' type='service' version='1'>
+  <create_default_instance enabled='false' />
   <dependency name='network' grouping='require_all' restart_on='none'
     type='service'>
   <service_fmri value='svc:/milestone/network:default' />
