@@ -10,7 +10,7 @@
   </dependency>
 
   <exec_method type='method' name='start'
-      exec='ctrun -l child -o noorphan,regent /opt/oxide/mg-ddm/bin/mg-ddm %{config/admin_port} %{config/mode} %{config/flags} &amp;'
+      exec='ctrun -l child -o noorphan,regent /opt/oxide/mg-ddm/bin/ddm-illumos %{config/admin_port} %{config/mode} %{config/flags} &amp;'
     timeout_seconds='0' />
   <exec_method type='method' name='stop' exec=':kill' timeout_seconds='0' />
 
