@@ -23,8 +23,8 @@ implemented, and lower halves implement `Platform` traits.
 ### DDM
 
 - [x] [Local](ddm-local)
-- [ ] [illumos/Helios](ddm-illumos) **in progress**
-- [ ] Sidecar/Dendrite
+- [x] [illumos/Helios](ddm-illumos)
+- [x] Sidecar/Dendrite - part of illumos platform implementation
 
 ## Tooling
 
