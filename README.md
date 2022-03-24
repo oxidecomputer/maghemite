@@ -33,4 +33,4 @@ implemented, and lower halves implement `Platform` traits.
 ## APIs
 
 - [x] [DDM OpenAPI](ddm-openapi)
-- [x] [DDM Rust Client Library](ddm-admin-client]
+- [x] [DDM Rust Client Library](ddm-admin-client)
