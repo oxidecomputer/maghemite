@@ -5,7 +5,7 @@ of the Maghemite routing daemons and associated command line applications in a
 specially-formatted tarball.
 
 A manifest describing this Zone image exists in
-[package-manifest.toml](package-manifest.toml)`, and the resulting image is
+[package-manifest.toml](../package-manifest.toml), and the resulting image is
 created as `out/mg-ddm.tar.gz`.
 
 To create the Zone image:
