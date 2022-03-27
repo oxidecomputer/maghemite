@@ -10,7 +10,7 @@ dir path=lib/svc/manifest/system owner=root group=sys mode=0755
 file path=lib/svc/manifest/system/mg-ddm.xml owner=root group=sys \
     mode=0444 restart_fmri=svc:/system/manifest-import:default \
     variant.opensolaris.zone=global
-dir path=opt owner=root group=bin mode=0755
+dir path=opt owner=root group=sys mode=0755
 dir path=opt/oxide owner=root group=bin mode=0755
 dir path=opt/oxide/maghemite owner=root group=bin mode=0755
 dir path=opt/oxide/maghemite/bin owner=root group=bin mode=0755
