@@ -26,4 +26,4 @@ if [[ "$val" != '""' ]]; then
     export RUST_LOG="$val"
 fi
 
-exec /opt/oxide/mg-ddm/bin/ddm-illumos "${args[@]}"
+exec /opt/oxide/maghemite/bin/ddm-illumos "${args[@]}"

@@ -14,13 +14,13 @@
 #:
 #: [[publish]]
 #: series = "image"
-#: name = "mg-ddm.tar.gz"
-#: from_output = "/out/mg-ddm.tar.gz"
+#: name = "maghemite.tar.gz"
+#: from_output = "/out/maghemite.tar.gz"
 #:
 #: [[publish]]
 #: series = "image"
-#: name = "mg-ddm.sha256.txt"
-#: from_output = "/out/mg-ddm.sha256.txt"
+#: name = "maghemite.sha256.txt"
+#: from_output = "/out/maghemite.sha256.txt"
 #:
 
 set -o errexit
@@ -37,11 +37,11 @@ banner image
 ptime -m cargo run -p mg-package
 
 banner contents
-tar tvfz out/mg-ddm.tar.gz
+tar tvfz out/maghemite.tar.gz
 
 banner copy
 pfexec mkdir -p /out
 pfexec chown "$UID" /out
-mv out/mg-ddm.tar.gz /out/mg-ddm.tar.gz
+mv out/maghemite.tar.gz /out/maghemite.tar.gz
 cd /out
-digest -a sha256 mg-ddm.tar.gz > mg-ddm.sha256.txt
+digest -a sha256 maghemite.tar.gz > maghemite.sha256.txt
