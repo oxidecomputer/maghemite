@@ -30,4 +30,4 @@ pushd pkg
 banner copy
 pfexec mkdir -p /out
 pfexec chown "$UID" /out
-mv packages/repo/*.p5p /out/mg-ddm.tar.gz
+mv packages/repo/*.p5p /out/
