@@ -13,7 +13,7 @@ implemented, and lower halves implement `Platform` traits.
 
 ## Protocols
 
-- [x] [DDM](ddm): Delay Driven Multipath **in progress**
+- [x] [DDM](ddm): Delay Driven Multipath
 - [ ] BGP: Border Gateway Protocol
 - [ ] OSPF: Open Shortest Path First
 - [ ] Static: Static route specifications (e.g. no protocol involved)
@@ -33,4 +33,4 @@ implemented, and lower halves implement `Platform` traits.
 ## APIs
 
 - [x] [DDM OpenAPI](ddm-openapi)
-- [x] [DDM Rust Client Library](ddm-admin-client]
+- [x] [DDM Rust Client Library](ddm-admin-client)

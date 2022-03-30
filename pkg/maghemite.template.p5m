@@ -1,0 +1,21 @@
+set name=pkg.fmri \
+    value=pkg://%PUBLISHER%/system/network/maghemite@1.0.%COMMIT_COUNT%
+set name=pkg.summary value="The Maghemite routing platform"
+set name=info.classification \
+    value=org.opensolaris.category.2008:System/Services
+set name=variant.opensolaris.zone value=global value=nonglobal
+dir path=lib owner=root group=bin mode=0755
+dir path=lib/svc owner=root group=bin mode=0755
+dir path=lib/svc/manifest/system owner=root group=sys mode=0755
+file path=lib/svc/manifest/system/mg-ddm.xml owner=root group=sys \
+    mode=0444 restart_fmri=svc:/system/manifest-import:default \
+    variant.opensolaris.zone=global
+dir path=opt owner=root group=sys mode=0755
+dir path=opt/oxide owner=root group=bin mode=0755
+dir path=opt/oxide/maghemite owner=root group=bin mode=0755
+dir path=opt/oxide/maghemite/bin owner=root group=bin mode=0755
+file path=opt/oxide/maghemite/bin/ddm-illumos owner=root group=bin mode=0755
+file path=opt/oxide/maghemite/bin/ddmadm owner=root group=bin mode=0755
+file path=opt/oxide/maghemite/bin/ddm_method_script.sh owner=root group=bin mode=0755
+depend type=incorporate fmri=pkg:/system/network/maghemite@1.0.%COMMIT_COUNT%
+depend type=require fmri=pkg:/system/network/maghemite@1.0.%COMMIT_COUNT%
