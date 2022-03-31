@@ -5,7 +5,7 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use slog::{Logger, debug, error, trace};
+use slog::{Logger, warn, debug, error, trace};
 use tokio::{
     spawn, select,
     time::sleep,
@@ -64,17 +64,17 @@ pub struct PortInfo {
 
 impl Platform {
     
-    pub fn new(log: Logger, id: u16, radix: u16) -> Result<Self> {
+    pub async fn new(log: Logger, id: u16, radix: u16) -> Result<Self> {
         let mut ports = BTreeMap::new();
         for i in 0..radix {
-            let (port, info) = Self::create_port(&log, id, i)?;
+            let (port, info) = Self::create_port(&log, id, i).await?;
             ports.insert(port, info);
         }
         let state = Arc::new(Mutex::new(PlatformState{ ports }));
         Ok(Platform{ id, state, log })
     }
 
-    pub fn create_port(log: &Logger, id: u16, i: u16) -> Result<(Port, PortInfo)> {
+    pub async fn create_port(log: &Logger, id: u16, i: u16) -> Result<(Port, PortInfo)> {
 
         let name = format!("mg{}_sim{}", id, i);
         create_simnet_link(&name, LinkFlags::Active).map_err(|e| {
@@ -93,7 +93,7 @@ impl Platform {
 
 
         let objname = format!("{}/v6", name);
-        let info = get_ipaddr_info(&objname).map_err(|e| {
+        let info = get_addr(&log, &objname).await.map_err(|e| {
             Error::new(
                 ErrorKind::Other, 
                 format!("get ip info {}: {}", i, e.to_string()),
@@ -497,4 +497,20 @@ impl platform::Router for Platform {
     async fn delete_route(&self, _r: Route) -> Result<()> {
         Ok(())
     }
+}
+
+async fn get_addr(log: &Logger, objname: &str) -> Result<libnet::IpInfo> {
+    for _ in 0..15 {
+        match get_ipaddr_info(objname) {
+            Ok(ipaddr) => return Ok(ipaddr),
+            Err(e) => {
+                warn!(log, "no ip info for {}: {}", objname, e);
+                sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+    return Err(Error::new(
+        ErrorKind::Other, 
+        format!("get ip info for {}", objname),
+    ))
 }

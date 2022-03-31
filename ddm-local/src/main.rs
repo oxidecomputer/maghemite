@@ -91,7 +91,7 @@ async fn main() -> Result<(), String> {
         log.clone(),
         opt.id,
         radix,
-    ).map_err(|e| format!("new platform: {}", e))?;
+    ).await.map_err(|e| format!("new platform: {}", e))?;
 
     match opt.subcommand {
         SubCommand::Server(ref s) => {

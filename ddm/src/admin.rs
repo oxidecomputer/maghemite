@@ -98,13 +98,21 @@ async fn advertise_prefix(
     let api_context = ctx.context();
     let body: HashSet<Ipv6Prefix> = body_param.into_inner();
 
-    let prefixes = &mut api_context.state.lock().await.prefixes;
+    let mut state = api_context.state.lock().await;
+
+    let prefixes = &mut state.prefixes;
     let x = DdmPrefix{
         origin: api_context.info.name.clone(),
         prefixes: body.clone(),
         serial: 0,
     };
     prefixes.insert(x.clone());
+
+    // there will be no update channel if there are no peers, when a peer joins
+    // later they will get this advertisement as a part of the peering process.
+    if state.peers.is_empty() {
+        return Ok(HttpResponseOk(()))
+    }
     match api_context.pfupdate.send(x.clone()) {
         Ok(_) => {}, 
         Err(e) => {
