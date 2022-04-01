@@ -5,6 +5,8 @@ use tokio::sync::mpsc::Sender;
 use dropshot::{
     endpoint,
     ConfigDropshot,
+    ConfigLogging,
+    ConfigLoggingLevel,
     ApiDescription,
     HttpServerStarter,
     RequestContext,
@@ -44,7 +46,7 @@ async fn ddm_prefix(
 pub(crate) fn prefix_handler(
     addr: Ipv6Addr, 
     tx: Arc::<Mutex::<Sender<DdmMessage>>>,
-    log: slog::Logger,
+    _log: slog::Logger,
 ) -> Result<HttpServer<PrefixHandlerContext>, String> {
 
     let sa = SocketAddr::V6(
@@ -54,6 +56,14 @@ pub(crate) fn prefix_handler(
         bind_address: sa,
         ..Default::default()
     };
+
+    // this logging gets real noisy with modest message exchange rates
+    let log =
+        ConfigLogging::StderrTerminal {
+            level: ConfigLoggingLevel::Error,
+        }
+        .to_logger("prefix")
+        .map_err(|e| e.to_string())?;
 
     let mut api = ApiDescription::new();
     api.register(ddm_prefix).unwrap();

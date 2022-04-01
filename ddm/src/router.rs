@@ -161,7 +161,7 @@ impl Router {
                     Some(msg) => {
                         match msg.packet {
                             ICMPv6Packet::RouterAdvertisement(_) => {
-                                debug!(log, "rx adv {:?}", msg);
+                                trace!(log, "rx adv {:?}", msg);
                                 let mut state = r.router.state.lock().await;
 
                                 // fill in peer info
@@ -257,6 +257,31 @@ impl Router {
         };
 
         // handle peer messages
+        // XXX
+        //
+        // There is a problem with this protocol. 
+        //
+        // *=====*              *=====*
+        // |  a  |              |  b  |
+        // *=====*              *=====*
+        //    |                    |
+        //    |                    |
+        //    |...... ping .......>|
+        //    |                    |
+        //    |<----- ping --------|
+        //    |                    |
+        //    |<----- pong --------|
+        // L #|                    |
+        // i #|..... message .....>| !DROP!
+        // s #|                    |
+        // t #|...... pong .......>|# L
+        // e #|                    |# i
+        // n #|                    |# s
+        //   #|                    |# t
+        //   #|                    |# e
+        //   #|                    |# n
+        // 
+        // XXX
         {
             let info = r.router.info.clone();
             let tx = tx.clone();
@@ -351,6 +376,7 @@ impl Router {
             }
         };
 
+
         // propagate prefix updates
         {
             let local = r.router.info.clone();
@@ -391,6 +417,7 @@ impl Router {
 
         // handle ddm messages
         {
+            let r = r.clone();
             let log = r.log.clone();
             let local = r.router.info.clone();
             let state = r.router.state.clone();
@@ -437,7 +464,7 @@ impl Router {
                                     log, local.name, "new prefix: {:?}", p);
 
                                 // don't add self routes
-                                if p.origin != r.router.info.name {
+                                if p.origin != local.name {
                                     // add the route to the local system
                                     for pfx in &p.prefixes {
 
@@ -462,8 +489,8 @@ impl Router {
                                 // update prefixes
                                 if !state.prefixes.contains(&p) {
                                     state.prefixes.insert(p.clone());
-                                    if r.router.info.kind == RouterKind::Transit ||
-                                        p.origin == r.router.info.name {
+                                    if local.kind == RouterKind::Transit ||
+                                        p.origin == local.name {
                                         // push update to other peers
                                         match pfupdate.send(p) {
                                             Ok(_) => {}
@@ -488,9 +515,58 @@ impl Router {
                 }
             }});
         }
+
+
+        Router::send_all_prefixes(r.clone(), port, tx.clone()).await
+
+
+    }
+
+    async fn send_all_prefixes<Platform>(
+        r: RouterRuntime<Platform>,
+        port: Port,
+        tx: Sender<DdmMessage>,
+    ) where
+        Platform: platform::Full
+    {
+
+        let prefixes = r.router.state.lock().await.prefixes.clone();
+        if prefixes.is_empty() {
+            return;
+        }
+        let log = r.log.clone();
+        let local = r.router.info.clone(); 
+
+        spawn(async move { 
+
+            let tx = tx.clone();
+            // send the new peer any prefixes we currently have
+            for prefix in &prefixes {
+                for _ in 1..10 {
+                    //TODO batch
+                    let msg = DdmMessage::Prefix(prefix.clone());
+                    match tx.send(msg).await {
+                        Ok(_) => {
+                            router_warn!(log, local.name, "PREFIX BOMB: {:?}", prefix);
+                            return
+                        },
+                        Err(e) => {
+                            router_warn!(log, local.name, "initial ddm prefix tx: {:?}", e);
+                            sleep(Duration::from_millis(1000)).await;
+                        }
+                    }
+                }
+
+            }
+
+            router_warn!(log, local.name,
+                "failed to initialize new peer on port {:?}", port);
+        });
+
     }
 
 }
+
 
 async fn handle_ping(
     local: RouterInfo,
@@ -522,14 +598,18 @@ where
 {
     router_trace!(r.log, r.router.info.name, "pong: {:?}", pong);
     let mut state = r.router.state.lock().await;
-    let mut prev = state.peers.get(&port);
+    let prev = state.peers.get(&port).clone();
     match prev {
-        Some(ref mut p) => {
+        Some(p) => {
             let mut ps = p.lock().await;
             let launch = ps.name == None;
             ps.name = Some(pong.sender);
             ps.kind = Some(pong.kind);
+            drop(ps);
             if launch {
+                drop(p);
+                drop(prev);
+                drop(state);
                 Router::run_ddm_io_sm(
                     r.clone(),
                     port,

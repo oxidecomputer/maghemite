@@ -5,6 +5,8 @@ use tokio::sync::mpsc::Sender;
 use dropshot::{
     endpoint,
     ConfigDropshot,
+    ConfigLogging,
+    ConfigLoggingLevel,
     ApiDescription,
     HttpServerStarter,
     RequestContext,
@@ -44,7 +46,7 @@ async fn ddm_peer(
 pub(crate) fn peer_handler(
     addr: Ipv6Addr, 
     tx: Arc::<Mutex::<Sender<PeerMessage>>>,
-    log: slog::Logger,
+    _log: slog::Logger,
 ) -> Result<HttpServer<PeerHandlerContext>, String> {
 
     let sa = SocketAddr::V6(
@@ -54,6 +56,14 @@ pub(crate) fn peer_handler(
         bind_address: sa,
         ..Default::default()
     };
+
+    // this logging gets real noisy with modest message exchange rates
+    let log =
+        ConfigLogging::StderrTerminal {
+            level: ConfigLoggingLevel::Error,
+        }
+        .to_logger("peer")
+        .map_err(|e| e.to_string())?;
 
     let mut api = ApiDescription::new();
     api.register(ddm_peer).unwrap();
