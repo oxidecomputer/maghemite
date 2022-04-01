@@ -318,9 +318,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.1.6"
+version = "3.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8c93436c21e4698bacadf42917db28b23017027a4deccb35dbe47a7e7840123"
+checksum = "c67e7973e74896f4bba06ca2dcfd28d54f9cb8c035e940a32b88ed48f5f5ecf2"
 dependencies = [
  "atty",
  "bitflags",
@@ -335,9 +335,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "3.1.4"
+version = "3.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da95d038ede1a964ce99f49cbe27a7fb538d1da595e4b4f70b8c8f338d17bf16"
+checksum = "a3aab4734e083b809aaf5794e14e756d1c798d2c69c7f7de7a09a2f5214993c1"
 dependencies = [
  "heck 0.4.0",
  "proc-macro-error",
@@ -1105,9 +1105,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.12"
+version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62eeb471aa3e3c9197aa4bfeabfe02982f6dc96f750486c0bb0009ac58b26d2b"
+checksum = "37a82c6d637fc9515a4694bbf1cb2457b79d81ce52b3108bdeea58b07dd34a57"
 dependencies = [
  "bytes 1.1.0",
  "fnv",
@@ -1118,7 +1118,7 @@ dependencies = [
  "indexmap",
  "slab",
  "tokio 1.17.0",
- "tokio-util 0.6.9",
+ "tokio-util 0.7.1",
  "tracing",
 ]
 
@@ -1268,7 +1268,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2 0.3.12",
+ "h2 0.3.13",
  "http",
  "http-body 0.4.4",
  "httparse",
@@ -1451,7 +1451,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/falcon#ee621efab21d504e9f30f4afb2c76d7a41898572"
 dependencies = [
  "anyhow",
- "clap 3.1.6",
+ "clap 3.1.7",
  "colored",
  "fs2",
  "futures",
@@ -1482,7 +1482,7 @@ dependencies = [
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#b6a18ce3a66a8f57c414f6ec4ce52ad3b7f2d638"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#0b5b1067b9da76eab8f34dec5fd47ef3048eeb88"
 dependencies = [
  "anyhow",
  "colored",
@@ -1499,7 +1499,7 @@ dependencies = [
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys#b6a18ce3a66a8f57c414f6ec4ce52ad3b7f2d638"
+source = "git+https://github.com/oxidecomputer/netadm-sys#0b5b1067b9da76eab8f34dec5fd47ef3048eeb88"
 dependencies = [
  "anyhow",
  "colored",
@@ -2020,9 +2020,9 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pkg-config"
-version = "0.3.24"
+version = "0.3.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58893f751c9b0412871a09abd62ecd2a00298c6c83befa223ef98c52aef40cbe"
+checksum = "1df8c4ec4b0627e53bdf214615ad287367e482558cf84b109250b37464dc03ae"
 
 [[package]]
 name = "polyval"
@@ -2385,7 +2385,7 @@ dependencies = [
  "encoding_rs",
  "futures-core",
  "futures-util",
- "h2 0.3.12",
+ "h2 0.3.13",
  "http",
  "http-body 0.4.4",
  "hyper 0.14.18",
@@ -3267,6 +3267,20 @@ dependencies = [
  "log",
  "pin-project-lite 0.2.8",
  "tokio 1.17.0",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0edfdeb067411dba2044da6d1cb2df793dd35add7888d73c16e3381ded401764"
+dependencies = [
+ "bytes 1.1.0",
+ "futures-core",
+ "futures-sink",
+ "pin-project-lite 0.2.8",
+ "tokio 1.17.0",
+ "tracing",
 ]
 
 [[package]]
