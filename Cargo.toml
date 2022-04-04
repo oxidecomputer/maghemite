@@ -4,6 +4,7 @@ members = [
     "lab",
     "icmpv6",
     "ddm",
+    "ddm2",
     "ddmadm",
     "ddm-admin-client",
     "ddm-local",
@@ -11,4 +12,5 @@ members = [
     "ddm-illumos",
     "console",
     "package",
+    "util",
 ]

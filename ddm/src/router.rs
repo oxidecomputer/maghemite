@@ -18,7 +18,7 @@ use crate::admin;
 use crate::platform;
 use crate::config::Config;
 use crate::protocol::{
-    RouterKind, DdmMessage, DdmPrefix, PeerMessage, PeerPing, PeerPong
+    RouterKind, DdmMessage, DdmPrefix, PeerMessage, Ping, Pong
 };
 use crate::{router_info, router_warn, router_error, router_trace, router_debug};
 use crate::port::Port;
@@ -289,7 +289,7 @@ impl Router {
             let r = r.clone();
 
             spawn(async move { loop {
-                    router_trace!(log, info.name, "waiting for pong");
+                    router_trace!(log, info.name, "waiting for peer message");
                     select! {
                         resp = rx.recv() => {
                             match resp {
@@ -297,6 +297,8 @@ impl Router {
                                     match msg {
                                         PeerMessage::Ping(ping) => {
                                             handle_ping(
+                                                r.clone(),
+                                                port,
                                                 info.clone(),
                                                 &ping,
                                                 &tx,
@@ -334,7 +336,7 @@ impl Router {
                 router_trace!(log, info.name, "sending ping");
 
                 let ping = PeerMessage::Ping(
-                    PeerPing{sender: info.name.clone()});
+                    Ping{sender: info.name.clone()});
 
                 match tx.send(ping).await {
                     Ok(_) => {},
@@ -568,18 +570,26 @@ impl Router {
 }
 
 
-async fn handle_ping(
+async fn handle_ping<Platform>(
+    r: RouterRuntime<Platform>,
+    port: Port,
     local: RouterInfo,
-    ping: &PeerPing,
+    ping: &Ping,
     tx: &Sender<PeerMessage>,
     log: &Logger
-) {
+) where
+    Platform: platform::Full
+{
     router_trace!(log, local.name, "ping: {:?}", ping);
-    let pong = PeerMessage::Pong(PeerPong{
+    let pong = PeerMessage::Pong(Pong{
         sender: local.name.clone(),
         origin: ping.sender.clone(),
         kind: local.kind,
     });
+    Router::run_ddm_io_sm(
+        r.clone(),
+        port,
+    ).await;
     match tx.send(pong).await {
         Ok(_) => { }
         Err(e) => {
@@ -591,7 +601,7 @@ async fn handle_ping(
 async fn handle_pong<Platform>(
     r: RouterRuntime<Platform>,
     port: Port,
-    pong: PeerPong,
+    pong: Pong,
 ) 
 where
     Platform: platform::Full
@@ -630,10 +640,6 @@ where
                 &pong.sender
             );
             drop(state);
-            Router::run_ddm_io_sm(
-                r.clone(),
-                port,
-            ).await;
         }
     }
 
@@ -747,7 +753,7 @@ mod test {
 
     use slog_term;
     use slog_async;
-    use slog::{info, Drain};
+    use slog::Drain;
 
     fn test_logger() -> slog::Logger {
         let decorator = slog_term::TermDecorator::new().build();

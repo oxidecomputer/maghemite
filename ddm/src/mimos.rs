@@ -295,7 +295,6 @@ mod test {
     use crate::mimos;
     use crate::port::{Port, PortState};
     use crate::platform::{Rdp, Ddm};
-    use crate::rdp::RdpMessage;
     use crate::protocol::{DdmMessage, DdmPrefix, RouterKind};
     use crate::net::Ipv6Prefix;
     use icmpv6::{ICMPv6Packet, RouterSolicitation, RDPMessage,};

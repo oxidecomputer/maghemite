@@ -84,7 +84,7 @@ impl Platform {
             )
         })?;
 
-        enable_v6_link_local(&name).map_err(|e| {
+        enable_v6_link_local(&name, "v6").map_err(|e| {
             Error::new(
                 ErrorKind::Other, 
                 format!("create port {}: {}", i, e.to_string()),

@@ -318,9 +318,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.1.7"
+version = "3.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c67e7973e74896f4bba06ca2dcfd28d54f9cb8c035e940a32b88ed48f5f5ecf2"
+checksum = "71c47df61d9e16dc010b55dba1952a57d8c215dbb533fd13cdd13369aac73b1c"
 dependencies = [
  "atty",
  "bitflags",
@@ -577,6 +577,7 @@ dependencies = [
 name = "ddm"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "common",
  "dropshot",
@@ -590,6 +591,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-async",
+ "slog-envlogger",
  "slog-term",
  "socket2 0.4.4",
  "thiserror",
@@ -644,6 +646,26 @@ dependencies = [
  "slog-term",
  "structopt",
  "tokio 1.17.0",
+]
+
+[[package]]
+name = "ddm2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dropshot",
+ "icmpv6",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
+ "schemars",
+ "serde",
+ "serde_json",
+ "slog",
+ "slog-async",
+ "slog-envlogger",
+ "slog-term",
+ "socket2 0.4.4",
+ "tokio 1.17.0",
+ "util",
 ]
 
 [[package]]
@@ -1448,10 +1470,10 @@ checksum = "efaa7b300f3b5fe8eb6bf21ce3895e1751d9665086af2d64b42f19701015ff4f"
 [[package]]
 name = "libfalcon"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon#ee621efab21d504e9f30f4afb2c76d7a41898572"
+source = "git+https://github.com/oxidecomputer/falcon#a81880f2d9aa3b0178226b41d1c00f0e5a83ffb0"
 dependencies = [
  "anyhow",
- "clap 3.1.7",
+ "clap 3.1.8",
  "colored",
  "fs2",
  "futures",
@@ -1482,7 +1504,7 @@ dependencies = [
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#0b5b1067b9da76eab8f34dec5fd47ef3048eeb88"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#5fadf7e270ff4ab713bb17fd5431aa1d49090498"
 dependencies = [
  "anyhow",
  "colored",
@@ -1499,7 +1521,7 @@ dependencies = [
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys#0b5b1067b9da76eab8f34dec5fd47ef3048eeb88"
+source = "git+https://github.com/oxidecomputer/netadm-sys#5fadf7e270ff4ab713bb17fd5431aa1d49090498"
 dependencies = [
  "anyhow",
  "colored",
@@ -2103,7 +2125,7 @@ dependencies = [
 [[package]]
 name = "progenitor"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/progenitor#75348207d7405db3371a98b5348bef3fbd0ef79e"
+source = "git+https://github.com/oxidecomputer/progenitor#bbf81dfe7d107302241f9eb37c74556ffb2854ac"
 dependencies = [
  "anyhow",
  "getopts",
@@ -2118,7 +2140,7 @@ dependencies = [
 [[package]]
 name = "progenitor-client"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/progenitor#75348207d7405db3371a98b5348bef3fbd0ef79e"
+source = "git+https://github.com/oxidecomputer/progenitor#bbf81dfe7d107302241f9eb37c74556ffb2854ac"
 dependencies = [
  "bytes 1.1.0",
  "futures-core",
@@ -2131,7 +2153,7 @@ dependencies = [
 [[package]]
 name = "progenitor-impl"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/progenitor#75348207d7405db3371a98b5348bef3fbd0ef79e"
+source = "git+https://github.com/oxidecomputer/progenitor#bbf81dfe7d107302241f9eb37c74556ffb2854ac"
 dependencies = [
  "convert_case",
  "getopts",
@@ -2153,7 +2175,7 @@ dependencies = [
 [[package]]
 name = "progenitor-macro"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/progenitor#75348207d7405db3371a98b5348bef3fbd0ef79e"
+source = "git+https://github.com/oxidecomputer/progenitor#bbf81dfe7d107302241f9eb37c74556ffb2854ac"
 dependencies = [
  "openapiv3",
  "proc-macro2",
@@ -2779,9 +2801,9 @@ dependencies = [
 
 [[package]]
 name = "slab"
-version = "0.4.5"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9def91fd1e018fe007022791f865d0ccc9b3a0d5001e01aabb8b40e46000afb5"
+checksum = "eb703cfe953bccee95685111adeedb76fabe4e97549a58d16f03ea7b9367bb32"
 
 [[package]]
 name = "slog"
@@ -3337,9 +3359,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-core"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa31669fa42c09c34d94d8165dd2012e8ff3c66aca50f3bb226b68f216f2706c"
+checksum = "90442985ee2f57c9e1b548ee72ae842f4a9a20e3f417cc38dbc5dc684d9bb4ee"
 dependencies = [
  "lazy_static",
 ]
@@ -3655,6 +3677,19 @@ name = "utf-8"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
+
+[[package]]
+name = "util"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
+ "slog",
+ "slog-async",
+ "slog-envlogger",
+ "slog-term",
+ "socket2 0.4.4",
+]
 
 [[package]]
 name = "uuid"

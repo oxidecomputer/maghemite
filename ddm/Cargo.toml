@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1"
 tokio = { version = "1.14", features = ["full"] }
 slog = "2.7"
 slog-term = "2.7"
 slog-async = "2.7"
+slog-envlogger = "2.2"
 dropshot = { git = "https://github.com/oxidecomputer/dropshot", branch = "main" }
 schemars = { version = "0.8.0", features = [ "uuid" ] }
 serde = "1.0"

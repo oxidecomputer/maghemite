@@ -5,6 +5,7 @@ pub mod router;
 pub mod mimos;
 pub mod local;
 pub mod platform;
+pub mod platform2;
 pub mod port;
 pub mod config;
 pub mod rdp;

@@ -32,12 +32,12 @@ impl std::str::FromStr  for RouterKind {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum PeerMessage {
-    Ping(PeerPing),
-    Pong(PeerPong),
+    Ping(Ping),
+    Pong(Pong),
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct PeerPing {
+pub struct Ping {
     pub sender: String,
     // TODO: include the serial of the last ddm messages received,
     // .     this way if the peer notices we are behind, it can resend us
@@ -48,7 +48,14 @@ pub struct PeerPing {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct PeerPong {
+pub struct Pong {
+    pub sender: String,
+    pub origin: String,
+    pub kind: RouterKind,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PingPong {
     pub sender: String,
     pub origin: String,
     pub kind: RouterKind,
