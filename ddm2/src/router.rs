@@ -245,7 +245,7 @@ mod tests {
         println!("routers running");
 
         //
-        // wait for peering
+        // wait for discovery
         //
         
         println!("sleeping");

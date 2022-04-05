@@ -1,3 +1,5 @@
+use std::net::{IpAddr, Ipv6Addr};
+
 use anyhow::Result;
 use slog::{self, Logger, Drain};
 use libnet::{
@@ -26,6 +28,12 @@ impl LabInterface {
             info: get_ipaddr_info(&format!("{}/v6", name))?,
         };
         Ok(LabInterface{name: name.into(), link, addr})
+    }
+    pub fn v6addr(&self) -> Option<Ipv6Addr> {
+        match self.addr.info.addr {
+            IpAddr::V6(a) => Some(a),
+            _ => None,
+        }
     }
 }
 

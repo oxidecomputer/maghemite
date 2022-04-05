@@ -104,6 +104,7 @@ mod tests {
         //
         // set up testlab interfaces
         //
+        
         let interfaces = testlab_x2("rdp1")?;
         let tx_ifx = interfaces[0].addr.info.index as u32;
         let rx_ifx = interfaces[1].addr.info.index as u32;
