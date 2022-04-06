@@ -24,7 +24,6 @@ use dropshot::{
     RequestContext,
     HttpResponseOk,
     HttpError,
-    HttpServer,
     TypedBody,
 };
 
@@ -208,7 +207,7 @@ impl Session {
         let mut api = ApiDescription::new();
         api.register(ping).unwrap();
 
-        let context = HandlerContext{host: self.host.clone(), state: self.state.clone()};
+        let context = HandlerContext{host: self.host.clone()};
 
         let server = HttpServerStarter::new(
             &config,
@@ -243,7 +242,6 @@ impl Drop for Session {
 
 struct HandlerContext {
     host: String,
-    state: Arc::<Mutex::<State>>,
 }
 
 #[endpoint {
