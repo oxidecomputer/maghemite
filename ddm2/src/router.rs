@@ -77,7 +77,8 @@ impl Router {
         Ok(Router{ log, config, state })
     }
 
-    pub async fn neighbors(&self) -> BTreeMap<Interface, Option::<NeighboringRouter>> {
+    pub async fn neighbors(&self) 
+    -> BTreeMap<Interface, Option::<NeighboringRouter>> {
         self.state.lock().await.interfaces.clone()
     }
 
@@ -324,7 +325,7 @@ mod tests {
 
         let log = util::test::logger();
         let r1 = Router::new(log.clone(), c1).expect("new router 1");
-        let r2 = Router::new(log.clone(), c2).expect("new router 1");
+        let r2 = Router::new(log.clone(), c2).expect("new router 2");
 
         //
         // run the routers
@@ -340,7 +341,7 @@ mod tests {
         //
         
         println!("sleeping");
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(2)).await;
         println!("done sleeping");
 
         //
@@ -380,6 +381,17 @@ mod tests {
         let p1 = r1.peer_status().await;
         assert_eq!(p1.len(), 1);
         assert_eq!(p1.get(&ifx1), Some(&Some(peer::Status::Active)));
+
+        //
+        // drop a peer and test expiration
+        //
+
+        drop(r2);
+        sleep(Duration::from_secs(5)).await;
+
+        let p1 = r1.peer_status().await;
+        assert_eq!(p1.len(), 1);
+        assert_eq!(p1.get(&ifx1), Some(&Some(peer::Status::Expired)));
 
 
         Ok(())
