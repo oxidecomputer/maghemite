@@ -30,6 +30,7 @@ use dropshot::{
 
 use crate::protocol::{Ping, Pong, RouterKind};
 
+#[derive(Clone)]
 pub struct Session {
     log: Logger,
     ifnum: i32,
@@ -37,8 +38,8 @@ pub struct Session {
     interval: u64,
     expire: u64,
     state: Arc::<Mutex::<State>>,
-    client_task: Option<JoinHandle<()>>,
-    server_task: Option<JoinHandle<()>>,
+    client_task: Option<Arc::<JoinHandle<()>>>,
+    server_task: Option<Arc::<JoinHandle<()>>>,
 
     host: String,
     server_addr: Ipv6Addr,
@@ -94,22 +95,13 @@ impl Session {
         // start ping server
         //
         
-        self.server_task = Some(self.start_server()?);
+        self.server_task = Some(Arc::new(self.start_server()?));
 
         //
         // start ping client
         //
         
-        self.client_task = Some(Self::run(
-            self.log.clone(),
-            self.ifnum,
-            self.addr,
-            self.interval,
-            self.expire,
-            self.host.clone(),
-            self.server_port,
-            self.state.clone(),
-        ));
+        self.client_task = Some(Arc::new(self.run()));
 
         Ok(())
     }
@@ -128,61 +120,45 @@ impl Session {
         }
     }
 
-    fn run(
-        log: Logger,
-        ifnum: i32,
-        addr: Ipv6Addr,
-        interval: u64,
-        expire: u64,
-        host: String,
-        server_port: u16,
-        state: Arc::<Mutex::<State>>,
-    ) -> JoinHandle<()> {
+    fn run(&self) -> JoinHandle<()> {
+        let session = self.clone();
         spawn(async move { 
             loop {
-                let pong = match Self::ping(
-                    &log, ifnum, addr, host.clone(), server_port).await {
+                let pong = match Self::ping(&session).await {
                     Ok(pong) => pong,
                     Err(e) => {
-                        warn!(log, "ping: {}", e);
-                        sleep(Duration::from_millis(interval)).await;
+                        warn!(session.log, "ping: {}", e);
+                        sleep(Duration::from_millis(session.interval)).await;
                         continue;
                     }
                 };
-                if pong.origin != host {
-                    warn!(log, "unexpected pong: {:#?}", pong);
-                    sleep(Duration::from_millis(interval)).await;
+                if pong.origin != session.host {
+                    warn!(session.log, "unexpected pong: {:#?}", pong);
+                    sleep(Duration::from_millis(session.interval)).await;
                     continue;
                 } 
-                state.lock().await.last_seen = Some(Instant::now());
-                sleep(Duration::from_millis(interval)).await;
+                session.state.lock().await.last_seen = Some(Instant::now());
+                sleep(Duration::from_millis(session.interval)).await;
             }
         })
     }
 
-    async fn ping(
-        log: &Logger,
-        ifnum: i32,
-        addr: Ipv6Addr, 
-        host: String,
-        server_port: u16,
-    ) -> Result<Pong, String> {
+    async fn ping(s: &Session) -> Result<Pong, String> {
 
         // XXX we need to use a custom hyper client here, and not a dropshot
         // generated client because hyper is the only rust client that supports
         // scoped ipv6 addresses. Dropshot uses reqwest internally which does
         // not support scoped ipv6 addresses.
 
-        let msg = Ping{sender: host};
+        let msg = Ping{sender: s.host.clone()};
 
         let json = serde_json::to_string(&msg)
             .map_err(|e| e.to_string())?;
 
-        let uri = format!(
-            "http://[{}%{}]:{}/ping",
-            addr,
-            ifnum,
-            server_port,
+        let uri = format!("http://[{}%{}]:{}/ping",
+            s.addr,
+            s.ifnum,
+            s.server_port,
         );
 
         let client = hyper::Client::new();
