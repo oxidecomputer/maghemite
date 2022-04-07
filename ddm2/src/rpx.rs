@@ -1,9 +1,11 @@
 // Router Prefix Exchange
+
 use std::net::{SocketAddrV6, Ipv6Addr};
 use std::sync::Arc;
 use std::collections::HashSet;
+use std::time::Duration;
 
-use tokio::{spawn, sync::Mutex, task::JoinHandle};
+use tokio::{spawn, time::timeout, sync::Mutex, task::JoinHandle};
 use slog::{warn, error};
 use dropshot::{
     endpoint,
@@ -86,15 +88,48 @@ async fn advertise_handler(
             );
         }
     }
-        
 
     Ok(HttpResponseOk(()))
 }
 
 
 pub async fn advertise(
-    _prefixes: &HashSet::<Ipv6Prefix>,
-    _dest: Ipv6Addr,
+    origin: String,
+    nexthop: Ipv6Addr,
+    prefixes: HashSet::<Ipv6Prefix>,
+    scope: i32,
+    dest: Ipv6Addr,
+    dest_port: u16,
+    serial: u64,
 ) -> Result<(), String> {
-    todo!();
+
+    let msg = Advertise{
+        origin,
+        nexthop,
+        prefixes,
+        serial,
+    };
+
+    let json = serde_json::to_string(&msg)
+        .map_err(|e| e.to_string())?;
+
+    let uri = format!("http://[{}%{}]:{}/ping",
+        dest,
+        scope,
+        dest_port,
+    );
+
+    let client = hyper::Client::new();
+    let req = hyper::Request::builder()
+        .method(hyper::Method::POST)
+        .uri(&uri)
+        .body(hyper::Body::from(json))
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.request(req);
+
+    match timeout(Duration::from_millis(250), resp).await {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("peer request timeout to {}: {}", uri, e)),
+    }
 }

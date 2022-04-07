@@ -1,12 +1,5 @@
 // DDM Peering
 
-// TODO(you are here)
-//
-// - Plumb in dropshot server
-// - Generate clients
-// - Implement 3-way peering handshake
-// - Implement keepalives
-
 use std::net::{SocketAddrV6, Ipv6Addr};
 use std::time::{Instant, Duration};
 use std::sync::Arc;
@@ -178,7 +171,7 @@ impl Session {
                     e,
                 )),
             },
-            Err(_) => return Err(format!("peer request timeout to {}", uri)),
+            Err(e) => return Err(format!("peer request timeout to {}: {}", uri, e)),
         };
 
         let body = match response.body_mut().data().await {

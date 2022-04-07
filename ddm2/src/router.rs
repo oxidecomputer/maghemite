@@ -207,8 +207,19 @@ impl Router {
     pub async fn advertise(&self, prefixes: HashSet::<Ipv6Prefix>)
     -> Result<(), String>{
 
-        let interfaces = self.state.lock().await.interfaces.clone();
-        for (_, rtr) in interfaces {
+        // get exclusive access to internal state
+        let mut state = self.state.lock().await;
+
+        // add the provided prefixes to our local prefixes
+        state.local_prefixes.extend(prefixes.iter());
+
+        // clone out the current interfaces so we can drop our lock on internal
+        // state
+        let interfaces = state.interfaces.clone();
+        drop(state);
+
+        // advertise the given prefixes to our peers
+        for (ifx, rtr) in interfaces {
 
             let rtr = match rtr {
                 Some(rtr) => rtr,
@@ -221,7 +232,15 @@ impl Router {
                 _ => continue,
             }
 
-            rpx::advertise(&prefixes, rtr.addr).await?;
+            rpx::advertise(
+                self.config.name.clone(),
+                ifx.ll_addr,
+                prefixes.clone(),
+                ifx.ifnum,
+                rtr.addr,
+                self.config.rpx_port,
+                0, //XXX todo, serial
+            ).await?;
 
         }
 
