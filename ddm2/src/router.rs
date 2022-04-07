@@ -1,7 +1,7 @@
 // DDM Router Implementation
 
 use std::net::{IpAddr, Ipv6Addr};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use std::convert::TryFrom;
@@ -13,6 +13,8 @@ use slog::{self, error, warn, Logger};
 
 use crate::rdp;
 use crate::peer;
+use crate::rpx;
+use crate::net::Ipv6Prefix;
 
 pub struct Router { 
     config: Config,
@@ -20,11 +22,28 @@ pub struct Router {
     log: Logger,
 }
 
-struct RouterState {
+pub(crate) struct RouterState {
     /// Interface numbers for the IP interfaces this router will peer over. The
     /// NeighboringRouter entry value for each interface index is populated when
     /// a neighbor on that interface is discovered.
-    interfaces: BTreeMap::<Interface, Option::<NeighboringRouter>>,
+    pub(crate) interfaces: BTreeMap::<Interface, Option::<NeighboringRouter>>,
+
+    /// A set of prefixes that have been advertised to this router, indexed by
+    /// nexthop
+    pub(crate) remote_prefixes: BTreeMap::<Ipv6Addr, HashSet::<Ipv6Prefix>>,
+
+    /// A set of prefixes that this router is advertising.
+    pub(crate) local_prefixes: HashSet::<Ipv6Prefix>,
+}
+
+impl Default for RouterState {
+    fn default() -> Self {
+        RouterState {
+            interfaces: BTreeMap::new(),
+            remote_prefixes: BTreeMap::new(),
+            local_prefixes: HashSet::new(),
+        }
+    }
 }
 
 
@@ -50,6 +69,12 @@ pub struct Config {
 
     /// What port to use when contacting peers.
     pub peer_port: u16,
+
+    /// What port to use for router prefix exchange
+    pub rpx_port: u16,
+
+    /// What address to listen on for router prefix exchange messages
+    pub rpx_addr: Ipv6Addr,
 }
 
 impl Default for Config {
@@ -61,6 +86,8 @@ impl Default for Config {
             peer_interval: 50,
             peer_expire: 3000,
             peer_port: 0x1dd0,
+            rpx_port: 0x1dd1,
+            rpx_addr: Ipv6Addr::UNSPECIFIED,
         }
     }
 }
@@ -73,7 +100,9 @@ impl Router {
             let info = get_ipaddr_info(&name).map_err(|e| e.to_string())?;
             interfaces.insert(info.try_into()? , None);
         }
-        let state = Arc::new(Mutex::new(RouterState{ interfaces }));
+        let state = Arc::new(Mutex::new(
+            RouterState{interfaces, ..Default::default()}
+        ));
         Ok(Router{ log, config, state })
     }
 
@@ -98,6 +127,11 @@ impl Router {
 
     pub async fn run(&self) -> Result<(), String> {
         self.start_discovery().await;
+        rpx::start_server(
+            self.config.rpx_addr, 
+            self.config.rpx_port,
+            self.state.clone(),
+        )?;
         Ok(())
     }
 
@@ -168,6 +202,30 @@ impl Router {
                 }
             }
         }
+    }
+
+    pub async fn advertise(&self, prefixes: HashSet::<Ipv6Prefix>)
+    -> Result<(), String>{
+
+        let interfaces = self.state.lock().await.interfaces.clone();
+        for (_, rtr) in interfaces {
+
+            let rtr = match rtr {
+                Some(rtr) => rtr,
+                None => continue,
+            };
+
+            // only advertise to active peers
+            match rtr.session.status().await {
+                peer::Status::Active => {}
+                _ => continue,
+            }
+
+            rpx::advertise(&prefixes, rtr.addr).await?;
+
+        }
+
+        todo!();
     }
 
 }

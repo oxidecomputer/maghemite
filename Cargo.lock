@@ -665,6 +665,7 @@ dependencies = [
  "slog-envlogger",
  "slog-term",
  "socket2 0.4.4",
+ "thiserror",
  "tokio 1.17.0",
  "util",
 ]

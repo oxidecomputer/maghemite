@@ -1,5 +1,9 @@
+use std::collections::HashSet;
+use std::net::Ipv6Addr;
+
 use schemars::JsonSchema;
 use serde::{Serialize, Deserialize};
+use crate::net::Ipv6Prefix;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 pub enum RouterKind {
@@ -25,3 +29,10 @@ pub struct Pong {
     pub kind: RouterKind,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Advertise {
+    pub origin: String,
+    pub nexthop: Ipv6Addr,
+    pub prefixes: HashSet::<Ipv6Prefix>,
+    pub serial: u64,
+}

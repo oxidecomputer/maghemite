@@ -9,6 +9,7 @@ tokio = { version = "1.14", features = ["full"] }
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
 socket2 = { version = "0.4", features = ["all"] }
 anyhow = "1"
+thiserror = "1"
 util = { path = "../util" }
 slog = "2.7"
 slog-term = "2.7"
