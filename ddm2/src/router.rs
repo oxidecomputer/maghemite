@@ -16,10 +16,11 @@ use crate::peer;
 use crate::rpx;
 use crate::net::Ipv6Prefix;
 
+#[derive(Clone)]
 pub struct Router { 
-    config: Config,
-    state: Arc::<Mutex::<RouterState>>,
-    log: Logger,
+    pub config: Config,
+    pub(crate) state: Arc::<Mutex::<RouterState>>,
+    pub(crate) log: Logger,
 }
 
 pub(crate) struct RouterState {
@@ -130,7 +131,7 @@ impl Router {
         rpx::start_server(
             self.config.rpx_addr, 
             self.config.rpx_port,
-            self.state.clone(),
+            self.clone(),
         )?;
         Ok(())
     }
@@ -332,8 +333,8 @@ impl Drop for Solicitor {
 
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Interface {
-    ifnum: i32,
-    ll_addr: Ipv6Addr,
+    pub ifnum: i32,
+    pub ll_addr: Ipv6Addr,
 }
 
 impl TryFrom<&IpInfo> for Interface {

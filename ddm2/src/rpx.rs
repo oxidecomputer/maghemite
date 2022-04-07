@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::collections::HashSet;
 use std::time::Duration;
 
-use tokio::{spawn, time::timeout, sync::Mutex, task::JoinHandle};
+use tokio::{spawn, time::timeout, task::JoinHandle};
 use slog::{warn, error};
 use dropshot::{
     endpoint,
@@ -22,16 +22,17 @@ use dropshot::{
 
 use crate::net::Ipv6Prefix;
 use crate::protocol::Advertise;
-use crate::router::RouterState;
+use crate::router::Router;
+use crate::peer;
 
 struct HandlerContext {
-    state: Arc::<Mutex::<RouterState>>,
+    router: Router,
 }
 
 pub(crate) fn start_server(
     addr: Ipv6Addr, 
     port: u16,
-    state: Arc::<Mutex::<RouterState>>,
+    router: Router,
 ) -> Result<JoinHandle<()>, String> {
 
     let sa = SocketAddrV6::new(addr, port, 0, 0);
@@ -47,7 +48,7 @@ pub(crate) fn start_server(
     let mut api = ApiDescription::new();
     api.register(advertise_handler).unwrap();
 
-    let context = HandlerContext{state};
+    let context = HandlerContext{router};
 
     let server = HttpServerStarter::new(
         &config,
@@ -74,8 +75,29 @@ async fn advertise_handler(
 ) -> Result<HttpResponseOk<()>, HttpError> {
 
     let context = ctx.context();
-    let mut router_state = context.state.lock().await;
+    let router = &context.router;
+    let mut router_state = router.state.lock().await;
     let advertisement = rq.into_inner();
+
+    let mut found = false;
+    let peers = router.peer_status().await;
+    for (ifx, status) in peers.iter() {
+        if ifx.ll_addr == advertisement.nexthop {
+            found = true;
+            if status != &Some(peer::Status::Active) {
+                return Err(
+                    HttpError::for_bad_request(
+                        None, "peer not active for nexthop".into())
+                )
+            }
+            break;
+        }
+    }
+    if !found {
+        return Err(
+            HttpError::for_bad_request(None, "peer not found for nexthop".into())
+        );
+    }
 
     match router_state.remote_prefixes.get_mut(&advertisement.nexthop) {
         Some(ref mut set) => {
