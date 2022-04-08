@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::collections::HashSet;
 use std::time::Duration;
 
+use hyper::body::HttpBody;
 use tokio::{spawn, time::timeout, task::JoinHandle};
 use slog::{warn, error};
 use dropshot::{
@@ -21,8 +22,8 @@ use dropshot::{
 };
 
 use crate::net::Ipv6Prefix;
-use crate::protocol::Advertise;
-use crate::router::Router;
+use crate::protocol::{Advertise, Solicit};
+use crate::router::{Interface, Router};
 use crate::peer;
 
 struct HandlerContext {
@@ -47,6 +48,7 @@ pub(crate) fn start_server(
 
     let mut api = ApiDescription::new();
     api.register(advertise_handler).unwrap();
+    api.register(solicit_handler).unwrap();
 
     let context = HandlerContext{router};
 
@@ -65,6 +67,18 @@ pub(crate) fn start_server(
     }))
 }
 
+async fn ensure_peer_active(router: &Router, addr: Ipv6Addr) -> Result<Interface, HttpError> {
+    match router.peer_status_for(addr).await {
+        Some((ifx, peer::Status::Active)) => Ok(ifx),
+        Some(_) => Err(HttpError::for_bad_request(
+                None, "peer not active for nexthop: {}".into()
+        )),
+        None => Err(HttpError::for_bad_request(
+                None, "peer not found for nexthop".into()
+        )),
+    }
+}
+
 #[endpoint {
     method = POST,
     path = "/advertise"
@@ -76,66 +90,79 @@ async fn advertise_handler(
 
     let context = ctx.context();
     let router = &context.router;
-    let mut router_state = router.state.lock().await;
     let advertisement = rq.into_inner();
 
-    let mut found = false;
-    let peers = router.peer_status().await;
-    for (ifx, status) in peers.iter() {
-        if ifx.ll_addr == advertisement.nexthop {
-            found = true;
-            if status != &Some(peer::Status::Active) {
-                return Err(
-                    HttpError::for_bad_request(
-                        None, "peer not active for nexthop".into())
-                )
-            }
-            break;
-        }
-    }
-    if !found {
-        return Err(
-            HttpError::for_bad_request(None, "peer not found for nexthop".into())
-        );
-    }
+    ensure_peer_active(&router, advertisement.nexthop).await?;
 
-    match router_state.remote_prefixes.get_mut(&advertisement.nexthop) {
-        Some(ref mut set) => {
-            set.extend(advertisement.prefixes.iter());
-        }
-        None => {
-            router_state.remote_prefixes.insert(
-                advertisement.nexthop,
-                advertisement.prefixes.clone()
-            );
-        }
-    }
+    router.add_remote_prefixes(
+        advertisement.nexthop,
+        advertisement.prefixes,
+    ).await;
 
     Ok(HttpResponseOk(()))
 }
 
+/// Get all prefixes available through this router in a single advertisement.
+#[endpoint {
+    method = POST,
+    path = "/solicit",
+}]
+async fn solicit_handler(
+    ctx: Arc::<RequestContext::<HandlerContext>>,
+    rq: TypedBody<Solicit>,
+) -> Result<HttpResponseOk<Advertise>, HttpError> {
+
+    let context = ctx.context();
+    let router = &context.router;
+    let router_state = router.state.lock().await;
+    let locals = router_state.local_prefixes.clone();
+    let remotes = router_state.remote_prefixes.clone();
+    drop(router_state);
+
+    let solicit = rq.into_inner();
+
+    let ifx = match ensure_peer_active(&router, solicit.src).await {
+        Ok(ifx) => ifx,
+        Err(e) => {
+           warn!(router.log, "solicit inactive peer {}: {}", solicit.src, e);
+           return Err(e);
+        }
+    };
+
+    let mut prefixes = locals;
+    for (_, x) in remotes {
+        prefixes.extend(x.iter());
+    }
+
+    let result = Advertise{
+        prefixes,
+        nexthop: ifx.ll_addr,
+    };
+
+    println!("RESULT: {:#?}", result);
+
+    Ok(HttpResponseOk(result))
+
+}
+
 
 pub async fn advertise(
-    origin: String,
     nexthop: Ipv6Addr,
     prefixes: HashSet::<Ipv6Prefix>,
     scope: i32,
     dest: Ipv6Addr,
     dest_port: u16,
-    serial: u64,
 ) -> Result<(), String> {
 
     let msg = Advertise{
-        origin,
         nexthop,
         prefixes,
-        serial,
     };
 
     let json = serde_json::to_string(&msg)
         .map_err(|e| e.to_string())?;
 
-    let uri = format!("http://[{}%{}]:{}/ping",
+    let uri = format!("http://[{}%{}]:{}/advertise",
         dest,
         scope,
         dest_port,
@@ -154,4 +181,61 @@ pub async fn advertise(
         Ok(_) => Ok(()),
         Err(e) => Err(format!("peer request timeout to {}: {}", uri, e)),
     }
+}
+
+pub async fn solicit(
+    src: Ipv6Addr,
+    scope: i32,
+    dest: Ipv6Addr,
+    dest_port: u16,
+) -> Result<Advertise, String> {
+
+    let msg = Solicit{src};
+
+    let json = serde_json::to_string(&msg)
+        .map_err(|e| e.to_string())?;
+
+    let uri = format!("http://[{}%{}]:{}/solicit",
+        dest,
+        scope,
+        dest_port,
+    );
+
+    let client = hyper::Client::new();
+    let req = hyper::Request::builder()
+        .method(hyper::Method::POST)
+        .uri(&uri)
+        .body(hyper::Body::from(json))
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.request(req);
+
+    let mut response = match timeout(Duration::from_millis(250), resp).await {
+        Ok(resp) => match resp {
+            Ok(r) => {
+                match r.status() {
+                    hyper::StatusCode::OK => r,
+                    code => {
+                        return Err(format!("http response code: {}", code));
+                    }
+                }
+            }
+            Err(e) => return Err(format!(
+                "hyper send request to {}: {}",
+                &uri,
+                e,
+            )),
+        },
+        Err(e) => return Err(format!("peer request timeout to {}: {}", uri, e)),
+    };
+
+    let body = match response.body_mut().data().await {
+        Some(body) => body.map_err(|e| e.to_string())?,
+        None => return Err("no body found".to_string()),
+    };
+
+    let advertisement: Advertise = serde_json::from_slice(body.as_ref())
+        .map_err(|e| e.to_string())?;
+
+    Ok(advertisement)
 }

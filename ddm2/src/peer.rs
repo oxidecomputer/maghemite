@@ -5,7 +5,7 @@ use std::time::{Instant, Duration};
 use std::sync::Arc;
 
 use tokio::{spawn, time::{sleep, timeout}, sync::Mutex, task::JoinHandle};
-use slog::{Logger, warn, error};
+use slog::{Logger, info, warn, error};
 use hyper::body::HttpBody;
 use dropshot::{
     endpoint,
@@ -20,7 +20,7 @@ use dropshot::{
     TypedBody,
 };
 
-use crate::protocol::{Ping, Pong, RouterKind};
+use crate::protocol::{Hail, Response, RouterKind};
 
 #[derive(Clone)]
 pub struct Session {
@@ -36,21 +36,31 @@ pub struct Session {
     host: String,
     server_addr: Ipv6Addr,
     server_port: u16,
+
+    router_kind: RouterKind,
 }
 
 pub struct State {
     last_seen: Option<Instant>,
+    hail_response_sent: bool,
+    hail_response_received: bool,
 }
 
 impl State {
     fn new() -> Self {
-        State{ last_seen: None }
+        State{
+            last_seen: None,
+            hail_response_sent: false,
+            hail_response_received: false,
+        }
     }
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Status {
     NoContact,
+    HailResponseSent,
+    HailResponseReceived,
     Active,
     Expired,
 }
@@ -65,6 +75,7 @@ impl Session {
         host: String,
         server_addr: Ipv6Addr,
         server_port: u16,
+        router_kind: RouterKind,
     ) -> Self {
         Session{
             log,
@@ -78,19 +89,20 @@ impl Session {
             host,
             server_addr,
             server_port,
+            router_kind,
         }
     }
 
     pub async fn start(&mut self) -> Result<(), String> {
 
         //
-        // start ping server
+        // start peering server
         //
         
         self.server_task = Some(Arc::new(self.start_server()?));
 
         //
-        // start ping client
+        // start peering client
         //
         
         self.client_task = Some(Arc::new(self.run()));
@@ -116,38 +128,45 @@ impl Session {
         let session = self.clone();
         spawn(async move { 
             loop {
-                let pong = match Self::ping(&session).await {
-                    Ok(pong) => pong,
-                    Err(e) => {
-                        warn!(session.log, "ping: {}", e);
-                        sleep(Duration::from_millis(session.interval)).await;
-                        continue;
-                    }
-                };
-                if pong.origin != session.host {
-                    warn!(session.log, "unexpected pong: {:#?}", pong);
-                    sleep(Duration::from_millis(session.interval)).await;
-                    continue;
-                } 
-                session.state.lock().await.last_seen = Some(Instant::now());
+                match Self::step(&session).await {
+                    Ok(_) => {},
+                    Err(e) => warn!(session.log, "{}", e),
+                }
                 sleep(Duration::from_millis(session.interval)).await;
             }
         })
     }
 
-    async fn ping(s: &Session) -> Result<Pong, String> {
+    async fn step(session: &Session) -> Result<(), String> {
+        let response = match Self::hail(&session).await {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(format!("hail: {}", e));
+            }
+        };
+        if response.origin != session.host {
+            return Err(format!("unexpected response: {:#?}", response));
+        } 
+
+        let mut state = session.state.lock().await;
+        state.last_seen = Some(Instant::now());
+        state.hail_response_received = true;
+        Ok(())
+    }
+
+    async fn hail(s: &Session) -> Result<Response, String> {
 
         // XXX we need to use a custom hyper client here, and not a dropshot
         // generated client because hyper is the only rust client that supports
         // scoped ipv6 addresses. Dropshot uses reqwest internally which does
         // not support scoped ipv6 addresses.
 
-        let msg = Ping{sender: s.host.clone()};
+        let msg = Hail{sender: s.host.clone(), router_kind: s.router_kind};
 
         let json = serde_json::to_string(&msg)
             .map_err(|e| e.to_string())?;
 
-        let uri = format!("http://[{}%{}]:{}/ping",
+        let uri = format!("http://[{}%{}]:{}/hail",
             s.addr,
             s.ifnum,
             s.server_port,
@@ -164,7 +183,7 @@ impl Session {
 
         let mut response = match timeout(Duration::from_millis(250), resp).await {
             Ok(resp) => match resp {
-                Ok(pong) => pong,
+                Ok(r) => r,
                 Err(e) => return Err(format!(
                     "hyper send request to {}: {}",
                     &uri,
@@ -179,10 +198,10 @@ impl Session {
             None => return Err("no body found".to_string()),
         };
 
-        let pong: Pong = serde_json::from_slice(body.as_ref())
+        let response: Response = serde_json::from_slice(body.as_ref())
             .map_err(|e| e.to_string())?;
 
-        Ok(pong)
+        Ok(response)
     }
 
     fn start_server(&self) -> Result<JoinHandle<()>, String> {
@@ -198,9 +217,9 @@ impl Session {
             .map_err(|e| e.to_string())?;
 
         let mut api = ApiDescription::new();
-        api.register(ping).unwrap();
+        api.register(hail).unwrap();
 
-        let context = HandlerContext{host: self.host.clone()};
+        let context = HandlerContext{session: self.clone()};
 
         let server = HttpServerStarter::new(
             &config,
@@ -209,6 +228,9 @@ impl Session {
             &log,
         ).map_err(|e| format!("new peer dropshot: {}", e))?;
 
+        info!(self.log, "peer: listening on {}", sa);
+
+        let log = self.log.clone();
         Ok(spawn(async move {
             match server.start().await {
                 Ok(_) => warn!(log, "peer: unexpected server exit"),
@@ -234,24 +256,27 @@ impl Drop for Session {
 // Dropshot endpoints =========================================================
 
 struct HandlerContext {
-    host: String,
+    session: Session,
 }
 
 #[endpoint {
     method = POST,
-    path = "/ping"
+    path = "/hail"
 }]
-async fn ping(
+async fn hail(
     ctx: Arc::<RequestContext::<HandlerContext>>,
-    rq: TypedBody<Ping>,
-) -> Result<HttpResponseOk<Pong>, HttpError> {
+    rq: TypedBody<Hail>,
+) -> Result<HttpResponseOk<Response>, HttpError> {
 
     let context = ctx.context();
+    let session = &context.session;
 
-    Ok(HttpResponseOk(Pong{
-        sender: context.host.clone(),
+    session.state.lock().await.hail_response_sent = true;
+
+    Ok(HttpResponseOk(Response{
+        sender: session.host.clone(),
         origin: rq.into_inner().sender,
-        kind: RouterKind::Transit,
+        router_kind: session.router_kind,
     }))
 }
 
@@ -264,6 +289,8 @@ mod tests {
     use anyhow::Result;
     use util::test::testlab_x2;
     use tokio::time::sleep;
+
+    use crate::protocol::RouterKind;
 
     use super::*;
 
@@ -290,22 +317,24 @@ mod tests {
             log.clone(),
             if0.addr.info.index,
             if1_v6,
-            50,
+            500,
             3000,
             "s1".into(),
             if0_v6,
             0x1dd0,
+            RouterKind::Server,
         );
 
         let mut s2 = Session::new(
             log.clone(),
             if1.addr.info.index,
             if0_v6,
-            50,
+            500,
             3000,
             "s1".into(),
             if1_v6,
             0x1dd0,
+            RouterKind::Server,
         );
 
         assert_eq!(s1.status().await, Status::NoContact);
@@ -322,15 +351,17 @@ mod tests {
         // wait for peering
         //
         
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(5)).await;
 
         assert_eq!(s1.status().await, Status::Active);
         assert_eq!(s2.status().await, Status::Active);
+        println!("peering ok");
 
         //
         // drop a peer and test expiration
         //
 
+        println!("testing expiration");
         drop(s2);
         sleep(Duration::from_millis(5000)).await;
         assert_eq!(s1.status().await, Status::Expired);

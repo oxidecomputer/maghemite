@@ -9,12 +9,13 @@ use std::convert::TryFrom;
 use tokio::{sync::Mutex, spawn, time::sleep};
 use libnet::{IpInfo, get_ipaddr_info};
 use icmpv6::{ICMPv6Packet, RouterSolicitation};
-use slog::{self, error, warn, Logger};
+use slog::{self, trace, error, warn, Logger};
 
 use crate::rdp;
 use crate::peer;
 use crate::rpx;
 use crate::net::Ipv6Prefix;
+use crate::protocol::RouterKind;
 
 #[derive(Clone)]
 pub struct Router { 
@@ -74,8 +75,8 @@ pub struct Config {
     /// What port to use for router prefix exchange
     pub rpx_port: u16,
 
-    /// What address to listen on for router prefix exchange messages
-    pub rpx_addr: Ipv6Addr,
+    /// The kind of router this is.
+    pub router_kind: RouterKind,
 }
 
 impl Default for Config {
@@ -88,7 +89,7 @@ impl Default for Config {
             peer_expire: 3000,
             peer_port: 0x1dd0,
             rpx_port: 0x1dd1,
-            rpx_addr: Ipv6Addr::UNSPECIFIED,
+            router_kind: RouterKind::Server,
         }
     }
 }
@@ -126,13 +127,115 @@ impl Router {
         result
     }
 
+    /// Get the status for a peer with the specified address
+    pub async fn peer_status_for(&self, addr: Ipv6Addr) -> Option<(Interface, peer::Status)> {
+
+        for (ifx, nbr) in self.state.lock().await.interfaces.clone() {
+            match nbr {
+                Some(nbr) => {
+                    if nbr.addr == addr {
+                        return Some((ifx, nbr.session.status().await));
+                    }
+                    continue
+                }
+                None => return None,
+            }
+        }
+        None
+    }
+
     pub async fn run(&self) -> Result<(), String> {
+        self.start_rpx().await?;
         self.start_discovery().await;
-        rpx::start_server(
-            self.config.rpx_addr, 
+        self.initial_solicit().await;
+        Ok(())
+    }
+
+    pub async fn start_rpx(&self) -> Result<(), String> {
+
+        let s = self.state.lock().await;
+        let interfaces : Vec<Interface> = s
+            .interfaces
+            .keys()
+            .map(|k| *k)
+            .collect();
+        drop(s);
+
+        for i in interfaces {
+            rpx::start_server(
+                i.ll_addr,
+                self.config.rpx_port,
+                self.clone(),
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// for each interface, wait until the peering session is active and then
+    /// solicit all the routes from that peer.
+    async fn initial_solicit(&self) {
+
+        trace!(self.log, "initial solicit: cloning ifxs");
+        let interfaces = self.state.lock().await.interfaces.clone();
+        trace!(self.log, "initial solicit: cloned ifxs");
+        for (ifx, _) in interfaces {
+            let rtr = self.clone();
+            spawn(async move { loop {
+                // get an updated copy of the neighbor
+                let nbr = rtr.state.lock().await.interfaces.get(&ifx).unwrap().clone();
+                match nbr {
+                    Some(ref nbr) => match nbr.session.status().await {
+                        peer::Status::Active => {
+                            trace!(rtr.log, "soliciting {} on {:?}", nbr.addr, ifx);
+                            match rtr.solicit(ifx, nbr.addr).await {
+                                Ok(_) => return,
+                                Err(e) => {
+                                    warn!(rtr.log, "solicit failed: {}", e);
+                                }
+                            }
+                        }
+                        _ => { 
+                            trace!(rtr.log, "initial_solicit: peer not active on {:?}", ifx);
+                        }
+                    }
+                    None => { 
+                        trace!(rtr.log, "initial_solicit: no peer on {:?}", ifx);
+                    }
+                };
+                sleep(Duration::from_millis(rtr.config.peer_interval)).await;
+            }});
+        }
+
+    }
+
+    pub async fn add_remote_prefixes(&self, nexthop: Ipv6Addr, prefixes: HashSet::<Ipv6Prefix>) {
+        let mut router_state = self.state.lock().await;
+        match router_state.remote_prefixes.get_mut(&nexthop) {
+            Some(ref mut set) => {
+                set.extend(prefixes.iter());
+            }
+            None => {
+                router_state.remote_prefixes.insert(nexthop, prefixes.clone());
+            }
+        }
+    }
+
+    async fn solicit(&self, ifx: Interface, dst: Ipv6Addr) 
+    -> Result<(), String> {
+
+        let advertisement = rpx::solicit(
+            ifx.ll_addr,
+            ifx.ifnum,
+            dst,
             self.config.rpx_port,
-            self.clone(),
-        )?;
+        ).await?;
+
+        self.add_remote_prefixes(
+            advertisement.nexthop,
+            advertisement.prefixes,
+        ).await;
+
         Ok(())
     }
 
@@ -178,6 +281,7 @@ impl Router {
                         config.name.clone(),
                         interface.ll_addr,
                         config.peer_port,
+                        config.router_kind,
                     );
                     match session.start().await {
                         Ok(_) => {},
@@ -234,18 +338,29 @@ impl Router {
             }
 
             rpx::advertise(
-                self.config.name.clone(),
                 ifx.ll_addr,
                 prefixes.clone(),
                 ifx.ifnum,
                 rtr.addr,
                 self.config.rpx_port,
-                0, //XXX todo, serial
             ).await?;
 
         }
 
-        todo!();
+        Ok(())
+    }
+
+    pub async fn nexthops(&self, prefix: Ipv6Prefix) -> HashSet::<Ipv6Addr> {
+
+        let mut result = HashSet::new();
+        let remotes = self.state.lock().await.remote_prefixes.clone();
+        for (nexthop, prefixes) in remotes {
+            if prefixes.contains(&prefix) {
+                result.insert(nexthop);
+            }
+        }
+
+        result
     }
 
 }
@@ -368,14 +483,16 @@ mod tests {
 
     use std::time::Duration;
     use std::net::IpAddr;
+    use std::str::FromStr;
 
     use anyhow::Result;
     use util::test::testlab_x2;
     use tokio::time::sleep;
     use super::*;
 
+    /// Discover Peer Exchange
     #[tokio::test]
-    async fn rs_discover_and_peer() -> Result<()> {
+    async fn rs_dpx() -> Result<()> {
 
         //
         // set up testlab interfaces
@@ -392,12 +509,16 @@ mod tests {
         let c1 = Config{
             name: "r1".into(),
             interfaces: vec![if1],
+            peer_interval: 50,
+            peer_expire: 10000,
             ..Default::default()
         };
 
         let c2 = Config{
             name: "r2".into(),
             interfaces: vec![if2],
+            peer_interval: 50,
+            peer_expire: 10000,
             ..Default::default()
         };
 
@@ -415,11 +536,25 @@ mod tests {
         println!("routers running");
 
         //
+        // advertise some routes
+        //
+
+        let pfx1 = Ipv6Prefix::from_str("fd00:1::/64").expect("parse prefix a1");
+        let mut a1 = HashSet::new();
+        a1.insert(pfx1);
+        r1.advertise(a1).await.expect("advertise from r1");
+
+        let pfx2 = Ipv6Prefix::from_str("fd00:2::/64").expect("parse prefix a2");
+        let mut a2 = HashSet::new();
+        a2.insert(pfx2);
+        r2.advertise(a2).await.expect("advertise from a2");
+
+        //
         // wait for discovery
         //
         
         println!("sleeping");
-        sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(5)).await;
         println!("done sleeping");
 
         //
@@ -459,6 +594,28 @@ mod tests {
         let p1 = r1.peer_status().await;
         assert_eq!(p1.len(), 1);
         assert_eq!(p1.get(&ifx1), Some(&Some(peer::Status::Active)));
+
+        let p2 = r2.peer_status().await;
+        assert_eq!(p2.len(), 1);
+        assert_eq!(p2.get(&ifx2), Some(&Some(peer::Status::Active)));
+
+        //
+        // assert expected prefix state
+        //
+        
+        sleep(Duration::from_secs(5)).await;
+
+        // router1 should have router2's link-local address as a nexthop for
+        // fd00:2::/64
+        let nexthops = r1.nexthops(pfx2).await;
+        println!("{:?}", nexthops);
+        assert!(nexthops.contains(&ifx2.ll_addr));
+
+        // router2 should have router1's link-local address as a nexthop for
+        // fd00:1::/64
+        let nexthops = r2.nexthops(pfx1).await;
+        println!("{:?}", nexthops);
+        assert!(nexthops.contains(&ifx1.ll_addr));
 
         //
         // drop a peer and test expiration

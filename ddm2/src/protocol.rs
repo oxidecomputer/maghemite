@@ -12,27 +12,29 @@ pub enum RouterKind {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct Ping {
+pub struct Hail {
     pub sender: String,
-    // TODO: include the serial of the last ddm messages received,
-    // .     this way if the peer notices we are behind, it can resend us
-    // .     any information we may have missed. This woudl allow us to
-    // .     automatically converge on the most up to date state through
-    // .     the ping messages. This would preclude the need for the sync
-    // .     messages.
+    pub router_kind: RouterKind,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct Pong {
+pub struct Response {
     pub sender: String,
     pub origin: String,
-    pub kind: RouterKind,
+    pub router_kind: RouterKind,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Advertise {
-    pub origin: String,
+    /// The next hop address for the enclosed prefixes
     pub nexthop: Ipv6Addr,
+
+    /// Prefixes being advertised
     pub prefixes: HashSet::<Ipv6Prefix>,
-    pub serial: u64,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Solicit {
+    /// The source address of the peer asking for advertisements.
+    pub src: Ipv6Addr,
 }
