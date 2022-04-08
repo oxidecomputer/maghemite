@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
-tokio = { version = "1.14", features = ["full"] }
+tokio = { version = "1.14", features = ["full", "tracing"] }
 slog = "2.7"
 slog-term = "2.7"
 slog-async = "2.7"

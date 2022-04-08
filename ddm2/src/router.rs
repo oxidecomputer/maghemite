@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::convert::TryFrom;
 
-use tokio::{sync::Mutex, spawn, time::sleep};
+use tokio::{sync::Mutex, spawn, time::sleep, task::JoinHandle};
 use libnet::{IpInfo, get_ipaddr_info};
 use icmpv6::{ICMPv6Packet, RouterSolicitation};
-use slog::{self, trace, error, warn, Logger};
+use slog::{self, info, debug, trace, error, warn, Logger};
 
 use crate::rdp;
 use crate::peer;
@@ -17,25 +17,35 @@ use crate::rpx;
 use crate::net::Ipv6Prefix;
 use crate::protocol::RouterKind;
 
-#[derive(Clone)]
+//#[derive(Clone)]
 pub struct Router { 
     pub config: Config,
     pub(crate) state: Arc::<Mutex::<RouterState>>,
     pub(crate) log: Logger,
+    threadpile: Vec<JoinHandle<()>>,
 }
 
-pub(crate) struct RouterState {
+impl Drop for Router {
+    fn drop(&mut self) {
+        warn!(self.log, "dropping threadpile[{}]", self.threadpile.len());
+        for t in &self.threadpile {
+            t.abort();
+        }
+    }
+}
+
+pub struct RouterState {
     /// Interface numbers for the IP interfaces this router will peer over. The
     /// NeighboringRouter entry value for each interface index is populated when
     /// a neighbor on that interface is discovered.
-    pub(crate) interfaces: BTreeMap::<Interface, Option::<NeighboringRouter>>,
+    pub interfaces: BTreeMap::<Interface, Option::<NeighboringRouter>>,
 
     /// A set of prefixes that have been advertised to this router, indexed by
     /// nexthop
-    pub(crate) remote_prefixes: BTreeMap::<Ipv6Addr, HashSet::<Ipv6Prefix>>,
+    pub remote_prefixes: BTreeMap::<Ipv6Addr, HashSet::<Ipv6Prefix>>,
 
     /// A set of prefixes that this router is advertising.
-    pub(crate) local_prefixes: HashSet::<Ipv6Prefix>,
+    pub local_prefixes: HashSet::<Ipv6Prefix>,
 }
 
 impl Default for RouterState {
@@ -47,6 +57,27 @@ impl Default for RouterState {
         }
     }
 }
+
+impl RouterState {
+    /// Get the status for a peer with the specified address
+    pub async fn peer_status_for(&self, addr: Ipv6Addr)
+    -> Option<(Interface, peer::Status)> {
+
+        for (ifx, nbr) in self.interfaces.clone() {
+            match nbr {
+                Some(nbr) => {
+                    if nbr.addr == addr {
+                        return Some((ifx, nbr.session.status().await));
+                    }
+                    continue
+                }
+                None => return None,
+            }
+        }
+        None
+    }
+}
+
 
 
 /// User provided router configuration information
@@ -105,7 +136,7 @@ impl Router {
         let state = Arc::new(Mutex::new(
             RouterState{interfaces, ..Default::default()}
         ));
-        Ok(Router{ log, config, state })
+        Ok(Router{ log, config, state, threadpile: Vec::new() })
     }
 
     pub async fn neighbors(&self) 
@@ -127,31 +158,17 @@ impl Router {
         result
     }
 
-    /// Get the status for a peer with the specified address
-    pub async fn peer_status_for(&self, addr: Ipv6Addr) -> Option<(Interface, peer::Status)> {
 
-        for (ifx, nbr) in self.state.lock().await.interfaces.clone() {
-            match nbr {
-                Some(nbr) => {
-                    if nbr.addr == addr {
-                        return Some((ifx, nbr.session.status().await));
-                    }
-                    continue
-                }
-                None => return None,
-            }
-        }
-        None
-    }
-
-    pub async fn run(&self) -> Result<(), String> {
+    pub async fn run(&mut self) -> Result<(), String> {
         self.start_rpx().await?;
         self.start_discovery().await;
         self.initial_solicit().await;
         Ok(())
     }
 
-    pub async fn start_rpx(&self) -> Result<(), String> {
+    pub async fn start_rpx(&mut self) -> Result<(), String> {
+
+        trace!(self.log, "starting rpx");
 
         let s = self.state.lock().await;
         let interfaces : Vec<Interface> = s
@@ -162,55 +179,80 @@ impl Router {
         drop(s);
 
         for i in interfaces {
-            rpx::start_server(
+            let t = rpx::start_server(
+                self.log.clone(),
                 i.ll_addr,
                 self.config.rpx_port,
-                self.clone(),
+                self.state.clone(),
             )?;
+            self.threadpile.push(t);
         }
+
+        trace!(self.log, "rpx started");
 
         Ok(())
     }
 
     /// for each interface, wait until the peering session is active and then
     /// solicit all the routes from that peer.
-    async fn initial_solicit(&self) {
+    async fn initial_solicit(&mut self) {
+
+        trace!(self.log, "starting initial solicit");
 
         trace!(self.log, "initial solicit: cloning ifxs");
         let interfaces = self.state.lock().await.interfaces.clone();
         trace!(self.log, "initial solicit: cloned ifxs");
         for (ifx, _) in interfaces {
-            let rtr = self.clone();
-            spawn(async move { loop {
+            debug!(self.log, "begin solicit for {:?}", ifx);
+            let rtr = self.state.clone();
+            let log = self.log.clone();
+            let config = self.config.clone();
+            let state = self.state.clone();
+            let t = spawn(async move { loop {
                 // get an updated copy of the neighbor
-                let nbr = rtr.state.lock().await.interfaces.get(&ifx).unwrap().clone();
+                let nbr = rtr.lock().await.interfaces.get(&ifx).unwrap().clone();
                 match nbr {
                     Some(ref nbr) => match nbr.session.status().await {
                         peer::Status::Active => {
-                            trace!(rtr.log, "soliciting {} on {:?}", nbr.addr, ifx);
-                            match rtr.solicit(ifx, nbr.addr).await {
-                                Ok(_) => return,
+                            trace!(log, "soliciting {} on {:?}", nbr.addr, ifx);
+                            match Self::solicit(
+                                config.clone(), state.clone(), ifx, nbr.addr).await {
+                                Ok(_) => {
+                                    debug!(
+                                        log, 
+                                        "initial solicit complete for {:?}",
+                                        ifx,
+                                    );
+                                    return;
+                                }
                                 Err(e) => {
-                                    warn!(rtr.log, "solicit failed: {}", e);
+                                    warn!(log, "solicit failed: {}", e);
                                 }
                             }
                         }
                         _ => { 
-                            trace!(rtr.log, "initial_solicit: peer not active on {:?}", ifx);
+                            trace!(log, 
+                                "initial_solicit: peer not active on {:?}", ifx);
                         }
                     }
                     None => { 
-                        trace!(rtr.log, "initial_solicit: no peer on {:?}", ifx);
+                        trace!(log, "initial_solicit: no peer on {:?}", ifx);
                     }
                 };
-                sleep(Duration::from_millis(rtr.config.peer_interval)).await;
+                sleep(Duration::from_millis(config.peer_interval)).await;
             }});
+            self.threadpile.push(t);
         }
+        trace!(self.log, "initial solicit started");
 
     }
 
-    pub async fn add_remote_prefixes(&self, nexthop: Ipv6Addr, prefixes: HashSet::<Ipv6Prefix>) {
-        let mut router_state = self.state.lock().await;
+    pub async fn add_remote_prefixes(
+        state: Arc::<Mutex::<RouterState>>,
+        nexthop: Ipv6Addr,
+        prefixes: HashSet::<Ipv6Prefix>,
+    ) {
+        let mut router_state = state.lock().await;
         match router_state.remote_prefixes.get_mut(&nexthop) {
             Some(ref mut set) => {
                 set.extend(prefixes.iter());
@@ -221,17 +263,22 @@ impl Router {
         }
     }
 
-    async fn solicit(&self, ifx: Interface, dst: Ipv6Addr) 
-    -> Result<(), String> {
+    async fn solicit(
+        config: Config,
+        state: Arc::<Mutex::<RouterState>>,
+        ifx: Interface,
+        dst: Ipv6Addr
+    ) -> Result<(), String> {
 
         let advertisement = rpx::solicit(
             ifx.ll_addr,
             ifx.ifnum,
             dst,
-            self.config.rpx_port,
+            config.rpx_port,
         ).await?;
 
-        self.add_remote_prefixes(
+        Self::add_remote_prefixes(
+            state,
             advertisement.nexthop,
             advertisement.prefixes,
         ).await;
@@ -239,10 +286,12 @@ impl Router {
         Ok(())
     }
 
-    async fn start_discovery(&self) {
+    async fn start_discovery(&mut self) {
         // Get a copy of they interface keys. We cannot hold onto the lock as
         // the threads that are spawned below need to acquire the lock
         // individually to update the router state when a peer is discovered.
+        
+        trace!(self.log, "starting discovery");
         
         let s = self.state.lock().await;
         let interfaces : Vec<Interface> = s
@@ -256,10 +305,13 @@ impl Router {
             let state = self.state.clone();
             let config = self.config.clone();
             let log = self.log.clone();
-            spawn(async move { 
+            let t = spawn(async move { 
                 Self::discover_neighboring_router(i, state, config, log).await;
             });
+            self.threadpile.push(t);
         }
+
+        trace!(self.log, "discovery started");
     }
 
     async fn discover_neighboring_router(
@@ -272,6 +324,7 @@ impl Router {
             match discover_neighboring_router(
                 interface.ifnum, config.discovery_interval, log.clone()).await {
                 Ok(addr) => {
+                    info!(log, "discovered neighbor {}", addr);
                     let mut session = peer::Session::new(
                         log.clone(),
                         interface.ifnum,
@@ -284,7 +337,10 @@ impl Router {
                         config.router_kind,
                     );
                     match session.start().await {
-                        Ok(_) => {},
+                        Ok(_) => {
+                            info!(log,
+                                "started peering session for {}", addr);
+                        },
                         Err(e) => {
                             error!(log,
                                 "start peer session on {:?}: {}", interface, e);
@@ -296,9 +352,10 @@ impl Router {
                         interface,
                         Some(NeighboringRouter{
                             addr,
-                            session,
+                            session: Arc::new(session),
                         }),
                     );
+                    info!(log, "neigbor discovery finished on {:?}", interface);
                     return;
                 }
                 Err(e) => {
@@ -385,6 +442,7 @@ async fn discover_neighboring_router(
         .map_err(|e| e.to_string())?;
 
     loop {
+        trace!(log, "waiting for solicitation");
         match receiver.recv().await {
             Ok((src, ICMPv6Packet::RouterSolicitation(_))) => return Ok(src),
             Ok(_) => continue,
@@ -425,6 +483,7 @@ impl Solicitor {
         let log = self.log.clone();
          self.task = Some(spawn(async move { 
             loop { 
+                trace!(log, "soliciting ddm router");
                 match solicit_ddm_router(ifnum).await {
                     Ok(_) => {},
                     Err(e) => {
@@ -439,6 +498,7 @@ impl Solicitor {
 
 impl Drop for Solicitor {
     fn drop(&mut self) {
+        info!(self.log, "dropping solicitor on ifnum {}", self.ifnum);
         match self.task {
             Some(ref t) => t.abort(),
             None => {}
@@ -475,7 +535,7 @@ impl TryFrom<IpInfo> for Interface {
 #[derive(Clone)]
 pub struct NeighboringRouter {
     pub addr: Ipv6Addr,
-    pub session: peer::Session,
+    pub session: Arc::<peer::Session>,
 }
 
 #[cfg(test)]
@@ -488,6 +548,7 @@ mod tests {
     use anyhow::Result;
     use util::test::testlab_x2;
     use tokio::time::sleep;
+    use slog::{info, debug};
     use super::*;
 
     /// Discover Peer Exchange
@@ -509,31 +570,31 @@ mod tests {
         let c1 = Config{
             name: "r1".into(),
             interfaces: vec![if1],
-            peer_interval: 50,
-            peer_expire: 10000,
+            peer_interval: 100,
+            peer_expire: 1000,
             ..Default::default()
         };
 
         let c2 = Config{
             name: "r2".into(),
             interfaces: vec![if2],
-            peer_interval: 50,
-            peer_expire: 10000,
+            peer_interval: 100,
+            peer_expire: 1000,
             ..Default::default()
         };
 
         let log = util::test::logger();
-        let r1 = Router::new(log.clone(), c1).expect("new router 1");
-        let r2 = Router::new(log.clone(), c2).expect("new router 2");
+        let mut r1 = Router::new(log.clone(), c1).expect("new router 1");
+        let mut r2 = Router::new(log.clone(), c2).expect("new router 2");
 
         //
         // run the routers
         //
         
-        println!("running routers");
+        info!(log, "running routers");
         r1.run().await.expect("run router 1");
         r2.run().await.expect("run router 2");
-        println!("routers running");
+        info!(log, "routers running");
 
         //
         // advertise some routes
@@ -553,29 +614,27 @@ mod tests {
         // wait for discovery
         //
         
-        println!("sleeping");
-        sleep(Duration::from_secs(5)).await;
-        println!("done sleeping");
+        sleep(Duration::from_secs(2)).await;
 
         //
         // assert expected discovery state
         //
 
-        println!("get n1");
+        info!(log, "get n1");
         let n1 = r1.neighbors().await;
         let ifx1: Interface = (&interfaces[0].addr.info).try_into().unwrap();
         let n1 = n1.get(&ifx1)
             .expect("get n1").as_ref()
             .expect("n1 is some");
 
-        println!("get n1");
-        let n2 = r2.neighbors().await;
+        info!(log, "get n1");
+        let n2s = r2.neighbors().await;
         let ifx2: Interface = (&interfaces[1].addr.info).try_into().unwrap();
-        let n2 = n2.get(&ifx2)
+        let n2 = n2s.get(&ifx2)
             .expect("get n2").as_ref()
             .expect("n2 is some");
 
-        println!("got n1/n2");
+        info!(log, "got n1/n2");
 
         assert_eq!(
             IpAddr::V6(n1.addr),
@@ -591,6 +650,7 @@ mod tests {
         // assert expected peer state
         //
 
+        info!(log, "getting peer state");
         let p1 = r1.peer_status().await;
         assert_eq!(p1.len(), 1);
         assert_eq!(p1.get(&ifx1), Some(&Some(peer::Status::Active)));
@@ -603,31 +663,36 @@ mod tests {
         // assert expected prefix state
         //
         
-        sleep(Duration::from_secs(5)).await;
+        sleep(Duration::from_secs(2)).await;
 
         // router1 should have router2's link-local address as a nexthop for
         // fd00:2::/64
         let nexthops = r1.nexthops(pfx2).await;
-        println!("{:?}", nexthops);
+        debug!(log, "{:?}", nexthops);
         assert!(nexthops.contains(&ifx2.ll_addr));
 
         // router2 should have router1's link-local address as a nexthop for
         // fd00:1::/64
         let nexthops = r2.nexthops(pfx1).await;
-        println!("{:?}", nexthops);
+        debug!(log, "{:?}", nexthops);
         assert!(nexthops.contains(&ifx1.ll_addr));
 
         //
         // drop a peer and test expiration
         //
 
+        // TODO this is fragile, the router interface should not hand back
+        // references that can keep threads alive
+        info!(log, "dropping r2");
+        drop(p2);
+        drop(n2);
         drop(r2);
-        sleep(Duration::from_secs(5)).await;
+        drop(n2s);
+        sleep(Duration::from_secs(3)).await;
 
         let p1 = r1.peer_status().await;
         assert_eq!(p1.len(), 1);
         assert_eq!(p1.get(&ifx1), Some(&Some(peer::Status::Expired)));
-
 
         Ok(())
     }

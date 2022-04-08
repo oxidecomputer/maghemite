@@ -6,8 +6,8 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use hyper::body::HttpBody;
-use tokio::{spawn, time::timeout, task::JoinHandle};
-use slog::{warn, error};
+use tokio::{spawn, time::timeout, task::JoinHandle, sync::Mutex};
+use slog::{Logger, warn, error};
 use dropshot::{
     endpoint,
     ConfigDropshot,
@@ -23,18 +23,22 @@ use dropshot::{
 
 use crate::net::Ipv6Prefix;
 use crate::protocol::{Advertise, Solicit};
-use crate::router::{Interface, Router};
+use crate::router::{Interface, Router, RouterState};
 use crate::peer;
 
 struct HandlerContext {
-    router: Router,
+    log: Logger,
+    router: Arc::<Mutex::<RouterState>>,
 }
 
 pub(crate) fn start_server(
+    log: Logger,
     addr: Ipv6Addr, 
     port: u16,
-    router: Router,
+    router: Arc::<Mutex::<RouterState>>,
 ) -> Result<JoinHandle<()>, String> {
+
+    let context = HandlerContext{router, log: log.clone()};
 
     let sa = SocketAddrV6::new(addr, port, 0, 0);
     let config = ConfigDropshot {
@@ -50,7 +54,6 @@ pub(crate) fn start_server(
     api.register(advertise_handler).unwrap();
     api.register(solicit_handler).unwrap();
 
-    let context = HandlerContext{router};
 
     let server = HttpServerStarter::new(
         &config,
@@ -67,8 +70,9 @@ pub(crate) fn start_server(
     }))
 }
 
-async fn ensure_peer_active(router: &Router, addr: Ipv6Addr) -> Result<Interface, HttpError> {
-    match router.peer_status_for(addr).await {
+async fn ensure_peer_active(router: &Arc::<Mutex::<RouterState>>, addr: Ipv6Addr)
+-> Result<Interface, HttpError> {
+    match router.lock().await.peer_status_for(addr).await {
         Some((ifx, peer::Status::Active)) => Ok(ifx),
         Some(_) => Err(HttpError::for_bad_request(
                 None, "peer not active for nexthop: {}".into()
@@ -89,12 +93,13 @@ async fn advertise_handler(
 ) -> Result<HttpResponseOk<()>, HttpError> {
 
     let context = ctx.context();
-    let router = &context.router;
+    let router = context.router.clone();
     let advertisement = rq.into_inner();
 
     ensure_peer_active(&router, advertisement.nexthop).await?;
 
-    router.add_remote_prefixes(
+    Router::add_remote_prefixes(
+        router,
         advertisement.nexthop,
         advertisement.prefixes,
     ).await;
@@ -114,7 +119,7 @@ async fn solicit_handler(
 
     let context = ctx.context();
     let router = &context.router;
-    let router_state = router.state.lock().await;
+    let router_state = router.lock().await;
     let locals = router_state.local_prefixes.clone();
     let remotes = router_state.remote_prefixes.clone();
     drop(router_state);
@@ -124,7 +129,7 @@ async fn solicit_handler(
     let ifx = match ensure_peer_active(&router, solicit.src).await {
         Ok(ifx) => ifx,
         Err(e) => {
-           warn!(router.log, "solicit inactive peer {}: {}", solicit.src, e);
+           warn!(context.log, "solicit inactive peer {}: {}", solicit.src, e);
            return Err(e);
         }
     };

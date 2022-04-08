@@ -5,7 +5,7 @@ use std::time::{Instant, Duration};
 use std::sync::Arc;
 
 use tokio::{spawn, time::{sleep, timeout}, sync::Mutex, task::JoinHandle};
-use slog::{Logger, info, warn, error};
+use slog::{Logger, debug, trace, info, warn, error};
 use hyper::body::HttpBody;
 use dropshot::{
     endpoint,
@@ -22,21 +22,24 @@ use dropshot::{
 
 use crate::protocol::{Hail, Response, RouterKind};
 
-#[derive(Clone)]
 pub struct Session {
+    log: Logger,
+    client_task: Option<Arc::<JoinHandle<()>>>,
+    server_task: Option<Arc::<JoinHandle<()>>>,
+    info: SessionInfo,
+}
+
+#[derive(Clone)]
+pub struct SessionInfo {
     log: Logger,
     ifnum: i32,
     addr: Ipv6Addr,
     interval: u64,
     expire: u64,
     state: Arc::<Mutex::<State>>,
-    client_task: Option<Arc::<JoinHandle<()>>>,
-    server_task: Option<Arc::<JoinHandle<()>>>,
-
     host: String,
     server_addr: Ipv6Addr,
     server_port: u16,
-
     router_kind: RouterKind,
 }
 
@@ -78,18 +81,21 @@ impl Session {
         router_kind: RouterKind,
     ) -> Self {
         Session{
-            log,
-            ifnum,
-            addr,
-            interval,
-            expire,
-            state: Arc::new(Mutex::new(State::new())),
+            log: log.clone(),
+            info: SessionInfo{
+                log: log.clone(),
+                ifnum,
+                addr,
+                interval,
+                expire,
+                state: Arc::new(Mutex::new(State::new())),
+                host,
+                server_addr,
+                server_port,
+                router_kind,
+            },
             client_task: None,
             server_task: None,
-            host,
-            server_addr,
-            server_port,
-            router_kind,
         }
     }
 
@@ -112,9 +118,9 @@ impl Session {
 
 
     pub async fn status(&self) -> Status {
-        match self.state.lock().await.last_seen {
+        match self.info.state.lock().await.last_seen {
             Some(instant) => {
-                if instant.elapsed().as_millis() > self.expire.into() {
+                if instant.elapsed().as_millis() > self.info.expire.into() {
                     Status::Expired
                 } else {
                     Status::Active
@@ -125,19 +131,25 @@ impl Session {
     }
 
     fn run(&self) -> JoinHandle<()> {
-        let session = self.clone();
+        let session = self.info.clone();
         spawn(async move { 
             loop {
+                trace!(session.log, "[{}] peer step", session.host);
                 match Self::step(&session).await {
                     Ok(_) => {},
                     Err(e) => warn!(session.log, "{}", e),
                 }
+                trace!(session.log, "[{}] peer sleep {}", 
+                    session.host,
+                    session.interval,
+                );
                 sleep(Duration::from_millis(session.interval)).await;
+                trace!(session.log, "[{}] peer wake", session.host);
             }
         })
     }
 
-    async fn step(session: &Session) -> Result<(), String> {
+    async fn step(session: &SessionInfo) -> Result<(), String> {
         let response = match Self::hail(&session).await {
             Ok(r) => r,
             Err(e) => {
@@ -151,10 +163,13 @@ impl Session {
         let mut state = session.state.lock().await;
         state.last_seen = Some(Instant::now());
         state.hail_response_received = true;
+        debug!(session.log, "updated last seen for {}", session.addr);
         Ok(())
     }
 
-    async fn hail(s: &Session) -> Result<Response, String> {
+    async fn hail(s: &SessionInfo) -> Result<Response, String> {
+
+        trace!(s.log, "sending hail to {}", s.addr);
 
         // XXX we need to use a custom hyper client here, and not a dropshot
         // generated client because hyper is the only rust client that supports
@@ -206,7 +221,12 @@ impl Session {
 
     fn start_server(&self) -> Result<JoinHandle<()>, String> {
 
-        let sa = SocketAddrV6::new(self.server_addr, self.server_port, 0, 0);
+        let sa = SocketAddrV6::new(
+            self.info.server_addr,
+            self.info.server_port,
+            0,
+            0,
+        );
         let config = ConfigDropshot {
             bind_address: sa.into(),
             ..Default::default()
@@ -219,7 +239,7 @@ impl Session {
         let mut api = ApiDescription::new();
         api.register(hail).unwrap();
 
-        let context = HandlerContext{session: self.clone()};
+        let context = HandlerContext{session: self.info.clone()};
 
         let server = HttpServerStarter::new(
             &config,
@@ -242,6 +262,8 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        info!(self.log, "dropping peer session for {}", self.info.addr);
+
         match self.client_task {
             Some(ref t) => t.abort(),
             None => {},
@@ -256,7 +278,7 @@ impl Drop for Session {
 // Dropshot endpoints =========================================================
 
 struct HandlerContext {
-    session: Session,
+    session: SessionInfo,
 }
 
 #[endpoint {
@@ -270,12 +292,15 @@ async fn hail(
 
     let context = ctx.context();
     let session = &context.session;
+    let msg = rq.into_inner();
+
+    trace!(session.log, "received hail from {}", msg.sender);
 
     session.state.lock().await.hail_response_sent = true;
 
     Ok(HttpResponseOk(Response{
         sender: session.host.clone(),
-        origin: rq.into_inner().sender,
+        origin: msg.sender,
         router_kind: session.router_kind,
     }))
 }
