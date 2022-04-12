@@ -51,7 +51,7 @@ done
 banner "test"
 
 pushd ddm2
-export RUST_LOG=debug
+export RUST_LOG=trace
 
 banner "rdp"
 pfexec cargo test rs_send_recv
