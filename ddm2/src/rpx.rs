@@ -23,11 +23,12 @@ use dropshot::{
 
 use crate::net::Ipv6Prefix;
 use crate::protocol::{Advertise, Solicit};
-use crate::router::{Interface, Router, RouterState};
+use crate::router::{Interface, Router, RouterState, Config};
 use crate::peer;
 
 struct HandlerContext {
     log: Logger,
+    config: Config,
     router: Arc::<Mutex::<RouterState>>,
 }
 
@@ -36,9 +37,10 @@ pub(crate) fn start_server(
     addr: Ipv6Addr, 
     port: u16,
     router: Arc::<Mutex::<RouterState>>,
+    config: Config,
 ) -> Result<JoinHandle<()>, String> {
 
-    let context = HandlerContext{router, log: log.clone()};
+    let context = HandlerContext{router, config, log: log.clone()};
 
     let sa = SocketAddrV6::new(addr, port, 0, 0);
     let config = ConfigDropshot {
@@ -103,6 +105,11 @@ async fn advertise_handler(
         advertisement.nexthop,
         advertisement.prefixes,
     ).await;
+
+    // if only in upper-half mode, we're done here
+    if context.config.upper_half_only {
+        return Ok(HttpResponseOk(()));
+    }
 
     Ok(HttpResponseOk(()))
 }

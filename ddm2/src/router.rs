@@ -107,6 +107,12 @@ pub struct Config {
 
     /// The kind of router this is.
     pub router_kind: RouterKind,
+
+    /// Only run the upper half of the router. This results in the router
+    /// implementing the DDM protocol to discover, peer and exchange routes with
+    /// other DDM routers. But it will not actually manage routes on the
+    /// underlying system.
+    pub upper_half_only: bool,
 }
 
 impl Default for Config {
@@ -120,6 +126,7 @@ impl Default for Config {
             peer_port: 0x1dd0,
             rpx_port: 0x1dd1,
             router_kind: RouterKind::Server,
+            upper_half_only: false,
         }
     }
 }
@@ -183,6 +190,7 @@ impl Router {
                 i.ll_addr,
                 self.config.rpx_port,
                 self.state.clone(),
+                self.config.clone(),
             )?;
             self.threadpile.push(t);
         }
@@ -251,6 +259,7 @@ impl Router {
         nexthop: Ipv6Addr,
         prefixes: HashSet::<Ipv6Prefix>,
     ) {
+
         let mut router_state = state.lock().await;
         match router_state.remote_prefixes.get_mut(&nexthop) {
             Some(ref mut set) => {
@@ -260,6 +269,7 @@ impl Router {
                 router_state.remote_prefixes.insert(nexthop, prefixes.clone());
             }
         }
+
     }
 
     async fn solicit(
@@ -571,6 +581,7 @@ mod tests {
             interfaces: vec![if1],
             peer_interval: 100,
             peer_expire: 1000,
+            upper_half_only: true,
             ..Default::default()
         };
 
@@ -579,6 +590,7 @@ mod tests {
             interfaces: vec![if2],
             peer_interval: 100,
             peer_expire: 1000,
+            upper_half_only: true,
             ..Default::default()
         };
 
