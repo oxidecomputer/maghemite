@@ -1,6 +1,6 @@
 #!/bin/bash
 #:
-#: name = "build"
+#: name = "build-and-test"
 #: variety = "basic"
 #: target = "helios"
 #: rust_toolchain = "nightly-2021-11-24"

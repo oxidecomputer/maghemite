@@ -20,4 +20,3 @@ schemars = { version = "0.8.0", features = [ "uuid" ] }
 serde = "1.0"
 serde_json = "1.0"
 hyper = { version = "0.14", features = ["full"] }
-console-subscriber = "0.1.3"
