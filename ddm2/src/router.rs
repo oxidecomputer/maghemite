@@ -80,7 +80,7 @@ impl RouterState {
 
 
 /// User provided router configuration information
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Config {
     /// Router name
     pub name: String,
@@ -113,6 +113,20 @@ pub struct Config {
     /// other DDM routers. But it will not actually manage routes on the
     /// underlying system.
     pub upper_half_only: bool,
+
+    /// If this value is populated the router will manage routes through a
+    /// Dendrite protod endpoint rather than the underlying illumos system.
+    pub protod: Option<ProtodConfig>,
+}
+
+
+#[derive(Debug, Clone)]
+pub struct ProtodConfig {
+    /// Hostname protod can be contacted at.
+    pub host: String,
+
+    /// Port number protod can be contacted on.
+    pub port: u16,
 }
 
 impl Default for Config {
@@ -127,6 +141,7 @@ impl Default for Config {
             rpx_port: 0x1dd1,
             router_kind: RouterKind::Server,
             upper_half_only: false,
+            protod: None,
         }
     }
 }

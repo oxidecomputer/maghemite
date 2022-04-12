@@ -33,6 +33,8 @@ struct Transit {
     dendrite: bool,
     #[structopt(long)]
     protod_host: Option<String>,
+    #[structopt(long)]
+    protod_port: Option<u16>,
 }
 
 #[tokio::main]
@@ -44,23 +46,30 @@ async fn main() -> Result<(), String> {
     let log = init_logger();
     info!(log, "starting illumos ddm control plane");
 
-    let (kind, dendrite, protod) = match opt.subcommand {
-        SubCommand::Server => (
-            ddm2::protocol::RouterKind::Server,
-            false,
-            "".into(),
-        ),
-        SubCommand::Transit(t) => (
-            ddm2::protocol::RouterKind::Transit,
-            t.dendrite,
-            t.protod_host.unwrap_or("localhost".into()),
-        ),
-    };
+    let name = hostname::get().unwrap().into_string().unwrap();
 
-    let config = ddm2::router::Config{
-        name: hostname::get().unwrap().into_string().unwrap(),
-        router_kind: kind,
-        ..Default::default()
+    let config = match opt.subcommand {
+        SubCommand::Server => ddm2::router::Config{
+            name,
+            router_kind: ddm2::protocol::RouterKind::Server,
+            ..Default::default()
+        },
+        SubCommand::Transit(t) => {
+            let protod = if t.dendrite {
+                Some(ddm2::router::ProtodConfig{
+                    host: t.protod_host.unwrap_or("localhost".into()),
+                    port: t.protod_port.unwrap_or(protod_api::default_port()),
+                })
+            } else {
+                None
+            };
+            ddm2::router::Config{
+                name,
+                protod,
+                router_kind: ddm2::protocol::RouterKind::Transit,
+                ..Default::default()
+            }
+        }
     };
 
     let mut r = ddm2::router::Router::new(

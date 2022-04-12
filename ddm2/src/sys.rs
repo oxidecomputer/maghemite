@@ -1,8 +1,10 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 
+use slog::{warn, debug, Logger};
 use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
 use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
+use dendrite_common::{Cidr, Ipv6Cidr};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Route {
@@ -104,17 +106,91 @@ pub fn  get_routes_dendrite(
     port: u16,
 ) -> Result<Vec<Route>, String> {
 
-    todo!();
+    let api = protod_api::Api::new(
+        host.clone(),
+        port,
+    ).map_err(|e| format!("protod api new: {}", e))?;
+
+    let mut cookie = "".to_string();
+    let routes = api.route_ipv6_get_range(None, &mut cookie)
+        .map_err(|e| format!("protod get routes: {}", e))?;
+    let mut result = Vec::new();
+
+    for r in routes {
+        let gw = match r.nexthop {
+            Some(IpAddr::V6(addr)) => addr.into(),
+            _ => Ipv6Addr::UNSPECIFIED.into(),
+        };
+        let (dest, prefix_len) = match r.cidr {
+            Cidr::V6(cidr) => 
+                (cidr.prefix.into(), cidr.prefix_len),
+            _ => continue,
+        };
+        let egress_port = r.egress_port;
+        result.push(Route{
+            dest,
+            prefix_len,
+            gw,
+            egress_port,
+        });
+    }
+
+    Ok(result)
 
 }
 
 pub fn  add_routes_dendrite(
     routes: Vec<Route>,
-    host: String,
+    host: &str,
     port: u16,
+    log: &Logger,
 ) -> Result<(), String> {
 
-    todo!();
+    let protod_api = protod_api::Api::new(
+        host.into(),
+        port,
+    ).map_err(|e| format!("protod api new: {}", e))?;
+
+    for r in routes {
+        let cidr = match r.dest {
+            IpAddr::V6(addr) => Ipv6Cidr{
+                prefix: addr,
+                prefix_len: r.prefix_len,
+            },
+            _ => { 
+                return Err(format!("unsupported dst: {:?}", r.dest));
+            }
+        };
+
+        let gw = match r.gw {
+            IpAddr::V6(gw) => gw,
+            _ => { 
+                return Err(format!("unsupported gw: {:?}", r.gw)); 
+            }
+        };
+
+        let egress_port = match protod_api.ndp_get(gw) {
+            Ok(nbr) => {
+                debug!(log, 
+                    "found neighbor port: {:?} -> {:?}", gw, nbr.port_id);
+                nbr.port_id
+            }
+            Err(e) => {
+                // TODO(ry) there are a number of reasons why an ndp entry may
+                // be transiently unavailable, there should be some (possibly
+                // asynchronous) retry logic here.
+                return Err(format!("ndp get{:?}", e));
+            }
+        };
+
+        protod_api.route_ipv6_add(
+            &cidr,
+            egress_port,
+            Some(gw),
+        ).map_err(|e| format!("protod route add: {}", e))?;
+    }
+
+    Ok(())
 
 }
 
@@ -122,8 +198,31 @@ pub fn  remove_routes_dendrite(
     routes: Vec<Route>,
     host: String,
     port: u16,
+    log: Logger,
 ) -> Result<(), String> {
 
-    todo!();
+    let protod_api = protod_api::Api::new(
+        host.clone(),
+        port,
+    ).map_err(|e| format!("protod api new: {}", e))?;
+
+    for r in routes {
+        let cidr = match r.dest {
+            IpAddr::V6(addr) => Ipv6Cidr{
+                prefix: addr,
+                prefix_len: r.prefix_len,
+            },
+            _ => {
+                warn!(log, "route remove: non-ipv6 routes not supported");
+                continue;
+            }
+        };
+
+
+        protod_api.route_ipv6_del(&cidr)
+            .map_err(|e| format!("protod route del: {}", e))?;
+    }
+
+    Ok(())
 
 }

@@ -12,3 +12,4 @@ slog-envlogger = "2.2"
 structopt = "0.3"
 ddm2 = { path = "../ddm2" }
 hostname = "0.3"
+protod-api = { git = "https://github.com/oxidecomputer/dendrite" }

@@ -645,10 +645,12 @@ name = "ddm2"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "common",
  "dropshot",
  "hyper 0.14.18",
  "icmpv6",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
+ "protod-api",
  "schemars",
  "serde",
  "serde_json",
@@ -683,6 +685,7 @@ version = "0.1.0"
 dependencies = [
  "ddm2",
  "hostname",
+ "protod-api",
  "slog",
  "slog-async",
  "slog-envlogger",

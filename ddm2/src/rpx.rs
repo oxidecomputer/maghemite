@@ -1,6 +1,6 @@
 // Router Prefix Exchange
 
-use std::net::{SocketAddrV6, Ipv6Addr};
+use std::net::{SocketAddrV6, Ipv6Addr, IpAddr};
 use std::sync::Arc;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -25,6 +25,7 @@ use crate::net::Ipv6Prefix;
 use crate::protocol::{Advertise, Solicit};
 use crate::router::{Interface, Router, RouterState, Config};
 use crate::peer;
+use crate::sys;
 
 struct HandlerContext {
     log: Logger,
@@ -103,13 +104,34 @@ async fn advertise_handler(
     Router::add_remote_prefixes(
         router,
         advertisement.nexthop,
-        advertisement.prefixes,
+        advertisement.prefixes.clone(),
     ).await;
 
     // if only in upper-half mode, we're done here
     if context.config.upper_half_only {
         return Ok(HttpResponseOk(()));
     }
+
+    let mut routes = Vec::new();
+    for pfx in &advertisement.prefixes {
+        let rte = sys::Route{
+            dest: IpAddr::V6(pfx.addr),
+            prefix_len: pfx.mask,
+            gw: IpAddr::V6(advertisement.nexthop),
+            egress_port: 0,
+        };
+        routes.push(rte);
+    }
+    
+    match &context.config.protod {
+        Some(protod) => sys::add_routes_dendrite(
+            routes,
+            &protod.host,
+            protod.port,
+            &ctx.log,
+        ),
+        None => sys::add_routes_illumos(routes)
+    }.map_err(|e| HttpError::for_internal_error(e))?;
 
     Ok(HttpResponseOk(()))
 }
