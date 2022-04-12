@@ -1,0 +1,14 @@
+[package]
+name = "ddmd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.14", features = ["full"] }
+slog = "2.7"
+slog-term = "2.7"
+slog-async = "2.7"
+slog-envlogger = "2.2"
+structopt = "0.3"
+ddm2 = { path = "../ddm2" }
+hostname = "0.3"

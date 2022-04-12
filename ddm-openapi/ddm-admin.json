@@ -14,39 +14,27 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Map_of_PeerStatus",
+                  "title": "Map_of_Status",
                   "type": "object",
                   "additionalProperties": {
-                    "$ref": "#/components/schemas/PeerStatus"
+                    "$ref": "#/components/schemas/Status"
                   }
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/ping": {
-      "get": {
-        "operationId": "adm_ping",
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "String",
-                  "type": "string"
-                }
-              }
-            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
     },
     "/prefix": {
       "put": {
-        "operationId": "advertise_prefix",
+        "operationId": "advertise_prefixes",
         "requestBody": {
           "content": {
             "application/json": {
@@ -76,6 +64,12 @@
                 }
               }
             }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
@@ -89,66 +83,60 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Set_of_DdmPrefix",
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/DdmPrefix"
-                  },
-                  "uniqueItems": true
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/routes": {
-      "get": {
-        "operationId": "get_routes",
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Array_of_Route",
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Route"
+                  "title": "Map_of_Set_of_Ipv6Prefix",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Ipv6Prefix"
+                    },
+                    "uniqueItems": true
                   }
                 }
               }
             }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
     }
   },
   "components": {
+    "responses": {
+      "Error": {
+        "description": "Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
     "schemas": {
-      "DdmPrefix": {
+      "Error": {
+        "description": "Error information from a response.",
         "type": "object",
         "properties": {
-          "origin": {
+          "error_code": {
             "type": "string"
           },
-          "prefixes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Ipv6Prefix"
-            },
-            "uniqueItems": true
+          "message": {
+            "type": "string"
           },
-          "serial": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
+          "request_id": {
+            "type": "string"
           }
         },
         "required": [
-          "origin",
-          "prefixes",
-          "serial"
+          "message",
+          "request_id"
         ]
       },
       "Ipv6Prefix": {
@@ -169,56 +157,14 @@
           "mask"
         ]
       },
-      "PeerStatus": {
-        "type": "object",
-        "properties": {
-          "addr": {
-            "nullable": true,
-            "type": "string",
-            "format": "ipv6"
-          },
-          "kind": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/RouterKind"
-              }
-            ]
-          },
-          "name": {
-            "nullable": true,
-            "type": "string"
-          }
-        }
-      },
-      "Route": {
-        "type": "object",
-        "properties": {
-          "dest": {
-            "type": "string",
-            "format": "ip"
-          },
-          "gw": {
-            "type": "string",
-            "format": "ip"
-          },
-          "prefix_len": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "dest",
-          "gw",
-          "prefix_len"
-        ]
-      },
-      "RouterKind": {
+      "Status": {
         "type": "string",
         "enum": [
-          "Server",
-          "Transit"
+          "NoContact",
+          "HailResponseSent",
+          "HailResponseReceived",
+          "Active",
+          "Expired"
         ]
       }
     }

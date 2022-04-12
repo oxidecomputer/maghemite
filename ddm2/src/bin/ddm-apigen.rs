@@ -1,0 +1,11 @@
+use std::fs::File;
+use anyhow::{anyhow, Result};
+use ddm2::admin::api_description;
+
+fn main() -> Result<()> {
+    let api = api_description().map_err(|e| anyhow!("{}", e))?;
+    let openapi = api.openapi("DDM Admin", "v0.1.0",);
+    let mut out = File::create("ddm-admin.json")?;
+    openapi.write(&mut out)?;
+    Ok(())
+}

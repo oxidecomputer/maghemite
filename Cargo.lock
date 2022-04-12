@@ -612,14 +612,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ddm-apigen"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ddm",
-]
-
-[[package]]
 name = "ddm-illumos"
 version = "0.1.0"
 dependencies = [
@@ -677,6 +669,20 @@ dependencies = [
  "anyhow",
  "ddm",
  "ddm-admin-client",
+ "slog",
+ "slog-async",
+ "slog-envlogger",
+ "slog-term",
+ "structopt",
+ "tokio 1.17.0",
+]
+
+[[package]]
+name = "ddmd"
+version = "0.1.0"
+dependencies = [
+ "ddm2",
+ "hostname",
  "slog",
  "slog-async",
  "slog-envlogger",
