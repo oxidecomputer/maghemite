@@ -6,6 +6,8 @@ use schemars::JsonSchema;
 use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
 use dendrite_common::{Cidr, Ipv6Cidr};
 
+use crate::router::Config;
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Route {
     pub dest: IpAddr,
@@ -54,6 +56,21 @@ impl Into<IpPrefix> for Route {
             }
         }
     }
+}
+
+pub fn add_routes(log: &Logger, config: &Config, routes: Vec<Route>)
+-> Result<(), String> {
+
+    match &config.protod {
+        Some(protod) => add_routes_dendrite(
+            routes,
+            &protod.host,
+            protod.port,
+            log,
+        ),
+        None => add_routes_illumos(routes)
+    }
+
 }
 
 pub fn  get_routes_illumos() -> Result<Vec<Route>, String> {

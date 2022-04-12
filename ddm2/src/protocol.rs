@@ -1,9 +1,11 @@
 use std::collections::HashSet;
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv6Addr};
 
 use schemars::JsonSchema;
 use serde::{Serialize, Deserialize};
+
 use crate::net::Ipv6Prefix;
+use crate::sys;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 pub enum RouterKind {
@@ -31,6 +33,17 @@ pub struct Advertise {
 
     /// Prefixes being advertised
     pub prefixes: HashSet::<Ipv6Prefix>,
+}
+
+impl Into<Vec<sys::Route>> for Advertise {
+    fn into(self) -> Vec<sys::Route> {
+        self.prefixes.iter().map(|pfx| sys::Route{
+            dest: IpAddr::V6(pfx.addr),
+            prefix_len: pfx.mask,
+            gw: IpAddr::V6(self.nexthop),
+            egress_port: 0,
+        }).collect()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]

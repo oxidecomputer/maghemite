@@ -1,6 +1,6 @@
 // Router Prefix Exchange
 
-use std::net::{SocketAddrV6, Ipv6Addr, IpAddr};
+use std::net::{SocketAddrV6, Ipv6Addr};
 use std::sync::Arc;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -112,26 +112,8 @@ async fn advertise_handler(
         return Ok(HttpResponseOk(()));
     }
 
-    let mut routes = Vec::new();
-    for pfx in &advertisement.prefixes {
-        let rte = sys::Route{
-            dest: IpAddr::V6(pfx.addr),
-            prefix_len: pfx.mask,
-            gw: IpAddr::V6(advertisement.nexthop),
-            egress_port: 0,
-        };
-        routes.push(rte);
-    }
-    
-    match &context.config.protod {
-        Some(protod) => sys::add_routes_dendrite(
-            routes,
-            &protod.host,
-            protod.port,
-            &ctx.log,
-        ),
-        None => sys::add_routes_illumos(routes)
-    }.map_err(|e| HttpError::for_internal_error(e))?;
+    sys::add_routes(&ctx.log, &context.config, advertisement.into())
+        .map_err(|e| HttpError::for_internal_error(e))?;
 
     Ok(HttpResponseOk(()))
 }

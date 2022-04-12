@@ -14,6 +14,7 @@ use slog::{self, info, debug, trace, error, warn, Logger};
 use crate::rdp;
 use crate::peer;
 use crate::rpx;
+use crate::sys;
 use crate::net::Ipv6Prefix;
 use crate::protocol::RouterKind;
 
@@ -238,7 +239,12 @@ impl Router {
                         peer::Status::Active => {
                             trace!(log, "soliciting {} on {:?}", nbr.addr, ifx);
                             match Self::solicit(
-                                config.clone(), state.clone(), ifx, nbr.addr).await {
+                                config.clone(), 
+                                state.clone(),
+                                ifx,
+                                nbr.addr,
+                                &log,
+                            ).await {
                                 Ok(_) => {
                                     debug!(
                                         log, 
@@ -291,7 +297,8 @@ impl Router {
         config: Config,
         state: Arc::<Mutex::<RouterState>>,
         ifx: Interface,
-        dst: Ipv6Addr
+        dst: Ipv6Addr,
+        log: &Logger,
     ) -> Result<(), String> {
 
         let advertisement = rpx::solicit(
@@ -304,10 +311,16 @@ impl Router {
         Self::add_remote_prefixes(
             state,
             advertisement.nexthop,
-            advertisement.prefixes,
+            advertisement.prefixes.clone(),
         ).await;
 
-        Ok(())
+        // for upper half only we're done
+        if config.upper_half_only {
+            return Ok(())
+        }
+
+        // add routes to the underlying system
+        sys::add_routes(&log, &config, advertisement.into())
     }
 
     async fn start_discovery(&mut self) {
