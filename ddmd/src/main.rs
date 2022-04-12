@@ -16,7 +16,11 @@ struct Opt {
     /// Port to use for admin server
     admin_port: u16,
 
+    /// Admin address to listen on
     admin_address: Option<Ipv6Addr>,
+
+    /// Interfaces to route over.
+    ifx: Vec<String>,
 
     #[structopt(subcommand)]
     subcommand: SubCommand
@@ -51,6 +55,7 @@ async fn main() -> Result<(), String> {
     let config = match opt.subcommand {
         SubCommand::Server => ddm2::router::Config{
             name,
+            interfaces: opt.ifx,
             router_kind: ddm2::protocol::RouterKind::Server,
             ..Default::default()
         },
@@ -65,6 +70,7 @@ async fn main() -> Result<(), String> {
             };
             ddm2::router::Config{
                 name,
+                interfaces: opt.ifx,
                 protod,
                 router_kind: ddm2::protocol::RouterKind::Transit,
                 ..Default::default()
@@ -89,7 +95,12 @@ async fn main() -> Result<(), String> {
         opt.admin_port,
         Arc::new(r),
     ) {
-        Ok(_) => warn!(log, "early exit?"),
+        Ok(handle) => {
+            match handle.await {
+                Ok(_) => warn!(log, "early exit?"),
+                Err(e) => error!(log, "admin join error: {}", e),
+            }
+        }
         Err(e) => error!(log, "run ddm admin server: {}", e),
     }
 
