@@ -23,7 +23,7 @@ rustc --version
 
 pushd ddm-illumos
 
-banner "build ddm-illumos"
+banner "build"
 ptime -m cargo build
 ptime -m cargo build --release
 
@@ -35,7 +35,6 @@ do
     cp target/$x/ddm-illumos /work/$x/ddm-illumos
 done
 
-banner "build ddmadm"
 pushd ddmadm
 
 ptime -m cargo build
@@ -48,3 +47,17 @@ do
     mkdir -p /work/$x
     cp target/$x/ddmadm /work/$x/ddmadm
 done
+
+banner "test"
+
+pushd ddm2
+export RUST_LOG=debug
+
+banner "rdp"
+pfexec cargo test rs_send_recv
+
+banner "peer"
+pfexec cargo test peer_session1
+
+banner "dpx"
+pfexec cargo test rs_dpx
