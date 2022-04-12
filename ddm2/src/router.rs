@@ -17,7 +17,6 @@ use crate::rpx;
 use crate::net::Ipv6Prefix;
 use crate::protocol::RouterKind;
 
-//#[derive(Clone)]
 pub struct Router { 
     pub config: Config,
     pub(crate) state: Arc::<Mutex::<RouterState>>,

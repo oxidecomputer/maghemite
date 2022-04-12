@@ -19,6 +19,8 @@ use dropshot::{
     HttpError,
     TypedBody,
 };
+use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 
 use crate::protocol::{Hail, Response, RouterKind};
 
@@ -59,7 +61,7 @@ impl State {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Debug, Copy, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum Status {
     NoContact,
     HailResponseSent,
