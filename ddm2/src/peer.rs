@@ -5,7 +5,7 @@ use std::time::{Instant, Duration};
 use std::sync::Arc;
 
 use tokio::{spawn, time::{sleep, timeout}, sync::Mutex, task::JoinHandle};
-use slog::{Logger, debug, trace, info, warn, error};
+use slog::{Logger, trace, info, warn, error};
 use hyper::body::HttpBody;
 use dropshot::{
     endpoint,
@@ -165,7 +165,7 @@ impl Session {
         let mut state = session.state.lock().await;
         state.last_seen = Some(Instant::now());
         state.hail_response_received = true;
-        debug!(session.log, "updated last seen for {}", session.addr);
+        trace!(session.log, "updated last seen for {}", session.addr);
         Ok(())
     }
 

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use hyper::body::HttpBody;
 use tokio::{spawn, time::timeout, task::JoinHandle, sync::Mutex};
-use slog::{Logger, warn, error};
+use slog::{Logger, trace, warn, error};
 use dropshot::{
     endpoint,
     ConfigDropshot,
@@ -173,7 +173,7 @@ async fn solicit_handler(
         nexthop: ifx.ll_addr,
     };
 
-    println!("RESULT: {:#?}", result);
+    trace!(context.log, "solicit result: {:#?}", result);
 
     Ok(HttpResponseOk(result))
 

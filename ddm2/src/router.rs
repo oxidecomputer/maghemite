@@ -344,9 +344,20 @@ impl Router {
         config: Config,
         log: Logger,
     ) {
+
+        //
+        // Start a solicitor.
+        //
+        let mut solicitor = Solicitor::new(
+            log.clone(),
+            interface.ifnum,
+            config.discovery_interval,
+        );
+        solicitor.start();
+
         loop {
             match discover_neighboring_router(
-                interface.ifnum, config.discovery_interval, log.clone()).await {
+                interface.ifnum, log.clone()).await {
                 Ok(addr) => {
                     info!(log, "discovered neighbor {}", addr);
                     let mut session = peer::Session::new(
@@ -377,6 +388,7 @@ impl Router {
                         Some(NeighboringRouter{
                             addr,
                             session: Arc::new(session),
+                            solicitor: Arc::new(solicitor),
                         }),
                     );
                     info!(log, "neigbor discovery finished on {:?}", interface);
@@ -448,18 +460,12 @@ impl Router {
 
 async fn discover_neighboring_router(
     ifnum: i32,
-    interval: u64,
     log: Logger,
 ) -> Result<Ipv6Addr, String> {
 
-    //
-    // Start a solicitor.
-    //
-    let mut solicitor = Solicitor::new(log.clone(), ifnum, interval); 
-    solicitor.start();
 
     //
-    // Handle advertisements.
+    // Handle solicitation.
     //
 
     let receiver = rdp::Receiver::new(log.clone(), ifnum as u32)
@@ -489,7 +495,7 @@ async fn solicit_ddm_router(ifnum: i32) -> Result<(), String>{
 
 /// A solicitor that solicits in the background and stops soliciting when
 /// droppd.
-struct Solicitor {
+pub struct Solicitor {
     ifnum: i32,
     task: Option<tokio::task::JoinHandle<()>>,
     interval: u64,
@@ -560,6 +566,7 @@ impl TryFrom<IpInfo> for Interface {
 pub struct NeighboringRouter {
     pub addr: Ipv6Addr,
     pub session: Arc::<peer::Session>,
+    pub solicitor: Arc::<Solicitor>,
 }
 
 #[cfg(test)]
