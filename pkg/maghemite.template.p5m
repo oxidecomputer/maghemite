@@ -1,5 +1,5 @@
 set name=pkg.fmri \
-    value=pkg://%PUBLISHER%/system/network/maghemite@1.0.%COMMIT_COUNT%
+    value=pkg://%PUBLISHER%/system/network/maghemite@0.1.%COMMIT_COUNT%
 set name=pkg.summary value="The Maghemite routing platform"
 set name=info.classification \
     value=org.opensolaris.category.2008:System/Services
