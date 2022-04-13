@@ -90,10 +90,15 @@ pub fn  get_routes_illumos() -> Result<Vec<Route>, String> {
 
 }
 
-pub fn  add_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
+pub fn add_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
 
     for r in routes {
         let gw = r.gw;
+
+        // don't add with a local destination or gateway
+        if addr_is_local(gw)? || addr_is_local(r.dest)? {
+            continue;
+        }
         match libnet::ensure_route_present(r.into(), gw) {
             Ok(_) => {},
             Err(e) => return Err(format!("set route: {}", e)),
@@ -102,6 +107,18 @@ pub fn  add_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
 
     Ok(())
 
+}
+
+fn addr_is_local(gw: IpAddr) -> Result<bool, String> {
+    let addrinfo = libnet::get_ipaddrs().map_err(|e| format!("{}", e))?;
+    for (_, infos) in addrinfo {
+        for info in infos {
+            if gw == info.addr {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 pub fn  remote_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
