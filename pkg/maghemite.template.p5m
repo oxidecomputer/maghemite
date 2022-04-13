@@ -17,5 +17,5 @@ dir path=opt/oxide/maghemite/bin owner=root group=bin mode=0755
 file path=opt/oxide/maghemite/bin/ddmd owner=root group=bin mode=0755
 file path=opt/oxide/maghemite/bin/ddmadm owner=root group=bin mode=0755
 file path=opt/oxide/maghemite/bin/ddm_method_script.sh owner=root group=bin mode=0755
-depend type=incorporate fmri=pkg:/system/network/maghemite@1.0.%COMMIT_COUNT%
-depend type=require fmri=pkg:/system/network/maghemite@1.0.%COMMIT_COUNT%
+depend type=incorporate fmri=pkg:/system/network/maghemite@0.1.%COMMIT_COUNT%
+depend type=require fmri=pkg:/system/network/maghemite@0.1.%COMMIT_COUNT%
