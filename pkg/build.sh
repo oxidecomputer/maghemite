@@ -32,4 +32,4 @@ pkgrepo create $REPO
 pkgrepo add-publisher -s $REPO $PUBLISHER
 
 pkgsend publish -d proto -s $REPO maghemite.final.p5m
-pkgrecv -a -d packages/repo/maghemite-1.0.$COMMIT_COUNT.p5p -s $REPO -v -m latest '*'
+pkgrecv -a -d packages/repo/maghemite-0.1.$COMMIT_COUNT.p5p -s $REPO -v -m latest '*'
