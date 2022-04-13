@@ -13,7 +13,7 @@ mkdir -p proto/lib/svc/manifest/system
 mkdir -p proto/opt/oxide/maghemite/bin
 cp ../smf/ddm/manifest.xml proto/lib/svc/manifest/system/mg-ddm.xml
 cp ../smf/ddm_method_script.sh proto/opt/oxide/maghemite/bin/
-cp ../target/release/ddm-illumos proto/opt/oxide/maghemite/bin/
+cp ../target/release/ddmd proto/opt/oxide/maghemite/bin/
 cp ../target/release/ddmadm proto/opt/oxide/maghemite/bin/
 
 # create the package

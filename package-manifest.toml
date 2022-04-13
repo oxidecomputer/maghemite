@@ -1,5 +1,5 @@
 [package.maghemite]
-rust.binary_names = ["ddm-illumos", "ddmadm"]
+rust.binary_names = ["ddmd", "ddmadm"]
 rust.release = true
 service_name = "maghemite"
 zone = true
