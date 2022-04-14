@@ -1,15 +1,14 @@
 Maghemite
 =========
 
-A modular routing stack written in Rust. Maghemite is a collection of routing
-protocol implementations. Maghemite separates the function speaking a routing
-protocol and managing the distributed state required to implement a protocol -
-from managing the underlying packet-pushing data plane. This
-protocol-plane/data-plane distinction is commonly referred to as a router's
-upper and lower halves respectively. Maghemite decouples the upper and lower
-halves of a routing protocol through a `Platform` trait. Upper halves are
-written in terms of a `Platform` trait specific to the protocol being
-implemented, and lower halves implement `Platform` traits.
+A suite of routing protocol implementations written in Rust.
+
+Routing protocols are commonly broken up into an upper-half and a lower-half.
+The upper-half is responsible for discovering other routers, forming peering
+relationships, and exchanging routes. The lower half is responsible for making
+packet forwarding decisions based on the routing tables established by an
+upper-half. Maghemite implements upper-halves for the protocols listed below
+with support for the lower-half data planes listed below.
 
 ## Protocols
 
@@ -18,13 +17,10 @@ implemented, and lower halves implement `Platform` traits.
 - [ ] OSPF: Open Shortest Path First
 - [ ] Static: Static route specifications (e.g. no protocol involved)
 
-## Platform Implementations
+## Supported Data Planes
 
-### DDM
-
-- [x] [Local](ddm-local)
 - [x] [illumos/Helios](ddm-illumos)
-- [x] Sidecar/Dendrite - part of illumos platform implementation
+- [x] Sidecar/Dendrite
 
 ## Tooling
 
