@@ -324,8 +324,8 @@ impl Router {
     ) {
 
         let s = state.lock().await;
-
         let active_peers = s.active_peers().await;
+        drop(s);
 
         warn!(log, "DISTRIBUTE({})", active_peers.len());
 
