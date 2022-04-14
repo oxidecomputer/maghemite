@@ -578,73 +578,6 @@ name = "ddm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
- "common",
- "dropshot",
- "hostname",
- "hyper 0.14.18",
- "icmpv6",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
- "protod-api",
- "schemars",
- "serde",
- "serde_json",
- "slog",
- "slog-async",
- "slog-envlogger",
- "slog-term",
- "socket2 0.4.4",
- "thiserror",
- "tokio 1.17.0",
-]
-
-[[package]]
-name = "ddm-admin-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "percent-encoding",
- "progenitor",
- "reqwest 0.11.10",
- "serde",
- "serde_json",
- "slog",
-]
-
-[[package]]
-name = "ddm-illumos"
-version = "0.1.0"
-dependencies = [
- "ddm",
- "hostname",
- "slog",
- "slog-async",
- "slog-envlogger",
- "slog-term",
- "structopt",
- "tokio 1.17.0",
-]
-
-[[package]]
-name = "ddm-local"
-version = "0.1.0"
-dependencies = [
- "ddm",
- "hostname",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
- "slog",
- "slog-async",
- "slog-envlogger",
- "slog-term",
- "structopt",
- "tokio 1.17.0",
-]
-
-[[package]]
-name = "ddm2"
-version = "0.1.0"
-dependencies = [
- "anyhow",
  "common",
  "dropshot",
  "hyper 0.14.18",
@@ -662,6 +595,19 @@ dependencies = [
  "thiserror",
  "tokio 1.17.0",
  "util",
+]
+
+[[package]]
+name = "ddm-admin-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "percent-encoding",
+ "progenitor",
+ "reqwest 0.11.10",
+ "serde",
+ "serde_json",
+ "slog",
 ]
 
 [[package]]
@@ -683,7 +629,7 @@ dependencies = [
 name = "ddmd"
 version = "0.1.0"
 dependencies = [
- "ddm2",
+ "ddm",
  "hostname",
  "protod-api",
  "slog",
@@ -3216,7 +3162,6 @@ dependencies = [
  "signal-hook-registry",
  "socket2 0.4.4",
  "tokio-macros",
- "tracing",
  "winapi 0.3.9",
 ]
 

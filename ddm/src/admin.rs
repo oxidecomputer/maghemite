@@ -1,6 +1,15 @@
+use std::sync::Arc;
+use std::collections::{HashMap, BTreeMap, HashSet};
+use std::net::{Ipv6Addr, SocketAddrV6};
+use tokio::task::JoinHandle;
+
+use slog::{info, warn, error, Logger};
+use tokio::spawn;
 use dropshot::{
     endpoint,
     ConfigDropshot,
+    ConfigLogging,
+    ConfigLoggingLevel,
     ApiDescription,
     HttpServerStarter,
     RequestContext,
@@ -9,52 +18,34 @@ use dropshot::{
     TypedBody,
 };
 
-use tokio::sync::{Mutex, broadcast};
-use std::sync::Arc;
-use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
-use std::collections::{HashSet, HashMap};
-
-use slog::{error, info};
-
-use crate::router_info;
-use crate::config::Config;
-use crate::router::{RouterState, PeerStatus, RouterRuntime, RouterInfo, Route};
+use crate::peer;
+use crate::router::Router;
 use crate::net::Ipv6Prefix;
-use crate::protocol::DdmPrefix;
-use crate::platform;
 
-pub struct ArcAdmContext {
-    pub config: Config,
-    pub info: RouterInfo,
-    pub state: Arc::<Mutex::<RouterState>>,
-    pub platform: Arc::<Mutex::<dyn platform::FullDyn>>,
-    pub pfupdate: broadcast::Sender<DdmPrefix>,
-}
-
-#[endpoint { method = GET, path = "/ping" }]
-async fn adm_ping(
-    _ctx: Arc<RequestContext<ArcAdmContext>>,
-) -> Result<HttpResponseOk<String>, HttpError> {
-
-    Ok(HttpResponseOk("pong".to_string()))
-
+pub struct HandlerContext {
+    pub router: Arc::<Router>,
 }
 
 #[endpoint { method = GET, path = "/peers" }]
 async fn get_peers(
-    ctx: Arc<RequestContext<ArcAdmContext>>,
-) -> Result<HttpResponseOk<HashMap::<usize, PeerStatus>>, HttpError> {
+    ctx: Arc<RequestContext<HandlerContext>>,
+) -> Result<HttpResponseOk<HashMap::<usize, peer::Status>>, HttpError> {
 
-    let api_context = ctx.context();
-
-    let peers = api_context.state.lock().await.peers.clone();
     let mut result = HashMap::new();
 
-    for (k,v) in peers {
-        result.insert(k.index, v.lock().await.clone()); 
-    }
+    let context = ctx.context();
+    let state = context.router.state.lock().await;
 
-    info!(ctx.log, "kerplop {:#?}", result);
+    for (ifx, nbr) in &state.interfaces {
+
+        let nbr = match nbr {
+            Some(nbr) => nbr,
+            None => continue,
+        };
+
+        result.insert(ifx.ifnum as usize, nbr.session.status().await);
+
+    }
 
     Ok(HttpResponseOk(result))
 
@@ -62,158 +53,80 @@ async fn get_peers(
 
 #[endpoint { method = GET, path = "/prefixes" }]
 async fn get_prefixes(
-    ctx: Arc<RequestContext<ArcAdmContext>>,
-) -> Result<HttpResponseOk<HashSet::<DdmPrefix>>, HttpError> {
+    ctx: Arc<RequestContext<HandlerContext>>,
+) -> Result<HttpResponseOk<BTreeMap::<Ipv6Addr, HashSet::<Ipv6Prefix>>>, HttpError> {
 
-    let api_context = ctx.context();
+    let context = ctx.context();
+    let state = context.router.state.lock().await;
 
-    Ok(HttpResponseOk(api_context.state.lock().await.prefixes.clone()))
-
-}
-
-#[endpoint { method = GET, path = "/routes" }]
-async fn get_routes(
-    ctx: Arc<RequestContext<ArcAdmContext>>,
-) -> Result<HttpResponseOk<Vec::<Route>>, HttpError> {
-
-    let api_context = ctx.context();
-    let routes = match api_context.platform.lock().await.get_routes().await {
-        Ok(rs) => rs.clone(),
-        Err(e) => {
-            error!(ctx.log, "{}", e);
-            return Err(HttpError::for_internal_error(format!("{}", e)));
-        }
-    };
-
-    Ok(HttpResponseOk(routes))
-
+    Ok(HttpResponseOk(state.remote_prefixes.clone()))
 }
 
 #[endpoint { method = PUT, path = "/prefix" }]
-async fn advertise_prefix(
-    ctx: Arc<RequestContext<ArcAdmContext>>,
-    body_param: TypedBody<HashSet<Ipv6Prefix>>,
+async fn advertise_prefixes(
+    ctx: Arc<RequestContext<HandlerContext>>,
+    request: TypedBody<HashSet<Ipv6Prefix>>,
 ) -> Result<HttpResponseOk<()>, HttpError> {
 
-    let api_context = ctx.context();
-    let body: HashSet<Ipv6Prefix> = body_param.into_inner();
+    let context = ctx.context();
+    let router = &context.router;
 
-    let mut state = api_context.state.lock().await;
-
-    let prefixes = &mut state.prefixes;
-    let x = DdmPrefix{
-        origin: api_context.info.name.clone(),
-        prefixes: body.clone(),
-        serial: 0,
-    };
-    prefixes.insert(x.clone());
-
-    // there will be no update channel if there are no peers, when a peer joins
-    // later they will get this advertisement as a part of the peering process.
-    if state.peers.is_empty() {
-        return Ok(HttpResponseOk(()))
-    }
-    match api_context.pfupdate.send(x.clone()) {
-        Ok(_) => {}, 
-        Err(e) => {
-            error!(ctx.log, "{}", e);
-            return Err(HttpError::for_internal_error(format!("{}", e)));
-        }
-    }
-
+    router.advertise(request.into_inner()).await
+        .map_err(|e| HttpError::for_internal_error(e))?;
 
     Ok(HttpResponseOk(()))
-
 }
 
-pub fn api_description() -> Result<ApiDescription<ArcAdmContext>, String> {
-    let mut api = ApiDescription::new();
-    api.register(adm_ping)?;
-    api.register(get_peers)?;
-    api.register(advertise_prefix)?;
-    api.register(get_prefixes)?;
-    api.register(get_routes)?;
-    Ok(api)
-}
+pub fn start_server(
+    log: Logger,
+    addr: Ipv6Addr,
+    port: u16,
+    router : Arc::<Router>,
 
+) -> Result<JoinHandle<()>, String> {
 
-pub(crate) async fn handler<Platform: platform::Full>(
-    r: RouterRuntime<Platform>
-) -> Result<(), String> {
+    let sa = SocketAddrV6::new(addr, port, 0, 0,);
 
-    let addr = SocketAddr::V4(
-        SocketAddrV4::new(Ipv4Addr::new(127,0,0,1), r.config.admin_port)
-    );
-
-    let config_dropshot = ConfigDropshot{
-        bind_address: addr,
+    let config = ConfigDropshot {
+        bind_address: sa.into(),
         ..Default::default()
     };
 
-    let api = api_description()?;
+    let ds_log =
+        ConfigLogging::StderrTerminal{level: ConfigLoggingLevel::Error}
+        .to_logger("admin")
+        .map_err(|e| e.to_string())?;
 
-    let api_context = ArcAdmContext{
-        config: r.config,
-        info: r.router.info.clone(),
-        state: r.router.state.clone(),
-        platform: r.platform.clone(),
-        pfupdate: r.router.prefix_update.clone(),
-    };
+    let mut api = ApiDescription::new();
+    api.register(get_peers).unwrap();
+    api.register(get_prefixes).unwrap();
+    api.register(advertise_prefixes).unwrap();
+
+    let context = HandlerContext{ router };
 
     let server = HttpServerStarter::new(
-        &config_dropshot,
+        &config,
         api,
-        api_context,
-        &r.log,
-    ).map_err(|e| format!("create dropshot adm server: {}", e))?
-    .start();
+        context,
+        &ds_log,
+    ).map_err(|e| format!("new admin dropshot: {}", e))?;
 
-    router_info!(r.log, r.router.info.name, "starting adm server");
+    info!(log, "admin: listening on {}", sa);
 
-    server.await
+    let log = log.clone();
+    Ok(spawn(async move {
+        match server.start().await {
+            Ok(_) => warn!(log, "admin: unexpected server exit"),
+            Err(e) => error!(log, "admin: server start error {:?}", e),
+        }
+    }))
 
 }
 
-#[cfg(test)]
-mod test {
-    use crate::mimos;
-    use crate::protocol::RouterKind;
-
-    use tokio::time::sleep;
-    use std::time::Duration;
-
-    use slog_term;
-    use slog_async;
-    use slog::Drain;
-
-    #[tokio::test]
-    async fn mimos_adm_ping() -> anyhow::Result<()> {
-
-        let decorator = slog_term::TermDecorator::new().build();
-        let drain = slog_term::FullFormat::new(decorator).build().fuse();
-        let drain = slog_envlogger::new(drain).fuse();
-        let drain = slog_async::Async::new(drain).build().fuse();
-        let log = slog::Logger::root(drain, slog::o!());
-
-        let a = mimos::Node::new("a".into(), RouterKind::Server);
-        a.run(4710, log)?;
-
-        sleep(Duration::from_secs(1)).await;
-
-        let client = hyper::Client::new();
-
-        let uri = "http://127.0.0.1:4710/ping".parse()?;
-        let resp = client.get(uri).await?;
-        assert_eq!(resp.status(), 200);
-
-        let body_bytes = hyper::body::to_bytes(resp.into_body()).await?;
-        let body = String::from_utf8(body_bytes.to_vec()).unwrap();
-        assert_eq!(body, "\"pong\"");
-
-
-        Ok(())
-
-    }
-
-
+pub fn api_description() -> Result<ApiDescription<HandlerContext>, String> {
+    let mut api = ApiDescription::new();
+    api.register(get_peers)?;
+    api.register(advertise_prefixes)?;
+    api.register(get_prefixes)?;
+    Ok(api)
 }

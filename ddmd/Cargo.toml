@@ -10,6 +10,6 @@ slog-term = "2.7"
 slog-async = "2.7"
 slog-envlogger = "2.2"
 structopt = "0.3"
-ddm2 = { path = "../ddm2" }
+ddm = { path = "../ddm" }
 hostname = "0.3"
 protod-api = { git = "https://github.com/oxidecomputer/dendrite" }

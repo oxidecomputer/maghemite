@@ -21,36 +21,19 @@ set -o xtrace
 cargo --version
 rustc --version
 
-pushd ddm-illumos
-
 banner "build"
 ptime -m cargo build
 ptime -m cargo build --release
 
-popd
-
 for x in debug release
 do
     mkdir -p /work/$x
-    cp target/$x/ddm-illumos /work/$x/ddm-illumos
-done
-
-pushd ddmadm
-
-ptime -m cargo build
-ptime -m cargo build --release
-
-popd
-
-for x in debug release
-do
-    mkdir -p /work/$x
+    cp target/$x/ddmd /work/$x/ddmd
     cp target/$x/ddmadm /work/$x/ddmadm
 done
 
 banner "test"
 
-pushd ddm2
 export RUST_LOG=trace
 
 banner "rdp"

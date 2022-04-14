@@ -1,6 +1,6 @@
 use std::fs::File;
 use anyhow::{anyhow, Result};
-use ddm2::admin::api_description;
+use ddm::admin::api_description;
 
 fn main() -> Result<()> {
     let api = api_description().map_err(|e| anyhow!("{}", e))?;

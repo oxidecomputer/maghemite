@@ -53,32 +53,32 @@ async fn main() -> Result<(), String> {
     let name = hostname::get().unwrap().into_string().unwrap();
 
     let config = match opt.subcommand {
-        SubCommand::Server => ddm2::router::Config{
+        SubCommand::Server => ddm::router::Config{
             name,
             interfaces: opt.ifx,
-            router_kind: ddm2::protocol::RouterKind::Server,
+            router_kind: ddm::protocol::RouterKind::Server,
             ..Default::default()
         },
         SubCommand::Transit(t) => {
             let protod = if t.dendrite {
-                Some(ddm2::router::ProtodConfig{
+                Some(ddm::router::ProtodConfig{
                     host: t.protod_host.unwrap_or("localhost".into()),
                     port: t.protod_port.unwrap_or(protod_api::default_port()),
                 })
             } else {
                 None
             };
-            ddm2::router::Config{
+            ddm::router::Config{
                 name,
                 interfaces: opt.ifx,
                 protod,
-                router_kind: ddm2::protocol::RouterKind::Transit,
+                router_kind: ddm::protocol::RouterKind::Transit,
                 ..Default::default()
             }
         }
     };
 
-    let mut r = ddm2::router::Router::new(
+    let mut r = ddm::router::Router::new(
             log.clone(),
             config,
     ).expect("new router");
@@ -89,7 +89,7 @@ async fn main() -> Result<(), String> {
         None => Ipv6Addr::LOCALHOST,
     };
 
-    match ddm2::admin::start_server(
+    match ddm::admin::start_server(
         log.clone(),
         addr,
         opt.admin_port,
