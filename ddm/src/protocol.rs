@@ -1,16 +1,11 @@
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv6Addr};
 
-use serde::{Serialize, Deserialize};
 use schemars::JsonSchema;
+use serde::{Serialize, Deserialize};
 
 use crate::net::Ipv6Prefix;
-
-/// The DDM multicast address used for bootstrapping ff02::dd;
-pub const RDP_MCAST_ADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0,0,0,0,0,0, 0xdd);
-pub const PEERING_PORT: u16 = 0x1dd0;
-pub const PREFIX_EXCHANGE_PORT: u16 = 0x1dd1;
+use crate::sys;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 pub enum RouterKind {
@@ -18,56 +13,41 @@ pub enum RouterKind {
     Transit,
 }
 
-impl std::str::FromStr  for RouterKind {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.to_lowercase();
-        match s.as_str()  {
-            "server" => Ok(RouterKind::Server),
-            "transit" => Ok(RouterKind::Transit),
-            _ => Err(()),
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum PeerMessage {
-    Ping(PeerPing),
-    Pong(PeerPong),
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct PeerPing {
+pub struct Hail {
     pub sender: String,
-    // TODO: include the serial of the last ddm messages received,
-    // .     this way if the peer notices we are behind, it can resend us
-    // .     any information we may have missed. This woudl allow us to
-    // .     automatically converge on the most up to date state through
-    // .     the ping messages. This would preclude the need for the sync
-    // .     messages.
+    pub router_kind: RouterKind,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct PeerPong {
+pub struct Response {
     pub sender: String,
     pub origin: String,
-    pub kind: RouterKind,
+    pub router_kind: RouterKind,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-pub enum DdmMessage {
-    Prefix(DdmPrefix),
-}
+pub struct Advertise {
+    /// The next hop address for the enclosed prefixes
+    pub nexthop: Ipv6Addr,
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct DdmPrefix {
-    pub origin: String,
+    /// Prefixes being advertised
     pub prefixes: HashSet::<Ipv6Prefix>,
-    pub serial: u64,
 }
 
-impl Hash for DdmPrefix {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.origin.hash(state);
+impl Into<Vec<sys::Route>> for Advertise {
+    fn into(self) -> Vec<sys::Route> {
+        self.prefixes.iter().map(|pfx| sys::Route{
+            dest: IpAddr::V6(pfx.addr),
+            prefix_len: pfx.mask,
+            gw: IpAddr::V6(self.nexthop),
+            egress_port: 0,
+        }).collect()
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Solicit {
+    /// The source address of the peer asking for advertisements.
+    pub src: Ipv6Addr,
 }

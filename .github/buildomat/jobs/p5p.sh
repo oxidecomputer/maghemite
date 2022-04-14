@@ -21,7 +21,7 @@ cargo --version
 rustc --version
 
 banner build
-ptime -m cargo build --release --verbose -p ddm-illumos -p ddmadm
+ptime -m cargo build --release --verbose -p ddmd -p ddmadm
 
 banner p5p
 pushd pkg

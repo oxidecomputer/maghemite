@@ -31,7 +31,7 @@ cargo --version
 rustc --version
 
 banner build
-ptime -m cargo build --release --verbose -p ddm-illumos -p ddmadm
+ptime -m cargo build --release --verbose -p ddmd -p ddmadm
 
 banner image
 ptime -m cargo run -p mg-package

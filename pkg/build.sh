@@ -13,7 +13,7 @@ mkdir -p proto/lib/svc/manifest/system
 mkdir -p proto/opt/oxide/maghemite/bin
 cp ../smf/ddm/manifest.xml proto/lib/svc/manifest/system/mg-ddm.xml
 cp ../smf/ddm_method_script.sh proto/opt/oxide/maghemite/bin/
-cp ../target/release/ddm-illumos proto/opt/oxide/maghemite/bin/
+cp ../target/release/ddmd proto/opt/oxide/maghemite/bin/
 cp ../target/release/ddmadm proto/opt/oxide/maghemite/bin/
 
 # create the package
@@ -32,4 +32,4 @@ pkgrepo create $REPO
 pkgrepo add-publisher -s $REPO $PUBLISHER
 
 pkgsend publish -d proto -s $REPO maghemite.final.p5m
-pkgrecv -a -d packages/repo/maghemite-1.0.$COMMIT_COUNT.p5p -s $REPO -v -m latest '*'
+pkgrecv -a -d packages/repo/maghemite-0.1.$COMMIT_COUNT.p5p -s $REPO -v -m latest '*'

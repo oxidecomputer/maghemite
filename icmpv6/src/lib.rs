@@ -242,6 +242,15 @@ pub enum ICMPv6Packet {
     RouterAdvertisement(RouterAdvertisement),
 }
 
+impl ICMPv6Packet {
+    pub fn wire(&self) -> Vec<u8> {
+        match self {
+            Self::RouterSolicitation(rs) => rs.wire(),
+            Self::RouterAdvertisement(ra) => ra.wire(),
+        }
+    }
+}
+
 pub fn parse_icmpv6(buf: &[u8]) -> Option<ICMPv6Packet> {
 
     if buf.len() < 4 {

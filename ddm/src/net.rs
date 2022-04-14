@@ -1,10 +1,10 @@
-// Copyright 2021 Oxide Computer Company
-use serde::{Deserialize, Serialize};
-use schemars::JsonSchema;
 use std::net::{Ipv6Addr, AddrParseError};
 use std::num::ParseIntError;
-use thiserror::Error;
 use std::str::FromStr;
+
+use schemars::JsonSchema;
+use thiserror::Error;
+use serde::{Deserialize, Serialize};
 
 #[derive(
     Debug, Clone, Copy, Deserialize, Serialize, JsonSchema,
@@ -44,4 +44,3 @@ impl FromStr for Ipv6Prefix {
 
     }
 }
-

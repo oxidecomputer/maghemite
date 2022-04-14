@@ -1,0 +1,13 @@
+[package]
+name = "util"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
+socket2 = { version = "0.4", features = ["all"] }
+anyhow = "1"
+slog = "2.7"
+slog-term = "2.7"
+slog-async = "2.7"
+slog-envlogger = "2.2"

@@ -29,9 +29,6 @@ struct Opt {
 
 #[derive(Debug, StructOpt)]
 enum SubCommand {
-    /// Ping a DDM router.
-    Ping,
-
     /// Get a DDM router's peers
     GetPeers,
 
@@ -39,7 +36,7 @@ enum SubCommand {
     GetPrefixes,
 
     /// Get the set of active DDM routes on a router.
-    GetRoutes,
+    //TODO GetRoutes,
 
     /// Advertise a prefix from a DDM router.
     AdvertisePrefix(AdvertiseCommand)
@@ -70,13 +67,6 @@ async fn main() -> Result<()> {
     let client = Client::new(&endpoint, log.clone());
 
     match opt.subcommand {
-        SubCommand::Ping => {
-            match client.adm_ping().await {
-                Ok(msg) => info!(log, "{:?}", msg),
-                Err(e) => error!(log, "{}", e),
-            };
-        }
-
         SubCommand::GetPeers => {
             match client.get_peers().await {
                 Ok(msg) => info!(log, "{:#?}", msg),
@@ -91,12 +81,14 @@ async fn main() -> Result<()> {
             };
         }
 
+        /* TODO
         SubCommand::GetRoutes => {
             match client.get_routes().await {
                 Ok(msg) => info!(log, "{:#?}", msg),
                 Err(e) => error!(log, "{}", e),
             };
         }
+        */
 
         SubCommand::AdvertisePrefix(ac) => {
             // TODO a better way to deal with translating the client type back
@@ -108,7 +100,7 @@ async fn main() -> Result<()> {
                     mask: p.mask,
                 });
             }
-            match client.advertise_prefix(&prefixes).await {
+            match client.advertise_prefixes(&prefixes).await {
                 Ok(msg) => info!(log, "{:#?}", msg),
                 Err(e) => error!(log, "{}", e),
             };

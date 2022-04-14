@@ -16,12 +16,15 @@
   <exec_method type='method' name='stop' exec=':kill' timeout_seconds='0' />
 
   <property_group name='config' type='application'>
-    <propval name='admin_port' type='count' value='8000' />
-    <propval name='mode' type='astring' value='server' />
-    <propval name='dendrite' type='boolean' value='false' />
-    <propval name='protod' type='astring' value='' />
-    <propval name='log' type='astring' value='info' />
-  </property_group>
+     <propval name='admin_host' type='astring' value='::1' />
+     <propval name='admin_port' type='count' value='8000' />
+     <propval name='mode' type='astring' value='server' />
+     <propval name='dendrite' type='boolean' value='false' />
+     <propval name='protod' type='astring' value='' />
+     <propval name='log' type='astring' value='info' />
+     <property name='interfaces' type='astring'>
+     </property>
+   </property_group>
 
   <property_group name='startd' type='framework'>
     <propval name='duration' type='astring' value='contract' />
