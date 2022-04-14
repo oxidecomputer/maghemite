@@ -39,14 +39,33 @@ impl LabInterface {
 
 pub fn testlab_x2(name: &str) -> Result<Vec<LabInterface>> {
 
-    let if1 = LabInterface::new(&format!("test_{}_sim0", name))?;
-    let if2 = LabInterface::new(&format!("test_{}_sim1", name))?;
+    let if0 = LabInterface::new(&format!("test_{}_sim0", name))?;
+    let if1 = LabInterface::new(&format!("test_{}_sim1", name))?;
     connect_simnet_peers(
+        &if0.link.handle(),
         &if1.link.handle(),
-        &if2.link.handle(),
     )?;
 
-    Ok(vec![if1, if2])
+    Ok(vec![if0, if1])
+
+}
+
+pub fn testlab_1x2(name: &str) -> Result<Vec<LabInterface>> {
+
+    let if0 = LabInterface::new(&format!("test_{}_sim0", name))?;
+    let if1 = LabInterface::new(&format!("test_{}_sim1", name))?;
+    let if2 = LabInterface::new(&format!("test_{}_sim2", name))?;
+    let if3 = LabInterface::new(&format!("test_{}_sim3", name))?;
+    connect_simnet_peers(
+        &if0.link.handle(),
+        &if1.link.handle(),
+    )?;
+    connect_simnet_peers(
+        &if2.link.handle(),
+        &if3.link.handle(),
+    )?;
+
+    Ok(vec![if0, if1, if2, if3])
 
 }
 

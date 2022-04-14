@@ -16,7 +16,7 @@ use crate::peer;
 use crate::rpx;
 use crate::sys;
 use crate::net::Ipv6Prefix;
-use crate::protocol::RouterKind;
+use crate::protocol::{RouterKind, Advertise};
 
 pub struct Router { 
     pub config: Config,
@@ -75,6 +75,29 @@ impl RouterState {
             }
         }
         None
+    }
+
+    /// Get this router's active peers.
+    pub async fn active_peers(&self) -> BTreeMap<Interface, NeighboringRouter> {
+
+        let mut result = BTreeMap::new();
+
+        for (ifx, nbr) in self.interfaces.clone() {
+            match nbr {
+                Some(nbr) => {
+                    match nbr.session.status().await {
+                        peer::Status::Active => {
+                            result.insert(ifx, nbr);
+                        }
+                        _ => continue,
+                    }
+                }
+                None => continue,
+            }
+        }
+
+        result
+
     }
 }
 
@@ -276,7 +299,7 @@ impl Router {
     }
 
     pub async fn add_remote_prefixes(
-        state: Arc::<Mutex::<RouterState>>,
+        state: &Arc::<Mutex::<RouterState>>,
         nexthop: Ipv6Addr,
         prefixes: HashSet::<Ipv6Prefix>,
     ) {
@@ -288,6 +311,49 @@ impl Router {
             }
             None => {
                 router_state.remote_prefixes.insert(nexthop, prefixes.clone());
+            }
+        }
+
+    }
+
+    pub async fn distribute(
+        state: &Arc::<Mutex::<RouterState>>,
+        adv: &Advertise,
+        config: &Config,
+        log: &Logger,
+    ) {
+
+        let s = state.lock().await;
+
+        let active_peers = s.active_peers().await;
+
+        warn!(log, "DISTRIBUTE({})", active_peers.len());
+
+        for (ifx, nbr) in active_peers {
+
+            // dont redistribute to the source
+            if adv.nexthop == nbr.addr {
+                continue
+            }
+
+            let mut adv = adv.clone();
+
+            // update the next hop to be this interface e.g. distance vector
+            // routing
+            adv.nexthop = ifx.ll_addr;
+
+            warn!(log, "DIST: {:?} -> {:?}", adv, nbr.addr);
+
+            match rpx::advertise(
+                adv.nexthop,
+                adv.prefixes.clone(),
+                ifx.ifnum,
+                nbr.addr,
+                config.rpx_port,
+            ).await {
+                Ok(_) => {},
+                Err(e) => error!(log,
+                    "distribute advertisement: {}", e),
             }
         }
 
@@ -309,10 +375,20 @@ impl Router {
         ).await?;
 
         Self::add_remote_prefixes(
-            state,
+            &state,
             advertisement.nexthop,
             advertisement.prefixes.clone(),
         ).await;
+
+        if config.router_kind == RouterKind::Transit {
+            warn!(log, "DISTRIBUTE");
+            Router::distribute(
+                &state,
+                &advertisement,
+                &config,
+                &log,
+            ).await;
+        }
 
         // for upper half only we're done
         if config.upper_half_only {
@@ -460,6 +536,10 @@ impl Router {
 
         let mut result = HashSet::new();
         let remotes = self.state.lock().await.remote_prefixes.clone();
+        debug!(self.log, "[{}] nexthops {:#?}",
+            self.config.name,
+            remotes,
+        );
         for (nexthop, prefixes) in remotes {
             if prefixes.contains(&prefix) {
                 result.insert(nexthop);
@@ -590,14 +670,14 @@ mod tests {
     use std::str::FromStr;
 
     use anyhow::Result;
-    use util::test::testlab_x2;
+    use util::test::{testlab_x2, testlab_1x2};
     use tokio::time::sleep;
     use slog::{info, debug};
     use super::*;
 
-    /// Discover Peer Exchange
+    /// Discover, peer, exchange with two directly connected server routers
     #[tokio::test]
-    async fn rs_dpx() -> Result<()> {
+    async fn rs_dpx_x2() -> Result<()> {
 
         //
         // set up testlab interfaces
@@ -741,5 +821,111 @@ mod tests {
         assert_eq!(p1.get(&ifx1), Some(&Some(peer::Status::Expired)));
 
         Ok(())
+    }
+
+    /// Discover, peer, exchange with two server routers connected to a single
+    /// transit router.
+    #[tokio::test]
+    async fn rs_dpx_1x2() -> Result<()> {
+
+        //
+        // set up testlab interfaces
+        //
+
+        let interfaces = testlab_1x2("disc2")?;
+        let if0 = format!("{}/v6", interfaces[0].name.clone());
+        let if1 = format!("{}/v6", interfaces[1].name.clone());
+        let if2 = format!("{}/v6", interfaces[2].name.clone());
+        let if3 = format!("{}/v6", interfaces[3].name.clone());
+
+        let ifx1: Interface = (&interfaces[1].addr.info).try_into().unwrap();
+        let ifx3: Interface = (&interfaces[3].addr.info).try_into().unwrap();
+
+        //
+        // set up routers
+        //
+
+        let sc1 = Config{
+            name: "r1".into(),
+            interfaces: vec![if0],
+            peer_interval: 100,
+            peer_expire: 1000,
+            upper_half_only: true,
+            ..Default::default()
+        };
+
+        let sc2 = Config{
+            name: "r2".into(),
+            interfaces: vec![if2],
+            peer_interval: 100,
+            peer_expire: 1000,
+            upper_half_only: true,
+            ..Default::default()
+        };
+
+        let tc1 = Config{
+            name: "t1".into(),
+            interfaces: vec![if1, if3],
+            peer_interval: 100,
+            peer_expire: 1000,
+            upper_half_only: true,
+            router_kind: RouterKind::Transit,
+            ..Default::default()
+        };
+
+        let log = util::test::logger();
+        let mut s1 = Router::new(log.clone(), sc1).expect("new s-router 1");
+        let mut s2 = Router::new(log.clone(), sc2).expect("new s-router 2");
+        let mut t1 = Router::new(log.clone(), tc1).expect("new t-router 2");
+
+        //
+        // run the routers
+        //
+        
+        info!(log, "running routers");
+        s1.run().await.expect("run server router 1");
+        s2.run().await.expect("run server router 2");
+        t1.run().await.expect("run transit router 1");
+        info!(log, "routers running");
+
+        //
+        // advertise some routes
+        //
+
+        debug!(log, "advertising!!!");
+        let pfx1 = Ipv6Prefix::from_str("fd00:1::/64").expect("parse prefix a1");
+        let mut a1 = HashSet::new();
+        a1.insert(pfx1);
+        s1.advertise(a1).await.expect("advertise from r1");
+
+        let pfx2 = Ipv6Prefix::from_str("fd00:2::/64").expect("parse prefix a2");
+        let mut a2 = HashSet::new();
+        a2.insert(pfx2);
+        s2.advertise(a2).await.expect("advertise from a2");
+
+        //
+        // wait for discovery + peering + exchange
+        //
+        
+        sleep(Duration::from_secs(5)).await;
+
+        //
+        // assert expected prefix state
+        //
+        
+        // s-router1 should have the transit routers link-local address as a
+        // nexthop for fd00:2::/64
+        let nexthops = s1.nexthops(pfx2).await;
+        debug!(log, "{:?}", nexthops);
+        assert!(nexthops.contains(&ifx1.ll_addr));
+
+        // router2 should have the transit routers link-local address as a
+        // nexthop for fd00:1::/64
+        let nexthops = s2.nexthops(pfx1).await;
+        debug!(log, "{:?}", nexthops);
+        assert!(nexthops.contains(&ifx3.ll_addr));
+
+        Ok(())
+
     }
 }

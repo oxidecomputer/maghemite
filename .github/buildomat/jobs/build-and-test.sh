@@ -59,5 +59,8 @@ pfexec cargo test rs_send_recv
 banner "peer"
 pfexec cargo test peer_session1
 
-banner "dpx"
-pfexec cargo test rs_dpx
+banner "dpx x2"
+pfexec cargo test rs_dpx_x2
+
+banner "dpx 1x2"
+pfexec cargo test rs_dpx_1x2

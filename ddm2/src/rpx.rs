@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use hyper::body::HttpBody;
 use tokio::{spawn, time::timeout, task::JoinHandle, sync::Mutex};
-use slog::{Logger, trace, warn, error};
+use slog::{Logger, info, trace, warn, error};
 use dropshot::{
     endpoint,
     ConfigDropshot,
@@ -22,7 +22,7 @@ use dropshot::{
 };
 
 use crate::net::Ipv6Prefix;
-use crate::protocol::{Advertise, Solicit};
+use crate::protocol::{Advertise, Solicit, RouterKind};
 use crate::router::{Interface, Router, RouterState, Config};
 use crate::peer;
 use crate::sys;
@@ -73,7 +73,7 @@ pub(crate) fn start_server(
     }))
 }
 
-async fn ensure_peer_active(router: &Arc::<Mutex::<RouterState>>, addr: Ipv6Addr)
+async fn ensure_peer_active(router: &Arc<Mutex<RouterState>>, addr: Ipv6Addr)
 -> Result<Interface, HttpError> {
     match router.lock().await.peer_status_for(addr).await {
         Some((ifx, peer::Status::Active)) => Ok(ifx),
@@ -99,13 +99,27 @@ async fn advertise_handler(
     let router = context.router.clone();
     let advertisement = rq.into_inner();
 
+    info!(context.log, "[{}] received advertisement {:#?}",
+        &context.config.name,
+        advertisement
+    );
+
     ensure_peer_active(&router, advertisement.nexthop).await?;
 
     Router::add_remote_prefixes(
-        router,
+        &router,
         advertisement.nexthop,
         advertisement.prefixes.clone(),
     ).await;
+
+    if context.config.router_kind == RouterKind::Transit {
+        Router::distribute(
+            &router,
+            &advertisement,
+            &context.config,
+            &context.log,
+        ).await;
+    }
 
     // if only in upper-half mode, we're done here
     if context.config.upper_half_only {
