@@ -1,4 +1,42 @@
-// DDM Router Implementation
+/// This file contains the DDM Router implementation. This implementation is
+/// responsible for the DDM control plane, and not the data plane. The
+/// responsibility of the control plane is to
+///
+///   1. Discover neighboring routers.
+///   2. Peer with neighboring routers.
+///   3. Exchange routing information with neighboring routers.
+///
+/// The responsibility of the data plane is to decide what route to use when
+/// multiple routes for the same destination are present. This is done either in
+/// the operating system kernel or on a switch ASIC and is not implemented here.
+/// Here we are only concered with the 3 responsiblities above.
+///
+/// The DDM router implementation is mostly event driven. The router responds to
+/// discovery solicitations by attempting to peer with a soliciting neighbor.
+/// Hailing messages result in reflection responses that let peering routers
+/// know this router is a viable peer for route exchange. Reception of
+/// advertisements results in the update of routing tables and in the case of
+/// transit routers, distribution of advertisements to other peers.
+///
+/// Each of the responsibilities above, discovery, peering and routing prefix
+/// exchange - are implemented in their own files and have block comments at the
+/// top that describe their functionality.
+///
+/// The router is intrinsically asynchronous as it is primarily event driven.
+/// Because of this several tasks are spawned by the router to manage
+/// interactions with other routers and admin API users. A common design element
+/// used throughout the router is to save the join handles associated with these
+/// tasks in structures with a drop implementation that will abort the thread
+/// when dropped. This is to prevent situations like a peering session being
+/// kept alive by a peer that has been dropped by a router.
+///
+/// A router is configured with a set of interfaces that it expects to peer
+/// over. When starting up there is an initial solicit routine that will wait
+/// for active peering sessions to be established on each of these interfaces
+/// and then solicit each neighboring router for all routes it currently has.
+/// This allows a newly peered router to synchronize with the rest of the
+/// network. After that initial solicitation takes place, normal real-time route
+/// prefix exchange takes place between routers.
 
 use std::net::{IpAddr, Ipv6Addr};
 use std::collections::{BTreeMap, HashSet};
@@ -8,7 +46,7 @@ use std::convert::TryFrom;
 
 use tokio::{sync::Mutex, spawn, time::sleep, task::JoinHandle};
 use libnet::{IpInfo, get_ipaddr_info};
-use icmpv6::{ICMPv6Packet, RouterSolicitation};
+use icmpv6::ICMPv6Packet;
 use slog::{self, info, debug, trace, error, warn, Logger};
 
 use crate::rdp;
@@ -437,7 +475,7 @@ impl Router {
         //
         // Start a solicitor.
         //
-        let mut solicitor = Solicitor::new(
+        let mut solicitor = rdp::Solicitor::new(
             log.clone(),
             interface.ifnum,
             config.discovery_interval,
@@ -576,59 +614,6 @@ async fn discover_neighboring_router(
     }
 }
 
-async fn solicit_ddm_router(ifnum: i32) -> Result<(), String>{
-    let msg = ICMPv6Packet::RouterSolicitation(
-        RouterSolicitation::new(None)
-    );
-    let dst = rdp::DDM_RDP_MADDR;
-    rdp::send(msg.clone(), dst, ifnum as u32)
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// A solicitor that solicits in the background and stops soliciting when
-/// droppd.
-pub struct Solicitor {
-    ifnum: i32,
-    task: Option<tokio::task::JoinHandle<()>>,
-    interval: u64,
-    log: Logger,
-}
-
-impl Solicitor {
-    fn new(log: Logger, ifnum: i32, interval: u64) -> Self {
-        Solicitor { ifnum, interval, task: None, log }
-    }
-
-    fn start(&mut self) {
-        let ifnum = self.ifnum;
-        let interval = self.interval;
-        let log = self.log.clone();
-         self.task = Some(spawn(async move { 
-            loop { 
-                trace!(log, "soliciting ddm router");
-                match solicit_ddm_router(ifnum).await {
-                    Ok(_) => {},
-                    Err(e) => {
-                        warn!(log, "solicit failed: {}", e);
-                    }
-                }
-                sleep(Duration::from_millis(interval)).await;
-            } 
-        }));
-    }
-}
-
-impl Drop for Solicitor {
-    fn drop(&mut self) {
-        info!(self.log, "dropping solicitor on ifnum {}", self.ifnum);
-        match self.task {
-            Some(ref t) => t.abort(),
-            None => {}
-        }
-    }
-}
-
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Interface {
     pub ifnum: i32,
@@ -659,7 +644,7 @@ impl TryFrom<IpInfo> for Interface {
 pub struct NeighboringRouter {
     pub addr: Ipv6Addr,
     pub session: Arc::<peer::Session>,
-    pub solicitor: Arc::<Solicitor>,
+    pub solicitor: Arc::<rdp::Solicitor>,
 }
 
 #[cfg(test)]

@@ -1,13 +1,40 @@
-// Router Discovery Protocol
+/// This file contains the router discovery protocol (RDP) functionality for
+/// DDM. DDM routers emit periodic router solicitations to make other routers
+/// aware of their presence, but they do not emit advertisements. A DDM router
+/// will respond to an RDP solicitation by attempting to peer with the solicitor
+/// using the DDM peering protocol.
+///
+///              *-----*                        *-----*
+///              |  A  |                        |  B  |
+///              *-----*                        *-----*
+///                 |           solicit            |
+///                 |----------------------------->|
+///                 |            peer              |
+///                 |<-----------------------------|
+///                 |                              |
+///                 |    [b peers with a ...]      |
+///                 |                              |
+///              
+/// DDM peering is directional, so B peering with A is independent of A peering
+/// with B.
+///
+/// A DDM router will periodically send out solicitations on all interfaces it
+/// is configured to use independent of peering status with neighboring routers
+/// on those interfaces. This provides a persistent presence detection mechanism
+/// for neighbors.
+///
+/// Router solicitations are sent on the DDM router discovery link-local
+/// multicast address ff02::dd.
 
 use std::io::Result;
 use std::net::{SocketAddrV6, Ipv6Addr};
 use std::mem::MaybeUninit;
-use slog::{self, trace, Logger};
+use slog::{self, info, warn, trace, Logger};
+use std::time::Duration;
 
-use icmpv6::{ICMPv6Packet, parse_icmpv6};
+use icmpv6::{RouterSolicitation, ICMPv6Packet, parse_icmpv6};
 use socket2::{Socket, Domain, Type, Protocol, SockAddr};
-use tokio::io::unix::AsyncFd;
+use tokio::{spawn, time::sleep, io::unix::AsyncFd};
 
 pub const DDM_RDP_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0,0,0,0,0,0, 0xdd);
 
@@ -148,4 +175,56 @@ mod tests {
 
         Ok(())
     }
+}
+
+/// A solicitor that solicits in the background and stops soliciting when
+/// droppd.
+pub struct Solicitor {
+    ifnum: i32,
+    task: Option<tokio::task::JoinHandle<()>>,
+    interval: u64,
+    log: Logger,
+}
+
+impl Solicitor {
+    pub fn new(log: Logger, ifnum: i32, interval: u64) -> Self {
+        Solicitor { ifnum, interval, task: None, log }
+    }
+
+    pub fn start(&mut self) {
+        let ifnum = self.ifnum;
+        let interval = self.interval;
+        let log = self.log.clone();
+         self.task = Some(spawn(async move { 
+            loop { 
+                trace!(log, "soliciting ddm router");
+                match solicit_ddm_router(ifnum).await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        warn!(log, "solicit failed: {}", e);
+                    }
+                }
+                sleep(Duration::from_millis(interval)).await;
+            } 
+        }));
+    }
+}
+
+impl Drop for Solicitor {
+    fn drop(&mut self) {
+        info!(self.log, "dropping solicitor on ifnum {}", self.ifnum);
+        match self.task {
+            Some(ref t) => t.abort(),
+            None => {}
+        }
+    }
+}
+
+async fn solicit_ddm_router(ifnum: i32) -> Result<()>{
+    let msg = ICMPv6Packet::RouterSolicitation(
+        RouterSolicitation::new(None)
+    );
+    let dst = DDM_RDP_MADDR;
+    send(msg.clone(), dst, ifnum as u32)?;
+    Ok(())
 }

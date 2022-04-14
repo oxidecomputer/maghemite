@@ -1,4 +1,43 @@
-// Router Prefix Exchange
+/// This file contains route prefix exchange (RPX) functionality for DDM. RPX is
+/// the process of advertising prefixes to and consuming prefixes from
+/// neighboring routers.
+///
+/// In order for exchange to start, a bi-directional peering relationship must
+/// be established between routers. Peering sessions, however, are one-way. A
+/// router determines a bi-directional peering relationship has been established
+/// if the following conditions are met.
+///
+///   1. One way peering with the neigboring router has completed.
+///   2. The router has responded to a hail from the neighboring router and
+///      delivery of that response was succesful.
+///
+/// If these preconditions are satisfied for a given neighboring router, prefix
+/// exchange will begin for that router.
+///
+/// Advertisements are sent out in response to the following events
+///
+///   1. The router has been told to advertise a prefix through its
+///      administrative API.
+///   2. The router has received a request soliciting all of its routes from a
+///      neighboring router.
+///   3. When a router is a transit router, and has received and advertisement
+///      from a peer it will distribute that advertisement to its other peers.
+///
+/// When an advertisement is recieved. The router will add each destination
+/// address in the advertisement to its routing table via the link-local gateway
+/// address from whence the advertisement came. DDM is an "unnumbered" protocol
+/// in the sense that gateway addresses are always link-local addresses and thus
+/// nexthops are always on the same link as the router.
+///
+/// Additionally as stated above, if a router is a transit router, when an
+/// advertisement is received it will distribute that advertisiement to its
+/// peers. For each peer the advertisement is sent to, the nexthop gateway is
+/// modified to be the link-local address of the interface the transit router is
+/// distributing the prefix through - as the originating gateway is only local
+/// to the transit router, not the router the advertisement is being distributed
+/// to. This effectively is saying "this transit router is a gateway for the
+/// following set of prefixes", then the transit router will sort out where to
+/// route things from there.
 
 use std::net::{SocketAddrV6, Ipv6Addr};
 use std::sync::Arc;

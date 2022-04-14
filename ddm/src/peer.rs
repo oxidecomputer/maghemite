@@ -1,4 +1,37 @@
-// DDM Peering
+/// This file contains peering functionality for DDM. When a DDM router receives
+/// a router solicitation on the link-local router discovery address ff02::dd,
+/// it will attempt to peer with the solicitor. Peering is initiated by the
+/// router sending out a [`protocol::Hail`] message that contains the name of
+/// the router and what kind of router it is. If the solicitor sends a hail
+/// [`protocol::Response`] that specifies the hailing router as the origin then
+/// the hailing router will now consider the soliciting router a peer.
+///
+///              *-----*                        *-----*
+///              |  A  |                        |  B  |
+///              *-----*                        *-----*
+///                 |           solicit            |
+///                 |----------------------------->|
+///                 |        hail(B, server)       |
+///                 |<-----------------------------|
+///                 |     response(A, B, server)   |
+///                 |----------------------------->| * A is an active peer
+///                 |             ...              |
+///                 |                              |
+///                 |        hail(B, server)       |
+///                 |<-----------------------------|
+///                 |     response(A, B, server)   |
+///                 |----------------------------->| * Update A last seen at
+///                 |             ...              |   time <t>.
+///                 |                              |
+///                 |     [periodic hails ...]     |
+///                 |                              |
+///
+/// Peering is directional. Router A peering with router B, does not imply B
+/// peering with A.
+///
+/// Active peers have an expiration time. Periodic hails are required to keep a
+/// peer active. Both the expiration time and the hail interval are
+/// configuration parameters of a DDM router.
 
 use std::net::{SocketAddrV6, Ipv6Addr};
 use std::time::{Instant, Duration};
