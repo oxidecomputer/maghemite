@@ -7,6 +7,11 @@
 #:   "/out/*.json",
 #: ]
 #:
+#: [[publish]]
+#: series = "openapi"
+#: name = "ddm-admin.json"
+#: from_output = "/out/ddm-admin.json"
+#:
 
 set -o errexit
 set -o pipefail
