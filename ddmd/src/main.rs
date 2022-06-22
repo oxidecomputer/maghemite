@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use std::net::Ipv6Addr;
+use std::sync::Arc;
 
-use structopt::StructOpt;
+use slog::{error, info, warn, Drain, Logger};
 use structopt::clap::AppSettings::*;
-use slog::{info, warn, error, Logger, Drain};
+use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -23,7 +23,7 @@ struct Opt {
     ifx: Vec<String>,
 
     #[structopt(subcommand)]
-    subcommand: SubCommand
+    subcommand: SubCommand,
 }
 #[derive(Debug, StructOpt)]
 enum SubCommand {
@@ -53,7 +53,7 @@ async fn main() -> Result<(), String> {
     let name = hostname::get().unwrap().into_string().unwrap();
 
     let config = match opt.subcommand {
-        SubCommand::Server => ddm::router::Config{
+        SubCommand::Server => ddm::router::Config {
             name,
             interfaces: opt.ifx,
             router_kind: ddm::protocol::RouterKind::Server,
@@ -61,14 +61,14 @@ async fn main() -> Result<(), String> {
         },
         SubCommand::Transit(t) => {
             let protod = if t.dendrite {
-                Some(ddm::router::ProtodConfig{
+                Some(ddm::router::ProtodConfig {
                     host: t.protod_host.unwrap_or("localhost".into()),
                     port: t.protod_port.unwrap_or(protod_api::default_port()),
                 })
             } else {
                 None
             };
-            ddm::router::Config{
+            ddm::router::Config {
                 name,
                 interfaces: opt.ifx,
                 protod,
@@ -78,10 +78,8 @@ async fn main() -> Result<(), String> {
         }
     };
 
-    let mut r = ddm::router::Router::new(
-            log.clone(),
-            config,
-    ).expect("new router");
+    let mut r =
+        ddm::router::Router::new(log.clone(), config).expect("new router");
     r.run().await.expect("run router");
 
     let addr = match opt.admin_address {
@@ -95,12 +93,10 @@ async fn main() -> Result<(), String> {
         opt.admin_port,
         Arc::new(r),
     ) {
-        Ok(handle) => {
-            match handle.await {
-                Ok(_) => warn!(log, "early exit?"),
-                Err(e) => error!(log, "admin join error: {}", e),
-            }
-        }
+        Ok(handle) => match handle.await {
+            Ok(_) => warn!(log, "early exit?"),
+            Err(e) => error!(log, "admin join error: {}", e),
+        },
         Err(e) => error!(log, "run ddm admin server: {}", e),
     }
 
@@ -108,11 +104,12 @@ async fn main() -> Result<(), String> {
 }
 
 fn init_logger() -> Logger {
-
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::FullFormat::new(decorator).build().fuse();
     let drain = slog_envlogger::new(drain).fuse();
-    let drain = slog_async::Async::new(drain).chan_size(0x2000).build().fuse();
+    let drain = slog_async::Async::new(drain)
+        .chan_size(0x2000)
+        .build()
+        .fuse();
     slog::Logger::root(drain, slog::o!())
-
 }

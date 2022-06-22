@@ -1,61 +1,50 @@
-use std::sync::Arc;
-use std::collections::{HashMap, BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{Ipv6Addr, SocketAddrV6};
+use std::sync::Arc;
 use tokio::task::JoinHandle;
 
-use slog::{info, warn, error, Logger};
-use tokio::spawn;
 use dropshot::{
-    endpoint,
-    ConfigDropshot,
-    ConfigLogging,
-    ConfigLoggingLevel,
-    ApiDescription,
-    HttpServerStarter,
-    RequestContext,
-    HttpResponseOk,
-    HttpError,
-    TypedBody,
+    endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
+    ConfigLoggingLevel, HttpError, HttpResponseOk, HttpServerStarter,
+    RequestContext, TypedBody,
 };
+use slog::{error, info, warn, Logger};
+use tokio::spawn;
 
+use crate::net::Ipv6Prefix;
 use crate::peer;
 use crate::router::Router;
-use crate::net::Ipv6Prefix;
 
 pub struct HandlerContext {
-    pub router: Arc::<Router>,
+    pub router: Arc<Router>,
 }
 
 #[endpoint { method = GET, path = "/peers" }]
 async fn get_peers(
     ctx: Arc<RequestContext<HandlerContext>>,
-) -> Result<HttpResponseOk<HashMap::<usize, peer::Status>>, HttpError> {
-
+) -> Result<HttpResponseOk<HashMap<usize, peer::Status>>, HttpError> {
     let mut result = HashMap::new();
 
     let context = ctx.context();
     let state = context.router.state.lock().await;
 
     for (ifx, nbr) in &state.interfaces {
-
         let nbr = match nbr {
             Some(nbr) => nbr,
             None => continue,
         };
 
         result.insert(ifx.ifnum as usize, nbr.session.status().await);
-
     }
 
     Ok(HttpResponseOk(result))
-
 }
 
 #[endpoint { method = GET, path = "/prefixes" }]
 async fn get_prefixes(
     ctx: Arc<RequestContext<HandlerContext>>,
-) -> Result<HttpResponseOk<BTreeMap::<Ipv6Addr, HashSet::<Ipv6Prefix>>>, HttpError> {
-
+) -> Result<HttpResponseOk<BTreeMap<Ipv6Addr, HashSet<Ipv6Prefix>>>, HttpError>
+{
     let context = ctx.context();
     let state = context.router.state.lock().await;
 
@@ -67,11 +56,12 @@ async fn advertise_prefixes(
     ctx: Arc<RequestContext<HandlerContext>>,
     request: TypedBody<HashSet<Ipv6Prefix>>,
 ) -> Result<HttpResponseOk<()>, HttpError> {
-
     let context = ctx.context();
     let router = &context.router;
 
-    router.advertise(request.into_inner()).await
+    router
+        .advertise(request.into_inner())
+        .await
         .map_err(|e| HttpError::for_internal_error(e))?;
 
     Ok(HttpResponseOk(()))
@@ -81,35 +71,30 @@ pub fn start_server(
     log: Logger,
     addr: Ipv6Addr,
     port: u16,
-    router : Arc::<Router>,
-
+    router: Arc<Router>,
 ) -> Result<JoinHandle<()>, String> {
-
-    let sa = SocketAddrV6::new(addr, port, 0, 0,);
+    let sa = SocketAddrV6::new(addr, port, 0, 0);
 
     let config = ConfigDropshot {
         bind_address: sa.into(),
         ..Default::default()
     };
 
-    let ds_log =
-        ConfigLogging::StderrTerminal{level: ConfigLoggingLevel::Error}
-        .to_logger("admin")
-        .map_err(|e| e.to_string())?;
+    let ds_log = ConfigLogging::StderrTerminal {
+        level: ConfigLoggingLevel::Error,
+    }
+    .to_logger("admin")
+    .map_err(|e| e.to_string())?;
 
     let mut api = ApiDescription::new();
     api.register(get_peers).unwrap();
     api.register(get_prefixes).unwrap();
     api.register(advertise_prefixes).unwrap();
 
-    let context = HandlerContext{ router };
+    let context = HandlerContext { router };
 
-    let server = HttpServerStarter::new(
-        &config,
-        api,
-        context,
-        &ds_log,
-    ).map_err(|e| format!("new admin dropshot: {}", e))?;
+    let server = HttpServerStarter::new(&config, api, context, &ds_log)
+        .map_err(|e| format!("new admin dropshot: {}", e))?;
 
     info!(log, "admin: listening on {}", sa);
 
@@ -120,7 +105,6 @@ pub fn start_server(
             Err(e) => error!(log, "admin: server start error {:?}", e),
         }
     }))
-
 }
 
 pub fn api_description() -> Result<ApiDescription<HandlerContext>, String> {

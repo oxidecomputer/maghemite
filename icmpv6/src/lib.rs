@@ -1,10 +1,10 @@
 // Copyright 2021 Oxide Computer Company
 
-use std::net::Ipv6Addr;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use std::mem::size_of;
-use serde::{Serialize, Deserialize};
-use schemars::JsonSchema;
+use std::net::Ipv6Addr;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct RDPMessage {
@@ -91,11 +91,9 @@ pub struct RouterSolicitation {
 }
 
 impl RouterSolicitation {
-
     pub fn new(src: Option<Ipv6Addr>) -> Self {
-
         RouterSolicitation {
-            icmpv6_header: ICMPv6Header{
+            icmpv6_header: ICMPv6Header {
                 typ: ICMPv6Type::RouterSolicitation,
                 code: 0,
                 checksum: 0,
@@ -103,31 +101,32 @@ impl RouterSolicitation {
             reserved: 0,
             source_address: src,
         }
-
     }
 
     pub fn wire(&self) -> Vec<u8> {
-        let mut v = vec!(
-            self.icmpv6_header.typ as u8, 
+        let mut v = vec![
+            self.icmpv6_header.typ as u8,
             self.icmpv6_header.code,
             (self.icmpv6_header.checksum & 0x0f) as u8,
             (self.icmpv6_header.checksum & 0xf0) as u8,
-            0,0,0,0, //reserved
-        );
+            0,
+            0,
+            0,
+            0, //reserved
+        ];
 
         match self.source_address {
             Some(addr) => {
-                let sz = size_of::<NDPOptionType>()+size_of::<Ipv6Addr>();
+                let sz = size_of::<NDPOptionType>() + size_of::<Ipv6Addr>();
                 v.push(NDPOptionType::SourceLinkLayerAddress as u8);
                 v.push(sz as u8);
                 v.extend_from_slice(&addr.octets());
-            },
-            None => {},
+            }
+            None => {}
         }
 
         v
     }
-
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -145,7 +144,6 @@ pub struct RouterAdvertisement {
 }
 
 impl RouterAdvertisement {
-
     pub fn new(
         hop_limit: u8,
         managed_address: bool,
@@ -157,9 +155,8 @@ impl RouterAdvertisement {
         mtu: Option<u16>,
         prefix_info: Option<PrefixInfo>,
     ) -> Self {
-
-        RouterAdvertisement{
-            icmpv6_header: ICMPv6Header{
+        RouterAdvertisement {
+            icmpv6_header: ICMPv6Header {
                 typ: ICMPv6Type::RouterAdvertisement,
                 code: 0,
                 checksum: 0,
@@ -172,20 +169,20 @@ impl RouterAdvertisement {
             retransmission_timer,
             source_address: src,
             mtu,
-            prefix_info
+            prefix_info,
         }
     }
 
     pub fn wire(&self) -> Vec<u8> {
-        let mut v = vec!(
-            self.icmpv6_header.typ as u8, 
+        let mut v = vec![
+            self.icmpv6_header.typ as u8,
             self.icmpv6_header.code,
             (self.icmpv6_header.checksum & 0x0f) as u8,
             (self.icmpv6_header.checksum & 0xf0) as u8,
             self.hop_limit,
-        );
+        ];
 
-        let mut mo : u8 = 0b00000000;
+        let mut mo: u8 = 0b00000000;
         if self.managed_address {
             mo |= 0b10000000
         }
@@ -200,29 +197,28 @@ impl RouterAdvertisement {
 
         match self.source_address {
             Some(addr) => {
-                let sz = size_of::<NDPOptionType>()+size_of::<Ipv6Addr>();
+                let sz = size_of::<NDPOptionType>() + size_of::<Ipv6Addr>();
                 v.push(NDPOptionType::SourceLinkLayerAddress as u8);
                 v.push(sz as u8);
                 v.extend_from_slice(&addr.octets());
-            },
-            None => {},
+            }
+            None => {}
         }
 
         match self.mtu {
             Some(mtu) => {
-                let sz = size_of::<NDPOptionType>()+size_of::<u16>();
+                let sz = size_of::<NDPOptionType>() + size_of::<u16>();
                 v.push(NDPOptionType::MTU as u8);
                 v.push(sz as u8);
                 v.extend_from_slice(&mtu.to_be_bytes());
-            },
-            None => {},
+            }
+            None => {}
         }
 
         //TODO prefix info
 
         v
     }
-
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -233,7 +229,6 @@ pub struct PrefixInfo {
     pub valid_lifetime: u32,
     pub preferred_lifetime: u32,
     //pub prefix: [u8; 128], TODO serializable
-
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -252,58 +247,47 @@ impl ICMPv6Packet {
 }
 
 pub fn parse_icmpv6(buf: &[u8]) -> Option<ICMPv6Packet> {
-
     if buf.len() < 4 {
-        return None
+        return None;
     }
 
     match buf[0] {
+        133 => Some(ICMPv6Packet::RouterSolicitation(RouterSolicitation {
+            icmpv6_header: ICMPv6Header {
+                typ: ICMPv6Type::RouterSolicitation,
+                code: buf[1],
+                checksum: u16::from_be_bytes(
+                    buf[2..4].try_into().expect("slice into buf"),
+                ),
+            },
+            reserved: 0,
+            source_address: None, //TODO
+        })),
 
-        133 => Some(ICMPv6Packet::RouterSolicitation(
-                RouterSolicitation{
-                    icmpv6_header: ICMPv6Header{
-                        typ: ICMPv6Type::RouterSolicitation,
-                        code: buf[1],
-                        checksum: u16::from_be_bytes(buf[2..4]
-                            .try_into()
-                            .expect("slice into buf")
-                        ),
-                    },
-                    reserved: 0,
-                    source_address: None, //TODO
-                })
-        ),
-
-        134 => Some(ICMPv6Packet::RouterAdvertisement(
-                RouterAdvertisement{
-                    icmpv6_header: ICMPv6Header{
-                        typ: ICMPv6Type::RouterAdvertisement,
-                        code: buf[1],
-                        checksum: u16::from_be_bytes(buf[2..4]
-                            .try_into()
-                            .expect("slice into buf")
-                        ),
-                    },
-                    hop_limit: buf[4],
-                    managed_address: 0b10000000&buf[5] != 0,
-                    other_stateful: 0b01000000&buf[5] != 0,
-                    router_lifetime: u16::from_be_bytes(buf[6..8]
-                        .try_into()
-                        .expect("slice into buf")
-                    ),
-                    reachable_time: u32::from_be_bytes(buf[8..12]
-                        .try_into()
-                        .expect("slice into buf")
-                    ), 
-                    retransmission_timer: u32::from_be_bytes(buf[12..16]
-                        .try_into()
-                        .expect("slice into buf")
-                    ), 
-                    source_address: None, //TODO
-                    mtu: None, //TODO
-                    prefix_info: None, //TODO
-                })
-        ),
+        134 => Some(ICMPv6Packet::RouterAdvertisement(RouterAdvertisement {
+            icmpv6_header: ICMPv6Header {
+                typ: ICMPv6Type::RouterAdvertisement,
+                code: buf[1],
+                checksum: u16::from_be_bytes(
+                    buf[2..4].try_into().expect("slice into buf"),
+                ),
+            },
+            hop_limit: buf[4],
+            managed_address: 0b10000000 & buf[5] != 0,
+            other_stateful: 0b01000000 & buf[5] != 0,
+            router_lifetime: u16::from_be_bytes(
+                buf[6..8].try_into().expect("slice into buf"),
+            ),
+            reachable_time: u32::from_be_bytes(
+                buf[8..12].try_into().expect("slice into buf"),
+            ),
+            retransmission_timer: u32::from_be_bytes(
+                buf[12..16].try_into().expect("slice into buf"),
+            ),
+            source_address: None, //TODO
+            mtu: None,            //TODO
+            prefix_info: None,    //TODO
+        })),
         _ => None,
     }
 }

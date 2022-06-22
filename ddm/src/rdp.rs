@@ -1,3 +1,4 @@
+use slog::{self, info, trace, warn, Logger};
 /// This file contains the router discovery protocol (RDP) functionality for
 /// DDM. DDM routers emit periodic router solicitations to make other routers
 /// aware of their presence, but they do not emit advertisements. A DDM router
@@ -25,29 +26,23 @@
 ///
 /// Router solicitations are sent on the DDM router discovery link-local
 /// multicast address ff02::dd.
-
 use std::io::Result;
-use std::net::{SocketAddrV6, Ipv6Addr};
 use std::mem::MaybeUninit;
-use slog::{self, info, warn, trace, Logger};
+use std::net::{Ipv6Addr, SocketAddrV6};
 use std::time::Duration;
 
-use icmpv6::{RouterSolicitation, ICMPv6Packet, parse_icmpv6};
-use socket2::{Socket, Domain, Type, Protocol, SockAddr};
-use tokio::{spawn, time::sleep, io::unix::AsyncFd};
+use icmpv6::{parse_icmpv6, ICMPv6Packet, RouterSolicitation};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use tokio::{io::unix::AsyncFd, spawn, time::sleep};
 
-pub const DDM_RDP_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0,0,0,0,0,0, 0xdd);
+pub const DDM_RDP_MADDR: Ipv6Addr =
+    Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xdd);
 
 pub fn send(msg: ICMPv6Packet, dst: Ipv6Addr, if_index: u32) -> Result<usize> {
-
     let sa: SockAddr = SocketAddrV6::new(dst, 0, 0, if_index).into();
     let data = msg.wire();
 
-    let socket = Socket::new(
-        Domain::IPV6,
-        Type::RAW,
-        Some(Protocol::ICMPV6),
-    )?;
+    let socket = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))?;
     socket.set_multicast_loop_v6(false)?;
 
     socket.send_to(data.as_slice(), &sa)
@@ -59,21 +54,19 @@ pub struct Receiver {
 }
 
 impl Receiver {
-
     pub fn new(log: Logger, if_index: u32) -> Result<Self> {
-        let socket = Socket::new(
-            Domain::IPV6,
-            Type::RAW,
-            Some(Protocol::ICMPV6),
-        )?;
+        let socket =
+            Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))?;
         socket.join_multicast_v6(&DDM_RDP_MADDR, if_index)?;
         socket.set_nonblocking(true)?;
 
-        Ok(Receiver{ log, socket: AsyncFd::new(socket)? })
+        Ok(Receiver {
+            log,
+            socket: AsyncFd::new(socket)?,
+        })
     }
 
     pub async fn recv(&self) -> Result<(Ipv6Addr, ICMPv6Packet)> {
-
         loop {
             let mut guard = self.socket.readable().await?;
             let mut buf = [MaybeUninit::new(0); 1024];
@@ -91,12 +84,12 @@ impl Receiver {
                 // This should never happen as we're listening on an ipv6
                 // multicast address, but we need to deal with this situation
                 // since the type gymnastics require it.
-                None => Ipv6Addr::UNSPECIFIED, 
+                None => Ipv6Addr::UNSPECIFIED,
             };
 
-            let msg = match parse_icmpv6(
-                unsafe{&MaybeUninit::slice_assume_init_ref(&buf)[..size]},
-            ) {
+            let msg = match parse_icmpv6(unsafe {
+                &MaybeUninit::slice_assume_init_ref(&buf)[..size]
+            }) {
                 Some(packet) => packet,
                 None => {
                     trace!(self.log, "parse error");
@@ -114,32 +107,27 @@ mod tests {
     use std::net::IpAddr;
     use std::time::Duration;
 
-    use tokio::{
-        spawn,
-        time::sleep,
-        sync::mpsc::channel,
-    };
     use anyhow::Result;
+    use tokio::{spawn, sync::mpsc::channel, time::sleep};
     use util::test::testlab_x2;
 
-    use icmpv6::{ICMPv6Packet, RouterSolicitation};
     use super::*;
+    use icmpv6::{ICMPv6Packet, RouterSolicitation};
 
     #[tokio::test]
     async fn rs_send_recv() -> Result<()> {
-
         //
         // set up testlab interfaces
         //
-        
+
         let interfaces = testlab_x2("rdp1")?;
         let tx_ifx = interfaces[0].addr.info.index as u32;
         let rx_ifx = interfaces[1].addr.info.index as u32;
 
         //
         // set up an rdp listener
-        // 
-        
+        //
+
         let log = util::test::logger();
         let receiver = Receiver::new(log.clone(), rx_ifx)?;
         let (tx, mut rx) = channel(1);
@@ -154,11 +142,10 @@ mod tests {
         //
         // send a router advertisement
         //
-        
+
         println!("sending solicitation");
-        let msg = ICMPv6Packet::RouterSolicitation(
-            RouterSolicitation::new(None)
-        );
+        let msg =
+            ICMPv6Packet::RouterSolicitation(RouterSolicitation::new(None));
         // rdp multicast address for ddm
         let dst = DDM_RDP_MADDR;
         send(msg.clone(), dst, tx_ifx)?;
@@ -188,24 +175,29 @@ pub struct Solicitor {
 
 impl Solicitor {
     pub fn new(log: Logger, ifnum: i32, interval: u64) -> Self {
-        Solicitor { ifnum, interval, task: None, log }
+        Solicitor {
+            ifnum,
+            interval,
+            task: None,
+            log,
+        }
     }
 
     pub fn start(&mut self) {
         let ifnum = self.ifnum;
         let interval = self.interval;
         let log = self.log.clone();
-         self.task = Some(spawn(async move { 
-            loop { 
+        self.task = Some(spawn(async move {
+            loop {
                 trace!(log, "soliciting ddm router");
                 match solicit_ddm_router(ifnum).await {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(e) => {
                         warn!(log, "solicit failed: {}", e);
                     }
                 }
                 sleep(Duration::from_millis(interval)).await;
-            } 
+            }
         }));
     }
 }
@@ -220,10 +212,8 @@ impl Drop for Solicitor {
     }
 }
 
-async fn solicit_ddm_router(ifnum: i32) -> Result<()>{
-    let msg = ICMPv6Packet::RouterSolicitation(
-        RouterSolicitation::new(None)
-    );
+async fn solicit_ddm_router(ifnum: i32) -> Result<()> {
+    let msg = ICMPv6Packet::RouterSolicitation(RouterSolicitation::new(None));
     let dst = DDM_RDP_MADDR;
     send(msg.clone(), dst, ifnum as u32)?;
     Ok(())

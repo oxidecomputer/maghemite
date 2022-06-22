@@ -1,10 +1,14 @@
 // Copyright 2021 Oxide Computer Company
 
-use libfalcon::{cli::{run, RunMode}, error::Error, Runner, unit::gb};
+use libfalcon::{
+    cli::{run, RunMode},
+    error::Error,
+    unit::gb,
+    Runner,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-
     let mut d = Runner::new("quartet");
 
     // nodes
@@ -26,24 +30,31 @@ async fn main() -> Result<(), Error> {
 
     match run(&mut d).await? {
         RunMode::Launch => {
-            d.exec(r0, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
-            d.exec(r0, "ipadm create-addr -t -T addrconf vioif1/v6").await?;
+            d.exec(r0, "ipadm create-addr -t -T addrconf vioif0/v6")
+                .await?;
+            d.exec(r0, "ipadm create-addr -t -T addrconf vioif1/v6")
+                .await?;
             d.exec(r0, "routeadm -e ipv6-forwarding").await?;
             d.exec(r0, "routeadm -u").await?;
 
-            d.exec(r1, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
-            d.exec(r1, "ipadm create-addr -t -T addrconf vioif1/v6").await?;
+            d.exec(r1, "ipadm create-addr -t -T addrconf vioif0/v6")
+                .await?;
+            d.exec(r1, "ipadm create-addr -t -T addrconf vioif1/v6")
+                .await?;
             d.exec(r1, "routeadm -e ipv6-forwarding").await?;
             d.exec(r1, "routeadm -u").await?;
 
-            d.exec(h0, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
-            d.exec(h0, "ipadm create-addr -t -T addrconf vioif1/v6").await?;
+            d.exec(h0, "ipadm create-addr -t -T addrconf vioif0/v6")
+                .await?;
+            d.exec(h0, "ipadm create-addr -t -T addrconf vioif1/v6")
+                .await?;
 
-            d.exec(h1, "ipadm create-addr -t -T addrconf vioif0/v6").await?;
-            d.exec(h1, "ipadm create-addr -t -T addrconf vioif1/v6").await?;
+            d.exec(h1, "ipadm create-addr -t -T addrconf vioif0/v6")
+                .await?;
+            d.exec(h1, "ipadm create-addr -t -T addrconf vioif1/v6")
+                .await?;
             Ok(())
-        },
+        }
         _ => Ok(()),
     }
-
 }
