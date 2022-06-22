@@ -1,8 +1,10 @@
 use std::collections::HashSet;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
+use std::net::Ipv6Addr;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::net::Ipv6Prefix;
 use crate::sys;

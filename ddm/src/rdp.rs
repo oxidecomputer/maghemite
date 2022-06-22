@@ -26,15 +26,27 @@
 //! Router solicitations are sent on the DDM router discovery link-local
 //! multicast address ff02::dd.
 
-use slog::{self, info, trace, warn, Logger};
 use std::io::Result;
 use std::mem::MaybeUninit;
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::Ipv6Addr;
+use std::net::SocketAddrV6;
 use std::time::Duration;
 
-use icmpv6::{parse_icmpv6, ICMPv6Packet, RouterSolicitation};
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-use tokio::{io::unix::AsyncFd, spawn, time::sleep};
+use icmpv6::parse_icmpv6;
+use icmpv6::ICMPv6Packet;
+use icmpv6::RouterSolicitation;
+use slog::info;
+use slog::trace;
+use slog::warn;
+use slog::Logger;
+use socket2::Domain;
+use socket2::Protocol;
+use socket2::SockAddr;
+use socket2::Socket;
+use socket2::Type;
+use tokio::io::unix::AsyncFd;
+use tokio::spawn;
+use tokio::time::sleep;
 
 pub const DDM_RDP_MADDR: Ipv6Addr =
     Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xdd);
@@ -109,11 +121,14 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::Result;
-    use tokio::{spawn, sync::mpsc::channel, time::sleep};
+    use tokio::spawn;
+    use tokio::sync::mpsc::channel;
+    use tokio::time::sleep;
     use util::test::testlab_x2;
 
     use super::*;
-    use icmpv6::{ICMPv6Packet, RouterSolicitation};
+    use icmpv6::ICMPv6Packet;
+    use icmpv6::RouterSolicitation;
 
     #[tokio::test]
     async fn rs_send_recv() -> Result<()> {

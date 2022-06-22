@@ -40,23 +40,41 @@
 //! route things from there.
 
 use std::collections::HashSet;
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::Ipv6Addr;
+use std::net::SocketAddrV6;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dropshot::{
-    endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
-    ConfigLoggingLevel, HttpError, HttpResponseOk, HttpServerStarter,
-    RequestContext, TypedBody,
-};
+use dropshot::endpoint;
+use dropshot::ApiDescription;
+use dropshot::ConfigDropshot;
+use dropshot::ConfigLogging;
+use dropshot::ConfigLoggingLevel;
+use dropshot::HttpError;
+use dropshot::HttpResponseOk;
+use dropshot::HttpServerStarter;
+use dropshot::RequestContext;
+use dropshot::TypedBody;
 use hyper::body::HttpBody;
-use slog::{error, info, trace, warn, Logger};
-use tokio::{spawn, sync::Mutex, task::JoinHandle, time::timeout};
+use slog::error;
+use slog::info;
+use slog::trace;
+use slog::warn;
+use slog::Logger;
+use tokio::spawn;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
 
 use crate::net::Ipv6Prefix;
 use crate::peer;
-use crate::protocol::{Advertise, RouterKind, Solicit};
-use crate::router::{Config, Interface, Router, RouterState};
+use crate::protocol::Advertise;
+use crate::protocol::RouterKind;
+use crate::protocol::Solicit;
+use crate::router::Config;
+use crate::router::Interface;
+use crate::router::Router;
+use crate::router::RouterState;
 use crate::sys;
 
 struct HandlerContext {

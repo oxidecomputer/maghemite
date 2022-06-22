@@ -38,20 +38,33 @@
 //! network. After that initial solicitation takes place, normal real-time route
 //! prefix exchange takes place between routers.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::convert::TryFrom;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
+use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use icmpv6::ICMPv6Packet;
-use libnet::{get_ipaddr_info, IpInfo};
-use slog::{self, debug, error, info, trace, warn, Logger};
-use tokio::{spawn, sync::Mutex, task::JoinHandle, time::sleep};
+use libnet::get_ipaddr_info;
+use libnet::IpInfo;
+use slog::debug;
+use slog::error;
+use slog::info;
+use slog::trace;
+use slog::warn;
+use slog::Logger;
+use slog::{self};
+use tokio::spawn;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 
 use crate::net::Ipv6Prefix;
 use crate::peer;
-use crate::protocol::{Advertise, RouterKind};
+use crate::protocol::Advertise;
+use crate::protocol::RouterKind;
 use crate::rdp;
 use crate::rpx;
 use crate::sys;
@@ -650,9 +663,11 @@ mod tests {
 
     use super::*;
     use anyhow::Result;
-    use slog::{debug, info};
+    use slog::debug;
+    use slog::info;
     use tokio::time::sleep;
-    use util::test::{testlab_1x2, testlab_x2};
+    use util::test::testlab_1x2;
+    use util::test::testlab_x2;
 
     /// Discover, peer, exchange with two directly connected server routers
     #[tokio::test]

@@ -33,27 +33,40 @@
 //! peer active. Both the expiration time and the hail interval are
 //! configuration parameters of a DDM router.
 
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::Ipv6Addr;
+use std::net::SocketAddrV6;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
-use dropshot::{
-    endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
-    ConfigLoggingLevel, HttpError, HttpResponseOk, HttpServerStarter,
-    RequestContext, TypedBody,
-};
+use dropshot::endpoint;
+use dropshot::ApiDescription;
+use dropshot::ConfigDropshot;
+use dropshot::ConfigLogging;
+use dropshot::ConfigLoggingLevel;
+use dropshot::HttpError;
+use dropshot::HttpResponseOk;
+use dropshot::HttpServerStarter;
+use dropshot::RequestContext;
+use dropshot::TypedBody;
 use hyper::body::HttpBody;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use slog::{error, info, trace, warn, Logger};
-use tokio::{
-    spawn,
-    sync::Mutex,
-    task::JoinHandle,
-    time::{sleep, timeout},
-};
+use serde::Deserialize;
+use serde::Serialize;
+use slog::error;
+use slog::info;
+use slog::trace;
+use slog::warn;
+use slog::Logger;
+use tokio::spawn;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
+use tokio::time::timeout;
 
-use crate::protocol::{Hail, Response, RouterKind};
+use crate::protocol::Hail;
+use crate::protocol::Response;
+use crate::protocol::RouterKind;
 
 pub struct Session {
     log: Logger,

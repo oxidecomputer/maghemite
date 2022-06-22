@@ -1,7 +1,8 @@
 // Copyright 2021 Oxide Computer Company
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::convert::TryInto;
 use std::mem::size_of;
 use std::net::Ipv6Addr;

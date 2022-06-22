@@ -2,10 +2,16 @@ use std::io;
 //use termion::raw::IntoRawMode;
 use std::io::Read;
 use tui::backend::CrosstermBackend;
-use tui::layout::{Constraint, Direction, Layout};
-use tui::style::{Color, Style};
+use tui::layout::Constraint;
+use tui::layout::Direction;
+use tui::layout::Layout;
+use tui::style::Color;
+use tui::style::Style;
 use tui::text::Span;
-use tui::widgets::{Block, Borders, Row, Table};
+use tui::widgets::Block;
+use tui::widgets::Borders;
+use tui::widgets::Row;
+use tui::widgets::Table;
 use tui::Terminal;
 
 // TODO: this is all mock up at the moment, just seeing if tui is a reasonable

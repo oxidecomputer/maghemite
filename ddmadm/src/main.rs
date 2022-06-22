@@ -1,8 +1,13 @@
 use anyhow::Result;
 use ddm::net::Ipv6Prefix;
-use ddm_admin_client::{types, Client};
-use slog::{error, info, Drain, Logger};
-use structopt::{clap::AppSettings::*, StructOpt};
+use ddm_admin_client::types;
+use ddm_admin_client::Client;
+use slog::error;
+use slog::info;
+use slog::Drain;
+use slog::Logger;
+use structopt::clap::AppSettings::*;
+use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
 #[structopt(

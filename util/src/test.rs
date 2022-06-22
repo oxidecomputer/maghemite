@@ -1,11 +1,16 @@
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
+use std::net::Ipv6Addr;
 
 use anyhow::Result;
-use libnet::{
-    connect_simnet_peers, create_simnet_link, enable_v6_link_local,
-    get_ipaddr_info, DropIp, DropLink, LinkFlags,
-};
-use slog::{self, Drain, Logger};
+use libnet::connect_simnet_peers;
+use libnet::create_simnet_link;
+use libnet::enable_v6_link_local;
+use libnet::get_ipaddr_info;
+use libnet::DropIp;
+use libnet::DropLink;
+use libnet::LinkFlags;
+use slog::Drain;
+use slog::Logger;
 
 pub struct LabInterface {
     pub name: String,

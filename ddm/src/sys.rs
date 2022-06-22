@@ -1,10 +1,17 @@
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
+use std::net::Ipv6Addr;
 
-use dendrite_common::{Cidr, Ipv6Cidr};
-use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
+use dendrite_common::Cidr;
+use dendrite_common::Ipv6Cidr;
+use libnet::IpPrefix;
+use libnet::Ipv4Prefix;
+use libnet::Ipv6Prefix;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use slog::{debug, warn, Logger};
+use serde::Deserialize;
+use serde::Serialize;
+use slog::debug;
+use slog::warn;
+use slog::Logger;
 
 use crate::router::Config;
 

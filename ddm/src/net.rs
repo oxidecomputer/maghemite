@@ -1,9 +1,11 @@
-use std::net::{AddrParseError, Ipv6Addr};
+use std::net::AddrParseError;
+use std::net::Ipv6Addr;
 use std::num::ParseIntError;
 use std::str::FromStr;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
 
 #[derive(

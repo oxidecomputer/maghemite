@@ -1,7 +1,11 @@
 use std::net::Ipv6Addr;
 use std::sync::Arc;
 
-use slog::{error, info, warn, Drain, Logger};
+use slog::error;
+use slog::info;
+use slog::warn;
+use slog::Drain;
+use slog::Logger;
 use structopt::clap::AppSettings::*;
 use structopt::StructOpt;
 
