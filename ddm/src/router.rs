@@ -1,44 +1,45 @@
+//! This file contains the DDM Router implementation. This implementation is
+//! responsible for the DDM control plane, and not the data plane. The
+//! responsibility of the control plane is to
+//!
+//!   1. Discover neighboring routers.
+//!   2. Peer with neighboring routers.
+//!   3. Exchange routing information with neighboring routers.
+//!
+//! The responsibility of the data plane is to decide what route to use when
+//! multiple routes for the same destination are present. This is done either in
+//! the operating system kernel or on a switch ASIC and is not implemented here.
+//! Here we are only concered with the 3 responsiblities above.
+//!
+//! The DDM router implementation is mostly event driven. The router responds to
+//! discovery solicitations by attempting to peer with a soliciting neighbor.
+//! Hailing messages result in reflection responses that let peering routers
+//! know this router is a viable peer for route exchange. Reception of
+//! advertisements results in the update of routing tables and in the case of
+//! transit routers, distribution of advertisements to other peers.
+//!
+//! Each of the responsibilities above, discovery, peering and routing prefix
+//! exchange - are implemented in their own files and have block comments at the
+//! top that describe their functionality.
+//!
+//! The router is intrinsically asynchronous as it is primarily event driven.
+//! Because of this several tasks are spawned by the router to manage
+//! interactions with other routers and admin API users. A common design element
+//! used throughout the router is to save the join handles associated with these
+//! tasks in structures with a drop implementation that will abort the thread
+//! when dropped. This is to prevent situations like a peering session being
+//! kept alive by a peer that has been dropped by a router.
+//!
+//! A router is configured with a set of interfaces that it expects to peer
+//! over. When starting up there is an initial solicit routine that will wait
+//! for active peering sessions to be established on each of these interfaces
+//! and then solicit each neighboring router for all routes it currently has.
+//! This allows a newly peered router to synchronize with the rest of the
+//! network. After that initial solicitation takes place, normal real-time route
+//! prefix exchange takes place between routers.
+
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryFrom;
-/// This file contains the DDM Router implementation. This implementation is
-/// responsible for the DDM control plane, and not the data plane. The
-/// responsibility of the control plane is to
-///
-///   1. Discover neighboring routers.
-///   2. Peer with neighboring routers.
-///   3. Exchange routing information with neighboring routers.
-///
-/// The responsibility of the data plane is to decide what route to use when
-/// multiple routes for the same destination are present. This is done either in
-/// the operating system kernel or on a switch ASIC and is not implemented here.
-/// Here we are only concered with the 3 responsiblities above.
-///
-/// The DDM router implementation is mostly event driven. The router responds to
-/// discovery solicitations by attempting to peer with a soliciting neighbor.
-/// Hailing messages result in reflection responses that let peering routers
-/// know this router is a viable peer for route exchange. Reception of
-/// advertisements results in the update of routing tables and in the case of
-/// transit routers, distribution of advertisements to other peers.
-///
-/// Each of the responsibilities above, discovery, peering and routing prefix
-/// exchange - are implemented in their own files and have block comments at the
-/// top that describe their functionality.
-///
-/// The router is intrinsically asynchronous as it is primarily event driven.
-/// Because of this several tasks are spawned by the router to manage
-/// interactions with other routers and admin API users. A common design element
-/// used throughout the router is to save the join handles associated with these
-/// tasks in structures with a drop implementation that will abort the thread
-/// when dropped. This is to prevent situations like a peering session being
-/// kept alive by a peer that has been dropped by a router.
-///
-/// A router is configured with a set of interfaces that it expects to peer
-/// over. When starting up there is an initial solicit routine that will wait
-/// for active peering sessions to be established on each of these interfaces
-/// and then solicit each neighboring router for all routes it currently has.
-/// This allows a newly peered router to synchronize with the rest of the
-/// network. After that initial solicitation takes place, normal real-time route
-/// prefix exchange takes place between routers.
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Duration;

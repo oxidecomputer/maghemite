@@ -1,31 +1,32 @@
+//! This file contains the router discovery protocol (RDP) functionality for
+//! DDM. DDM routers emit periodic router solicitations to make other routers
+//! aware of their presence, but they do not emit advertisements. A DDM router
+//! will respond to an RDP solicitation by attempting to peer with the solicitor
+//! using the DDM peering protocol.
+//!
+//!              *-----*                        *-----*
+//!              |  A  |                        |  B  |
+//!              *-----*                        *-----*
+//!                 |           solicit            |
+//!                 |----------------------------->|
+//!                 |            peer              |
+//!                 |<-----------------------------|
+//!                 |                              |
+//!                 |    [b peers with a ...]      |
+//!                 |                              |
+//!
+//! DDM peering is directional, so B peering with A is independent of A peering
+//! with B.
+//!
+//! A DDM router will periodically send out solicitations on all interfaces it
+//! is configured to use independent of peering status with neighboring routers
+//! on those interfaces. This provides a persistent presence detection mechanism
+//! for neighbors.
+//!
+//! Router solicitations are sent on the DDM router discovery link-local
+//! multicast address ff02::dd.
+
 use slog::{self, info, trace, warn, Logger};
-/// This file contains the router discovery protocol (RDP) functionality for
-/// DDM. DDM routers emit periodic router solicitations to make other routers
-/// aware of their presence, but they do not emit advertisements. A DDM router
-/// will respond to an RDP solicitation by attempting to peer with the solicitor
-/// using the DDM peering protocol.
-///
-///              *-----*                        *-----*
-///              |  A  |                        |  B  |
-///              *-----*                        *-----*
-///                 |           solicit            |
-///                 |----------------------------->|
-///                 |            peer              |
-///                 |<-----------------------------|
-///                 |                              |
-///                 |    [b peers with a ...]      |
-///                 |                              |
-///              
-/// DDM peering is directional, so B peering with A is independent of A peering
-/// with B.
-///
-/// A DDM router will periodically send out solicitations on all interfaces it
-/// is configured to use independent of peering status with neighboring routers
-/// on those interfaces. This provides a persistent presence detection mechanism
-/// for neighbors.
-///
-/// Router solicitations are sent on the DDM router discovery link-local
-/// multicast address ff02::dd.
 use std::io::Result;
 use std::mem::MaybeUninit;
 use std::net::{Ipv6Addr, SocketAddrV6};
