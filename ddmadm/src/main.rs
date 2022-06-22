@@ -17,13 +17,13 @@ use structopt::StructOpt;
     global_setting(ColoredHelp)
 )]
 struct Opt {
-    /// Address of the router, defaults to localhost
-    #[structopt(short, long)]
-    address: Option<String>,
+    /// Address of the router
+    #[structopt(short, long, default_value = "localhost")]
+    address: String,
 
-    /// Port to use, defaults to 8000
-    #[structopt(short, long)]
-    port: Option<usize>,
+    /// Port to use
+    #[structopt(short, long, default_value = "8000")]
+    port: usize,
 
     #[structopt(subcommand)]
     subcommand: SubCommand,
@@ -55,16 +55,7 @@ async fn main() -> Result<()> {
     let opt = Opt::from_args();
     let log = init_logger();
 
-    let addr = match opt.address {
-        Some(a) => a,
-        None => "localhost".into(),
-    };
-    let port = match opt.port {
-        Some(p) => p,
-        None => 8000,
-    };
-
-    let endpoint = format!("http://{}:{}", addr, port);
+    let endpoint = format!("http://{}:{}", opt.address, opt.port);
     let client = Client::new(&endpoint, log.clone());
 
     match opt.subcommand {

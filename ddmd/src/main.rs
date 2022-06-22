@@ -1,6 +1,7 @@
 use std::net::Ipv6Addr;
 use std::sync::Arc;
 
+use once_cell::sync::Lazy;
 use slog::error;
 use slog::info;
 use slog::warn;
@@ -21,7 +22,8 @@ struct Opt {
     admin_port: u16,
 
     /// Admin address to listen on
-    admin_address: Option<Ipv6Addr>,
+    #[structopt(default_value = "::1")]
+    admin_address: Ipv6Addr,
 
     /// Interfaces to route over.
     ifx: Vec<String>,
@@ -35,14 +37,19 @@ enum SubCommand {
     Transit(Transit),
 }
 
+// structopt needs a non-temporary `&str` for default values, so we'll stash the
+// default protod port into a lazy `String`.
+static PROTOD_DEFAULT_PORT: Lazy<String> =
+    Lazy::new(|| protod_api::default_port().to_string());
+
 #[derive(Debug, StructOpt)]
 struct Transit {
     #[structopt(long)]
     dendrite: bool,
-    #[structopt(long)]
-    protod_host: Option<String>,
-    #[structopt(long)]
-    protod_port: Option<u16>,
+    #[structopt(long, default_value = "localhost")]
+    protod_host: String,
+    #[structopt(long, default_value = &PROTOD_DEFAULT_PORT)]
+    protod_port: u16,
 }
 
 #[tokio::main]
@@ -66,8 +73,8 @@ async fn main() -> Result<(), String> {
         SubCommand::Transit(t) => {
             let protod = if t.dendrite {
                 Some(ddm::router::ProtodConfig {
-                    host: t.protod_host.unwrap_or("localhost".into()),
-                    port: t.protod_port.unwrap_or(protod_api::default_port()),
+                    host: t.protod_host,
+                    port: t.protod_port,
                 })
             } else {
                 None
@@ -86,14 +93,9 @@ async fn main() -> Result<(), String> {
         ddm::router::Router::new(log.clone(), config).expect("new router");
     r.run().await.expect("run router");
 
-    let addr = match opt.admin_address {
-        Some(addr) => addr,
-        None => Ipv6Addr::LOCALHOST,
-    };
-
     match ddm::admin::start_server(
         log.clone(),
-        addr,
+        opt.admin_address,
         opt.admin_port,
         Arc::new(r),
     ) {

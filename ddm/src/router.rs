@@ -85,6 +85,7 @@ impl Drop for Router {
     }
 }
 
+#[derive(Default)]
 pub struct RouterState {
     /// Interface numbers for the IP interfaces this router will peer over. The
     /// NeighboringRouter entry value for each interface index is populated when
@@ -97,16 +98,6 @@ pub struct RouterState {
 
     /// A set of prefixes that this router is advertising.
     pub local_prefixes: HashSet<Ipv6Prefix>,
-}
-
-impl Default for RouterState {
-    fn default() -> Self {
-        RouterState {
-            interfaces: BTreeMap::new(),
-            remote_prefixes: BTreeMap::new(),
-            local_prefixes: HashSet::new(),
-        }
-    }
 }
 
 impl RouterState {
