@@ -1,11 +1,8 @@
 [package.maghemite]
 rust.binary_names = ["ddmd", "ddmadm"]
 rust.release = true
-service_name = "maghemite"
-zone = true
+service_name = "mg-ddm"
+zone = false
 [[package.maghemite.paths]]
-from = "smf/ddm"
-to = "/var/svc/manifest/site/mg-ddm"
-[[package.maghemite.paths]]
-from = "smf/ddm_method_script.sh"
-to = "/opt/oxide/maghemite/bin/ddm_method_script.sh"
+from = "smf"
+to = "pkg"

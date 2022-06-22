@@ -28,4 +28,4 @@ if [[ "$val" != '""' ]]; then
     export RUST_LOG="$val"
 fi
 
-exec /opt/oxide/maghemite/bin/ddmd "${args[@]}"
+exec /opt/oxide/mg-ddm/ddmd "${args[@]}"

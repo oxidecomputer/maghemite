@@ -12,10 +12,10 @@ file path=lib/svc/manifest/system/mg-ddm.xml owner=root group=sys \
     variant.opensolaris.zone=global
 dir path=opt owner=root group=sys mode=0755
 dir path=opt/oxide owner=root group=bin mode=0755
-dir path=opt/oxide/maghemite owner=root group=bin mode=0755
-dir path=opt/oxide/maghemite/bin owner=root group=bin mode=0755
-file path=opt/oxide/maghemite/bin/ddmd owner=root group=bin mode=0755
-file path=opt/oxide/maghemite/bin/ddmadm owner=root group=bin mode=0755
-file path=opt/oxide/maghemite/bin/ddm_method_script.sh owner=root group=bin mode=0755
+dir path=opt/oxide/mg-ddm owner=root group=bin mode=0755
+dir path=opt/oxide/mg-ddm/pkg owner=root group=bin mode=0755
+file path=opt/oxide/mg-ddm/ddmd owner=root group=bin mode=0755
+file path=opt/oxide/mg-ddm/ddmadm owner=root group=bin mode=0755
+file path=opt/oxide/mg-ddm/pkg/ddm_method_script.sh owner=root group=bin mode=0755
 depend type=incorporate fmri=pkg:/system/network/maghemite@0.1.%COMMIT_COUNT%
 depend type=require fmri=pkg:/system/network/maghemite@0.1.%COMMIT_COUNT%
