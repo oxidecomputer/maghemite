@@ -3,7 +3,6 @@ use ddm::net::Ipv6Prefix;
 use ddm_admin_client::types;
 use ddm_admin_client::Client;
 use slog::error;
-use slog::info;
 use slog::Drain;
 use slog::Logger;
 use std::net::Ipv6Addr;
@@ -64,14 +63,14 @@ async fn main() -> Result<()> {
     match opt.subcommand {
         SubCommand::GetPeers => {
             match client.get_peers().await {
-                Ok(msg) => info!(log, "{:#?}", msg),
+                Ok(msg) => println!("{:#?}", msg),
                 Err(e) => error!(log, "{}", e),
             };
         }
 
         SubCommand::GetPrefixes => {
             match client.get_prefixes().await {
-                Ok(msg) => info!(log, "{:#?}", msg),
+                Ok(msg) => println!("{:#?}", msg),
                 Err(e) => error!(log, "{}", e),
             };
         }
@@ -79,7 +78,7 @@ async fn main() -> Result<()> {
         /* TODO
         SubCommand::GetRoutes => {
             match client.get_routes().await {
-                Ok(msg) => info!(log, "{:#?}", msg),
+                Ok(msg) => println!("{:#?}", msg),
                 Err(e) => error!(log, "{}", e),
             };
         }
@@ -95,7 +94,7 @@ async fn main() -> Result<()> {
                 });
             }
             match client.advertise_prefixes(&prefixes).await {
-                Ok(msg) => info!(log, "{:#?}", msg),
+                Ok(msg) => println!("{:#?}", msg),
                 Err(e) => error!(log, "{}", e),
             };
         }
