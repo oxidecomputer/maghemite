@@ -32,7 +32,7 @@ impl FromStr for Ipv6Prefix {
     type Err = Ipv6PrefixParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split("/").collect();
+        let parts: Vec<&str> = s.split('/').collect();
         if parts.len() < 2 {
             return Err(Ipv6PrefixParseError::Cidr);
         }

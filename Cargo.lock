@@ -631,6 +631,7 @@ version = "0.1.0"
 dependencies = [
  "ddm",
  "hostname",
+ "once_cell",
  "protod-api",
  "slog",
  "slog-async",

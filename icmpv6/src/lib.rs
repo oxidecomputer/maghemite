@@ -145,6 +145,7 @@ pub struct RouterAdvertisement {
 }
 
 impl RouterAdvertisement {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hop_limit: u8,
         managed_address: bool,

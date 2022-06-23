@@ -74,6 +74,7 @@ pub fn add_routes(
     }
 }
 
+#[allow(dead_code)] // TODO-cleanup Remove once this is used.
 pub fn get_routes_illumos() -> Result<Vec<Route>, String> {
     let mut result = Vec::new();
 
@@ -118,7 +119,8 @@ fn addr_is_local(gw: IpAddr) -> Result<bool, String> {
     Ok(false)
 }
 
-pub fn remote_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
+#[allow(dead_code)] // TODO-cleanup Remove once this is used.
+pub fn remove_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
     for r in routes {
         let gw = r.gw;
         match libnet::delete_route(r.into(), gw) {
@@ -130,11 +132,12 @@ pub fn remote_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)] // TODO-cleanup Remove once this is used.
 pub fn get_routes_dendrite(
     host: String,
     port: u16,
 ) -> Result<Vec<Route>, String> {
-    let api = protod_api::Api::new(host.clone(), port)
+    let api = protod_api::Api::new(host, port)
         .map_err(|e| format!("protod api new: {}", e))?;
 
     let mut cookie = "".to_string();
@@ -215,13 +218,14 @@ pub fn add_routes_dendrite(
     Ok(())
 }
 
+#[allow(dead_code)] // TODO-cleanup Remove once this is used.
 pub fn remove_routes_dendrite(
     routes: Vec<Route>,
     host: String,
     port: u16,
     log: Logger,
 ) -> Result<(), String> {
-    let protod_api = protod_api::Api::new(host.clone(), port)
+    let protod_api = protod_api::Api::new(host, port)
         .map_err(|e| format!("protod api new: {}", e))?;
 
     for r in routes {

@@ -51,11 +51,12 @@ async fn get_peers(
     Ok(HttpResponseOk(result))
 }
 
+type PrefixMap = BTreeMap<Ipv6Addr, HashSet<Ipv6Prefix>>;
+
 #[endpoint { method = GET, path = "/prefixes" }]
 async fn get_prefixes(
     ctx: Arc<RequestContext<HandlerContext>>,
-) -> Result<HttpResponseOk<BTreeMap<Ipv6Addr, HashSet<Ipv6Prefix>>>, HttpError>
-{
+) -> Result<HttpResponseOk<PrefixMap>, HttpError> {
     let context = ctx.context();
     let state = context.router.state.lock().await;
 

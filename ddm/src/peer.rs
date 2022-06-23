@@ -115,6 +115,7 @@ pub enum Status {
 }
 
 impl Session {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         log: Logger,
         ifnum: i32,

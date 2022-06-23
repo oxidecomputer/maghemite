@@ -231,6 +231,6 @@ impl Drop for Solicitor {
 async fn solicit_ddm_router(ifnum: i32) -> Result<()> {
     let msg = ICMPv6Packet::RouterSolicitation(RouterSolicitation::new(None));
     let dst = DDM_RDP_MADDR;
-    send(msg.clone(), dst, ifnum as u32)?;
+    send(msg, dst, ifnum as u32)?;
     Ok(())
 }

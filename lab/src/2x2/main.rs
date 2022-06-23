@@ -31,7 +31,7 @@ async fn main() -> Result<(), Error> {
         }
     }
 
-    match run(&mut d).await? {
-        _ => Ok(()),
-    }
+    let _ = run(&mut d).await?;
+
+    Ok(())
 }
