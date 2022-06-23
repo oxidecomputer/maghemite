@@ -1,10 +1,13 @@
 // Copyright 2021 Oxide Computer Company
 
-use libfalcon::{cli::{run, RunMode}, error::Error, Runner, unit::gb};
+use libfalcon::cli::run;
+use libfalcon::cli::RunMode;
+use libfalcon::error::Error;
+use libfalcon::unit::gb;
+use libfalcon::Runner;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-
     let mut d = Runner::new("duo");
 
     // nodes
@@ -25,5 +28,4 @@ async fn main() -> Result<(), Error> {
         }
         _ => Ok(()),
     }
-
 }

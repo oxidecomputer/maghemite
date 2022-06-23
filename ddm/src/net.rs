@@ -1,14 +1,15 @@
-use std::net::{Ipv6Addr, AddrParseError};
+use std::net::AddrParseError;
+use std::net::Ipv6Addr;
 use std::num::ParseIntError;
 use std::str::FromStr;
 
 use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
-use serde::{Deserialize, Serialize};
 
 #[derive(
-    Debug, Clone, Copy, Deserialize, Serialize, JsonSchema,
-    PartialEq, Eq, Hash,
+    Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Hash,
 )]
 pub struct Ipv6Prefix {
     pub addr: Ipv6Addr,
@@ -31,16 +32,14 @@ impl FromStr for Ipv6Prefix {
     type Err = Ipv6PrefixParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-
         let parts: Vec<&str> = s.split("/").collect();
         if parts.len() < 2 {
             return Err(Ipv6PrefixParseError::Cidr);
         }
 
-        Ok(Ipv6Prefix{
+        Ok(Ipv6Prefix {
             addr: Ipv6Addr::from_str(parts[0])?,
             mask: u8::from_str(parts[1])?,
         })
-
     }
 }

@@ -1,64 +1,77 @@
-/// This file contains the DDM Router implementation. This implementation is
-/// responsible for the DDM control plane, and not the data plane. The
-/// responsibility of the control plane is to
-///
-///   1. Discover neighboring routers.
-///   2. Peer with neighboring routers.
-///   3. Exchange routing information with neighboring routers.
-///
-/// The responsibility of the data plane is to decide what route to use when
-/// multiple routes for the same destination are present. This is done either in
-/// the operating system kernel or on a switch ASIC and is not implemented here.
-/// Here we are only concered with the 3 responsiblities above.
-///
-/// The DDM router implementation is mostly event driven. The router responds to
-/// discovery solicitations by attempting to peer with a soliciting neighbor.
-/// Hailing messages result in reflection responses that let peering routers
-/// know this router is a viable peer for route exchange. Reception of
-/// advertisements results in the update of routing tables and in the case of
-/// transit routers, distribution of advertisements to other peers.
-///
-/// Each of the responsibilities above, discovery, peering and routing prefix
-/// exchange - are implemented in their own files and have block comments at the
-/// top that describe their functionality.
-///
-/// The router is intrinsically asynchronous as it is primarily event driven.
-/// Because of this several tasks are spawned by the router to manage
-/// interactions with other routers and admin API users. A common design element
-/// used throughout the router is to save the join handles associated with these
-/// tasks in structures with a drop implementation that will abort the thread
-/// when dropped. This is to prevent situations like a peering session being
-/// kept alive by a peer that has been dropped by a router.
-///
-/// A router is configured with a set of interfaces that it expects to peer
-/// over. When starting up there is an initial solicit routine that will wait
-/// for active peering sessions to be established on each of these interfaces
-/// and then solicit each neighboring router for all routes it currently has.
-/// This allows a newly peered router to synchronize with the rest of the
-/// network. After that initial solicitation takes place, normal real-time route
-/// prefix exchange takes place between routers.
+//! This file contains the DDM Router implementation. This implementation is
+//! responsible for the DDM control plane, and not the data plane. The
+//! responsibility of the control plane is to
+//!
+//!   1. Discover neighboring routers.
+//!   2. Peer with neighboring routers.
+//!   3. Exchange routing information with neighboring routers.
+//!
+//! The responsibility of the data plane is to decide what route to use when
+//! multiple routes for the same destination are present. This is done either in
+//! the operating system kernel or on a switch ASIC and is not implemented here.
+//! Here we are only concered with the 3 responsiblities above.
+//!
+//! The DDM router implementation is mostly event driven. The router responds to
+//! discovery solicitations by attempting to peer with a soliciting neighbor.
+//! Hailing messages result in reflection responses that let peering routers
+//! know this router is a viable peer for route exchange. Reception of
+//! advertisements results in the update of routing tables and in the case of
+//! transit routers, distribution of advertisements to other peers.
+//!
+//! Each of the responsibilities above, discovery, peering and routing prefix
+//! exchange - are implemented in their own files and have block comments at the
+//! top that describe their functionality.
+//!
+//! The router is intrinsically asynchronous as it is primarily event driven.
+//! Because of this several tasks are spawned by the router to manage
+//! interactions with other routers and admin API users. A common design element
+//! used throughout the router is to save the join handles associated with these
+//! tasks in structures with a drop implementation that will abort the thread
+//! when dropped. This is to prevent situations like a peering session being
+//! kept alive by a peer that has been dropped by a router.
+//!
+//! A router is configured with a set of interfaces that it expects to peer
+//! over. When starting up there is an initial solicit routine that will wait
+//! for active peering sessions to be established on each of these interfaces
+//! and then solicit each neighboring router for all routes it currently has.
+//! This allows a newly peered router to synchronize with the rest of the
+//! network. After that initial solicitation takes place, normal real-time route
+//! prefix exchange takes place between routers.
 
-use std::net::{IpAddr, Ipv6Addr};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+use std::collections::HashSet;
+use std::convert::TryFrom;
+use std::net::IpAddr;
+use std::net::Ipv6Addr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::convert::TryFrom;
 
-use tokio::{sync::Mutex, spawn, time::sleep, task::JoinHandle};
-use libnet::{IpInfo, get_ipaddr_info};
 use icmpv6::ICMPv6Packet;
-use slog::{self, info, debug, trace, error, warn, Logger};
+use libnet::get_ipaddr_info;
+use libnet::IpInfo;
+use slog::debug;
+use slog::error;
+use slog::info;
+use slog::trace;
+use slog::warn;
+use slog::Logger;
+use slog::{self};
+use tokio::spawn;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 
-use crate::rdp;
+use crate::net::Ipv6Prefix;
 use crate::peer;
+use crate::protocol::Advertise;
+use crate::protocol::RouterKind;
+use crate::rdp;
 use crate::rpx;
 use crate::sys;
-use crate::net::Ipv6Prefix;
-use crate::protocol::{RouterKind, Advertise};
 
-pub struct Router { 
+pub struct Router {
     pub config: Config,
-    pub(crate) state: Arc::<Mutex::<RouterState>>,
+    pub(crate) state: Arc<Mutex<RouterState>>,
     pub(crate) log: Logger,
     threadpile: Vec<JoinHandle<()>>,
 }
@@ -76,14 +89,14 @@ pub struct RouterState {
     /// Interface numbers for the IP interfaces this router will peer over. The
     /// NeighboringRouter entry value for each interface index is populated when
     /// a neighbor on that interface is discovered.
-    pub interfaces: BTreeMap::<Interface, Option::<NeighboringRouter>>,
+    pub interfaces: BTreeMap<Interface, Option<NeighboringRouter>>,
 
     /// A set of prefixes that have been advertised to this router, indexed by
     /// nexthop
-    pub remote_prefixes: BTreeMap::<Ipv6Addr, HashSet::<Ipv6Prefix>>,
+    pub remote_prefixes: BTreeMap<Ipv6Addr, HashSet<Ipv6Prefix>>,
 
     /// A set of prefixes that this router is advertising.
-    pub local_prefixes: HashSet::<Ipv6Prefix>,
+    pub local_prefixes: HashSet<Ipv6Prefix>,
 }
 
 impl Default for RouterState {
@@ -98,16 +111,17 @@ impl Default for RouterState {
 
 impl RouterState {
     /// Get the status for a peer with the specified address
-    pub async fn peer_status_for(&self, addr: Ipv6Addr)
-    -> Option<(Interface, peer::Status)> {
-
+    pub async fn peer_status_for(
+        &self,
+        addr: Ipv6Addr,
+    ) -> Option<(Interface, peer::Status)> {
         for (ifx, nbr) in self.interfaces.clone() {
             match nbr {
                 Some(nbr) => {
                     if nbr.addr == addr {
                         return Some((ifx, nbr.session.status().await));
                     }
-                    continue
+                    continue;
                 }
                 None => return None,
             }
@@ -117,29 +131,23 @@ impl RouterState {
 
     /// Get this router's active peers.
     pub async fn active_peers(&self) -> BTreeMap<Interface, NeighboringRouter> {
-
         let mut result = BTreeMap::new();
 
         for (ifx, nbr) in self.interfaces.clone() {
             match nbr {
-                Some(nbr) => {
-                    match nbr.session.status().await {
-                        peer::Status::Active => {
-                            result.insert(ifx, nbr);
-                        }
-                        _ => continue,
+                Some(nbr) => match nbr.session.status().await {
+                    peer::Status::Active => {
+                        result.insert(ifx, nbr);
                     }
-                }
+                    _ => continue,
+                },
                 None => continue,
             }
         }
 
         result
-
     }
 }
-
-
 
 /// User provided router configuration information
 #[derive(Debug, Clone)]
@@ -181,7 +189,6 @@ pub struct Config {
     pub protod: Option<ProtodConfig>,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct ProtodConfig {
     /// Hostname protod can be contacted at.
@@ -210,37 +217,43 @@ impl Default for Config {
 
 impl Router {
     pub fn new(log: Logger, config: Config) -> Result<Self, String> {
-
         let mut interfaces = BTreeMap::new();
         for name in &config.interfaces {
             let info = get_ipaddr_info(&name).map_err(|e| e.to_string())?;
-            interfaces.insert(info.try_into()? , None);
+            interfaces.insert(info.try_into()?, None);
         }
-        let state = Arc::new(Mutex::new(
-            RouterState{interfaces, ..Default::default()}
-        ));
-        Ok(Router{ log, config, state, threadpile: Vec::new() })
+        let state = Arc::new(Mutex::new(RouterState {
+            interfaces,
+            ..Default::default()
+        }));
+        Ok(Router {
+            log,
+            config,
+            state,
+            threadpile: Vec::new(),
+        })
     }
 
-    pub async fn neighbors(&self) 
-    -> BTreeMap<Interface, Option::<NeighboringRouter>> {
+    pub async fn neighbors(
+        &self,
+    ) -> BTreeMap<Interface, Option<NeighboringRouter>> {
         self.state.lock().await.interfaces.clone()
     }
 
-    pub async fn peer_status(&self) -> BTreeMap<Interface, Option::<peer::Status>> {
-
+    pub async fn peer_status(
+        &self,
+    ) -> BTreeMap<Interface, Option<peer::Status>> {
         let mut result = BTreeMap::new();
-        for (k,v) in self.state.lock().await.interfaces.clone() {
+        for (k, v) in self.state.lock().await.interfaces.clone() {
             let status = match v {
                 Some(rtr) => Some(rtr.session.status().await),
-                None => None
+                None => None,
             };
             result.insert(k, status);
         }
-        
+
         result
     }
-
 
     pub async fn run(&mut self) -> Result<(), String> {
         self.start_rpx().await?;
@@ -250,15 +263,11 @@ impl Router {
     }
 
     pub async fn start_rpx(&mut self) -> Result<(), String> {
-
         trace!(self.log, "starting rpx");
 
         let s = self.state.lock().await;
-        let interfaces : Vec<Interface> = s
-            .interfaces
-            .keys()
-            .map(|k| *k)
-            .collect();
+        let interfaces: Vec<Interface> =
+            s.interfaces.keys().map(|k| *k).collect();
         drop(s);
 
         for i in interfaces {
@@ -280,7 +289,6 @@ impl Router {
     /// for each interface, wait until the peering session is active and then
     /// solicit all the routes from that peer.
     async fn initial_solicit(&mut self) {
-
         trace!(self.log, "starting initial solicit");
 
         trace!(self.log, "initial solicit: cloning ifxs");
@@ -292,75 +300,90 @@ impl Router {
             let log = self.log.clone();
             let config = self.config.clone();
             let state = self.state.clone();
-            let t = spawn(async move { loop {
-                // get an updated copy of the neighbor
-                let nbr = rtr.lock().await.interfaces.get(&ifx).unwrap().clone();
-                match nbr {
-                    Some(ref nbr) => match nbr.session.status().await {
-                        peer::Status::Active => {
-                            trace!(log, "soliciting {} on {:?}", nbr.addr, ifx);
-                            match Self::solicit(
-                                config.clone(), 
-                                state.clone(),
-                                ifx,
-                                nbr.addr,
-                                &log,
-                            ).await {
-                                Ok(_) => {
-                                    debug!(
-                                        log, 
-                                        "initial solicit complete for {:?}",
-                                        ifx,
-                                    );
-                                    return;
-                                }
-                                Err(e) => {
-                                    warn!(log, "solicit failed: {}", e);
+            let t = spawn(async move {
+                loop {
+                    // get an updated copy of the neighbor
+                    let nbr =
+                        rtr.lock().await.interfaces.get(&ifx).unwrap().clone();
+                    match nbr {
+                        Some(ref nbr) => match nbr.session.status().await {
+                            peer::Status::Active => {
+                                trace!(
+                                    log,
+                                    "soliciting {} on {:?}",
+                                    nbr.addr,
+                                    ifx
+                                );
+                                match Self::solicit(
+                                    config.clone(),
+                                    state.clone(),
+                                    ifx,
+                                    nbr.addr,
+                                    &log,
+                                )
+                                .await
+                                {
+                                    Ok(_) => {
+                                        debug!(
+                                            log,
+                                            "initial solicit complete for {:?}",
+                                            ifx,
+                                        );
+                                        return;
+                                    }
+                                    Err(e) => {
+                                        warn!(log, "solicit failed: {}", e);
+                                    }
                                 }
                             }
+                            _ => {
+                                trace!(
+                                    log,
+                                    "initial_solicit: peer not active on {:?}",
+                                    ifx,
+                                );
+                            }
+                        },
+                        None => {
+                            trace!(
+                                log,
+                                "initial_solicit: no peer on {:?}",
+                                ifx
+                            );
                         }
-                        _ => { 
-                            trace!(log, 
-                                "initial_solicit: peer not active on {:?}", ifx);
-                        }
-                    }
-                    None => { 
-                        trace!(log, "initial_solicit: no peer on {:?}", ifx);
-                    }
-                };
-                sleep(Duration::from_millis(config.peer_interval)).await;
-            }});
+                    };
+                    sleep(Duration::from_millis(config.peer_interval)).await;
+                }
+            });
             self.threadpile.push(t);
         }
         trace!(self.log, "initial solicit started");
-
     }
 
     pub async fn add_remote_prefixes(
-        state: &Arc::<Mutex::<RouterState>>,
+        state: &Arc<Mutex<RouterState>>,
         nexthop: Ipv6Addr,
-        prefixes: HashSet::<Ipv6Prefix>,
+        prefixes: HashSet<Ipv6Prefix>,
     ) {
-
         let mut router_state = state.lock().await;
         match router_state.remote_prefixes.get_mut(&nexthop) {
             Some(ref mut set) => {
                 set.extend(prefixes.iter());
             }
             None => {
-                router_state.remote_prefixes.insert(nexthop, prefixes.clone());
+                router_state
+                    .remote_prefixes
+                    .insert(nexthop, prefixes.clone());
             }
         }
-
     }
 
     pub async fn distribute(
-        state: &Arc::<Mutex::<RouterState>>,
+        state: &Arc<Mutex<RouterState>>,
         adv: &Advertise,
         config: &Config,
         log: &Logger,
     ) {
-
         let s = state.lock().await;
         let active_peers = s.active_peers().await;
         drop(s);
@@ -368,10 +391,9 @@ impl Router {
         warn!(log, "DISTRIBUTE({})", active_peers.len());
 
         for (ifx, nbr) in active_peers {
-
             // dont redistribute to the source
             if adv.nexthop == nbr.addr {
-                continue
+                continue;
             }
 
             let mut adv = adv.clone();
@@ -388,49 +410,40 @@ impl Router {
                 ifx.ifnum,
                 nbr.addr,
                 config.rpx_port,
-            ).await {
-                Ok(_) => {},
-                Err(e) => error!(log,
-                    "distribute advertisement: {}", e),
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(e) => error!(log, "distribute advertisement: {}", e),
             }
         }
-
     }
 
     async fn solicit(
         config: Config,
-        state: Arc::<Mutex::<RouterState>>,
+        state: Arc<Mutex<RouterState>>,
         ifx: Interface,
         dst: Ipv6Addr,
         log: &Logger,
     ) -> Result<(), String> {
-
-        let advertisement = rpx::solicit(
-            ifx.ll_addr,
-            ifx.ifnum,
-            dst,
-            config.rpx_port,
-        ).await?;
+        let advertisement =
+            rpx::solicit(ifx.ll_addr, ifx.ifnum, dst, config.rpx_port).await?;
 
         Self::add_remote_prefixes(
             &state,
             advertisement.nexthop,
             advertisement.prefixes.clone(),
-        ).await;
+        )
+        .await;
 
         if config.router_kind == RouterKind::Transit {
             warn!(log, "DISTRIBUTE");
-            Router::distribute(
-                &state,
-                &advertisement,
-                &config,
-                &log,
-            ).await;
+            Router::distribute(&state, &advertisement, &config, &log).await;
         }
 
         // for upper half only we're done
         if config.upper_half_only {
-            return Ok(())
+            return Ok(());
         }
 
         // add routes to the underlying system
@@ -441,22 +454,19 @@ impl Router {
         // Get a copy of they interface keys. We cannot hold onto the lock as
         // the threads that are spawned below need to acquire the lock
         // individually to update the router state when a peer is discovered.
-        
+
         trace!(self.log, "starting discovery");
-        
+
         let s = self.state.lock().await;
-        let interfaces : Vec<Interface> = s
-            .interfaces
-            .keys()
-            .map(|k| *k)
-            .collect();
+        let interfaces: Vec<Interface> =
+            s.interfaces.keys().map(|k| *k).collect();
         drop(s);
 
         for i in interfaces {
             let state = self.state.clone();
             let config = self.config.clone();
             let log = self.log.clone();
-            let t = spawn(async move { 
+            let t = spawn(async move {
                 Self::discover_neighboring_router(i, state, config, log).await;
             });
             self.threadpile.push(t);
@@ -467,11 +477,10 @@ impl Router {
 
     async fn discover_neighboring_router(
         interface: Interface,
-        state: Arc::<Mutex::<RouterState>>,
+        state: Arc<Mutex<RouterState>>,
         config: Config,
         log: Logger,
     ) {
-
         //
         // Start a solicitor.
         //
@@ -483,8 +492,9 @@ impl Router {
         solicitor.start();
 
         loop {
-            match discover_neighboring_router(
-                interface.ifnum, log.clone()).await {
+            match discover_neighboring_router(interface.ifnum, log.clone())
+                .await
+            {
                 Ok(addr) => {
                     info!(log, "discovered neighbor {}", addr);
                     let mut session = peer::Session::new(
@@ -500,19 +510,20 @@ impl Router {
                     );
                     match session.start().await {
                         Ok(_) => {
-                            info!(log,
-                                "started peering session for {}", addr);
-                        },
+                            info!(log, "started peering session for {}", addr);
+                        }
                         Err(e) => {
-                            error!(log,
-                                "start peer session on {:?}: {}", interface, e);
+                            error!(
+                                log,
+                                "start peer session on {:?}: {}", interface, e
+                            );
                             sleep(Duration::from_millis(100)).await;
                             continue;
                         }
                     };
                     state.lock().await.interfaces.insert(
                         interface,
-                        Some(NeighboringRouter{
+                        Some(NeighboringRouter {
                             addr,
                             session: Arc::new(session),
                             solicitor: Arc::new(solicitor),
@@ -529,9 +540,10 @@ impl Router {
         }
     }
 
-    pub async fn advertise(&self, prefixes: HashSet::<Ipv6Prefix>)
-    -> Result<(), String>{
-
+    pub async fn advertise(
+        &self,
+        prefixes: HashSet<Ipv6Prefix>,
+    ) -> Result<(), String> {
         // get exclusive access to internal state
         let mut state = self.state.lock().await;
 
@@ -545,7 +557,6 @@ impl Router {
 
         // advertise the given prefixes to our peers
         for (ifx, rtr) in interfaces {
-
             let rtr = match rtr {
                 Some(rtr) => rtr,
                 None => continue,
@@ -563,21 +574,17 @@ impl Router {
                 ifx.ifnum,
                 rtr.addr,
                 self.config.rpx_port,
-            ).await?;
-
+            )
+            .await?;
         }
 
         Ok(())
     }
 
-    pub async fn nexthops(&self, prefix: Ipv6Prefix) -> HashSet::<Ipv6Addr> {
-
+    pub async fn nexthops(&self, prefix: Ipv6Prefix) -> HashSet<Ipv6Addr> {
         let mut result = HashSet::new();
         let remotes = self.state.lock().await.remote_prefixes.clone();
-        debug!(self.log, "[{}] nexthops {:#?}",
-            self.config.name,
-            remotes,
-        );
+        debug!(self.log, "[{}] nexthops {:#?}", self.config.name, remotes,);
         for (nexthop, prefixes) in remotes {
             if prefixes.contains(&prefix) {
                 result.insert(nexthop);
@@ -586,15 +593,12 @@ impl Router {
 
         result
     }
-
 }
 
 async fn discover_neighboring_router(
     ifnum: i32,
     log: Logger,
 ) -> Result<Ipv6Addr, String> {
-
-
     //
     // Handle solicitation.
     //
@@ -628,7 +632,10 @@ impl TryFrom<&IpInfo> for Interface {
             IpAddr::V6(addr) => addr,
             _ => return Err("expected ipv6 addr".into()),
         };
-        Ok(Interface{ll_addr, ifnum: info.index})
+        Ok(Interface {
+            ll_addr,
+            ifnum: info.index,
+        })
     }
 }
 
@@ -643,31 +650,32 @@ impl TryFrom<IpInfo> for Interface {
 #[derive(Clone)]
 pub struct NeighboringRouter {
     pub addr: Ipv6Addr,
-    pub session: Arc::<peer::Session>,
-    pub solicitor: Arc::<rdp::Solicitor>,
+    pub session: Arc<peer::Session>,
+    pub solicitor: Arc<rdp::Solicitor>,
 }
 
 #[cfg(test)]
 mod tests {
 
-    use std::time::Duration;
     use std::net::IpAddr;
     use std::str::FromStr;
+    use std::time::Duration;
 
-    use anyhow::Result;
-    use util::test::{testlab_x2, testlab_1x2};
-    use tokio::time::sleep;
-    use slog::{info, debug};
     use super::*;
+    use anyhow::Result;
+    use slog::debug;
+    use slog::info;
+    use tokio::time::sleep;
+    use util::test::testlab_1x2;
+    use util::test::testlab_x2;
 
     /// Discover, peer, exchange with two directly connected server routers
     #[tokio::test]
     async fn rs_dpx_x2() -> Result<()> {
-
         //
         // set up testlab interfaces
         //
-        
+
         let interfaces = testlab_x2("disc1")?;
         let if1 = format!("{}/v6", interfaces[0].name.clone());
         let if2 = format!("{}/v6", interfaces[1].name.clone());
@@ -676,7 +684,7 @@ mod tests {
         // set up routers
         //
 
-        let c1 = Config{
+        let c1 = Config {
             name: "r1".into(),
             interfaces: vec![if1],
             peer_interval: 100,
@@ -685,7 +693,7 @@ mod tests {
             ..Default::default()
         };
 
-        let c2 = Config{
+        let c2 = Config {
             name: "r2".into(),
             interfaces: vec![if2],
             peer_interval: 100,
@@ -701,7 +709,7 @@ mod tests {
         //
         // run the routers
         //
-        
+
         info!(log, "running routers");
         r1.run().await.expect("run router 1");
         r2.run().await.expect("run router 2");
@@ -711,12 +719,14 @@ mod tests {
         // advertise some routes
         //
 
-        let pfx1 = Ipv6Prefix::from_str("fd00:1::/64").expect("parse prefix a1");
+        let pfx1 =
+            Ipv6Prefix::from_str("fd00:1::/64").expect("parse prefix a1");
         let mut a1 = HashSet::new();
         a1.insert(pfx1);
         r1.advertise(a1).await.expect("advertise from r1");
 
-        let pfx2 = Ipv6Prefix::from_str("fd00:2::/64").expect("parse prefix a2");
+        let pfx2 =
+            Ipv6Prefix::from_str("fd00:2::/64").expect("parse prefix a2");
         let mut a2 = HashSet::new();
         a2.insert(pfx2);
         r2.advertise(a2).await.expect("advertise from a2");
@@ -724,7 +734,7 @@ mod tests {
         //
         // wait for discovery
         //
-        
+
         sleep(Duration::from_secs(2)).await;
 
         //
@@ -734,28 +744,22 @@ mod tests {
         info!(log, "get n1");
         let n1 = r1.neighbors().await;
         let ifx1: Interface = (&interfaces[0].addr.info).try_into().unwrap();
-        let n1 = n1.get(&ifx1)
-            .expect("get n1").as_ref()
-            .expect("n1 is some");
+        let n1 = n1.get(&ifx1).expect("get n1").as_ref().expect("n1 is some");
 
         info!(log, "get n1");
         let n2s = r2.neighbors().await;
         let ifx2: Interface = (&interfaces[1].addr.info).try_into().unwrap();
-        let n2 = n2s.get(&ifx2)
-            .expect("get n2").as_ref()
+        let n2 = n2s
+            .get(&ifx2)
+            .expect("get n2")
+            .as_ref()
             .expect("n2 is some");
 
         info!(log, "got n1/n2");
 
-        assert_eq!(
-            IpAddr::V6(n1.addr),
-            interfaces[1].addr.info.addr,
-        );
+        assert_eq!(IpAddr::V6(n1.addr), interfaces[1].addr.info.addr,);
 
-        assert_eq!(
-            IpAddr::V6(n2.addr),
-            interfaces[0].addr.info.addr,
-        );
+        assert_eq!(IpAddr::V6(n2.addr), interfaces[0].addr.info.addr,);
 
         //
         // assert expected peer state
@@ -773,7 +777,7 @@ mod tests {
         //
         // assert expected prefix state
         //
-        
+
         sleep(Duration::from_secs(2)).await;
 
         // router1 should have router2's link-local address as a nexthop for
@@ -812,7 +816,6 @@ mod tests {
     /// transit router.
     #[tokio::test]
     async fn rs_dpx_1x2() -> Result<()> {
-
         //
         // set up testlab interfaces
         //
@@ -830,7 +833,7 @@ mod tests {
         // set up routers
         //
 
-        let sc1 = Config{
+        let sc1 = Config {
             name: "r1".into(),
             interfaces: vec![if0],
             peer_interval: 100,
@@ -839,7 +842,7 @@ mod tests {
             ..Default::default()
         };
 
-        let sc2 = Config{
+        let sc2 = Config {
             name: "r2".into(),
             interfaces: vec![if2],
             peer_interval: 100,
@@ -848,7 +851,7 @@ mod tests {
             ..Default::default()
         };
 
-        let tc1 = Config{
+        let tc1 = Config {
             name: "t1".into(),
             interfaces: vec![if1, if3],
             peer_interval: 100,
@@ -866,7 +869,7 @@ mod tests {
         //
         // run the routers
         //
-        
+
         info!(log, "running routers");
         s1.run().await.expect("run server router 1");
         s2.run().await.expect("run server router 2");
@@ -878,12 +881,14 @@ mod tests {
         //
 
         debug!(log, "advertising!!!");
-        let pfx1 = Ipv6Prefix::from_str("fd00:1::/64").expect("parse prefix a1");
+        let pfx1 =
+            Ipv6Prefix::from_str("fd00:1::/64").expect("parse prefix a1");
         let mut a1 = HashSet::new();
         a1.insert(pfx1);
         s1.advertise(a1).await.expect("advertise from r1");
 
-        let pfx2 = Ipv6Prefix::from_str("fd00:2::/64").expect("parse prefix a2");
+        let pfx2 =
+            Ipv6Prefix::from_str("fd00:2::/64").expect("parse prefix a2");
         let mut a2 = HashSet::new();
         a2.insert(pfx2);
         s2.advertise(a2).await.expect("advertise from a2");
@@ -891,13 +896,13 @@ mod tests {
         //
         // wait for discovery + peering + exchange
         //
-        
+
         sleep(Duration::from_secs(5)).await;
 
         //
         // assert expected prefix state
         //
-        
+
         // s-router1 should have the transit routers link-local address as a
         // nexthop for fd00:2::/64
         let nexthops = s1.nexthops(pfx2).await;
@@ -911,6 +916,5 @@ mod tests {
         assert!(nexthops.contains(&ifx3.ll_addr));
 
         Ok(())
-
     }
 }

@@ -1,11 +1,11 @@
 #![feature(maybe_uninit_slice)]
 
-pub mod router;
 pub mod admin;
-pub mod protocol;
 pub mod net;
+pub mod protocol;
+pub mod router;
 
-mod rdp;
 mod peer;
+mod rdp;
 mod rpx;
 mod sys;

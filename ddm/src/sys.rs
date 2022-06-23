@@ -1,10 +1,17 @@
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
+use std::net::Ipv6Addr;
 
-use slog::{warn, debug, Logger};
-use serde::{Deserialize, Serialize};
+use dendrite_common::Cidr;
+use dendrite_common::Ipv6Cidr;
+use libnet::IpPrefix;
+use libnet::Ipv4Prefix;
+use libnet::Ipv6Prefix;
 use schemars::JsonSchema;
-use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
-use dendrite_common::{Cidr, Ipv6Cidr};
+use serde::Deserialize;
+use serde::Serialize;
+use slog::debug;
+use slog::warn;
+use slog::Logger;
 
 use crate::router::Config;
 
@@ -42,39 +49,32 @@ impl Into<libnet::route::Route> for Route {
 impl Into<IpPrefix> for Route {
     fn into(self) -> IpPrefix {
         match self.dest {
-            IpAddr::V4(a) => {
-                IpPrefix::V4(Ipv4Prefix{
-                    addr: a,
-                    mask: self.prefix_len,
-                })
-            }
-            IpAddr::V6(a) => {
-                IpPrefix::V6(Ipv6Prefix{
-                    addr: a,
-                    mask: self.prefix_len,
-                })
-            }
+            IpAddr::V4(a) => IpPrefix::V4(Ipv4Prefix {
+                addr: a,
+                mask: self.prefix_len,
+            }),
+            IpAddr::V6(a) => IpPrefix::V6(Ipv6Prefix {
+                addr: a,
+                mask: self.prefix_len,
+            }),
         }
     }
 }
 
-pub fn add_routes(log: &Logger, config: &Config, routes: Vec<Route>)
--> Result<(), String> {
-
+pub fn add_routes(
+    log: &Logger,
+    config: &Config,
+    routes: Vec<Route>,
+) -> Result<(), String> {
     match &config.protod {
-        Some(protod) => add_routes_dendrite(
-            routes,
-            &protod.host,
-            protod.port,
-            log,
-        ),
-        None => add_routes_illumos(routes)
+        Some(protod) => {
+            add_routes_dendrite(routes, &protod.host, protod.port, log)
+        }
+        None => add_routes_illumos(routes),
     }
-
 }
 
-pub fn  get_routes_illumos() -> Result<Vec<Route>, String> {
-
+pub fn get_routes_illumos() -> Result<Vec<Route>, String> {
     let mut result = Vec::new();
 
     let routes = match libnet::get_routes() {
@@ -87,11 +87,9 @@ pub fn  get_routes_illumos() -> Result<Vec<Route>, String> {
     }
 
     Ok(result)
-
 }
 
 pub fn add_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
-
     for r in routes {
         let gw = r.gw;
 
@@ -100,13 +98,12 @@ pub fn add_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
             continue;
         }
         match libnet::ensure_route_present(r.into(), gw) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => return Err(format!("set route: {}", e)),
         }
     }
 
     Ok(())
-
 }
 
 fn addr_is_local(gw: IpAddr) -> Result<bool, String> {
@@ -121,32 +118,28 @@ fn addr_is_local(gw: IpAddr) -> Result<bool, String> {
     Ok(false)
 }
 
-pub fn  remote_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
-
+pub fn remote_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
     for r in routes {
         let gw = r.gw;
         match libnet::delete_route(r.into(), gw) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => return Err(format!("set route: {}", e)),
         }
     }
 
     Ok(())
-
 }
 
-pub fn  get_routes_dendrite(
+pub fn get_routes_dendrite(
     host: String,
     port: u16,
 ) -> Result<Vec<Route>, String> {
-
-    let api = protod_api::Api::new(
-        host.clone(),
-        port,
-    ).map_err(|e| format!("protod api new: {}", e))?;
+    let api = protod_api::Api::new(host.clone(), port)
+        .map_err(|e| format!("protod api new: {}", e))?;
 
     let mut cookie = "".to_string();
-    let routes = api.route_ipv6_get_range(None, &mut cookie)
+    let routes = api
+        .route_ipv6_get_range(None, &mut cookie)
         .map_err(|e| format!("protod get routes: {}", e))?;
     let mut result = Vec::new();
 
@@ -156,12 +149,11 @@ pub fn  get_routes_dendrite(
             _ => Ipv6Addr::UNSPECIFIED.into(),
         };
         let (dest, prefix_len) = match r.cidr {
-            Cidr::V6(cidr) => 
-                (cidr.prefix.into(), cidr.prefix_len),
+            Cidr::V6(cidr) => (cidr.prefix.into(), cidr.prefix_len),
             _ => continue,
         };
         let egress_port = r.egress_port;
-        result.push(Route{
+        result.push(Route {
             dest,
             prefix_len,
             gw,
@@ -170,43 +162,41 @@ pub fn  get_routes_dendrite(
     }
 
     Ok(result)
-
 }
 
-pub fn  add_routes_dendrite(
+pub fn add_routes_dendrite(
     routes: Vec<Route>,
     host: &str,
     port: u16,
     log: &Logger,
 ) -> Result<(), String> {
-
-    let protod_api = protod_api::Api::new(
-        host.into(),
-        port,
-    ).map_err(|e| format!("protod api new: {}", e))?;
+    let protod_api = protod_api::Api::new(host.into(), port)
+        .map_err(|e| format!("protod api new: {}", e))?;
 
     for r in routes {
         let cidr = match r.dest {
-            IpAddr::V6(addr) => Ipv6Cidr{
+            IpAddr::V6(addr) => Ipv6Cidr {
                 prefix: addr,
                 prefix_len: r.prefix_len,
             },
-            _ => { 
+            _ => {
                 return Err(format!("unsupported dst: {:?}", r.dest));
             }
         };
 
         let gw = match r.gw {
             IpAddr::V6(gw) => gw,
-            _ => { 
-                return Err(format!("unsupported gw: {:?}", r.gw)); 
+            _ => {
+                return Err(format!("unsupported gw: {:?}", r.gw));
             }
         };
 
         let egress_port = match protod_api.ndp_get(gw) {
             Ok(nbr) => {
-                debug!(log, 
-                    "found neighbor port: {:?} -> {:?}", gw, nbr.port_id);
+                debug!(
+                    log,
+                    "found neighbor port: {:?} -> {:?}", gw, nbr.port_id
+                );
                 nbr.port_id
             }
             Err(e) => {
@@ -217,32 +207,26 @@ pub fn  add_routes_dendrite(
             }
         };
 
-        protod_api.route_ipv6_add(
-            &cidr,
-            egress_port,
-            Some(gw),
-        ).map_err(|e| format!("protod route add: {}", e))?;
+        protod_api
+            .route_ipv6_add(&cidr, egress_port, Some(gw))
+            .map_err(|e| format!("protod route add: {}", e))?;
     }
 
     Ok(())
-
 }
 
-pub fn  remove_routes_dendrite(
+pub fn remove_routes_dendrite(
     routes: Vec<Route>,
     host: String,
     port: u16,
     log: Logger,
 ) -> Result<(), String> {
-
-    let protod_api = protod_api::Api::new(
-        host.clone(),
-        port,
-    ).map_err(|e| format!("protod api new: {}", e))?;
+    let protod_api = protod_api::Api::new(host.clone(), port)
+        .map_err(|e| format!("protod api new: {}", e))?;
 
     for r in routes {
         let cidr = match r.dest {
-            IpAddr::V6(addr) => Ipv6Cidr{
+            IpAddr::V6(addr) => Ipv6Cidr {
                 prefix: addr,
                 prefix_len: r.prefix_len,
             },
@@ -252,11 +236,10 @@ pub fn  remove_routes_dendrite(
             }
         };
 
-
-        protod_api.route_ipv6_del(&cidr)
+        protod_api
+            .route_ipv6_del(&cidr)
             .map_err(|e| format!("protod route del: {}", e))?;
     }
 
     Ok(())
-
 }

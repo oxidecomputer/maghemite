@@ -1,66 +1,77 @@
-/// This file contains peering functionality for DDM. When a DDM router receives
-/// a router solicitation on the link-local router discovery address ff02::dd,
-/// it will attempt to peer with the solicitor. Peering is initiated by the
-/// router sending out a [`protocol::Hail`] message that contains the name of
-/// the router and what kind of router it is. If the solicitor sends a hail
-/// [`protocol::Response`] that specifies the hailing router as the origin then
-/// the hailing router will now consider the soliciting router a peer.
-///
-///              *-----*                        *-----*
-///              |  A  |                        |  B  |
-///              *-----*                        *-----*
-///                 |           solicit            |
-///                 |----------------------------->|
-///                 |        hail(B, server)       |
-///                 |<-----------------------------|
-///                 |     response(A, B, server)   |
-///                 |----------------------------->| * A is an active peer
-///                 |             ...              |
-///                 |                              |
-///                 |        hail(B, server)       |
-///                 |<-----------------------------|
-///                 |     response(A, B, server)   |
-///                 |----------------------------->| * Update A last seen at
-///                 |             ...              |   time <t>.
-///                 |                              |
-///                 |     [periodic hails ...]     |
-///                 |                              |
-///
-/// Peering is directional. Router A peering with router B, does not imply B
-/// peering with A.
-///
-/// Active peers have an expiration time. Periodic hails are required to keep a
-/// peer active. Both the expiration time and the hail interval are
-/// configuration parameters of a DDM router.
+//! This file contains peering functionality for DDM. When a DDM router receives
+//! a router solicitation on the link-local router discovery address ff02::dd,
+//! it will attempt to peer with the solicitor. Peering is initiated by the
+//! router sending out a [`protocol::Hail`] message that contains the name of
+//! the router and what kind of router it is. If the solicitor sends a hail
+//! [`protocol::Response`] that specifies the hailing router as the origin then
+//! the hailing router will now consider the soliciting router a peer.
+//!
+//!              *-----*                        *-----*
+//!              |  A  |                        |  B  |
+//!              *-----*                        *-----*
+//!                 |           solicit            |
+//!                 |----------------------------->|
+//!                 |        hail(B, server)       |
+//!                 |<-----------------------------|
+//!                 |     response(A, B, server)   |
+//!                 |----------------------------->| * A is an active peer
+//!                 |             ...              |
+//!                 |                              |
+//!                 |        hail(B, server)       |
+//!                 |<-----------------------------|
+//!                 |     response(A, B, server)   |
+//!                 |----------------------------->| * Update A last seen at
+//!                 |             ...              |   time <t>.
+//!                 |                              |
+//!                 |     [periodic hails ...]     |
+//!                 |                              |
+//!
+//! Peering is directional. Router A peering with router B, does not imply B
+//! peering with A.
+//!
+//! Active peers have an expiration time. Periodic hails are required to keep a
+//! peer active. Both the expiration time and the hail interval are
+//! configuration parameters of a DDM router.
 
-use std::net::{SocketAddrV6, Ipv6Addr};
-use std::time::{Instant, Duration};
+use std::net::Ipv6Addr;
+use std::net::SocketAddrV6;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
-use tokio::{spawn, time::{sleep, timeout}, sync::Mutex, task::JoinHandle};
-use slog::{Logger, trace, info, warn, error};
+use dropshot::endpoint;
+use dropshot::ApiDescription;
+use dropshot::ConfigDropshot;
+use dropshot::ConfigLogging;
+use dropshot::ConfigLoggingLevel;
+use dropshot::HttpError;
+use dropshot::HttpResponseOk;
+use dropshot::HttpServerStarter;
+use dropshot::RequestContext;
+use dropshot::TypedBody;
 use hyper::body::HttpBody;
-use dropshot::{
-    endpoint,
-    ConfigDropshot,
-    ConfigLogging,
-    ConfigLoggingLevel,
-    ApiDescription,
-    HttpServerStarter,
-    RequestContext,
-    HttpResponseOk,
-    HttpError,
-    TypedBody,
-};
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
+use slog::error;
+use slog::info;
+use slog::trace;
+use slog::warn;
+use slog::Logger;
+use tokio::spawn;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
+use tokio::time::timeout;
 
-use crate::protocol::{Hail, Response, RouterKind};
+use crate::protocol::Hail;
+use crate::protocol::Response;
+use crate::protocol::RouterKind;
 
 pub struct Session {
     log: Logger,
-    client_task: Option<Arc::<JoinHandle<()>>>,
-    server_task: Option<Arc::<JoinHandle<()>>>,
+    client_task: Option<Arc<JoinHandle<()>>>,
+    server_task: Option<Arc<JoinHandle<()>>>,
     info: SessionInfo,
 }
 
@@ -71,7 +82,7 @@ pub struct SessionInfo {
     addr: Ipv6Addr,
     interval: u64,
     expire: u64,
-    state: Arc::<Mutex::<State>>,
+    state: Arc<Mutex<State>>,
     host: String,
     server_addr: Ipv6Addr,
     server_port: u16,
@@ -86,7 +97,7 @@ pub struct State {
 
 impl State {
     fn new() -> Self {
-        State{
+        State {
             last_seen: None,
             hail_response_sent: false,
             hail_response_received: false,
@@ -115,9 +126,9 @@ impl Session {
         server_port: u16,
         router_kind: RouterKind,
     ) -> Self {
-        Session{
+        Session {
             log: log.clone(),
-            info: SessionInfo{
+            info: SessionInfo {
                 log: log.clone(),
                 ifnum,
                 addr,
@@ -135,22 +146,20 @@ impl Session {
     }
 
     pub async fn start(&mut self) -> Result<(), String> {
-
         //
         // start peering server
         //
-        
+
         self.server_task = Some(Arc::new(self.start_server()?));
 
         //
         // start peering client
         //
-        
+
         self.client_task = Some(Arc::new(self.run()));
 
         Ok(())
     }
-
 
     pub async fn status(&self) -> Status {
         match self.info.state.lock().await.last_seen {
@@ -167,14 +176,16 @@ impl Session {
 
     fn run(&self) -> JoinHandle<()> {
         let session = self.info.clone();
-        spawn(async move { 
+        spawn(async move {
             loop {
                 trace!(session.log, "[{}] peer step", session.host);
                 match Self::step(&session).await {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(e) => warn!(session.log, "{}", e),
                 }
-                trace!(session.log, "[{}] peer sleep {}", 
+                trace!(
+                    session.log,
+                    "[{}] peer sleep {}",
                     session.host,
                     session.interval,
                 );
@@ -193,7 +204,7 @@ impl Session {
         };
         if response.origin != session.host {
             return Err(format!("unexpected response: {:#?}", response));
-        } 
+        }
 
         let mut state = session.state.lock().await;
         state.last_seen = Some(Instant::now());
@@ -203,7 +214,6 @@ impl Session {
     }
 
     async fn hail(s: &SessionInfo) -> Result<Response, String> {
-
         trace!(s.log, "sending hail to {}", s.addr);
 
         // XXX we need to use a custom hyper client here, and not a dropshot
@@ -211,16 +221,15 @@ impl Session {
         // scoped ipv6 addresses. Dropshot uses reqwest internally which does
         // not support scoped ipv6 addresses.
 
-        let msg = Hail{sender: s.host.clone(), router_kind: s.router_kind};
+        let msg = Hail {
+            sender: s.host.clone(),
+            router_kind: s.router_kind,
+        };
 
-        let json = serde_json::to_string(&msg)
-            .map_err(|e| e.to_string())?;
+        let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
 
-        let uri = format!("http://[{}%{}]:{}/hail",
-            s.addr,
-            s.ifnum,
-            s.server_port,
-        );
+        let uri =
+            format!("http://[{}%{}]:{}/hail", s.addr, s.ifnum, s.server_port,);
 
         let client = hyper::Client::new();
         let req = hyper::Request::builder()
@@ -231,16 +240,20 @@ impl Session {
 
         let resp = client.request(req);
 
-        let mut response = match timeout(Duration::from_millis(250), resp).await {
+        let mut response = match timeout(Duration::from_millis(250), resp).await
+        {
             Ok(resp) => match resp {
                 Ok(r) => r,
-                Err(e) => return Err(format!(
-                    "hyper send request to {}: {}",
-                    &uri,
-                    e,
-                )),
+                Err(e) => {
+                    return Err(format!(
+                        "hyper send request to {}: {}",
+                        &uri, e,
+                    ))
+                }
             },
-            Err(e) => return Err(format!("peer request timeout to {}: {}", uri, e)),
+            Err(e) => {
+                return Err(format!("peer request timeout to {}: {}", uri, e))
+            }
         };
 
         let body = match response.body_mut().data().await {
@@ -248,14 +261,13 @@ impl Session {
             None => return Err("no body found".to_string()),
         };
 
-        let response: Response = serde_json::from_slice(body.as_ref())
-            .map_err(|e| e.to_string())?;
+        let response: Response =
+            serde_json::from_slice(body.as_ref()).map_err(|e| e.to_string())?;
 
         Ok(response)
     }
 
     fn start_server(&self) -> Result<JoinHandle<()>, String> {
-
         let sa = SocketAddrV6::new(
             self.info.server_addr,
             self.info.server_port,
@@ -266,22 +278,21 @@ impl Session {
             bind_address: sa.into(),
             ..Default::default()
         };
-        let log =
-            ConfigLogging::StderrTerminal{level: ConfigLoggingLevel::Error}
-            .to_logger("peer")
-            .map_err(|e| e.to_string())?;
+        let log = ConfigLogging::StderrTerminal {
+            level: ConfigLoggingLevel::Error,
+        }
+        .to_logger("peer")
+        .map_err(|e| e.to_string())?;
 
         let mut api = ApiDescription::new();
         api.register(hail).unwrap();
 
-        let context = HandlerContext{session: self.info.clone()};
+        let context = HandlerContext {
+            session: self.info.clone(),
+        };
 
-        let server = HttpServerStarter::new(
-            &config,
-            api,
-            context,
-            &log,
-        ).map_err(|e| format!("new peer dropshot: {}", e))?;
+        let server = HttpServerStarter::new(&config, api, context, &log)
+            .map_err(|e| format!("new peer dropshot: {}", e))?;
 
         info!(self.log, "peer: listening on {}", sa);
 
@@ -301,11 +312,11 @@ impl Drop for Session {
 
         match self.client_task {
             Some(ref t) => t.abort(),
-            None => {},
+            None => {}
         }
         match self.server_task {
             Some(ref t) => t.abort(),
-            None => {},
+            None => {}
         }
     }
 }
@@ -321,10 +332,9 @@ struct HandlerContext {
     path = "/hail"
 }]
 async fn hail(
-    ctx: Arc::<RequestContext::<HandlerContext>>,
+    ctx: Arc<RequestContext<HandlerContext>>,
     rq: TypedBody<Hail>,
 ) -> Result<HttpResponseOk<Response>, HttpError> {
-
     let context = ctx.context();
     let session = &context.session;
     let msg = rq.into_inner();
@@ -333,7 +343,7 @@ async fn hail(
 
     session.state.lock().await.hail_response_sent = true;
 
-    Ok(HttpResponseOk(Response{
+    Ok(HttpResponseOk(Response {
         sender: session.host.clone(),
         origin: msg.sender,
         router_kind: session.router_kind,
@@ -347,8 +357,8 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::Result;
-    use util::test::testlab_x2;
     use tokio::time::sleep;
+    use util::test::testlab_x2;
 
     use crate::protocol::RouterKind;
 
@@ -356,7 +366,6 @@ mod tests {
 
     #[tokio::test]
     async fn peer_session1() -> Result<()> {
-        
         let log = util::test::logger();
 
         //
@@ -372,7 +381,7 @@ mod tests {
         //
         // set up peer sessions
         //
-        
+
         let mut s1 = Session::new(
             log.clone(),
             if0.addr.info.index,
@@ -410,7 +419,7 @@ mod tests {
         //
         // wait for peering
         //
-        
+
         sleep(Duration::from_secs(5)).await;
 
         assert_eq!(s1.status().await, Status::Active);

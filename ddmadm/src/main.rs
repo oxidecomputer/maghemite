@@ -1,11 +1,13 @@
-use structopt::{
-    StructOpt,
-    clap::AppSettings::*,
-};
 use anyhow::Result;
 use ddm::net::Ipv6Prefix;
-use slog::{info, error, Logger, Drain};
-use ddm_admin_client::{Client, types};
+use ddm_admin_client::types;
+use ddm_admin_client::Client;
+use slog::error;
+use slog::info;
+use slog::Drain;
+use slog::Logger;
+use structopt::clap::AppSettings::*;
+use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -24,7 +26,7 @@ struct Opt {
     port: Option<usize>,
 
     #[structopt(subcommand)]
-    subcommand: SubCommand
+    subcommand: SubCommand,
 }
 
 #[derive(Debug, StructOpt)]
@@ -39,18 +41,17 @@ enum SubCommand {
     //TODO GetRoutes,
 
     /// Advertise a prefix from a DDM router.
-    AdvertisePrefix(AdvertiseCommand)
+    AdvertisePrefix(AdvertiseCommand),
 }
 
 #[derive(Debug, StructOpt)]
 struct AdvertiseCommand {
     /// IPv6 Prefix to advertise
-    prefixes: Vec::<Ipv6Prefix>,
+    prefixes: Vec<Ipv6Prefix>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-
     let opt = Opt::from_args();
     let log = init_logger();
 
@@ -89,13 +90,12 @@ async fn main() -> Result<()> {
             };
         }
         */
-
         SubCommand::AdvertisePrefix(ac) => {
             // TODO a better way to deal with translating the client type back
             // into the type it was derived from in the first place?
-            let mut prefixes: Vec::<types::Ipv6Prefix> = Vec::new();
+            let mut prefixes: Vec<types::Ipv6Prefix> = Vec::new();
             for p in ac.prefixes {
-                prefixes.push(types::Ipv6Prefix{
+                prefixes.push(types::Ipv6Prefix {
                     addr: p.addr,
                     mask: p.mask,
                 });
@@ -111,11 +111,12 @@ async fn main() -> Result<()> {
 }
 
 fn init_logger() -> Logger {
-
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::FullFormat::new(decorator).build().fuse();
     let drain = slog_envlogger::new(drain).fuse();
-    let drain = slog_async::Async::new(drain).chan_size(0x2000).build().fuse();
+    let drain = slog_async::Async::new(drain)
+        .chan_size(0x2000)
+        .build()
+        .fuse();
     slog::Logger::root(drain, slog::o!())
-
 }
