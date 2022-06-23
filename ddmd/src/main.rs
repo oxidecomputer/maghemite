@@ -22,11 +22,11 @@ struct Opt {
     admin_port: u16,
 
     /// Admin address to listen on
-    #[structopt(default_value = "::1")]
     admin_address: Ipv6Addr,
 
-    /// Interfaces to route over.
-    ifx: Vec<String>,
+    /// Address objects to route over.
+    #[structopt(required = true)]
+    addresses: Vec<String>,
 
     #[structopt(subcommand)]
     subcommand: SubCommand,
@@ -54,8 +54,6 @@ struct Transit {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    println!("hi");
-
     let opt = Opt::from_args();
 
     let log = init_logger();
@@ -66,7 +64,7 @@ async fn main() -> Result<(), String> {
     let config = match opt.subcommand {
         SubCommand::Server => ddm::router::Config {
             name,
-            interfaces: opt.ifx,
+            interfaces: opt.addresses,
             router_kind: ddm::protocol::RouterKind::Server,
             ..Default::default()
         },
@@ -81,7 +79,7 @@ async fn main() -> Result<(), String> {
             };
             ddm::router::Config {
                 name,
-                interfaces: opt.ifx,
+                interfaces: opt.addresses,
                 protod,
                 router_kind: ddm::protocol::RouterKind::Transit,
                 ..Default::default()

@@ -3,9 +3,10 @@ use ddm::net::Ipv6Prefix;
 use ddm_admin_client::types;
 use ddm_admin_client::Client;
 use slog::error;
-use slog::info;
 use slog::Drain;
 use slog::Logger;
+use std::net::Ipv6Addr;
+use std::net::SocketAddrV6;
 use structopt::clap::AppSettings::*;
 use structopt::StructOpt;
 
@@ -18,12 +19,12 @@ use structopt::StructOpt;
 )]
 struct Opt {
     /// Address of the router
-    #[structopt(short, long, default_value = "localhost")]
-    address: String,
+    #[structopt(short, long, default_value = "::1")]
+    address: Ipv6Addr,
 
     /// Port to use
     #[structopt(short, long, default_value = "8000")]
-    port: usize,
+    port: u16,
 
     #[structopt(subcommand)]
     subcommand: SubCommand,
@@ -55,20 +56,21 @@ async fn main() -> Result<()> {
     let opt = Opt::from_args();
     let log = init_logger();
 
-    let endpoint = format!("http://{}:{}", opt.address, opt.port);
+    let endpoint =
+        format!("http://{}", SocketAddrV6::new(opt.address, opt.port, 0, 0));
     let client = Client::new(&endpoint, log.clone());
 
     match opt.subcommand {
         SubCommand::GetPeers => {
             match client.get_peers().await {
-                Ok(msg) => info!(log, "{:#?}", msg),
+                Ok(msg) => println!("{:#?}", msg),
                 Err(e) => error!(log, "{}", e),
             };
         }
 
         SubCommand::GetPrefixes => {
             match client.get_prefixes().await {
-                Ok(msg) => info!(log, "{:#?}", msg),
+                Ok(msg) => println!("{:#?}", msg),
                 Err(e) => error!(log, "{}", e),
             };
         }
@@ -76,7 +78,7 @@ async fn main() -> Result<()> {
         /* TODO
         SubCommand::GetRoutes => {
             match client.get_routes().await {
-                Ok(msg) => info!(log, "{:#?}", msg),
+                Ok(msg) => println!("{:#?}", msg),
                 Err(e) => error!(log, "{}", e),
             };
         }
@@ -92,7 +94,7 @@ async fn main() -> Result<()> {
                 });
             }
             match client.advertise_prefixes(&prefixes).await {
-                Ok(msg) => info!(log, "{:#?}", msg),
+                Ok(msg) => println!("{:#?}", msg),
                 Err(e) => error!(log, "{}", e),
             };
         }
