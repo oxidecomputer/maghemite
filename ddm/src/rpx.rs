@@ -52,6 +52,7 @@ use dropshot::ConfigLogging;
 use dropshot::ConfigLoggingLevel;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
+use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
@@ -146,7 +147,7 @@ async fn ensure_peer_active(
 async fn advertise_handler(
     ctx: Arc<RequestContext<HandlerContext>>,
     rq: TypedBody<Advertise>,
-) -> Result<HttpResponseOk<()>, HttpError> {
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let context = ctx.context();
     let router = context.router.clone();
     let advertisement = rq.into_inner();
@@ -179,13 +180,13 @@ async fn advertise_handler(
 
     // if only in upper-half mode, we're done here
     if context.config.upper_half_only {
-        return Ok(HttpResponseOk(()));
+        return Ok(HttpResponseUpdatedNoContent());
     }
 
     sys::add_routes(&ctx.log, &context.config, advertisement.into())
         .map_err(|e| HttpError::for_internal_error(e))?;
 
-    Ok(HttpResponseOk(()))
+    Ok(HttpResponseUpdatedNoContent())
 }
 
 /// Get all prefixes available through this router in a single advertisement.
