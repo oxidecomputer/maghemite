@@ -20,8 +20,12 @@ schemars = { version = "0.8.0", features = [ "uuid" ] }
 serde = "1.0"
 serde_json = "1.0"
 hyper = { version = "0.14", features = ["full"] }
-protod-api = { git = "https://github.com/oxidecomputer/dendrite" }
+
+[dependencies.protod-api]
+git = "https://github.com/oxidecomputer/dendrite"
+rev = "a047a036296a01555f698afd83da0424d5e66053"
 
 [dependencies.dendrite-common]
 git = "https://github.com/oxidecomputer/dendrite"
 package = "common"
+rev = "a047a036296a01555f698afd83da0424d5e66053"
