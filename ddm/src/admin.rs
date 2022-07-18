@@ -13,6 +13,7 @@ use dropshot::ConfigLogging;
 use dropshot::ConfigLoggingLevel;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
+use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
@@ -67,7 +68,7 @@ async fn get_prefixes(
 async fn advertise_prefixes(
     ctx: Arc<RequestContext<HandlerContext>>,
     request: TypedBody<HashSet<Ipv6Prefix>>,
-) -> Result<HttpResponseOk<()>, HttpError> {
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let context = ctx.context();
     let router = &context.router;
 
@@ -76,7 +77,7 @@ async fn advertise_prefixes(
         .await
         .map_err(|e| HttpError::for_internal_error(e))?;
 
-    Ok(HttpResponseOk(()))
+    Ok(HttpResponseUpdatedNoContent())
 }
 
 pub fn start_server(
