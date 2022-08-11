@@ -38,18 +38,18 @@ enum SubCommand {
 }
 
 // structopt needs a non-temporary `&str` for default values, so we'll stash the
-// default protod port into a lazy `String`.
-static PROTOD_DEFAULT_PORT: Lazy<String> =
-    Lazy::new(|| protod_api::default_port().to_string());
+// default dpd port into a lazy `String`.
+static DPD_DEFAULT_PORT: Lazy<String> =
+    Lazy::new(|| dpd_api::default_port().to_string());
 
 #[derive(Debug, StructOpt)]
 struct Transit {
     #[structopt(long)]
     dendrite: bool,
     #[structopt(long, default_value = "localhost")]
-    protod_host: String,
-    #[structopt(long, default_value = &PROTOD_DEFAULT_PORT)]
-    protod_port: u16,
+    dpd_host: String,
+    #[structopt(long, default_value = &DPD_DEFAULT_PORT)]
+    dpd_port: u16,
 }
 
 #[tokio::main]
@@ -69,10 +69,10 @@ async fn main() -> Result<(), String> {
             ..Default::default()
         },
         SubCommand::Transit(t) => {
-            let protod = if t.dendrite {
-                Some(ddm::router::ProtodConfig {
-                    host: t.protod_host,
-                    port: t.protod_port,
+            let dpd = if t.dendrite {
+                Some(ddm::router::DpdConfig {
+                    host: t.dpd_host,
+                    port: t.dpd_port,
                 })
             } else {
                 None
@@ -80,7 +80,7 @@ async fn main() -> Result<(), String> {
             ddm::router::Config {
                 name,
                 interfaces: opt.addresses,
-                protod,
+                dpd,
                 router_kind: ddm::protocol::RouterKind::Transit,
                 ..Default::default()
             }

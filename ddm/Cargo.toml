@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 icmpv6 = { path = "../icmpv6" }
 tokio = { version = "1.15", features = ["full"] }
-libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "siocgnds" }
 socket2 = { version = "0.4", features = ["all"] }
 anyhow = "1"
 thiserror = "1"
@@ -21,11 +21,12 @@ serde = "1.0"
 serde_json = "1.0"
 hyper = { version = "0.14", features = ["full"] }
 
-[dependencies.protod-api]
+[dependencies.dpd-api]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "a047a036296a01555f698afd83da0424d5e66053"
+package = "dpd-api"
+branch = "softnpu"
 
 [dependencies.dendrite-common]
 git = "https://github.com/oxidecomputer/dendrite"
 package = "common"
-rev = "a047a036296a01555f698afd83da0424d5e66053"
+branch = "softnpu"

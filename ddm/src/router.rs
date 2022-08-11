@@ -176,12 +176,12 @@ pub struct Config {
     pub upper_half_only: bool,
 
     /// If this value is populated the router will manage routes through a
-    /// Dendrite protod endpoint rather than the underlying illumos system.
-    pub protod: Option<ProtodConfig>,
+    /// Dendrite dpd endpoint rather than the underlying illumos system.
+    pub dpd: Option<DpdConfig>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ProtodConfig {
+pub struct DpdConfig {
     /// Hostname protod can be contacted at.
     pub host: String,
 
@@ -201,7 +201,7 @@ impl Default for Config {
             rpx_port: 0x1dd1,
             router_kind: RouterKind::Server,
             upper_half_only: false,
-            protod: None,
+            dpd: None,
         }
     }
 }

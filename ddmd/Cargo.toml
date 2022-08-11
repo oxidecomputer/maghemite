@@ -13,4 +13,8 @@ slog-envlogger = "2.2"
 structopt = "0.3"
 ddm = { path = "../ddm" }
 hostname = "0.3"
-protod-api = { git = "https://github.com/oxidecomputer/dendrite" }
+
+[dependencies.dpd-api]
+git = "https://github.com/oxidecomputer/dendrite"
+package = "dpd-api"
+branch = "softnpu"

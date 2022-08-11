@@ -1,8 +1,7 @@
 use std::net::IpAddr;
 use std::net::Ipv6Addr;
 
-use dendrite_common::Cidr;
-use dendrite_common::Ipv6Cidr;
+use dendrite_common::network::{Cidr, Ipv6Cidr};
 use libnet::IpPrefix;
 use libnet::Ipv4Prefix;
 use libnet::Ipv6Prefix;
@@ -66,9 +65,9 @@ pub fn add_routes(
     config: &Config,
     routes: Vec<Route>,
 ) -> Result<(), String> {
-    match &config.protod {
-        Some(protod) => {
-            add_routes_dendrite(routes, &protod.host, protod.port, log)
+    match &config.dpd {
+        Some(dpd) => {
+            add_routes_dendrite(routes, &dpd.host, dpd.port, log)
         }
         None => add_routes_illumos(routes),
     }
@@ -137,13 +136,13 @@ pub fn get_routes_dendrite(
     host: String,
     port: u16,
 ) -> Result<Vec<Route>, String> {
-    let api = protod_api::Api::new(host, port)
-        .map_err(|e| format!("protod api new: {}", e))?;
+    let api = dpd_api::Api::new(host, port)
+        .map_err(|e| format!("dpd api new: {}", e))?;
 
     let mut cookie = "".to_string();
     let routes = api
         .route_ipv6_get_range(None, &mut cookie)
-        .map_err(|e| format!("protod get routes: {}", e))?;
+        .map_err(|e| format!("dpd get routes: {}", e))?;
     let mut result = Vec::new();
 
     for r in routes {
@@ -155,7 +154,21 @@ pub fn get_routes_dendrite(
             Cidr::V6(cidr) => (cidr.prefix.into(), cidr.prefix_len),
             _ => continue,
         };
-        let egress_port = r.egress_port;
+        let parts: Vec<&str> = r.egress_port.split(':').collect();
+        if parts.is_empty() {
+            return Err(format!(
+                "expected port format M:N, got {}",
+                r.egress_port
+            ));
+        }
+        let egress_port = match u16::from_str_radix(parts[0], 10) {
+            Ok(n) => n,
+            Err(e) => return Err(format!(
+                "expected port format M:N, got {}: {}",
+                r.egress_port,
+                e,
+            )),
+        };
         result.push(Route {
             dest,
             prefix_len,
@@ -173,8 +186,8 @@ pub fn add_routes_dendrite(
     port: u16,
     log: &Logger,
 ) -> Result<(), String> {
-    let protod_api = protod_api::Api::new(host.into(), port)
-        .map_err(|e| format!("protod api new: {}", e))?;
+    let dpd_api = dpd_api::Api::new(host.into(), port)
+        .map_err(|e| format!("dpdapi new: {}", e))?;
 
     for r in routes {
         let cidr = match r.dest {
@@ -194,28 +207,47 @@ pub fn add_routes_dendrite(
             }
         };
 
-        let egress_port = match protod_api.ndp_get(gw) {
-            Ok(nbr) => {
+        // TODO vioif -> tfport
+        let egress_port = match get_neighbor_port(&gw, "vioif") {
+            Some(port) => {
                 debug!(
                     log,
-                    "found neighbor port: {:?} -> {:?}", gw, nbr.port_id
+                    "found neighbor port: {:?} -> {:?}", gw, port
                 );
-                nbr.port_id
+                port
             }
-            Err(e) => {
+            None => {
                 // TODO(ry) there are a number of reasons why an ndp entry may
                 // be transiently unavailable, there should be some (possibly
                 // asynchronous) retry logic here.
-                return Err(format!("ndp get{:?}", e));
+                return Err(format!("no egress port for {}", gw));
             }
         };
 
-        protod_api
+        dpd_api
             .route_ipv6_add(&cidr, egress_port, Some(gw))
-            .map_err(|e| format!("protod route add: {}", e))?;
+            .map_err(|e| format!("dpd route add: {}", e))?;
     }
 
     Ok(())
+}
+
+fn get_neighbor_port(addr: &Ipv6Addr, prefix: &str) -> Option<usize> {
+
+    let nbrs = libnet::get_neighbors().ok()?;
+    for n in nbrs {
+        let v6 = Ipv6Addr::from(n.ndpre_l3_addr.s6_addr);
+        if &v6 == addr {
+            let name = String::from_utf8_lossy(n.ndpre_ifname.as_slice());
+            if let Some(suffix) = name.strip_prefix(prefix) {
+                match usize::from_str_radix(suffix, 10) {
+                    Ok(n) => return Some(n),
+                    Err(_) => return None
+                }
+            }
+        }
+    }
+    None
 }
 
 #[allow(dead_code)] // TODO-cleanup Remove once this is used.
@@ -225,8 +257,8 @@ pub fn remove_routes_dendrite(
     port: u16,
     log: Logger,
 ) -> Result<(), String> {
-    let protod_api = protod_api::Api::new(host, port)
-        .map_err(|e| format!("protod api new: {}", e))?;
+    let dpd_api = dpd_api::Api::new(host, port)
+        .map_err(|e| format!("dpd api new: {}", e))?;
 
     for r in routes {
         let cidr = match r.dest {
@@ -240,9 +272,9 @@ pub fn remove_routes_dendrite(
             }
         };
 
-        protod_api
+        dpd_api
             .route_ipv6_del(&cidr)
-            .map_err(|e| format!("protod route del: {}", e))?;
+            .map_err(|e| format!("dpd route del: {}", e))?;
     }
 
     Ok(())
