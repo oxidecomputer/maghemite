@@ -254,7 +254,6 @@ fn get_neighbor_port(
     };
     for n in nbrs {
         let v6 = Ipv6Addr::from(n.ndpre_l3_addr.s6_addr);
-        debug!(log, "{} =?= {}", v6, addr);
         if &v6 == addr {
             let s = n.ndpre_ifname.as_slice();
 
@@ -268,16 +267,12 @@ fn get_neighbor_port(
             }
             let s = &s[0..i];
             let name = String::from_utf8_lossy(s);
-            debug!(log, "yes: {}", name);
             if let Some(suffix) = name.strip_prefix(prefix) {
-                debug!(log, "pfx match suffix='{}'", suffix);
                 match usize::from_str_radix(suffix.trim(), 10) {
                     Ok(n) => {
-                        debug!(log, "n={}", n);
                         return Some(n);
                     }
-                    Err(e) => {
-                        error!(log, "int parse: {}", e);
+                    Err(_) => {
                         continue;
                     }
                 }
