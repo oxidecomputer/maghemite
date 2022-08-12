@@ -114,7 +114,7 @@ impl RouterState {
                     }
                     continue;
                 }
-                None => return None,
+                None => continue,
             }
         }
         None
