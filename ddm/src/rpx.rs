@@ -178,13 +178,22 @@ async fn advertise_handler(
         .await;
     }
 
+    println!("distribute complete");
+
     // if only in upper-half mode, we're done here
     if context.config.upper_half_only {
+        warn!(context.log, "upper half only not adding");
         return Ok(HttpResponseUpdatedNoContent());
     }
 
-    sys::add_routes(&ctx.log, &context.config, advertisement.into())
-        .map_err(|e| HttpError::for_internal_error(e))?;
+    info!(context.log, "adding routes");
+    match sys::add_routes(&context.log, &context.config, advertisement.into()) {
+        Ok(_) => {}
+        Err(e) => {
+            error!(context.log, "add route to system failed: {}", e);
+            return Err(HttpError::for_internal_error(e));
+        }
+    };
 
     Ok(HttpResponseUpdatedNoContent())
 }

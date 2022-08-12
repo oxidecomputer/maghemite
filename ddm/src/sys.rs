@@ -8,9 +8,7 @@ use libnet::Ipv6Prefix;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use slog::debug;
-use slog::warn;
-use slog::Logger;
+use slog::{debug, info, warn, error, Logger};
 
 use crate::router::Config;
 
@@ -67,9 +65,13 @@ pub fn add_routes(
 ) -> Result<(), String> {
     match &config.dpd {
         Some(dpd) => {
+            info!(log, "sending routes to dendrite");
             add_routes_dendrite(routes, &dpd.host, dpd.port, log)
         }
-        None => add_routes_illumos(routes),
+        None => {
+            info!(log, "sending routes to illumos");
+            add_routes_illumos(routes)
+        }
     }
 }
 
@@ -186,6 +188,9 @@ pub fn add_routes_dendrite(
     port: u16,
     log: &Logger,
 ) -> Result<(), String> {
+
+    debug!(log, "sending to dpd host={} port={}", host, port);
+
     let dpd_api = dpd_api::Api::new(host.into(), port)
         .map_err(|e| format!("dpdapi new: {}", e))?;
 
@@ -208,7 +213,7 @@ pub fn add_routes_dendrite(
         };
 
         // TODO vioif -> tfport
-        let egress_port = match get_neighbor_port(&gw, "vioif") {
+        let egress_port = match get_neighbor_port(&gw, "vioif", log) {
             Some(port) => {
                 debug!(
                     log,
@@ -224,6 +229,8 @@ pub fn add_routes_dendrite(
             }
         };
 
+        let egress_port = format!("{}:0", egress_port+1);
+
         dpd_api
             .route_ipv6_add(&cidr, egress_port, Some(gw))
             .map_err(|e| format!("dpd route add: {}", e))?;
@@ -232,17 +239,47 @@ pub fn add_routes_dendrite(
     Ok(())
 }
 
-fn get_neighbor_port(addr: &Ipv6Addr, prefix: &str) -> Option<usize> {
+fn get_neighbor_port(
+    addr: &Ipv6Addr,
+    prefix: &str,
+    log: &Logger,
+) -> Option<usize> {
 
-    let nbrs = libnet::get_neighbors().ok()?;
+    let nbrs = match libnet::get_neighbors() {
+        Ok(x) => x,
+        Err(e) => {
+            error!(log, "get neighbors: {}", e);
+            return None;
+        }
+    };
     for n in nbrs {
         let v6 = Ipv6Addr::from(n.ndpre_l3_addr.s6_addr);
+        debug!(log, "{} =?= {}", v6, addr);
         if &v6 == addr {
-            let name = String::from_utf8_lossy(n.ndpre_ifname.as_slice());
+            let s = n.ndpre_ifname.as_slice();
+
+            // determine length of name
+            let mut i = 0;
+            for x in s {
+                if *x == 0 {
+                    break;
+                }
+                i += 1;
+            }
+            let s = &s[0..i];
+            let name = String::from_utf8_lossy(s);
+            debug!(log, "yes: {}", name);
             if let Some(suffix) = name.strip_prefix(prefix) {
-                match usize::from_str_radix(suffix, 10) {
-                    Ok(n) => return Some(n),
-                    Err(_) => return None
+                debug!(log, "pfx match suffix='{}'", suffix);
+                match usize::from_str_radix(suffix.trim(), 10) {
+                    Ok(n) => {
+                        debug!(log, "n={}", n);
+                        return Some(n);
+                    }
+                    Err(e) => {
+                        error!(log, "int parse: {}", e);
+                        continue;
+                    }
                 }
             }
         }
