@@ -8,7 +8,7 @@ use libnet::Ipv6Prefix;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use slog::{debug, info, warn, error, Logger};
+use slog::{debug, error, info, warn, Logger};
 
 use crate::router::Config;
 
@@ -165,11 +165,12 @@ pub fn get_routes_dendrite(
         }
         let egress_port = match u16::from_str_radix(parts[0], 10) {
             Ok(n) => n,
-            Err(e) => return Err(format!(
-                "expected port format M:N, got {}: {}",
-                r.egress_port,
-                e,
-            )),
+            Err(e) => {
+                return Err(format!(
+                    "expected port format M:N, got {}: {}",
+                    r.egress_port, e,
+                ))
+            }
         };
         result.push(Route {
             dest,
@@ -188,7 +189,6 @@ pub fn add_routes_dendrite(
     port: u16,
     log: &Logger,
 ) -> Result<(), String> {
-
     debug!(log, "sending to dpd host={} port={}", host, port);
 
     let dpd_api = dpd_api::Api::new(host.into(), port)
@@ -215,10 +215,7 @@ pub fn add_routes_dendrite(
         // TODO vioif -> tfport
         let egress_port = match get_neighbor_port(&gw, "vioif", log) {
             Some(port) => {
-                debug!(
-                    log,
-                    "found neighbor port: {:?} -> {:?}", gw, port
-                );
+                debug!(log, "found neighbor port: {:?} -> {:?}", gw, port);
                 port
             }
             None => {
@@ -229,7 +226,7 @@ pub fn add_routes_dendrite(
             }
         };
 
-        let egress_port = format!("{}:0", egress_port+1);
+        let egress_port = format!("{}:0", egress_port + 1);
 
         dpd_api
             .route_ipv6_add(&cidr, egress_port, Some(gw))
@@ -244,7 +241,6 @@ fn get_neighbor_port(
     prefix: &str,
     log: &Logger,
 ) -> Option<usize> {
-
     let nbrs = match libnet::get_neighbors() {
         Ok(x) => x,
         Err(e) => {
