@@ -41,6 +41,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::net::IpAddr;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
@@ -652,13 +653,14 @@ mod tests {
     use std::str::FromStr;
     use std::time::Duration;
 
-    use super::*;
     use anyhow::Result;
     use slog::debug;
     use slog::info;
     use tokio::time::sleep;
     use util::test::testlab_1x2;
     use util::test::testlab_x2;
+
+    use super::*;
 
     /// Discover, peer, exchange with two directly connected server routers
     #[tokio::test]

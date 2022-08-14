@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "siocgnds" }
 socket2 = { version = "0.4", features = ["all"] }
 anyhow = "1"
 slog = "2.7"
