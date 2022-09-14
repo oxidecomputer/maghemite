@@ -102,16 +102,16 @@ pub struct RouterState {
 }
 
 impl RouterState {
-    /// Get the status for a peer with the specified address
-    pub async fn peer_status_for(
+    /// Get the peer router associated with the specified address
+    pub async fn peer_router_for(
         &self,
         addr: Ipv6Addr,
-    ) -> Option<(Interface, peer::Status)> {
+    ) -> Option<(Interface, NeighboringRouter)> {
         for (ifx, nbr) in self.interfaces.clone() {
             match nbr {
                 Some(nbr) => {
                     if nbr.addr == addr {
-                        return Some((ifx, nbr.session.status().await));
+                        return Some((ifx, nbr));
                     }
                     continue;
                 }
@@ -119,6 +119,17 @@ impl RouterState {
             }
         }
         None
+    }
+
+    /// Get the status for a peer with the specified address
+    pub async fn peer_status_for(
+        &self,
+        addr: Ipv6Addr,
+    ) -> Option<(Interface, peer::Status)> {
+        match self.peer_router_for(addr).await {
+            Some((ifx, nbr)) => Some((ifx, nbr.session.status().await)),
+            None => None,
+        }
     }
 
     /// Get this router's active peers.
@@ -489,7 +500,7 @@ impl Router {
             {
                 Ok(addr) => {
                     info!(log, "discovered neighbor {}", addr);
-                    let mut session = peer::Session::new(
+                    let session = peer::Session::new(
                         log.clone(),
                         interface.ifnum,
                         addr,

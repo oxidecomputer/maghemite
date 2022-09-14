@@ -58,6 +58,7 @@ use slog::info;
 use slog::trace;
 use slog::warn;
 use slog::Logger;
+use tokio::runtime::Runtime;
 use tokio::spawn;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -71,8 +72,8 @@ use crate::router::Config;
 
 pub struct Session {
     pub log: Logger,
-    pub client_task: Option<Arc<JoinHandle<()>>>,
-    pub server_task: Option<Arc<JoinHandle<()>>>,
+    pub client_task: Mutex<Option<Arc<JoinHandle<()>>>>,
+    pub server_task: Mutex<Option<Arc<JoinHandle<()>>>>,
     pub info: SessionInfo,
     pub this_router_config: Config,
 }
@@ -86,6 +87,21 @@ pub struct SessionInfo {
     pub host: Arc<Mutex<Option<String>>>,
     pub server_addr: Ipv6Addr,
     pub router_kind: Arc<Mutex<Option<RouterKind>>>,
+}
+
+impl SessionInfo {
+    pub async fn status(&self, config: &Config) -> Status {
+        match self.state.lock().await.last_seen {
+            Some(instant) => {
+                if instant.elapsed().as_millis() > config.peer_expire.into() {
+                    Status::Expired
+                } else {
+                    Status::Active
+                }
+            }
+            None => Status::NoContact,
+        }
+    }
 }
 
 pub struct State {
@@ -133,25 +149,24 @@ impl Session {
                 server_addr,
                 router_kind: Arc::new(Mutex::new(None)),
             },
-            client_task: None,
-            server_task: None,
+            client_task: Mutex::new(None),
+            server_task: Mutex::new(None),
             this_router_config,
         }
     }
 
-    pub async fn start(&mut self) -> Result<(), String> {
-        //
-        // start peering server
-        //
+    pub async fn start(&self) -> Result<(), String> {
+        self.server_start().await?;
+        self.client_start().await
+    }
 
-        self.server_task = Some(Arc::new(self.start_server()?));
+    pub async fn client_start(&self) -> Result<(), String> {
+        *self.client_task.lock().await = Some(Arc::new(self.run()));
+        Ok(())
+    }
 
-        //
-        // start peering client
-        //
-
-        self.client_task = Some(Arc::new(self.run()));
-
+    pub async fn server_start(&self) -> Result<(), String> {
+        *self.server_task.lock().await = Some(Arc::new(self.start_server()?));
         Ok(())
     }
 
@@ -176,16 +191,20 @@ impl Session {
         spawn(async move {
             loop {
                 trace!(session.log, "[{}] peer step", config.name);
-                match Self::step(&session, &config).await {
-                    Ok(_) => {}
-                    Err(e) => warn!(session.log, "{}", e),
+                if let Err(e) = Self::step(&session, &config).await {
+                    warn!(session.log, "{}", e);
+                    if session.status(&config).await == Status::Expired {
+                        warn!(
+                            session.log,
+                            "peer expired, dropping session for {}",
+                            match *session.host.lock().await {
+                                Some(ref x) => x,
+                                None => "?",
+                            },
+                        );
+                        break;
+                    }
                 }
-                trace!(
-                    session.log,
-                    "[{}] peer sleep {}",
-                    config.name,
-                    config.peer_interval,
-                );
                 sleep(Duration::from_millis(config.peer_interval)).await;
                 trace!(session.log, "[{}] peer wake", config.name);
             }
@@ -316,12 +335,27 @@ impl Drop for Session {
     fn drop(&mut self) {
         info!(self.log, "dropping peer session for {}", self.info.addr);
 
-        match self.client_task {
-            Some(ref t) => t.abort(),
+        let rt = match Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                error!(
+                    self.log,
+                    "drop session: failed to get tokio runtime: {}", e,
+                );
+                return;
+            }
+        };
+
+        match *rt.block_on(self.client_task.lock()) {
+            Some(ref t) => {
+                t.abort();
+            }
             None => {}
         }
-        match self.server_task {
-            Some(ref t) => t.abort(),
+        match *rt.block_on(self.server_task.lock()) {
+            Some(ref t) => {
+                t.abort();
+            }
             None => {}
         }
     }
