@@ -228,9 +228,16 @@ pub fn add_routes_dendrite(
 
         let egress_port = format!("{}:0", egress_port + 1);
 
-        dpd_api
-            .route_ipv6_add(&cidr, egress_port, Some(gw))
-            .map_err(|e| format!("dpd route add: {}", e))?;
+        if let Err(e) = dpd_api.route_ipv6_add(&cidr, egress_port, Some(gw)) {
+            // If this comes back as 409 conflict, that just means the route is
+            // already there.
+            if e.to_string().contains("409") {
+                warn!(log, "attempt to add route that exists {}", cidr);
+            } else {
+                return Err(format!("dpd route add: {}", e))
+            }
+        }
+
     }
 
     Ok(())
