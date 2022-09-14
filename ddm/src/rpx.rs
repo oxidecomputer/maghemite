@@ -225,7 +225,10 @@ async fn solicit_handler(
     };
 
     let mut prefixes = locals;
-    for (_, x) in remotes {
+    for (nexthop, x) in remotes {
+        if nexthop == solicit.src {
+            continue;
+        }
         prefixes.extend(x.iter());
     }
 
