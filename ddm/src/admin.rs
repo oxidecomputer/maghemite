@@ -25,16 +25,28 @@ use tokio::spawn;
 
 use crate::net::Ipv6Prefix;
 use crate::peer;
+use crate::protocol::RouterKind;
 use crate::router::Router;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 pub struct HandlerContext {
     pub router: Arc<Router>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+struct PeerInfo {
+    status: peer::Status,
+    addr: Ipv6Addr,
+    host: Option<String>,
+    kind: Option<RouterKind>,
+}
+
 #[endpoint { method = GET, path = "/peers" }]
 async fn get_peers(
     ctx: Arc<RequestContext<HandlerContext>>,
-) -> Result<HttpResponseOk<HashMap<usize, peer::Status>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap<usize, PeerInfo>>, HttpError> {
     let mut result = HashMap::new();
 
     let context = ctx.context();
@@ -46,7 +58,15 @@ async fn get_peers(
             None => continue,
         };
 
-        result.insert(ifx.ifnum as usize, nbr.session.status().await);
+        result.insert(
+            ifx.ifnum as usize,
+            PeerInfo {
+                status: nbr.session.status().await,
+                addr: nbr.session.info.addr,
+                host: nbr.session.info.host.lock().await.clone(),
+                kind: nbr.session.info.router_kind.lock().await.clone(),
+            },
+        );
     }
 
     Ok(HttpResponseOk(result))

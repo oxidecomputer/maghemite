@@ -493,12 +493,8 @@ impl Router {
                         log.clone(),
                         interface.ifnum,
                         addr,
-                        config.peer_interval,
-                        config.peer_expire,
-                        config.name.clone(),
                         interface.ll_addr,
-                        config.peer_port,
-                        config.router_kind,
+                        config.clone(),
                     );
                     match session.start().await {
                         Ok(_) => {

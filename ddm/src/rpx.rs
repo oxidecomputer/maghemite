@@ -207,11 +207,13 @@ async fn solicit_handler(
     ctx: Arc<RequestContext<HandlerContext>>,
     rq: TypedBody<Solicit>,
 ) -> Result<HttpResponseOk<Advertise>, HttpError> {
+    // hold lock for as little time as possible
     let context = ctx.context();
     let router = &context.router;
     let router_state = router.lock().await;
     let locals = router_state.local_prefixes.clone();
     let remotes = router_state.remote_prefixes.clone();
+    let interfaces = router_state.interfaces.clone();
     drop(router_state);
 
     let solicit = rq.into_inner();
@@ -224,9 +226,20 @@ async fn solicit_handler(
         }
     };
 
+    let is_server = match interfaces.get(&ifx) {
+        None | Some(None) => {
+            warn!(context.log, "peer has no session {}", solicit.src);
+            return Err(HttpError::for_bad_request(None, "no session".into()));
+        }
+        Some(Some(nbr)) => {
+            *nbr.session.info.router_kind.lock().await
+                == Some(RouterKind::Server)
+        }
+    };
+
     let mut prefixes = locals;
     for (nexthop, x) in remotes {
-        if nexthop == solicit.src {
+        if nexthop == solicit.src && is_server {
             continue;
         }
         prefixes.extend(x.iter());

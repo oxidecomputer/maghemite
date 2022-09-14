@@ -14,10 +14,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Map_of_Status",
+                  "title": "Map_of_PeerInfo",
                   "type": "object",
                   "additionalProperties": {
-                    "$ref": "#/components/schemas/Status"
+                    "$ref": "#/components/schemas/PeerInfo"
                   }
                 }
               }
@@ -144,6 +144,41 @@
         "required": [
           "addr",
           "mask"
+        ]
+      },
+      "PeerInfo": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "host": {
+            "nullable": true,
+            "type": "string"
+          },
+          "kind": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RouterKind"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        },
+        "required": [
+          "addr",
+          "status"
+        ]
+      },
+      "RouterKind": {
+        "type": "string",
+        "enum": [
+          "Server",
+          "Transit"
         ]
       },
       "Status": {
