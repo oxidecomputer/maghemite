@@ -234,10 +234,9 @@ pub fn add_routes_dendrite(
             if e.to_string().contains("409") {
                 warn!(log, "attempt to add route that exists {}", cidr);
             } else {
-                return Err(format!("dpd route add: {}", e))
+                return Err(format!("dpd route add: {}", e));
             }
         }
-
     }
 
     Ok(())
