@@ -264,11 +264,16 @@ async fn solicit_handler(
     };
 
     let mut prefixes = locals;
-    for (nexthop, x) in remotes {
-        if nexthop == solicit.src && is_server {
-            continue;
+    // If this is a transit router send remote prefixes to the adjacent router
+    if context.config.router_kind == RouterKind::Transit {
+        for (nexthop, x) in remotes {
+            // if the adjacent router is a server, and the nexthop for the
+            // remote is that server, do not advertise self-originating routes.
+            if nexthop == solicit.src && is_server {
+                continue;
+            }
+            prefixes.extend(x.iter());
         }
-        prefixes.extend(x.iter());
     }
 
     let result = Advertise {
