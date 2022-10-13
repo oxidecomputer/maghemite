@@ -269,8 +269,7 @@ impl Router {
         trace!(self.log, "starting rpx");
 
         let s = self.state.lock().await;
-        let interfaces: Vec<Interface> =
-            s.interfaces.keys().copied().collect();
+        let interfaces: Vec<Interface> = s.interfaces.keys().copied().collect();
         drop(s);
 
         for i in interfaces {
@@ -461,8 +460,7 @@ impl Router {
         trace!(self.log, "starting discovery");
 
         let s = self.state.lock().await;
-        let interfaces: Vec<Interface> =
-            s.interfaces.keys().copied().collect();
+        let interfaces: Vec<Interface> = s.interfaces.keys().copied().collect();
         drop(s);
 
         for i in interfaces {

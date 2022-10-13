@@ -13,14 +13,18 @@ pub struct RDPMessage {
     pub packet: ICMPv6Packet,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(
+    Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq,
+)]
 pub struct ICMPv6Header {
     pub typ: ICMPv6Type,
     pub code: u8,
     pub checksum: u16,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(
+    Debug, Copy, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq,
+)]
 #[repr(u8)]
 pub enum ICMPv6Type {
     Reserved = 0,
@@ -127,7 +131,9 @@ impl RouterSolicitation {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(
+    Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq,
+)]
 pub struct RouterAdvertisement {
     pub icmpv6_header: ICMPv6Header,
     pub hop_limit: u8,
@@ -214,7 +220,9 @@ impl RouterAdvertisement {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(
+    Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq,
+)]
 pub struct PrefixInfo {
     pub length: u8,
     pub on_link: bool,

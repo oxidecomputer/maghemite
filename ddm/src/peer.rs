@@ -120,7 +120,9 @@ impl State {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema,
+)]
 pub enum Status {
     NoContact,
     HailResponseSent,
@@ -345,7 +347,6 @@ impl Drop for Session {
                 return;
             }
         };
-
 
         if let Some(ref t) = *rt.block_on(self.client_task.lock()) {
             t.abort();

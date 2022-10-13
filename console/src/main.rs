@@ -65,8 +65,9 @@ fn main() -> Result<(), io::Error> {
             .and_then(|result| result.ok())
             .map(|byte| byte as i32);
 
-
-        if let Some(0x3) = input { break }
+        if let Some(0x3) = input {
+            break;
+        }
     }
 
     Ok(())
