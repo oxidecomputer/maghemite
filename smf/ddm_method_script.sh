@@ -17,9 +17,15 @@ if [[ "$val" == true ]]; then
     args+=( '--dendrite' )
 fi
 
-val=$(svcprop -c -p config/protod "${SMF_FMRI}")
+val=$(svcprop -c -p config/dpd_host "${SMF_FMRI}")
 if [[ "$val" != '""' ]]; then
-    args+=( '--protod-host' )
+    args+=( '--dpd-host' )
+    args+=( "$val" )
+fi
+
+val=$(svcprop -c -p config/dpd_port "${SMF_FMRI}")
+if [[ "$val" != '""' ]]; then
+    args+=( '--dpd-port' )
     args+=( "$val" )
 fi
 

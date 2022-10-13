@@ -194,10 +194,10 @@ pub struct Config {
 
 #[derive(Debug, Clone)]
 pub struct DpdConfig {
-    /// Hostname protod can be contacted at.
+    /// Hostname dpd can be contacted at.
     pub host: String,
 
-    /// Port number protod can be contacted on.
+    /// Port number dpd can be contacted on.
     pub port: u16,
 }
 

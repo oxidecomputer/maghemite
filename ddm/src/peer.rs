@@ -404,8 +404,6 @@ mod tests {
     use tokio::time::sleep;
     use util::test::testlab_x2;
 
-    use crate::protocol::RouterKind;
-
     use super::*;
 
     #[tokio::test]
@@ -422,32 +420,35 @@ mod tests {
         let if0_v6 = if0.v6addr().expect("if0 v6 addr");
         let if1_v6 = if1.v6addr().expect("if1 v6 addr");
 
+        let config_s1 = Config {
+            name: "s1".into(),
+            peer_interval: 500,
+            ..Default::default()
+        };
+
+        let config_s2 = Config {
+            name: "s2".into(),
+            ..Default::default()
+        };
+
         //
         // set up peer sessions
         //
 
-        let mut s1 = Session::new(
+        let s1 = Session::new(
             log.clone(),
             if0.addr.info.index,
             if1_v6,
-            500,
-            3000,
-            "s1".into(),
             if0_v6,
-            0x1dd0,
-            RouterKind::Server,
+            config_s1.clone(),
         );
 
-        let mut s2 = Session::new(
+        let s2 = Session::new(
             log.clone(),
             if1.addr.info.index,
             if0_v6,
-            500,
-            3000,
-            "s1".into(),
             if1_v6,
-            0x1dd0,
-            RouterKind::Server,
+            config_s2.clone(),
         );
 
         assert_eq!(s1.status().await, Status::NoContact);
