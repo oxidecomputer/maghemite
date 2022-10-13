@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.14", features = ["full"] }
+tokio = { version = "1.21", features = ["full"] }
 structopt = "0.3"
 anyhow = "1"
 slog = "2.7"
