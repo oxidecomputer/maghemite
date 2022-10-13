@@ -64,7 +64,7 @@ async fn get_peers(
                 status: nbr.session.status().await,
                 addr: nbr.session.info.addr,
                 host: nbr.session.info.host.lock().await.clone(),
-                kind: nbr.session.info.router_kind.lock().await.clone(),
+                kind: *nbr.session.info.router_kind.lock().await,
             },
         );
     }
@@ -95,7 +95,7 @@ async fn advertise_prefixes(
     router
         .advertise(request.into_inner())
         .await
-        .map_err(|e| HttpError::for_internal_error(e))?;
+        .map_err(HttpError::for_internal_error)?;
 
     Ok(HttpResponseUpdatedNoContent())
 }

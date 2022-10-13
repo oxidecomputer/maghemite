@@ -222,7 +222,7 @@ impl Router {
     pub fn new(log: Logger, config: Config) -> Result<Self, String> {
         let mut interfaces = BTreeMap::new();
         for name in &config.interfaces {
-            let info = get_ipaddr_info(&name).map_err(|e| e.to_string())?;
+            let info = get_ipaddr_info(name).map_err(|e| e.to_string())?;
             interfaces.insert(info.try_into()?, None);
         }
         let state = Arc::new(Mutex::new(RouterState {
@@ -270,7 +270,7 @@ impl Router {
 
         let s = self.state.lock().await;
         let interfaces: Vec<Interface> =
-            s.interfaces.keys().map(|k| *k).collect();
+            s.interfaces.keys().copied().collect();
         drop(s);
 
         for i in interfaces {
@@ -441,7 +441,7 @@ impl Router {
 
         if config.router_kind == RouterKind::Transit {
             warn!(log, "DISTRIBUTE");
-            Router::distribute(&state, &advertisement, &config, &log).await;
+            Router::distribute(&state, &advertisement, &config, log).await;
         }
 
         // for upper half only we're done
@@ -450,7 +450,7 @@ impl Router {
         }
 
         // add routes to the underlying system
-        sys::add_routes(&log, &config, advertisement.into())
+        sys::add_routes(log, &config, advertisement.into())
     }
 
     async fn start_discovery(&mut self) {
@@ -462,7 +462,7 @@ impl Router {
 
         let s = self.state.lock().await;
         let interfaces: Vec<Interface> =
-            s.interfaces.keys().map(|k| *k).collect();
+            s.interfaces.keys().copied().collect();
         drop(s);
 
         for i in interfaces {

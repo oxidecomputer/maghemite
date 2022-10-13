@@ -39,14 +39,14 @@ pub struct Advertise {
     pub prefixes: HashSet<Ipv6Prefix>,
 }
 
-impl Into<Vec<sys::Route>> for Advertise {
-    fn into(self) -> Vec<sys::Route> {
-        self.prefixes
+impl From<Advertise> for Vec<sys::Route> {
+    fn from(a: Advertise) -> Vec<sys::Route> {
+        a.prefixes
             .iter()
             .map(|pfx| sys::Route {
                 dest: IpAddr::V6(pfx.addr),
                 prefix_len: pfx.mask,
-                gw: IpAddr::V6(self.nexthop),
+                gw: IpAddr::V6(a.nexthop),
                 egress_port: 0,
             })
             .collect()

@@ -32,27 +32,27 @@ impl From<libnet::route::Route> for Route {
     }
 }
 
-impl Into<libnet::route::Route> for Route {
-    fn into(self) -> libnet::route::Route {
+impl From<Route> for libnet::route::Route {
+    fn from(r: Route) -> libnet::route::Route {
         libnet::route::Route {
-            dest: self.dest,
+            dest: r.dest,
             //TODO libnet should return a u8 as nothing > 128 is a valid mask
-            mask: self.prefix_len as u32,
-            gw: self.gw,
+            mask: r.prefix_len as u32,
+            gw: r.gw,
         }
     }
 }
 
-impl Into<IpPrefix> for Route {
-    fn into(self) -> IpPrefix {
-        match self.dest {
+impl From<Route> for IpPrefix {
+    fn from(r: Route) -> IpPrefix {
+        match r.dest {
             IpAddr::V4(a) => IpPrefix::V4(Ipv4Prefix {
                 addr: a,
-                mask: self.prefix_len,
+                mask: r.prefix_len,
             }),
             IpAddr::V6(a) => IpPrefix::V6(Ipv6Prefix {
                 addr: a,
-                mask: self.prefix_len,
+                mask: r.prefix_len,
             }),
         }
     }
@@ -163,7 +163,7 @@ pub fn get_routes_dendrite(
                 r.egress_port
             ));
         }
-        let egress_port = match u16::from_str_radix(parts[0], 10) {
+        let egress_port = match parts[0].parse::<u16>() {
             Ok(n) => n,
             Err(e) => {
                 return Err(format!(
@@ -270,7 +270,7 @@ fn get_neighbor_port(
             let s = &s[0..i];
             let name = String::from_utf8_lossy(s);
             if let Some(suffix) = name.strip_prefix(prefix) {
-                match usize::from_str_radix(suffix.trim(), 10) {
+                match suffix.trim().parse::<usize>() {
                     Ok(n) => {
                         return Some(n);
                     }

@@ -120,7 +120,7 @@ impl State {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub enum Status {
     NoContact,
     HailResponseSent,
@@ -215,7 +215,7 @@ impl Session {
         session: &SessionInfo,
         config: &Config,
     ) -> Result<(), String> {
-        let response = match Self::hail(&session, &config).await {
+        let response = match Self::hail(session, config).await {
             Ok(r) => r,
             Err(e) => {
                 return Err(format!("hail: {}", e));
@@ -346,17 +346,12 @@ impl Drop for Session {
             }
         };
 
-        match *rt.block_on(self.client_task.lock()) {
-            Some(ref t) => {
-                t.abort();
-            }
-            None => {}
+
+        if let Some(ref t) = *rt.block_on(self.client_task.lock()) {
+            t.abort();
         }
-        match *rt.block_on(self.server_task.lock()) {
-            Some(ref t) => {
-                t.abort();
-            }
-            None => {}
+        if let Some(ref t) = *rt.block_on(self.server_task.lock()) {
+            t.abort();
         }
     }
 }

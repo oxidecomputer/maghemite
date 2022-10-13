@@ -7,20 +7,20 @@ use std::convert::TryInto;
 use std::mem::size_of;
 use std::net::Ipv6Addr;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RDPMessage {
     pub from: Option<Ipv6Addr>,
     pub packet: ICMPv6Packet,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ICMPv6Header {
     pub typ: ICMPv6Type,
     pub code: u8,
     pub checksum: u16,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ICMPv6Type {
     Reserved = 0,
@@ -83,7 +83,7 @@ pub enum NDPOptionType {
     MTU = 5,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[repr(C)]
 pub struct RouterSolicitation {
     pub icmpv6_header: ICMPv6Header,
@@ -116,21 +116,18 @@ impl RouterSolicitation {
             0, //reserved
         ];
 
-        match self.source_address {
-            Some(addr) => {
-                let sz = size_of::<NDPOptionType>() + size_of::<Ipv6Addr>();
-                v.push(NDPOptionType::SourceLinkLayerAddress as u8);
-                v.push(sz as u8);
-                v.extend_from_slice(&addr.octets());
-            }
-            None => {}
+        if let Some(addr) = self.source_address {
+            let sz = size_of::<NDPOptionType>() + size_of::<Ipv6Addr>();
+            v.push(NDPOptionType::SourceLinkLayerAddress as u8);
+            v.push(sz as u8);
+            v.extend_from_slice(&addr.octets());
         }
 
         v
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct RouterAdvertisement {
     pub icmpv6_header: ICMPv6Header,
     pub hop_limit: u8,
@@ -197,24 +194,18 @@ impl RouterAdvertisement {
         v.extend_from_slice(&self.reachable_time.to_be_bytes());
         v.extend_from_slice(&self.retransmission_timer.to_be_bytes());
 
-        match self.source_address {
-            Some(addr) => {
-                let sz = size_of::<NDPOptionType>() + size_of::<Ipv6Addr>();
-                v.push(NDPOptionType::SourceLinkLayerAddress as u8);
-                v.push(sz as u8);
-                v.extend_from_slice(&addr.octets());
-            }
-            None => {}
+        if let Some(addr) = self.source_address {
+            let sz = size_of::<NDPOptionType>() + size_of::<Ipv6Addr>();
+            v.push(NDPOptionType::SourceLinkLayerAddress as u8);
+            v.push(sz as u8);
+            v.extend_from_slice(&addr.octets());
         }
 
-        match self.mtu {
-            Some(mtu) => {
-                let sz = size_of::<NDPOptionType>() + size_of::<u16>();
-                v.push(NDPOptionType::MTU as u8);
-                v.push(sz as u8);
-                v.extend_from_slice(&mtu.to_be_bytes());
-            }
-            None => {}
+        if let Some(mtu) = self.mtu {
+            let sz = size_of::<NDPOptionType>() + size_of::<u16>();
+            v.push(NDPOptionType::MTU as u8);
+            v.push(sz as u8);
+            v.extend_from_slice(&mtu.to_be_bytes());
         }
 
         //TODO prefix info
@@ -223,7 +214,7 @@ impl RouterAdvertisement {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct PrefixInfo {
     pub length: u8,
     pub on_link: bool,
@@ -233,7 +224,7 @@ pub struct PrefixInfo {
     //pub prefix: [u8; 128], TODO serializable
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum ICMPv6Packet {
     RouterSolicitation(RouterSolicitation),
     RouterAdvertisement(RouterAdvertisement),
