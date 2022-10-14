@@ -20,7 +20,8 @@
      <propval name='admin_port' type='count' value='8000' />
      <propval name='mode' type='astring' value='server' />
      <propval name='dendrite' type='boolean' value='false' />
-     <propval name='protod' type='astring' value='' />
+     <propval name='dpd_host' type='astring' value='' />
+     <propval name='dpd_port' type='astring' value='' />
      <propval name='log' type='astring' value='info' />
      <property name='interfaces' type='astring'>
      </property>

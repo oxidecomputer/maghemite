@@ -41,6 +41,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::net::IpAddr;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
@@ -101,16 +102,16 @@ pub struct RouterState {
 }
 
 impl RouterState {
-    /// Get the status for a peer with the specified address
-    pub async fn peer_status_for(
+    /// Get the peer router associated with the specified address
+    pub async fn peer_router_for(
         &self,
         addr: Ipv6Addr,
-    ) -> Option<(Interface, peer::Status)> {
+    ) -> Option<(Interface, NeighboringRouter)> {
         for (ifx, nbr) in self.interfaces.clone() {
             match nbr {
                 Some(nbr) => {
                     if nbr.addr == addr {
-                        return Some((ifx, nbr.session.status().await));
+                        return Some((ifx, nbr));
                     }
                     continue;
                 }
@@ -118,6 +119,17 @@ impl RouterState {
             }
         }
         None
+    }
+
+    /// Get the status for a peer with the specified address
+    pub async fn peer_status_for(
+        &self,
+        addr: Ipv6Addr,
+    ) -> Option<(Interface, peer::Status)> {
+        match self.peer_router_for(addr).await {
+            Some((ifx, nbr)) => Some((ifx, nbr.session.status().await)),
+            None => None,
+        }
     }
 
     /// Get this router's active peers.
@@ -176,16 +188,16 @@ pub struct Config {
     pub upper_half_only: bool,
 
     /// If this value is populated the router will manage routes through a
-    /// Dendrite protod endpoint rather than the underlying illumos system.
-    pub protod: Option<ProtodConfig>,
+    /// Dendrite dpd endpoint rather than the underlying illumos system.
+    pub dpd: Option<DpdConfig>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ProtodConfig {
-    /// Hostname protod can be contacted at.
+pub struct DpdConfig {
+    /// Hostname dpd can be contacted at.
     pub host: String,
 
-    /// Port number protod can be contacted on.
+    /// Port number dpd can be contacted on.
     pub port: u16,
 }
 
@@ -201,7 +213,7 @@ impl Default for Config {
             rpx_port: 0x1dd1,
             router_kind: RouterKind::Server,
             upper_half_only: false,
-            protod: None,
+            dpd: None,
         }
     }
 }
@@ -210,7 +222,7 @@ impl Router {
     pub fn new(log: Logger, config: Config) -> Result<Self, String> {
         let mut interfaces = BTreeMap::new();
         for name in &config.interfaces {
-            let info = get_ipaddr_info(&name).map_err(|e| e.to_string())?;
+            let info = get_ipaddr_info(name).map_err(|e| e.to_string())?;
             interfaces.insert(info.try_into()?, None);
         }
         let state = Arc::new(Mutex::new(RouterState {
@@ -257,8 +269,7 @@ impl Router {
         trace!(self.log, "starting rpx");
 
         let s = self.state.lock().await;
-        let interfaces: Vec<Interface> =
-            s.interfaces.keys().map(|k| *k).collect();
+        let interfaces: Vec<Interface> = s.interfaces.keys().copied().collect();
         drop(s);
 
         for i in interfaces {
@@ -429,7 +440,7 @@ impl Router {
 
         if config.router_kind == RouterKind::Transit {
             warn!(log, "DISTRIBUTE");
-            Router::distribute(&state, &advertisement, &config, &log).await;
+            Router::distribute(&state, &advertisement, &config, log).await;
         }
 
         // for upper half only we're done
@@ -438,7 +449,7 @@ impl Router {
         }
 
         // add routes to the underlying system
-        sys::add_routes(&log, &config, advertisement.into())
+        sys::add_routes(log, &config, advertisement.into())
     }
 
     async fn start_discovery(&mut self) {
@@ -449,8 +460,7 @@ impl Router {
         trace!(self.log, "starting discovery");
 
         let s = self.state.lock().await;
-        let interfaces: Vec<Interface> =
-            s.interfaces.keys().map(|k| *k).collect();
+        let interfaces: Vec<Interface> = s.interfaces.keys().copied().collect();
         drop(s);
 
         for i in interfaces {
@@ -488,16 +498,12 @@ impl Router {
             {
                 Ok(addr) => {
                     info!(log, "discovered neighbor {}", addr);
-                    let mut session = peer::Session::new(
+                    let session = peer::Session::new(
                         log.clone(),
                         interface.ifnum,
                         addr,
-                        config.peer_interval,
-                        config.peer_expire,
-                        config.name.clone(),
                         interface.ll_addr,
-                        config.peer_port,
-                        config.router_kind,
+                        config.clone(),
                     );
                     match session.start().await {
                         Ok(_) => {
@@ -652,13 +658,14 @@ mod tests {
     use std::str::FromStr;
     use std::time::Duration;
 
-    use super::*;
     use anyhow::Result;
     use slog::debug;
     use slog::info;
     use tokio::time::sleep;
     use util::test::testlab_1x2;
     use util::test::testlab_x2;
+
+    use super::*;
 
     /// Discover, peer, exchange with two directly connected server routers
     #[tokio::test]

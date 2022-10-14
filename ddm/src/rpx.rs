@@ -178,13 +178,22 @@ async fn advertise_handler(
         .await;
     }
 
+    println!("distribute complete");
+
     // if only in upper-half mode, we're done here
     if context.config.upper_half_only {
+        warn!(context.log, "upper half only not adding");
         return Ok(HttpResponseUpdatedNoContent());
     }
 
-    sys::add_routes(&ctx.log, &context.config, advertisement.into())
-        .map_err(|e| HttpError::for_internal_error(e))?;
+    info!(context.log, "adding routes");
+    match sys::add_routes(&context.log, &context.config, advertisement.into()) {
+        Ok(_) => {}
+        Err(e) => {
+            error!(context.log, "add route to system failed: {}", e);
+            return Err(HttpError::for_internal_error(e));
+        }
+    };
 
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -198,15 +207,42 @@ async fn solicit_handler(
     ctx: Arc<RequestContext<HandlerContext>>,
     rq: TypedBody<Solicit>,
 ) -> Result<HttpResponseOk<Advertise>, HttpError> {
+    // hold lock for as little time as possible
     let context = ctx.context();
     let router = &context.router;
     let router_state = router.lock().await;
     let locals = router_state.local_prefixes.clone();
     let remotes = router_state.remote_prefixes.clone();
+    let interfaces = router_state.interfaces.clone();
     drop(router_state);
 
     let solicit = rq.into_inner();
 
+    let (ifx, peer) =
+        match router.lock().await.peer_router_for(solicit.src).await {
+            Some((ifx, peer)) => (ifx, peer),
+            None => {
+                warn!(context.log, "no peer session for {}", solicit.src);
+                return Err(HttpError::for_bad_request(
+                    None,
+                    "no session".into(),
+                ));
+            }
+        };
+
+    if peer.session.status().await != peer::Status::Active {
+        warn!(context.log, "solicit inactive peer {}", solicit.src);
+        info!(
+            context.log,
+            "attempting to restart peer session for {}", solicit.src,
+        );
+        if let Err(e) = peer.session.client_start().await {
+            error!(context.log, "failed to restart peer session: {}", e);
+            return Err(HttpError::for_bad_request(None, "no session".into()));
+        }
+    }
+
+    /*
     let ifx = match ensure_peer_active(&router, solicit.src).await {
         Ok(ifx) => ifx,
         Err(e) => {
@@ -214,10 +250,30 @@ async fn solicit_handler(
             return Err(e);
         }
     };
+    */
+
+    let is_server = match interfaces.get(&ifx) {
+        None | Some(None) => {
+            warn!(context.log, "peer has no session {}", solicit.src);
+            return Err(HttpError::for_bad_request(None, "no session".into()));
+        }
+        Some(Some(nbr)) => {
+            *nbr.session.info.router_kind.lock().await
+                == Some(RouterKind::Server)
+        }
+    };
 
     let mut prefixes = locals;
-    for (_, x) in remotes {
-        prefixes.extend(x.iter());
+    // If this is a transit router send remote prefixes to the adjacent router
+    if context.config.router_kind == RouterKind::Transit {
+        for (nexthop, x) in remotes {
+            // if the adjacent router is a server, and the nexthop for the
+            // remote is that server, do not advertise self-originating routes.
+            if nexthop == solicit.src && is_server {
+                continue;
+            }
+            prefixes.extend(x.iter());
+        }
     }
 
     let result = Advertise {

@@ -221,9 +221,8 @@ impl Solicitor {
 impl Drop for Solicitor {
     fn drop(&mut self) {
         info!(self.log, "dropping solicitor on ifnum {}", self.ifnum);
-        match self.task {
-            Some(ref t) => t.abort(),
-            None => {}
+        if let Some(ref t) = self.task {
+            t.abort()
         }
     }
 }

@@ -67,26 +67,40 @@ use tokio::time::timeout;
 use crate::protocol::Hail;
 use crate::protocol::Response;
 use crate::protocol::RouterKind;
+use crate::router::Config;
 
 pub struct Session {
-    log: Logger,
-    client_task: Option<Arc<JoinHandle<()>>>,
-    server_task: Option<Arc<JoinHandle<()>>>,
-    info: SessionInfo,
+    pub log: Logger,
+    pub client_task: Mutex<Option<Arc<JoinHandle<()>>>>,
+    pub server_task: Mutex<Option<Arc<JoinHandle<()>>>>,
+    pub info: SessionInfo,
+    pub this_router_config: Config,
 }
 
 #[derive(Clone)]
 pub struct SessionInfo {
-    log: Logger,
-    ifnum: i32,
-    addr: Ipv6Addr,
-    interval: u64,
-    expire: u64,
-    state: Arc<Mutex<State>>,
-    host: String,
-    server_addr: Ipv6Addr,
-    server_port: u16,
-    router_kind: RouterKind,
+    pub log: Logger,
+    pub ifnum: i32,
+    pub addr: Ipv6Addr,
+    pub state: Arc<Mutex<State>>,
+    pub host: Arc<Mutex<Option<String>>>,
+    pub server_addr: Ipv6Addr,
+    pub router_kind: Arc<Mutex<Option<RouterKind>>>,
+}
+
+impl SessionInfo {
+    pub async fn status(&self, config: &Config) -> Status {
+        match self.state.lock().await.last_seen {
+            Some(instant) => {
+                if instant.elapsed().as_millis() > config.peer_expire.into() {
+                    Status::Expired
+                } else {
+                    Status::Active
+                }
+            }
+            None => Status::NoContact,
+        }
+    }
 }
 
 pub struct State {
@@ -105,7 +119,9 @@ impl State {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema,
+)]
 pub enum Status {
     NoContact,
     HailResponseSent,
@@ -120,12 +136,8 @@ impl Session {
         log: Logger,
         ifnum: i32,
         addr: Ipv6Addr,
-        interval: u64,
-        expire: u64,
-        host: String,
         server_addr: Ipv6Addr,
-        server_port: u16,
-        router_kind: RouterKind,
+        this_router_config: Config,
     ) -> Self {
         Session {
             log: log.clone(),
@@ -133,39 +145,38 @@ impl Session {
                 log: log.clone(),
                 ifnum,
                 addr,
-                interval,
-                expire,
                 state: Arc::new(Mutex::new(State::new())),
-                host,
+                host: Arc::new(Mutex::new(None)),
                 server_addr,
-                server_port,
-                router_kind,
+                router_kind: Arc::new(Mutex::new(None)),
             },
-            client_task: None,
-            server_task: None,
+            client_task: Mutex::new(None),
+            server_task: Mutex::new(None),
+            this_router_config,
         }
     }
 
-    pub async fn start(&mut self) -> Result<(), String> {
-        //
-        // start peering server
-        //
+    pub async fn start(&self) -> Result<(), String> {
+        self.server_start().await?;
+        self.client_start().await
+    }
 
-        self.server_task = Some(Arc::new(self.start_server()?));
+    pub async fn client_start(&self) -> Result<(), String> {
+        *self.client_task.lock().await = Some(Arc::new(self.run()));
+        Ok(())
+    }
 
-        //
-        // start peering client
-        //
-
-        self.client_task = Some(Arc::new(self.run()));
-
+    pub async fn server_start(&self) -> Result<(), String> {
+        *self.server_task.lock().await = Some(Arc::new(self.start_server()?));
         Ok(())
     }
 
     pub async fn status(&self) -> Status {
         match self.info.state.lock().await.last_seen {
             Some(instant) => {
-                if instant.elapsed().as_millis() > self.info.expire.into() {
+                if instant.elapsed().as_millis()
+                    > self.this_router_config.peer_expire.into()
+                {
                     Status::Expired
                 } else {
                     Status::Active
@@ -177,33 +188,41 @@ impl Session {
 
     fn run(&self) -> JoinHandle<()> {
         let session = self.info.clone();
+        let config = self.this_router_config.clone();
         spawn(async move {
             loop {
-                trace!(session.log, "[{}] peer step", session.host);
-                match Self::step(&session).await {
-                    Ok(_) => {}
-                    Err(e) => warn!(session.log, "{}", e),
+                trace!(session.log, "[{}] peer step", config.name);
+                if let Err(e) = Self::step(&session, &config).await {
+                    warn!(session.log, "{}", e);
+                    if session.status(&config).await == Status::Expired {
+                        warn!(
+                            session.log,
+                            "peer expired, dropping session for {}",
+                            match *session.host.lock().await {
+                                Some(ref x) => x,
+                                None => "?",
+                            },
+                        );
+                        break;
+                    }
                 }
-                trace!(
-                    session.log,
-                    "[{}] peer sleep {}",
-                    session.host,
-                    session.interval,
-                );
-                sleep(Duration::from_millis(session.interval)).await;
-                trace!(session.log, "[{}] peer wake", session.host);
+                sleep(Duration::from_millis(config.peer_interval)).await;
+                trace!(session.log, "[{}] peer wake", config.name);
             }
         })
     }
 
-    async fn step(session: &SessionInfo) -> Result<(), String> {
-        let response = match Self::hail(&session).await {
+    async fn step(
+        session: &SessionInfo,
+        config: &Config,
+    ) -> Result<(), String> {
+        let response = match Self::hail(session, config).await {
             Ok(r) => r,
             Err(e) => {
                 return Err(format!("hail: {}", e));
             }
         };
-        if response.origin != session.host {
+        if response.origin != config.name {
             return Err(format!("unexpected response: {:#?}", response));
         }
 
@@ -214,7 +233,10 @@ impl Session {
         Ok(())
     }
 
-    async fn hail(s: &SessionInfo) -> Result<Response, String> {
+    async fn hail(
+        s: &SessionInfo,
+        config: &Config,
+    ) -> Result<Response, String> {
         trace!(s.log, "sending hail to {}", s.addr);
 
         // XXX we need to use a custom hyper client here, and not a dropshot
@@ -223,14 +245,16 @@ impl Session {
         // not support scoped ipv6 addresses.
 
         let msg = Hail {
-            sender: s.host.clone(),
-            router_kind: s.router_kind,
+            sender: config.name.clone(),
+            router_kind: config.router_kind,
         };
 
         let json = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
 
-        let uri =
-            format!("http://[{}%{}]:{}/hail", s.addr, s.ifnum, s.server_port,);
+        let uri = format!(
+            "http://[{}%{}]:{}/hail",
+            s.addr, s.ifnum, config.peer_port,
+        );
 
         let client = hyper::Client::new();
         let req = hyper::Request::builder()
@@ -271,7 +295,7 @@ impl Session {
     fn start_server(&self) -> Result<JoinHandle<()>, String> {
         let sa = SocketAddrV6::new(
             self.info.server_addr,
-            self.info.server_port,
+            self.this_router_config.peer_port,
             0,
             0,
         );
@@ -290,6 +314,7 @@ impl Session {
 
         let context = HandlerContext {
             session: self.info.clone(),
+            config: self.this_router_config.clone(),
         };
 
         let server = HttpServerStarter::new(&config, api, context, &log)
@@ -311,14 +336,21 @@ impl Drop for Session {
     fn drop(&mut self) {
         info!(self.log, "dropping peer session for {}", self.info.addr);
 
-        match self.client_task {
-            Some(ref t) => t.abort(),
-            None => {}
-        }
-        match self.server_task {
-            Some(ref t) => t.abort(),
-            None => {}
-        }
+        info!(self.log, "got runtime for session for {}", self.info.addr);
+
+        futures::executor::block_on(async {
+            if let Some(ref t) = *self.client_task.lock().await {
+                t.abort();
+            }
+        });
+        info!(self.log, "dropped client session for {}", self.info.addr);
+
+        futures::executor::block_on(async {
+            if let Some(ref t) = *self.server_task.lock().await {
+                t.abort();
+            }
+        });
+        info!(self.log, "dropped server session for {}", self.info.addr);
     }
 }
 
@@ -326,6 +358,7 @@ impl Drop for Session {
 
 struct HandlerContext {
     session: SessionInfo,
+    config: Config,
 }
 
 #[endpoint {
@@ -338,16 +371,19 @@ async fn hail(
 ) -> Result<HttpResponseOk<Response>, HttpError> {
     let context = ctx.context();
     let session = &context.session;
+    let config = &context.config;
     let msg = rq.into_inner();
 
     trace!(session.log, "received hail from {}", msg.sender);
 
     session.state.lock().await.hail_response_sent = true;
+    *session.host.lock().await = Some(msg.sender.clone());
+    *session.router_kind.lock().await = Some(msg.router_kind);
 
     Ok(HttpResponseOk(Response {
-        sender: session.host.clone(),
+        sender: config.name.clone(),
         origin: msg.sender,
-        router_kind: session.router_kind,
+        router_kind: config.router_kind,
     }))
 }
 
@@ -360,8 +396,6 @@ mod tests {
     use anyhow::Result;
     use tokio::time::sleep;
     use util::test::testlab_x2;
-
-    use crate::protocol::RouterKind;
 
     use super::*;
 
@@ -379,36 +413,44 @@ mod tests {
         let if0_v6 = if0.v6addr().expect("if0 v6 addr");
         let if1_v6 = if1.v6addr().expect("if1 v6 addr");
 
+        let config_s1 = Config {
+            name: "s1".into(),
+            peer_interval: 500,
+            ..Default::default()
+        };
+
+        let config_s2 = Config {
+            name: "s2".into(),
+            peer_interval: 500,
+            ..Default::default()
+        };
+
+        info!(log, "spicy");
+
         //
         // set up peer sessions
         //
 
-        let mut s1 = Session::new(
+        let s1 = Session::new(
             log.clone(),
             if0.addr.info.index,
             if1_v6,
-            500,
-            3000,
-            "s1".into(),
             if0_v6,
-            0x1dd0,
-            RouterKind::Server,
+            config_s1.clone(),
         );
 
-        let mut s2 = Session::new(
+        let s2 = Session::new(
             log.clone(),
             if1.addr.info.index,
             if0_v6,
-            500,
-            3000,
-            "s1".into(),
             if1_v6,
-            0x1dd0,
-            RouterKind::Server,
+            config_s2.clone(),
         );
 
         assert_eq!(s1.status().await, Status::NoContact);
         assert_eq!(s2.status().await, Status::NoContact);
+
+        info!(log, "taco");
 
         //
         // run peer sessions
@@ -416,6 +458,8 @@ mod tests {
 
         s1.start().await.expect("s1 start");
         s2.start().await.expect("s2 start");
+
+        info!(log, "crunch");
 
         //
         // wait for peering
@@ -425,14 +469,15 @@ mod tests {
 
         assert_eq!(s1.status().await, Status::Active);
         assert_eq!(s2.status().await, Status::Active);
-        println!("peering ok");
+        info!(log, "peering ok");
 
         //
         // drop a peer and test expiration
         //
 
-        println!("testing expiration");
+        info!(log, "testing expiration");
         drop(s2);
+        info!(log, "dropped session 2");
         sleep(Duration::from_millis(5000)).await;
         assert_eq!(s1.status().await, Status::Expired);
 

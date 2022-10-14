@@ -32,6 +32,9 @@ do
     cp target/$x/ddmadm /work/$x/ddmadm
 done
 
+banner "check"
+cargo fmt -- --check
+
 banner "test"
 
 export RUST_LOG=trace
