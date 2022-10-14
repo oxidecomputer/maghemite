@@ -20,6 +20,7 @@ schemars = { version = "0.8.0", features = [ "uuid" ] }
 serde = "1.0"
 serde_json = "1.0"
 hyper = { version = "0.14.20", features = ["full"] }
+futures = "0.3.24"
 
 [dependencies.dpd-api]
 git = "https://github.com/oxidecomputer/dendrite"

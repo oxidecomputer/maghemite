@@ -58,7 +58,6 @@ use slog::info;
 use slog::trace;
 use slog::warn;
 use slog::Logger;
-use tokio::runtime::Runtime;
 use tokio::spawn;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -337,23 +336,21 @@ impl Drop for Session {
     fn drop(&mut self) {
         info!(self.log, "dropping peer session for {}", self.info.addr);
 
-        let rt = match Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                error!(
-                    self.log,
-                    "drop session: failed to get tokio runtime: {}", e,
-                );
-                return;
-            }
-        };
+        info!(self.log, "got runtime for session for {}", self.info.addr);
 
-        if let Some(ref t) = *rt.block_on(self.client_task.lock()) {
-            t.abort();
-        }
-        if let Some(ref t) = *rt.block_on(self.server_task.lock()) {
-            t.abort();
-        }
+        futures::executor::block_on(async {
+            if let Some(ref t) = *self.client_task.lock().await {
+                t.abort();
+            }
+        });
+        info!(self.log, "dropped client session for {}", self.info.addr);
+
+        futures::executor::block_on(async {
+            if let Some(ref t) = *self.server_task.lock().await {
+                t.abort();
+            }
+        });
+        info!(self.log, "dropped server session for {}", self.info.addr);
     }
 }
 
@@ -424,8 +421,11 @@ mod tests {
 
         let config_s2 = Config {
             name: "s2".into(),
+            peer_interval: 500,
             ..Default::default()
         };
+
+        info!(log, "spicy");
 
         //
         // set up peer sessions
@@ -450,12 +450,16 @@ mod tests {
         assert_eq!(s1.status().await, Status::NoContact);
         assert_eq!(s2.status().await, Status::NoContact);
 
+        info!(log, "taco");
+
         //
         // run peer sessions
         //
 
         s1.start().await.expect("s1 start");
         s2.start().await.expect("s2 start");
+
+        info!(log, "crunch");
 
         //
         // wait for peering
@@ -465,14 +469,15 @@ mod tests {
 
         assert_eq!(s1.status().await, Status::Active);
         assert_eq!(s2.status().await, Status::Active);
-        println!("peering ok");
+        info!(log, "peering ok");
 
         //
         // drop a peer and test expiration
         //
 
-        println!("testing expiration");
+        info!(log, "testing expiration");
         drop(s2);
+        info!(log, "dropped session 2");
         sleep(Duration::from_millis(5000)).await;
         assert_eq!(s1.status().await, Status::Expired);
 
