@@ -21,6 +21,8 @@ members = [
     "util",
     "mg-ddm-verify",
     "tests",
+    "bgp",
+    "bgpd",
 ]
 
 [workspace.dependencies]

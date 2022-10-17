@@ -1,0 +1,9 @@
+[package]
+name = "bgp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+num_enum = "0.5.7"
+slog = "2.7.0"
+tokio = { version = "1.21.2", features = ["sync", "time"] }
