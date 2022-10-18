@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub enum Error {
     TooSmall,
     TooLarge,
@@ -5,8 +6,8 @@ pub enum Error {
     InvalidMessageType(u8),
     BadVersion,
     Reserved,
-    Unassigned,
+    Unassigned(u8),
     Experimental,
     InvalidCode(u8),
-    BadLength,
+    BadLength { expected: u8, found: u8 },
 }

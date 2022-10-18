@@ -5,7 +5,7 @@ use std::net::IpAddr;
 /// BGP Message types.
 ///
 /// Ref: RFC 4271 §4.1
-#[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Copy, Clone)]
 #[repr(u8)]
 pub enum MessageType {
     /// The first message sent by each side once a TCP connection is
@@ -54,6 +54,7 @@ pub enum MessageType {
 /// called.
 ///
 /// Ref: RFC 4271 §4.1
+#[derive(Debug, PartialEq, Eq)]
 pub struct Header {
     /// Total length of the message, including the header. May be no larger than
     /// 4096.
@@ -140,7 +141,7 @@ pub const BGP4: u8 = 4;
 /// ```
 ///
 /// Ref: RFC 4271 §4.2
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct OpenMessage {
     /// BGP protocol version.
     pub version: u8,
@@ -190,15 +191,12 @@ impl OpenMessage {
 
         // version
         buf.push(self.version);
-        buf.extend_from_slice(&[0u8; 3]);
 
         // as
         buf.extend_from_slice(&self.asn.to_be_bytes());
-        buf.extend_from_slice(&[0u8; 2]);
 
         // hold time
         buf.extend_from_slice(&self.hold_time.to_be_bytes());
-        buf.extend_from_slice(&[0u8; 2]);
 
         // id
         buf.extend_from_slice(&self.id.to_be_bytes());
@@ -264,7 +262,7 @@ impl OpenMessage {
         while !buf.is_empty() {
             let (param, n) = OptionalParameter::from_wire(buf)?;
             result.push(param);
-            buf = &buf[n..];
+            buf = &buf[n + 2..];
         }
 
         Ok(result)
@@ -390,7 +388,7 @@ pub enum UpdateErrorSubcode {
 }
 
 /// The IANA/IETF currently defines the following optional parameter types.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum OptionalParameter {
     /// Code 0
     Reserved,
@@ -426,9 +424,15 @@ impl OptionalParameter {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         match self {
             Self::Reserved => Err(Error::Reserved),
-            Self::Unassigned => Err(Error::Unassigned),
+            Self::Unassigned => Err(Error::Unassigned(0)),
             Self::Authentication => todo!(),
-            Self::Capability(c) => c.to_wire(),
+            Self::Capability(c) => {
+                let mut buf = vec![OptionalParameterCode::Capability as u8];
+                let cbuf = c.to_wire()?;
+                buf.push(cbuf.len() as u8);
+                buf.extend_from_slice(&cbuf);
+                Ok(buf)
+            }
             Self::ExtendedLength => todo!(),
         }
     }
@@ -436,7 +440,7 @@ impl OptionalParameter {
     pub fn from_wire(buf: &[u8]) -> Result<(OptionalParameter, usize), Error> {
         let code = match OptionalParameterCode::try_from(buf[0]) {
             Ok(code) => code,
-            Err(_) => return Err(Error::Unassigned),
+            Err(_) => return Err(Error::Unassigned(buf[0])),
         };
 
         let len = buf[1] as usize;
@@ -466,7 +470,7 @@ impl OptionalParameter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Capability {
     /// RFC 2858 TODO
     MultiprotocolExtensions {},
@@ -569,7 +573,7 @@ impl Capability {
             Self::BgpRole {} => todo!(),
             Self::GracefulRestart {} => todo!(),
             Self::FourOctetAs { asn } => {
-                let mut buf = vec![CapabilityCode::FourOctetAs as u8];
+                let mut buf = vec![CapabilityCode::FourOctetAs as u8, 4];
                 buf.extend_from_slice(&asn.to_be_bytes());
                 Ok(buf)
             }
@@ -587,7 +591,7 @@ impl Capability {
             Self::PrestandardFqdn {} => todo!(),
             Self::PrestandardOpereationalMessage {} => todo!(),
             Self::Experimental { code: _ } => Err(Error::Experimental),
-            Self::Unassigned { code: _ } => Err(Error::Unassigned),
+            Self::Unassigned { code } => Err(Error::Unassigned(*code)),
             Self::Reserved { code: _ } => Err(Error::Reserved),
         }
     }
@@ -617,13 +621,16 @@ impl Capability {
             CapabilityCode::GracefulRestart => todo!(),
             CapabilityCode::FourOctetAs => {
                 if len != 4 {
-                    return Err(Error::BadLength);
+                    return Err(Error::BadLength {
+                        expected: 4,
+                        found: len,
+                    });
                 }
                 if buf.len() < 6 {
                     return Err(Error::TooSmall);
                 }
                 Ok(Capability::FourOctetAs {
-                    asn: u32::from_be_bytes([buf[2], buf[3], buf[3], buf[4]]),
+                    asn: u32::from_be_bytes([buf[2], buf[3], buf[4], buf[5]]),
                 })
             }
             CapabilityCode::DynamicCapability => todo!(),
@@ -827,4 +834,46 @@ pub enum CapabilityCode {
     Experimental49,
     Experimental50,
     Experimental51,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_hex::*;
+
+    #[test]
+    fn header_round_trip() {
+        let h0 = Header {
+            length: 0x1701,
+            typ: MessageType::Notification,
+        };
+
+        let buf = h0.to_wire();
+
+        println!("buf: {}", buf.hex_dump());
+
+        assert_eq!(
+            buf,
+            vec![
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // marker
+                0x17, 0x01, // length
+                3,    // type
+            ]
+        );
+
+        let h1 = Header::from_wire(&buf).expect("header from wire");
+        assert_eq!(h0, h1);
+    }
+
+    #[test]
+    fn open_round_trip() {
+        let om0 = OpenMessage::new4(395849, 0x1234, 0xaabbccdd);
+
+        let buf = om0.to_wire().expect("open message to wire");
+
+        println!("buf: {}", buf.hex_dump());
+
+        let om1 = OpenMessage::from_wire(&buf).expect("open message from wire");
+        assert_eq!(om0, om1);
+    }
 }
