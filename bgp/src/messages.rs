@@ -1,4 +1,8 @@
 use crate::error::Error;
+use nom::{
+    bytes::complete::{tag, take},
+    number::complete::{be_u16, be_u32, u8 as parse_u8},
+};
 use num_enum::TryFromPrimitive;
 use std::net::IpAddr;
 
@@ -89,23 +93,12 @@ impl Header {
     }
 
     /// Deserialize a header from wire format.
-    pub fn from_wire(buf: &[u8]) -> Result<Header, Error> {
-        if buf.len() < 19 {
-            return Err(Error::TooSmall);
-        }
-        if buf[..16] != MARKER {
-            return Err(Error::NoMarker);
-        }
-
-        let typ = match MessageType::try_from(buf[18]) {
-            Ok(typ) => typ,
-            Err(_) => return Err(Error::InvalidMessageType(buf[18])),
-        };
-
-        Ok(Header {
-            length: u16::from_be_bytes([buf[16], buf[17]]),
-            typ,
-        })
+    pub fn from_wire(input: &[u8]) -> Result<Header, Error> {
+        let (input, _) = tag(MARKER)(input)?;
+        let (input, length) = be_u16(input)?;
+        let (_, typ) = parse_u8(input)?;
+        let typ = MessageType::try_from(typ)?;
+        Ok(Header { length, typ })
     }
 }
 
@@ -217,29 +210,19 @@ impl OpenMessage {
     }
 
     /// Deserialize an open message from wire format.
-    pub fn from_wire(buf: &[u8]) -> Result<OpenMessage, Error> {
-        if buf.len() < 10 {
+    pub fn from_wire(input: &[u8]) -> Result<OpenMessage, Error> {
+        let (input, version) = parse_u8(input)?;
+        let (input, asn) = be_u16(input)?;
+        let (input, hold_time) = be_u16(input)?;
+        let (input, id) = be_u32(input)?;
+        let (input, param_len) = parse_u8(input)?;
+        let param_len = param_len as usize;
+
+        if input.len() < param_len {
             return Err(Error::TooSmall);
         }
 
-        // version
-        let version = buf[0];
-        if version != BGP4 {
-            return Err(Error::BadVersion);
-        }
-
-        // as
-        let asn = u16::from_be_bytes([buf[1], buf[2]]);
-
-        // hold time
-        let hold_time = u16::from_be_bytes([buf[3], buf[4]]);
-
-        // id
-        let id = u32::from_be_bytes([buf[5], buf[6], buf[7], buf[8]]);
-
-        // parameters
-        let param_len = buf[9] as usize;
-        let parameters = Self::parameters_from_wire(&buf[10..10 + param_len])?;
+        let parameters = Self::parameters_from_wire(&input[..param_len])?;
 
         Ok(OpenMessage {
             version,
@@ -256,9 +239,9 @@ impl OpenMessage {
         let mut result = Vec::new();
 
         while !buf.is_empty() {
-            let (param, n) = OptionalParameter::from_wire(buf)?;
+            let (out, param) = OptionalParameter::from_wire(buf)?;
             result.push(param);
-            buf = &buf[n + 2..];
+            buf = out;
         }
 
         Ok(result)
@@ -360,33 +343,16 @@ impl UpdateMessage {
         Ok(buf)
     }
 
-    pub fn from_wire(buf: &[u8]) -> Result<UpdateMessage, Error> {
-        // withdrawn
-        if buf.len() < 2 {
-            return Err(Error::TooSmall);
-        }
-        let len = u16::from_be_bytes([buf[0], buf[1]]) as usize;
-        let buf = &buf[2..];
-        if buf.len() < len {
-            return Err(Error::TooSmall);
-        }
-        let withdrawn = Self::prefixes_from_wire(&buf[..len])?;
-        let buf = &buf[len..];
+    pub fn from_wire(input: &[u8]) -> Result<UpdateMessage, Error> {
+        let (input, len) = be_u16(input)?;
+        let (input, withdrawn_input) = take(len)(input)?;
+        let withdrawn = Self::prefixes_from_wire(withdrawn_input)?;
 
-        // path attributes
-        if buf.len() < 2 {
-            return Err(Error::TooSmall);
-        }
-        let len = u16::from_be_bytes([buf[0], buf[1]]) as usize;
-        let buf = &buf[2..];
-        if buf.len() < len {
-            return Err(Error::TooSmall);
-        }
-        let path_attributes = Self::path_attrs_from_wire(&buf[..len])?;
-        let buf = &buf[len..];
+        let (input, len) = be_u16(input)?;
+        let (input, attrs_input) = take(len)(input)?;
+        let path_attributes = Self::path_attrs_from_wire(attrs_input)?;
 
-        // nlri
-        let nlri = Self::prefixes_from_wire(buf)?;
+        let nlri = Self::prefixes_from_wire(input)?;
 
         Ok(UpdateMessage {
             withdrawn,
@@ -401,9 +367,9 @@ impl UpdateMessage {
             if buf.is_empty() {
                 break;
             }
-            let (pfx, n) = Prefix::from_wire(buf)?;
+            let (out, pfx) = Prefix::from_wire(buf)?;
             result.push(pfx);
-            buf = &buf[n..];
+            buf = out;
         }
         Ok(result)
     }
@@ -416,9 +382,9 @@ impl UpdateMessage {
             if buf.is_empty() {
                 break;
             }
-            let (pa, n) = PathAttribute::from_wire(buf)?;
+            let (out, pa) = PathAttribute::from_wire(buf)?;
             result.push(pa);
-            buf = &buf[n..];
+            buf = out;
         }
         Ok(result)
     }
@@ -439,19 +405,14 @@ impl Prefix {
         Ok(buf)
     }
 
-    fn from_wire(buf: &[u8]) -> Result<(Prefix, usize), Error> {
-        if buf.is_empty() {
-            return Err(Error::TooSmall);
-        }
-        let len = buf[0] as usize;
-        if buf.len() < len {
-            return Err(Error::TooSmall);
-        }
+    fn from_wire(input: &[u8]) -> Result<(&[u8], Prefix), Error> {
+        let (input, len) = parse_u8(input)?;
+        let (input, value) = take(len)(input)?;
         Ok((
+            input,
             Prefix {
-                value: buf[1..len + 1].to_owned(),
+                value: value.to_owned(),
             },
-            len + 1,
         ))
     }
 }
@@ -482,36 +443,21 @@ impl PathAttribute {
         Ok(buf)
     }
 
-    fn from_wire(buf: &[u8]) -> Result<(PathAttribute, usize), Error> {
-        if buf.len() < 2 {
-            return Err(Error::TooSmall);
-        }
-        let typ = PathAttributeType::from_wire(&buf[..2])?;
-        let mut buf = &buf[2..];
-        let mut n = 2;
-        let len = if typ.flags & PathAttributeFlags::ExtendedLength as u8 != 0 {
-            if buf.len() < 2 {
-                return Err(Error::TooSmall);
-            }
-            let len = u16::from_be_bytes([buf[0], buf[1]]) as usize;
-            buf = &buf[2..];
-            n += 2;
-            len
-        } else {
-            if buf.is_empty() {
-                return Err(Error::TooSmall);
-            }
-            let len = buf[0] as usize;
-            buf = &buf[1..];
-            n += 1;
-            len
-        };
-        if buf.len() < len {
-            return Err(Error::TooSmall);
-        }
-        let buf = &buf[..len];
-        let value = PathAttributeValue::from_wire(buf, typ.type_code)?;
-        Ok((PathAttribute { typ, value }, n + len))
+    fn from_wire(input: &[u8]) -> Result<(&[u8], PathAttribute), Error> {
+        let (input, type_input) = take(2usize)(input)?;
+        let typ = PathAttributeType::from_wire(type_input)?;
+
+        let (input, len) =
+            if typ.flags & PathAttributeFlags::ExtendedLength as u8 != 0 {
+                let (input, len) = be_u16(input)?;
+                (input, len as usize)
+            } else {
+                let (input, len) = parse_u8(input)?;
+                (input, len as usize)
+            };
+        let (input, pa_input) = take(len)(input)?;
+        let value = PathAttributeValue::from_wire(pa_input, typ.type_code)?;
+        Ok((input, PathAttribute { typ, value }))
     }
 }
 
@@ -526,16 +472,11 @@ impl PathAttributeType {
         vec![self.flags, self.type_code as u8]
     }
 
-    pub fn from_wire(buf: &[u8]) -> Result<PathAttributeType, Error> {
-        Ok(PathAttributeType {
-            flags: buf[0],
-            type_code: match PathAttributeTypeCode::try_from(buf[1]) {
-                Ok(tc) => tc,
-                Err(_) => {
-                    return Err(Error::InvalidCode(buf[1]));
-                }
-            },
-        })
+    pub fn from_wire(input: &[u8]) -> Result<PathAttributeType, Error> {
+        let (input, flags) = parse_u8(input)?;
+        let (_, type_code) = parse_u8(input)?;
+        let type_code = PathAttributeTypeCode::try_from(type_code)?;
+        Ok(PathAttributeType { flags, type_code })
     }
 }
 
@@ -612,7 +553,7 @@ impl PathAttributeValue {
     }
 
     pub fn from_wire(
-        mut buf: &[u8],
+        mut input: &[u8],
         type_code: PathAttributeTypeCode,
     ) -> Result<PathAttributeValue, Error> {
         match type_code {
@@ -626,12 +567,12 @@ impl PathAttributeValue {
             PathAttributeTypeCode::As4Path => {
                 let mut segments = Vec::new();
                 loop {
-                    if buf.is_empty() {
+                    if input.is_empty() {
                         break;
                     }
-                    let (seg, n) = As4PathSegment::from_wire(buf)?;
+                    let (out, seg) = As4PathSegment::from_wire(input)?;
                     segments.push(seg);
-                    buf = &buf[n..];
+                    input = out;
                 }
                 Ok(PathAttributeValue::As4Path(segments))
             }
@@ -671,41 +612,30 @@ impl As4PathSegment {
         Ok(buf)
     }
 
-    pub fn from_wire(mut buf: &[u8]) -> Result<(As4PathSegment, usize), Error> {
-        if buf.len() < 2 {
-            return Err(Error::TooSmall);
-        }
-        let typ = match AsPathType::try_from(buf[0]) {
-            Ok(t) => t,
-            Err(_) => {
-                return Err(Error::InvalidCode(buf[0]));
-            }
-        };
-        let mut len = buf[1] as usize;
-        len *= 4;
-        buf = &buf[2..];
+    pub fn from_wire(input: &[u8]) -> Result<(&[u8], As4PathSegment), Error> {
+        let (input, typ) = parse_u8(input)?;
+        let typ = AsPathType::try_from(typ)?;
+
+        let (input, len) = parse_u8(input)?;
+        let len = (len as usize) * 4;
         let mut segment = As4PathSegment {
             typ,
             value: Vec::new(),
         };
         if len == 0 {
-            return Ok((segment, 2));
+            return Ok((input, segment));
         }
 
-        if buf.len() < len {
-            return Err(Error::TooSmall);
-        }
-        buf = &buf[..len];
+        let (input, mut value_input) = take(len)(input)?;
         loop {
-            segment
-                .value
-                .push(u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]));
-            buf = &buf[4..];
-            if buf.is_empty() {
+            if value_input.is_empty() {
                 break;
             }
+            let (out, value) = be_u32(value_input)?;
+            segment.value.push(value);
+            value_input = out;
         }
-        Ok((segment, 2 + len))
+        Ok((input, segment))
     }
 }
 
@@ -815,35 +745,22 @@ impl OptionalParameter {
         }
     }
 
-    pub fn from_wire(buf: &[u8]) -> Result<(OptionalParameter, usize), Error> {
-        let code = match OptionalParameterCode::try_from(buf[0]) {
-            Ok(code) => code,
-            Err(_) => return Err(Error::Unassigned(buf[0])),
-        };
-
-        let len = buf[1] as usize;
+    pub fn from_wire(
+        input: &[u8],
+    ) -> Result<(&[u8], OptionalParameter), Error> {
+        let (input, code) = parse_u8(input)?;
+        let code = OptionalParameterCode::try_from(code)?;
+        let (input, len) = parse_u8(input)?;
+        let (input, capability_input) = take(len)(input)?;
 
         match code {
             OptionalParameterCode::Reserved => Err(Error::Reserved),
-            OptionalParameterCode::Authentication => {
-                todo!();
-            }
+            OptionalParameterCode::Authentication => todo!(),
             OptionalParameterCode::Capability => {
-                // minum size is:
-                // - optional parameter type    1
-                // - optional parameter length  1
-                // - capability code            1
-                // - capability length          1
-                //                              4
-                if buf.len() < 4 {
-                    return Err(Error::TooSmall);
-                }
-                let cap = Capability::from_wire(&buf[2..2 + len])?.into();
-                Ok((cap, len))
+                let (_, cap) = Capability::from_wire(capability_input)?;
+                Ok((input, cap.into()))
             }
-            OptionalParameterCode::ExtendedLength => {
-                todo!();
-            }
+            OptionalParameterCode::ExtendedLength => todo!(),
         }
     }
 }
@@ -974,17 +891,13 @@ impl Capability {
         }
     }
 
-    pub fn from_wire(buf: &[u8]) -> Result<Capability, Error> {
-        if buf.len() < 2 {
-            return Err(Error::TooSmall);
+    pub fn from_wire(input: &[u8]) -> Result<(&[u8], Capability), Error> {
+        let (input, code) = parse_u8(input)?;
+        let code = CapabilityCode::try_from(code)?;
+        let (input, len) = parse_u8(input)?;
+        if input.len() < len as usize {
+            return Err(Error::Eom);
         }
-
-        let code = match CapabilityCode::try_from(buf[0]) {
-            Ok(code) => code,
-            Err(_) => return Err(Error::InvalidCode(buf[0])),
-        };
-
-        let len = buf[1];
 
         match code {
             CapabilityCode::MultiprotocolExtensions => todo!(),
@@ -998,18 +911,8 @@ impl Capability {
             CapabilityCode::BgpRole => todo!(),
             CapabilityCode::GracefulRestart => todo!(),
             CapabilityCode::FourOctetAs => {
-                if len != 4 {
-                    return Err(Error::BadLength {
-                        expected: 4,
-                        found: len,
-                    });
-                }
-                if buf.len() < 6 {
-                    return Err(Error::TooSmall);
-                }
-                Ok(Capability::FourOctetAs {
-                    asn: u32::from_be_bytes([buf[2], buf[3], buf[4], buf[5]]),
-                })
+                let (input, asn) = be_u32(input)?;
+                Ok((input, Capability::FourOctetAs { asn }))
             }
             CapabilityCode::DynamicCapability => todo!(),
             CapabilityCode::MultisessionBgp => todo!(),

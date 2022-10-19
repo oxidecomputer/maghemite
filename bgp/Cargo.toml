@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+nom = "7.1.1"
 num_enum = "0.5.7"
 slog = "2.7.0"
+thiserror = "1.0.37"
 tokio = { version = "1.21.2", features = ["sync", "time"] }
 
 [dev-dependencies]
