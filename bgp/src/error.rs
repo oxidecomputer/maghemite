@@ -47,6 +47,18 @@ pub enum Error {
     #[error("AS path type error")]
     AsPathType(#[from] TryFromPrimitiveError<crate::messages::AsPathType>),
 
+    #[error("Error code")]
+    ErrorCode(#[from] TryFromPrimitiveError<crate::messages::ErrorCode>),
+
+    #[error("Header error subcode")]
+    HeaderSubcode(#[from] TryFromPrimitiveError<crate::messages::HeaderErrorSubcode>),
+
+    #[error("Open error subcode")]
+    OpenSubcode(#[from] TryFromPrimitiveError<crate::messages::OpenErrorSubcode>),
+
+    #[error("Update error subcode")]
+    UpdateSubcode(#[from] TryFromPrimitiveError<crate::messages::UpdateErrorSubcode>),
+
     #[error("message parse error")]
     Parse(nom::Err<(Vec<u8>, nom::error::ErrorKind)>),
 }

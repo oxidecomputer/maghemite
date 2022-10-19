@@ -674,21 +674,121 @@ pub enum AsPathType {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct NotificationMessage {
-    pub error_code: u8,
-    pub error_subcode: u8,
+    pub error_code: ErrorCode,
+    pub error_subcode: ErrorSubcode,
+
+    /*
+     * Implementation notes for later on the data field ...
+     *
+     * §6.1 Message Header Error Handling
+     * ==================================
+     *
+     *   If at least one of the following is true:
+     *
+     *    - if the Length field of the message header is less than 19 or
+     *      greater than 4096, or
+     *
+     *    - if the Length field of an OPEN message is less than the minimum
+     *      length of the OPEN message, or
+     *
+     *    - if the Length field of an UPDATE message is less than the
+     *      minimum length of the UPDATE message, or
+     *
+     *    - if the Length field of a KEEPALIVE message is not equal to 19,
+     *      or
+     *
+     *    - if the Length field of a NOTIFICATION message is less than the
+     *      minimum length of the NOTIFICATION message,
+     *
+     *     then the Error Subcode MUST be set to Bad Message Length.  The Data
+     *     field MUST contain the erroneous Length field.
+     *
+     *     If the Type field of the message header is not recognized, then the
+     *     Error Subcode MUST be set to Bad Message Type.  The Data field MUST
+     *     contain the erroneous Type field.
+     *
+     * §6.2 Open Message Error Handling
+     * ================================
+     *
+     *     If the version number in the Version field of the received OPEN
+     *     message is not supported, then the Error Subcode MUST be set to
+     *     Unsupported Version Number.  The Data field is a 2-octet unsigned
+     *     integer, which indicates the largest, locally-supported version
+     *     number less than the version the remote BGP peer bid
+     *
+     * §6.3 Update Message Error Handling
+     * ==================================
+     *
+     *     If any recognized attribute has Attribute Flags that conflict with
+     *     the Attribute Type Code, then the Error Subcode MUST be set to
+     *     Attribute Flags Error.  The Data field MUST contain the erroneous
+     *     attribute (type, length, and value).
+     *
+     *     If any recognized attribute has an Attribute Length that conflicts
+     *     with the expected length (based on the attribute type code), then the
+     *     Error Subcode MUST be set to Attribute Length Error.  The Data field
+     *     MUST contain the erroneous attribute (type, length, and value).
+     *
+     *     If any of the well-known mandatory attributes are not present, then
+     *     the Error Subcode MUST be set to Missing Well-known Attribute.  The
+     *     Data field MUST contain the Attribute Type Code of the missing,
+     *     well-known attribute.
+     *
+     *     If any of the well-known mandatory attributes are not recognized,
+     *     then the Error Subcode MUST be set to Unrecognized Well-known
+     *     Attribute.  The Data field MUST contain the unrecognized attribute
+     *     (type, length, and value).
+     *
+     *     If the ORIGIN attribute has an undefined value, then the Error Sub-
+     *     code MUST be set to Invalid Origin Attribute.  The Data field MUST
+     *     contain the unrecognized attribute (type, length, and value).
+     *
+     *     If the NEXT_HOP attribute field is syntactically incorrect, then the
+     *     Error Subcode MUST be set to Invalid NEXT_HOP Attribute.  The Data
+     *     field MUST contain the incorrect attribute (type, length, and value).
+     *     Syntactic correctness means that the NEXT_HOP attribute represents a
+     *     valid IP host address.
+     *
+     *     If an optional attribute is recognized, then the value of this
+     *     attribute MUST be checked.  If an error is detected, the attribute
+     *     MUST be discarded, and the Error Subcode MUST be set to Optional
+     *     Attribute Error.  The Data field MUST contain the attribute (type,
+     *     length, and value).
+     *
+     */
     pub data: Vec<u8>,
 }
 
 impl NotificationMessage {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        todo!();
+        let buf = vec![self.error_code as u8, self.error_subcode.as_u8()];
+        //TODO data, see comment above on data field
+        Ok(buf)
     }
-    pub fn from_wire(_input: &[u8]) -> Result<NotificationMessage, Error> {
-        todo!();
+
+    pub fn from_wire(input: &[u8]) -> Result<NotificationMessage, Error> {
+        let (input, error_code) = parse_u8(input)?;
+        let error_code = ErrorCode::try_from(error_code)?;
+
+        let (input, error_subcode) = parse_u8(input)?;
+        let error_subcode = match error_code {
+            ErrorCode::Header => HeaderErrorSubcode::try_from(error_subcode)?.into(),
+            ErrorCode::Open => OpenErrorSubcode::try_from(error_subcode)?.into(),
+            ErrorCode::Update => UpdateErrorSubcode::try_from(error_subcode)?.into(),
+            ErrorCode::HoldTimerExpired => ErrorSubcode::HoldTime(error_subcode),
+            ErrorCode::Fsm => ErrorSubcode::Fsm(error_subcode),
+            ErrorCode::Cease => ErrorSubcode::Cease(error_subcode),
+        };
+        Ok(NotificationMessage{
+            error_code,
+            error_subcode,
+            data: input.to_owned()
+        })
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+#[repr(u8)]
 pub enum ErrorCode {
     Header,
     Open,
@@ -698,14 +798,57 @@ pub enum ErrorCode {
     Cease,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ErrorSubcode {
+    Header(HeaderErrorSubcode),
+    Open(OpenErrorSubcode),
+    Update(UpdateErrorSubcode),
+    HoldTime(u8),
+    Fsm(u8),
+    Cease(u8),
+}
+
+impl From<HeaderErrorSubcode> for ErrorSubcode {
+    fn from(x: HeaderErrorSubcode) -> ErrorSubcode {
+        ErrorSubcode::Header(x)
+    }
+}
+
+impl From<OpenErrorSubcode> for ErrorSubcode {
+    fn from(x: OpenErrorSubcode) -> ErrorSubcode {
+        ErrorSubcode::Open(x)
+    }
+}
+
+impl From<UpdateErrorSubcode> for ErrorSubcode {
+    fn from(x: UpdateErrorSubcode) -> ErrorSubcode {
+        ErrorSubcode::Update(x)
+    }
+}
+
+impl ErrorSubcode {
+    fn as_u8(&self) -> u8 {
+        match self {
+            Self::Header(h) => *h as u8,
+            Self::Open(o) => *o as u8,
+            Self::Update(u) => *u as u8,
+            Self::HoldTime(x) => *x,
+            Self::Fsm(x) => *x,
+            Self::Cease(x) => *x,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+#[repr(u8)]
 pub enum HeaderErrorSubcode {
     ConnectionNotSynchronized,
     BadMessageLength,
     BadMessageType,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+#[repr(u8)]
 pub enum OpenErrorSubcode {
     UnsupportedVersionNumber,
     BadPeerAS,
@@ -715,7 +858,8 @@ pub enum OpenErrorSubcode {
     UnacceptableHoldTime,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+#[repr(u8)]
 pub enum UpdateErrorSubcode {
     MalformedAttributeList,
     UnrecognizedWellKnownAttribute,
