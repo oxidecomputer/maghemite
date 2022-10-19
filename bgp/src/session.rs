@@ -1,5 +1,9 @@
+use crate::messages::{
+    Header, Message, MessageType, NotificationMessage, OpenMessage,
+    UpdateMessage,
+};
 use crate::state::BgpState;
-use slog::{warn, Logger};
+use slog::{info, warn, Logger};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -7,7 +11,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::{interval, Interval};
-
 
 #[derive(Debug)]
 pub enum FsmState {
@@ -147,9 +150,6 @@ pub struct Session {
     /// Track how many times a connection has been attempted.
     pub connect_retry_counter: u64,
 
-    /// How often to send out keepalive messages.
-    pub keepalive_timer: Interval,
-
     // Optional Attributes
     /// Start the peer session automatically.
     pub allow_automatic_start: bool,
@@ -193,13 +193,11 @@ pub struct Session {
 
 impl Session {
     pub fn new(
-        keepalive_time: Duration,
         idle_hold_time: Duration,
         delay_open_time: Duration,
     ) -> Arc<Mutex<Session>> {
         Arc::new(Mutex::new(Session {
             connect_retry_counter: 0,
-            keepalive_timer: interval(keepalive_time),
             allow_automatic_start: false,
             allow_automatic_restart: false,
             allow_automatic_stop: false,
@@ -230,6 +228,9 @@ pub struct SessionRunner {
     /// How long to wait between connection attempts.
     pub connect_retry_timer: Interval,
 
+    /// How often to send out keepalive messages.
+    pub keepalive_timer: Interval,
+
     /// How long to keep a session alive between keepalive, update and/or
     /// notification messages.
     pub hold_timer: Interval,
@@ -245,6 +246,7 @@ impl SessionRunner {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         connect_retry_time: Duration,
+        keepalive_time: Duration,
         hold_time: Duration,
         session: Arc<Mutex<Session>>,
         event_rx: Receiver<FsmEvent>,
@@ -262,6 +264,7 @@ impl SessionRunner {
             _bgp_state: bgp_state,
             peer,
             connect_retry_timer: interval(connect_retry_time),
+            keepalive_timer: interval(keepalive_time),
             hold_timer: interval(hold_time),
             asn,
             id,
@@ -277,8 +280,12 @@ impl SessionRunner {
                 FsmState::Connect(stream) => self.on_connect(stream).await,
                 FsmState::Active(stream) => self.on_active(stream).await,
                 FsmState::OpenSent(stream) => self.on_open_sent(stream).await,
-                FsmState::OpenConfirm(_stream) => todo!(),
-                FsmState::Established(_stream) => todo!(),
+                FsmState::OpenConfirm(stream) => {
+                    self.on_open_confirm(stream).await
+                }
+                FsmState::Established(stream) => {
+                    self.on_established(stream).await
+                }
             };
         }
     }
@@ -288,10 +295,7 @@ impl SessionRunner {
             None => FsmState::Idle,
             Some(FsmEvent::ManualStart) => self.on_manual_start().await,
             x => {
-                warn!(
-                    self.log,
-                    "Event {:?} not allowed in idle, ignoring", x
-                );
+                warn!(self.log, "Event {:?} not allowed in idle, ignoring", x);
                 FsmState::Idle
             }
         }
@@ -314,66 +318,172 @@ impl SessionRunner {
         }
     }
 
-    async fn recv_open(
-        &mut self,
-        mut stream: TcpStream,
-    ) -> crate::messages::OpenMessage {
+    async fn recv_header(stream: &mut TcpStream) -> Header {
         loop {
             let mut buf = [0u8; 19];
             stream.read_exact(&mut buf).await.unwrap();
-            let hdr = match crate::messages::Header::from_wire(&buf) {
-                Ok(h) => h,
+            match Header::from_wire(&buf) {
+                Ok(h) => return h,
                 Err(_) => continue,
             };
+        }
+    }
 
-            if hdr.typ != crate::messages::MessageType::Open {
-                continue;
-            }
-
+    async fn recv_msg(stream: &mut TcpStream) -> Message {
+        loop {
+            let hdr = Self::recv_header(stream).await;
             let mut msgbuf = vec![0u8; hdr.length as usize];
             stream.read_exact(&mut msgbuf).await.unwrap();
 
-            let msg = match crate::messages::OpenMessage::from_wire(&msgbuf) {
-                Ok(m) => m,
-                Err(_) => continue,
+            match hdr.typ {
+                MessageType::Open => match OpenMessage::from_wire(&msgbuf) {
+                    Ok(m) => return m.into(),
+                    Err(_) => continue,
+                },
+                MessageType::Update => {
+                    match UpdateMessage::from_wire(&msgbuf) {
+                        Ok(m) => return m.into(),
+                        Err(_) => continue,
+                    }
+                }
+                MessageType::Notification => {
+                    match NotificationMessage::from_wire(&msgbuf) {
+                        Ok(m) => return m.into(),
+                        Err(_) => continue,
+                    }
+                }
+                MessageType::KeepAlive => return Message::KeepAlive,
             };
-
-            return msg;
         }
     }
 
     async fn on_connect(&mut self, mut stream: TcpStream) -> FsmState {
+        self.send_open(&mut stream).await;
+        FsmState::OpenSent(stream)
+    }
+
+    async fn on_active(&mut self, mut stream: TcpStream) -> FsmState {
+        let msg = Self::recv_msg(&mut stream).await;
+        let om =
+            match msg {
+                Message::Open(om) => om,
+                other => {
+                    warn!(self.log,
+                    "active: expected open message, received {:#?}, ignoring",
+                    other);
+                    return FsmState::Active(stream);
+                }
+            };
+        if !self.open_is_valid(om) {
+            return FsmState::Active(stream);
+        }
+        self.send_keepalive(&mut stream).await;
+        FsmState::OpenConfirm(stream)
+    }
+
+    async fn on_open_sent(&mut self, mut stream: TcpStream) -> FsmState {
+        let msg = Self::recv_msg(&mut stream).await;
+        let om =
+            match msg {
+                Message::Open(om) => om,
+                other => {
+                    warn!(self.log,
+                    "active: expected open message, received {:#?}, ignoring",
+                    other);
+                    return FsmState::Active(stream);
+                }
+            };
+        if !self.open_is_valid(om) {
+            return FsmState::Active(stream);
+        }
+        self.send_keepalive(&mut stream).await;
+        FsmState::OpenConfirm(stream)
+    }
+
+    fn open_is_valid(&self, _om: OpenMessage) -> bool {
+        //TODO
+        true
+    }
+
+    async fn send_keepalive(&self, stream: &mut TcpStream) {
+        let header = Header {
+            length: 0,
+            typ: MessageType::KeepAlive,
+        };
+        let header_buf = header.to_wire();
+        stream.write_all(&header_buf).await.unwrap();
+    }
+
+    async fn send_open(&self, stream: &mut TcpStream) {
         let msg = match self.asn {
-            Asn::FourOctet(asn) => crate::messages::OpenMessage::new4(
+            Asn::FourOctet(asn) => OpenMessage::new4(
                 asn,
                 self.hold_timer.period().as_secs() as u16,
                 self.id,
             ),
-            Asn::TwoOctet(asn) => crate::messages::OpenMessage::new2(
+            Asn::TwoOctet(asn) => OpenMessage::new2(
                 asn,
                 self.hold_timer.period().as_secs() as u16,
                 self.id,
             ),
         };
         let msg_buf = msg.to_wire().unwrap();
-        let header = crate::messages::Header {
+        let header = Header {
             length: msg_buf.len() as u16,
-            typ: crate::messages::MessageType::Notification,
+            typ: MessageType::Notification,
         };
         let header_buf = header.to_wire();
         stream.write_all(&header_buf).await.unwrap();
         stream.write_all(&msg_buf).await.unwrap();
-
-        FsmState::OpenSent(stream)
     }
 
-    async fn on_active(&mut self, stream: TcpStream) -> FsmState {
-        let _om = self.recv_open(stream);
-        todo!();
+    async fn on_open_confirm(&mut self, mut stream: TcpStream) -> FsmState {
+        let msg = Self::recv_msg(&mut stream).await;
+        match msg {
+            Message::KeepAlive => {
+                self.keepalive_timer.reset();
+                self.hold_timer.reset();
+                FsmState::Established(stream)
+            }
+            _other => todo!(),
+        }
     }
 
-    async fn on_open_sent(&mut self, stream: TcpStream) -> FsmState {
-        let _om = self.recv_open(stream);
-        todo!();
+    async fn on_established(&mut self, mut stream: TcpStream) -> FsmState {
+        tokio::select! {
+            _ = self.keepalive_timer.tick() => {
+                self.send_keepalive(&mut stream).await;
+                FsmState::Established(stream)
+            }
+            _ = self.hold_timer.tick() => {
+                self.session.lock().await.connect_retry_counter += 1;
+                FsmState::Idle
+            }
+            msg = Self::recv_msg(&mut stream) => {
+                match msg {
+                    Message::Open(m) => {
+                        warn!(self.log,
+                            "established: expected open message, \
+                            received {:#?}, ignoring",
+                            m);
+                        FsmState::Established(stream)
+                    }
+                    Message::Update(m) => {
+                        self.hold_timer.reset();
+                        info!(self.log, "update received: {:#?}", m);
+                        //TODO apply update
+                        FsmState::Established(stream)
+                    }
+                    Message::Notification(m) => {
+                        warn!(self.log, "notification received: {:#?}", m);
+                        FsmState::Idle
+                    }
+                    Message::KeepAlive => {
+                        self.hold_timer.reset();
+                        FsmState::Established(stream)
+                    }
+                }
+            }
+        }
     }
 }

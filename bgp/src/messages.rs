@@ -35,6 +35,32 @@ pub enum MessageType {
     KeepAlive = 4,
 }
 
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub enum Message {
+    Open(OpenMessage),
+    Update(UpdateMessage),
+    Notification(NotificationMessage),
+    KeepAlive,
+}
+
+impl From<OpenMessage> for Message {
+    fn from(m: OpenMessage) -> Message {
+        Message::Open(m)
+    }
+}
+
+impl From<UpdateMessage> for Message {
+    fn from(m: UpdateMessage) -> Message {
+        Message::Update(m)
+    }
+}
+
+impl From<NotificationMessage> for Message {
+    fn from(m: NotificationMessage) -> Message {
+        Message::Notification(m)
+    }
+}
+
 /// Each BGP message has a fixed sized header.
 ///
 /// ```text
@@ -130,7 +156,7 @@ pub const BGP4: u8 = 4;
 /// ```
 ///
 /// Ref: RFC 4271 §4.2
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct OpenMessage {
     /// BGP protocol version.
     pub version: u8,
@@ -282,7 +308,7 @@ pub struct Tlv {
 /// ```
 ///
 /// Ref: RFC 4271 §4.3
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct UpdateMessage {
     pub withdrawn: Vec<Prefix>,
     pub path_attributes: Vec<PathAttribute>,
@@ -390,7 +416,7 @@ impl UpdateMessage {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Prefix {
     pub value: Vec<u8>,
 }
@@ -417,7 +443,7 @@ impl Prefix {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct PathAttribute {
     pub typ: PathAttributeType,
     pub value: PathAttributeValue,
@@ -461,7 +487,7 @@ impl PathAttribute {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct PathAttributeType {
     pub flags: u8,
     pub type_code: PathAttributeTypeCode,
@@ -480,7 +506,7 @@ impl PathAttributeType {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 #[repr(u8)]
 pub enum PathAttributeFlags {
     Optional = 0b10000000,
@@ -520,7 +546,7 @@ pub enum PathAttributeTypeCode {
     As4Aggregator = 18,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PathAttributeValue {
     Origin(PathOrigin),
     AsPath(Vec<AsPathSegment>),
@@ -581,20 +607,20 @@ impl PathAttributeValue {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum PathOrigin {
     Igp = 0,
     Egp = 1,
     Incomplete = 2,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct AsPathSegment {
     pub typ: AsPathType,
     pub value: Vec<u16>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct As4PathSegment {
     pub typ: AsPathType,
     pub value: Vec<u32>,
@@ -646,11 +672,20 @@ pub enum AsPathType {
     AsSequence = 2,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct NotificationMessage {
     pub error_code: u8,
     pub error_subcode: u8,
     pub data: Vec<u8>,
+}
+
+impl NotificationMessage {
+    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+        todo!();
+    }
+    pub fn from_wire(_input: &[u8]) -> Result<NotificationMessage, Error> {
+        todo!();
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -696,7 +731,7 @@ pub enum UpdateErrorSubcode {
 }
 
 /// The IANA/IETF currently defines the following optional parameter types.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum OptionalParameter {
     /// Code 0
     Reserved,
@@ -765,7 +800,7 @@ impl OptionalParameter {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Capability {
     /// RFC 2858 TODO
     MultiprotocolExtensions {},
