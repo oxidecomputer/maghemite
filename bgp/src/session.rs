@@ -8,9 +8,6 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::{interval, Interval};
 
-pub struct SessionState {
-    pub fsm_state: FsmState,
-}
 
 #[derive(Debug)]
 pub enum FsmState {
@@ -30,19 +27,19 @@ pub enum FsmState {
     /// - DelayOpenTimerExpire -> OpenSent
     /// - TcpConnectionConfirmed -> OpenSent (unless delay_open = true)
     /// - BgpOpen -> OpenConfigm (only during delay_open interval)
-    Connect,
+    Connect(TcpStream),
 
     /// Trying to acquire peer by listening for and accepting a TCP connection.
-    Active,
+    Active(TcpStream),
 
     /// Waiting for open message from peer.
-    OpenSent,
+    OpenSent(TcpStream),
 
     /// Waiting for keepaliave or notification from peer.
-    OpenConfirm,
+    OpenConfirm(TcpStream),
 
     /// Able to exchange update, notification and keepliave messages with peers.
-    Established,
+    Established(TcpStream),
 }
 
 #[derive(Debug)]
@@ -146,8 +143,6 @@ pub enum FsmEvent {
 }
 
 pub struct Session {
-    pub session_state: SessionState,
-
     // Required Attributes
     /// Track how many times a connection has been attempted.
     pub connect_retry_counter: u64,
@@ -203,9 +198,6 @@ impl Session {
         delay_open_time: Duration,
     ) -> Arc<Mutex<Session>> {
         Arc::new(Mutex::new(Session {
-            session_state: SessionState {
-                fsm_state: FsmState::Idle,
-            },
             connect_retry_counter: 0,
             keepalive_timer: interval(keepalive_time),
             allow_automatic_start: false,
@@ -278,25 +270,34 @@ impl SessionRunner {
     }
 
     pub async fn start(&mut self) {
-        self.idle().await;
+        let mut next = FsmState::Idle;
+        loop {
+            next = match next {
+                FsmState::Idle => self.idle().await,
+                FsmState::Connect(stream) => self.on_connect(stream).await,
+                FsmState::Active(stream) => self.on_active(stream).await,
+                FsmState::OpenSent(stream) => self.on_open_sent(stream).await,
+                FsmState::OpenConfirm(_stream) => todo!(),
+                FsmState::Established(_stream) => todo!(),
+            };
+        }
     }
 
-    async fn idle(&mut self) {
-        loop {
-            match self.event_rx.recv().await {
-                None => continue,
-                Some(FsmEvent::ManualStart) => self.on_manual_start().await,
-                x => {
-                    warn!(
-                        self.log,
-                        "Event {:?} not allowed in idle, ignoring", x
-                    );
-                }
+    async fn idle(&mut self) -> FsmState {
+        match self.event_rx.recv().await {
+            None => FsmState::Idle,
+            Some(FsmEvent::ManualStart) => self.on_manual_start().await,
+            x => {
+                warn!(
+                    self.log,
+                    "Event {:?} not allowed in idle, ignoring", x
+                );
+                FsmState::Idle
             }
         }
     }
 
-    async fn on_manual_start(&mut self) {
+    async fn on_manual_start(&mut self) -> FsmState {
         self.session.lock().await.connect_retry_counter = 0;
 
         let listener = TcpListener::bind("0.0.0.0:179").await.unwrap();
@@ -304,11 +305,11 @@ impl SessionRunner {
         tokio::select! {
             _ = self.connect_retry_timer.tick() => {
                 let stream = TcpStream::connect(&self.peer).await.unwrap();
-                self.on_connect(stream).await;
+                FsmState::Connect(stream)
             }
             result = listener.accept() => {
                 let (stream, _) = result.unwrap();
-                self.on_active(stream).await;
+                FsmState::Active(stream)
             }
         }
     }
@@ -341,7 +342,7 @@ impl SessionRunner {
         }
     }
 
-    async fn on_connect(&mut self, mut stream: TcpStream) {
+    async fn on_connect(&mut self, mut stream: TcpStream) -> FsmState {
         let msg = match self.asn {
             Asn::FourOctet(asn) => crate::messages::OpenMessage::new4(
                 asn,
@@ -363,14 +364,16 @@ impl SessionRunner {
         stream.write_all(&header_buf).await.unwrap();
         stream.write_all(&msg_buf).await.unwrap();
 
-        self.on_open_sent(stream).await;
+        FsmState::OpenSent(stream)
     }
 
-    async fn on_active(&mut self, stream: TcpStream) {
+    async fn on_active(&mut self, stream: TcpStream) -> FsmState {
         let _om = self.recv_open(stream);
+        todo!();
     }
 
-    async fn on_open_sent(&mut self, stream: TcpStream) {
+    async fn on_open_sent(&mut self, stream: TcpStream) -> FsmState {
         let _om = self.recv_open(stream);
+        todo!();
     }
 }
