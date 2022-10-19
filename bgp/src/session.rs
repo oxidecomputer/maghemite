@@ -1,6 +1,10 @@
 use crate::state::BgpState;
+use slog::{warn, Logger};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::{interval, Interval};
 
@@ -8,6 +12,7 @@ pub struct SessionState {
     pub fsm_state: FsmState,
 }
 
+#[derive(Debug)]
 pub enum FsmState {
     /// Initial state. Refuse all incomming BGP connections. No resources
     /// allocated to peer.
@@ -40,6 +45,7 @@ pub enum FsmState {
     Established,
 }
 
+#[derive(Debug)]
 pub enum FsmEvent {
     /// Local system administrator manually starts the peer connection.
     ManualStart = 1,
@@ -140,19 +146,11 @@ pub enum FsmEvent {
 }
 
 pub struct Session {
-    pub bgp_state: Arc<Mutex<BgpState>>,
-    pub session_state: Arc<Mutex<SessionState>>,
+    pub session_state: SessionState,
 
     // Required Attributes
     /// Track how many times a connection has been attempted.
     pub connect_retry_counter: u64,
-
-    /// How long to wait between connection attempts.
-    pub connect_retry_timer: Interval,
-
-    /// How long to keep a session alive between keepalive, update and/or
-    /// notification messages.
-    pub hold_timer: Interval,
 
     /// How often to send out keepalive messages.
     pub keepalive_timer: Interval,
@@ -200,21 +198,15 @@ pub struct Session {
 
 impl Session {
     pub fn new(
-        bgp_state: Arc<Mutex<BgpState>>,
-        connect_retry_time: Duration,
-        hold_time: Duration,
         keepalive_time: Duration,
         idle_hold_time: Duration,
         delay_open_time: Duration,
-    ) -> Session {
-        Session {
-            bgp_state,
-            session_state: Arc::new(Mutex::new(SessionState {
+    ) -> Arc<Mutex<Session>> {
+        Arc::new(Mutex::new(Session {
+            session_state: SessionState {
                 fsm_state: FsmState::Idle,
-            })),
+            },
             connect_retry_counter: 0,
-            connect_retry_timer: interval(connect_retry_time),
-            hold_timer: interval(hold_time),
             keepalive_timer: interval(keepalive_time),
             allow_automatic_start: false,
             allow_automatic_restart: false,
@@ -228,6 +220,157 @@ impl Session {
             passive_tcp_establishment: false,
             send_notification_without_open: false,
             track_tcp_state: false,
+        }))
+    }
+}
+
+pub enum Asn {
+    TwoOctet(u16),
+    FourOctet(u32),
+}
+
+pub struct SessionRunner {
+    session: Arc<Mutex<Session>>,
+    event_rx: Receiver<FsmEvent>,
+    _event_tx: Sender<FsmEvent>,
+    _bgp_state: Arc<Mutex<BgpState>>,
+
+    /// How long to wait between connection attempts.
+    pub connect_retry_timer: Interval,
+
+    /// How long to keep a session alive between keepalive, update and/or
+    /// notification messages.
+    pub hold_timer: Interval,
+
+    peer: String,
+    asn: Asn,
+    id: u32,
+
+    log: Logger,
+}
+
+impl SessionRunner {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        connect_retry_time: Duration,
+        hold_time: Duration,
+        session: Arc<Mutex<Session>>,
+        event_rx: Receiver<FsmEvent>,
+        event_tx: Sender<FsmEvent>,
+        bgp_state: Arc<Mutex<BgpState>>,
+        peer: String,
+        asn: Asn,
+        id: u32,
+        log: Logger,
+    ) -> SessionRunner {
+        SessionRunner {
+            session,
+            event_rx,
+            _event_tx: event_tx,
+            _bgp_state: bgp_state,
+            peer,
+            connect_retry_timer: interval(connect_retry_time),
+            hold_timer: interval(hold_time),
+            asn,
+            id,
+            log,
         }
+    }
+
+    pub async fn start(&mut self) {
+        self.idle().await;
+    }
+
+    async fn idle(&mut self) {
+        loop {
+            match self.event_rx.recv().await {
+                None => continue,
+                Some(FsmEvent::ManualStart) => self.on_manual_start().await,
+                x => {
+                    warn!(
+                        self.log,
+                        "Event {:?} not allowed in idle, ignoring", x
+                    );
+                }
+            }
+        }
+    }
+
+    async fn on_manual_start(&mut self) {
+        self.session.lock().await.connect_retry_counter = 0;
+
+        let listener = TcpListener::bind("0.0.0.0:179").await.unwrap();
+
+        tokio::select! {
+            _ = self.connect_retry_timer.tick() => {
+                let stream = TcpStream::connect(&self.peer).await.unwrap();
+                self.on_connect(stream).await;
+            }
+            result = listener.accept() => {
+                let (stream, _) = result.unwrap();
+                self.on_active(stream).await;
+            }
+        }
+    }
+
+    async fn recv_open(
+        &mut self,
+        mut stream: TcpStream,
+    ) -> crate::messages::OpenMessage {
+        loop {
+            let mut buf = [0u8; 19];
+            stream.read_exact(&mut buf).await.unwrap();
+            let hdr = match crate::messages::Header::from_wire(&buf) {
+                Ok(h) => h,
+                Err(_) => continue,
+            };
+
+            if hdr.typ != crate::messages::MessageType::Open {
+                continue;
+            }
+
+            let mut msgbuf = vec![0u8; hdr.length as usize];
+            stream.read_exact(&mut msgbuf).await.unwrap();
+
+            let msg = match crate::messages::OpenMessage::from_wire(&msgbuf) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            return msg;
+        }
+    }
+
+    async fn on_connect(&mut self, mut stream: TcpStream) {
+        let msg = match self.asn {
+            Asn::FourOctet(asn) => crate::messages::OpenMessage::new4(
+                asn,
+                self.hold_timer.period().as_secs() as u16,
+                self.id,
+            ),
+            Asn::TwoOctet(asn) => crate::messages::OpenMessage::new2(
+                asn,
+                self.hold_timer.period().as_secs() as u16,
+                self.id,
+            ),
+        };
+        let msg_buf = msg.to_wire().unwrap();
+        let header = crate::messages::Header {
+            length: msg_buf.len() as u16,
+            typ: crate::messages::MessageType::Notification,
+        };
+        let header_buf = header.to_wire();
+        stream.write_all(&header_buf).await.unwrap();
+        stream.write_all(&msg_buf).await.unwrap();
+
+        self.on_open_sent(stream).await;
+    }
+
+    async fn on_active(&mut self, stream: TcpStream) {
+        let _om = self.recv_open(stream);
+    }
+
+    async fn on_open_sent(&mut self, stream: TcpStream) {
+        let _om = self.recv_open(stream);
     }
 }

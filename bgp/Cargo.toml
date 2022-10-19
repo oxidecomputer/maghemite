@@ -8,7 +8,7 @@ nom = "7.1.1"
 num_enum = "0.5.7"
 slog = "2.7.0"
 thiserror = "1.0.37"
-tokio = { version = "1.21.2", features = ["sync", "time"] }
+tokio = { version = "1.21.2", features = ["sync", "time", "rt", "net", "macros", "io-util"] }
 
 [dev-dependencies]
 pretty-hex = "0.3.0"
