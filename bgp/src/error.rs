@@ -51,13 +51,19 @@ pub enum Error {
     ErrorCode(#[from] TryFromPrimitiveError<crate::messages::ErrorCode>),
 
     #[error("Header error subcode")]
-    HeaderSubcode(#[from] TryFromPrimitiveError<crate::messages::HeaderErrorSubcode>),
+    HeaderSubcode(
+        #[from] TryFromPrimitiveError<crate::messages::HeaderErrorSubcode>,
+    ),
 
     #[error("Open error subcode")]
-    OpenSubcode(#[from] TryFromPrimitiveError<crate::messages::OpenErrorSubcode>),
+    OpenSubcode(
+        #[from] TryFromPrimitiveError<crate::messages::OpenErrorSubcode>,
+    ),
 
     #[error("Update error subcode")]
-    UpdateSubcode(#[from] TryFromPrimitiveError<crate::messages::UpdateErrorSubcode>),
+    UpdateSubcode(
+        #[from] TryFromPrimitiveError<crate::messages::UpdateErrorSubcode>,
+    ),
 
     #[error("message parse error")]
     Parse(nom::Err<(Vec<u8>, nom::error::ErrorKind)>),

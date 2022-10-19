@@ -772,17 +772,25 @@ impl NotificationMessage {
 
         let (input, error_subcode) = parse_u8(input)?;
         let error_subcode = match error_code {
-            ErrorCode::Header => HeaderErrorSubcode::try_from(error_subcode)?.into(),
-            ErrorCode::Open => OpenErrorSubcode::try_from(error_subcode)?.into(),
-            ErrorCode::Update => UpdateErrorSubcode::try_from(error_subcode)?.into(),
-            ErrorCode::HoldTimerExpired => ErrorSubcode::HoldTime(error_subcode),
+            ErrorCode::Header => {
+                HeaderErrorSubcode::try_from(error_subcode)?.into()
+            }
+            ErrorCode::Open => {
+                OpenErrorSubcode::try_from(error_subcode)?.into()
+            }
+            ErrorCode::Update => {
+                UpdateErrorSubcode::try_from(error_subcode)?.into()
+            }
+            ErrorCode::HoldTimerExpired => {
+                ErrorSubcode::HoldTime(error_subcode)
+            }
             ErrorCode::Fsm => ErrorSubcode::Fsm(error_subcode),
             ErrorCode::Cease => ErrorSubcode::Cease(error_subcode),
         };
-        Ok(NotificationMessage{
+        Ok(NotificationMessage {
             error_code,
             error_subcode,
-            data: input.to_owned()
+            data: input.to_owned(),
         })
     }
 }

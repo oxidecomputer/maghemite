@@ -6,3 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bgp = { version = "0.1.0", path = "../bgp" }
+clap = { version = "4.0.17", features = ["derive"] }
+slog = "2.7.0"
+slog-async = "2.7.0"
+slog-envlogger = "2.2.0"
+slog-term = "2.9.0"
+tokio = { version = "1.21.2", features = ["rt-multi-thread"] }

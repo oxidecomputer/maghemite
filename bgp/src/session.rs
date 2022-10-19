@@ -445,7 +445,14 @@ impl SessionRunner {
                 self.hold_timer.reset();
                 FsmState::Established(stream)
             }
-            _other => todo!(),
+            other => {
+                warn!(
+                    self.log,
+                    "Message {:?} not expected in open confirm, ignoring",
+                    other
+                );
+                FsmState::OpenConfirm(stream)
+            }
         }
     }
 
