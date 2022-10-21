@@ -9,11 +9,14 @@ use tokio::sync::Mutex;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
-struct Args {}
+struct Args {
+    /// Peer to connect to <addr>:<port>
+    peer: String,
+}
 
 #[tokio::main]
 async fn main() {
-    let _args = Args::parse();
+    let args = Args::parse();
 
     //XXX just hacking in a session for now
 
@@ -37,8 +40,9 @@ async fn main() {
         to_session_rx,
         from_session_tx,
         bgp_state,
-        "10.10.0.1::179".to_owned(),
-        Asn::FourOctet(395849),
+        args.peer,
+        //Asn::FourOctet(395849),
+        Asn::FourOctet(47),
         0x1de,
         log.clone(),
     );

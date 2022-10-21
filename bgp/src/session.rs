@@ -3,7 +3,7 @@ use crate::messages::{
     UpdateMessage,
 };
 use crate::state::BgpState;
-use slog::{info, warn, Logger};
+use slog::{error, info, warn, Logger};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -293,7 +293,7 @@ impl SessionRunner {
     async fn idle(&mut self) -> FsmState {
         match self.event_rx.recv().await {
             None => FsmState::Idle,
-            Some(FsmEvent::ManualStart) => self.on_manual_start().await,
+            Some(FsmEvent::ManualStart) => self.on_start().await,
             x => {
                 warn!(self.log, "Event {:?} not allowed in idle, ignoring", x);
                 FsmState::Idle
@@ -301,7 +301,7 @@ impl SessionRunner {
         }
     }
 
-    async fn on_manual_start(&mut self) -> FsmState {
+    async fn on_start(&mut self) -> FsmState {
         self.session.lock().await.connect_retry_counter = 0;
 
         let listener = TcpListener::bind("0.0.0.0:179").await.unwrap();
@@ -318,42 +318,57 @@ impl SessionRunner {
         }
     }
 
-    async fn recv_header(stream: &mut TcpStream) -> Header {
+    async fn recv_header(stream: &mut TcpStream) -> std::io::Result<Header> {
+        let mut buf = [0u8; 19];
+        let mut i = 0;
         loop {
-            let mut buf = [0u8; 19];
-            stream.read_exact(&mut buf).await.unwrap();
+            stream.readable().await?;
+            //stream.read_exact(&mut buf).await?;
+            let n = stream.try_read(&mut buf[i..])?;
+            i += n;
+            if i < 19 {
+                if i > 0 {
+                    println!("i={}", i);
+                }
+                continue;
+            }
             match Header::from_wire(&buf) {
-                Ok(h) => return h,
+                Ok(h) => return Ok(h),
                 Err(_) => continue,
             };
         }
     }
 
-    async fn recv_msg(stream: &mut TcpStream) -> Message {
+    async fn recv_msg(stream: &mut TcpStream) -> std::io::Result<Message> {
         loop {
-            let hdr = Self::recv_header(stream).await;
-            let mut msgbuf = vec![0u8; hdr.length as usize];
+            let hdr = Self::recv_header(stream).await?;
+            println!("HDR: {:#?}", hdr);
+
+            let mut msgbuf = vec![0u8; (hdr.length - 19) as usize];
             stream.read_exact(&mut msgbuf).await.unwrap();
 
-            match hdr.typ {
+            let msg = match hdr.typ {
                 MessageType::Open => match OpenMessage::from_wire(&msgbuf) {
-                    Ok(m) => return m.into(),
+                    Ok(m) => m.into(),
                     Err(_) => continue,
                 },
                 MessageType::Update => {
                     match UpdateMessage::from_wire(&msgbuf) {
-                        Ok(m) => return m.into(),
+                        Ok(m) => m.into(),
                         Err(_) => continue,
                     }
                 }
                 MessageType::Notification => {
                     match NotificationMessage::from_wire(&msgbuf) {
-                        Ok(m) => return m.into(),
+                        Ok(m) => m.into(),
                         Err(_) => continue,
                     }
                 }
-                MessageType::KeepAlive => return Message::KeepAlive,
+                MessageType::KeepAlive => return Ok(Message::KeepAlive),
             };
+
+            println!("MSG: {:#?}", msg);
+            return Ok(msg);
         }
     }
 
@@ -366,7 +381,15 @@ impl SessionRunner {
         let msg = Self::recv_msg(&mut stream).await;
         let om =
             match msg {
-                Message::Open(om) => om,
+                Ok(Message::Open(om)) => om,
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        return FsmState::Active(stream);
+                    } else {
+                        error!(self.log, "on active recv: {:#?}", e);
+                        return self.on_start().await;
+                    }
+                }
                 other => {
                     warn!(self.log,
                     "active: expected open message, received {:#?}, ignoring",
@@ -383,16 +406,24 @@ impl SessionRunner {
 
     async fn on_open_sent(&mut self, mut stream: TcpStream) -> FsmState {
         let msg = Self::recv_msg(&mut stream).await;
-        let om =
-            match msg {
-                Message::Open(om) => om,
-                other => {
-                    warn!(self.log,
-                    "active: expected open message, received {:#?}, ignoring",
-                    other);
-                    return FsmState::Active(stream);
+        let om = match msg {
+            Ok(Message::Open(om)) => om,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    return FsmState::OpenSent(stream);
+                } else {
+                    error!(self.log, "on open sent recv: {:#?}", e);
+                    return self.on_start().await;
                 }
-            };
+            }
+            other => {
+                warn!(
+                    self.log,
+                    "open sent: expected open, received {:#?}, ignoring", other
+                );
+                return FsmState::Active(stream);
+            }
+        };
         if !self.open_is_valid(om) {
             return FsmState::Active(stream);
         }
@@ -407,7 +438,7 @@ impl SessionRunner {
 
     async fn send_keepalive(&self, stream: &mut TcpStream) {
         let header = Header {
-            length: 0,
+            length: 19,
             typ: MessageType::KeepAlive,
         };
         let header_buf = header.to_wire();
@@ -429,18 +460,21 @@ impl SessionRunner {
         };
         let msg_buf = msg.to_wire().unwrap();
         let header = Header {
-            length: msg_buf.len() as u16,
-            typ: MessageType::Notification,
+            length: msg_buf.len() as u16 + 19,
+            typ: MessageType::Open,
         };
-        let header_buf = header.to_wire();
+        let mut header_buf = header.to_wire().to_vec();
+        header_buf.extend_from_slice(&msg_buf);
+        stream.writable().await.unwrap();
         stream.write_all(&header_buf).await.unwrap();
-        stream.write_all(&msg_buf).await.unwrap();
+        //stream.write_all(&header_buf).await.unwrap();
+        //stream.write_all(&msg_buf).await.unwrap();
     }
 
     async fn on_open_confirm(&mut self, mut stream: TcpStream) -> FsmState {
         let msg = Self::recv_msg(&mut stream).await;
         match msg {
-            Message::KeepAlive => {
+            Ok(Message::KeepAlive) => {
                 self.keepalive_timer.reset();
                 self.hold_timer.reset();
                 FsmState::Established(stream)
@@ -468,25 +502,29 @@ impl SessionRunner {
             }
             msg = Self::recv_msg(&mut stream) => {
                 match msg {
-                    Message::Open(m) => {
+                    Ok(Message::Open(m)) => {
                         warn!(self.log,
                             "established: expected open message, \
                             received {:#?}, ignoring",
                             m);
                         FsmState::Established(stream)
                     }
-                    Message::Update(m) => {
+                    Ok(Message::Update(m)) => {
                         self.hold_timer.reset();
                         info!(self.log, "update received: {:#?}", m);
                         //TODO apply update
                         FsmState::Established(stream)
                     }
-                    Message::Notification(m) => {
+                    Ok(Message::Notification(m)) => {
                         warn!(self.log, "notification received: {:#?}", m);
                         FsmState::Idle
                     }
-                    Message::KeepAlive => {
+                    Ok(Message::KeepAlive) => {
                         self.hold_timer.reset();
+                        FsmState::Established(stream)
+                    }
+                    Err(e) => {
+                        error!(self.log, "recv msg {:#?}", e);
                         FsmState::Established(stream)
                     }
                 }

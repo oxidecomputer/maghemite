@@ -95,7 +95,7 @@ pub struct Header {
 }
 
 /// According to RFC 4271 §4.1 the header marker is all ones.
-const MARKER: [u8; 16] = [1u8; 16];
+const MARKER: [u8; 16] = [0xFFu8; 16];
 
 impl Header {
     /// Create a new BGP message header. Length must be between 19 and 4096 per
@@ -112,7 +112,7 @@ impl Header {
 
     /// Serialize the header to wire format.
     pub fn to_wire(&self) -> Vec<u8> {
-        let mut buf = vec![1u8; 16];
+        let mut buf = MARKER.to_vec();
         buf.extend_from_slice(&self.length.to_be_bytes());
         buf.push(self.typ as u8);
         buf
@@ -798,7 +798,7 @@ impl NotificationMessage {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
 #[repr(u8)]
 pub enum ErrorCode {
-    Header,
+    Header = 1,
     Open,
     Update,
     HoldTimerExpired,
@@ -850,7 +850,7 @@ impl ErrorSubcode {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
 #[repr(u8)]
 pub enum HeaderErrorSubcode {
-    ConnectionNotSynchronized,
+    ConnectionNotSynchronized = 1,
     BadMessageLength,
     BadMessageType,
 }
@@ -858,7 +858,7 @@ pub enum HeaderErrorSubcode {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
 #[repr(u8)]
 pub enum OpenErrorSubcode {
-    UnsupportedVersionNumber,
+    UnsupportedVersionNumber = 1,
     BadPeerAS,
     BadBgpIdentifier,
     UnsupportedOptionalParameter,
@@ -869,7 +869,7 @@ pub enum OpenErrorSubcode {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
 #[repr(u8)]
 pub enum UpdateErrorSubcode {
-    MalformedAttributeList,
+    MalformedAttributeList = 1,
     UnrecognizedWellKnownAttribute,
     MissingWellKnownAttribute,
     AttributeFlags,
@@ -1082,13 +1082,20 @@ impl Capability {
         let (input, code) = parse_u8(input)?;
         let code = CapabilityCode::try_from(code)?;
         let (input, len) = parse_u8(input)?;
-        if input.len() < len as usize {
+        let len = len as usize;
+        if input.len() < len {
             return Err(Error::Eom);
         }
 
         match code {
-            CapabilityCode::MultiprotocolExtensions => todo!(),
-            CapabilityCode::RouteRefresh => todo!(),
+            CapabilityCode::MultiprotocolExtensions => {
+                //TODO
+                Ok((&input[len..], Capability::MultiprotocolExtensions {}))
+            }
+            CapabilityCode::RouteRefresh => {
+                //TODO
+                Ok((&input[len..], Capability::RouteRefresh {}))
+            }
             CapabilityCode::OutboundRouteFiltering => todo!(),
             CapabilityCode::MultipleRoutesToDestination => todo!(),
             CapabilityCode::ExtendedNextHopEncoding => todo!(),
@@ -1096,14 +1103,20 @@ impl Capability {
             CapabilityCode::BgpSec => todo!(),
             CapabilityCode::MultipleLabels => todo!(),
             CapabilityCode::BgpRole => todo!(),
-            CapabilityCode::GracefulRestart => todo!(),
+            CapabilityCode::GracefulRestart => {
+                //TODO
+                Ok((&input[len..], Capability::GracefulRestart {}))
+            }
             CapabilityCode::FourOctetAs => {
                 let (input, asn) = be_u32(input)?;
                 Ok((input, Capability::FourOctetAs { asn }))
             }
             CapabilityCode::DynamicCapability => todo!(),
             CapabilityCode::MultisessionBgp => todo!(),
-            CapabilityCode::AddPath => todo!(),
+            CapabilityCode::AddPath => {
+                //TODO
+                Ok((&input[len..], Capability::AddPath {}))
+            }
             CapabilityCode::EnhancedRouteRefresh => todo!(),
             CapabilityCode::LongLivedGracefulRestart => todo!(),
             CapabilityCode::RoutingPolicyDistribution => todo!(),
