@@ -196,7 +196,9 @@ impl OpenMessage {
             asn: AS_TRANS,
             hold_time,
             id,
-            parameters: vec![Capability::FourOctetAs { asn }.into()],
+            parameters: vec![OptionalParameter::Capabilities(vec![
+                Capability::FourOctetAs { asn },
+            ])],
         }
     }
 
@@ -892,7 +894,7 @@ pub enum OptionalParameter {
     Authentication, //TODO
 
     /// Code 2: RFC 5492
-    Capability(Capability),
+    Capabilities(Vec<Capability>),
 
     Unassigned,
 
@@ -905,15 +907,17 @@ pub enum OptionalParameter {
 pub enum OptionalParameterCode {
     Reserved = 0,
     Authentication = 1,
-    Capability = 2,
+    Capabilities = 2,
     ExtendedLength = 255,
 }
 
+/* XXX
 impl From<Capability> for OptionalParameter {
     fn from(c: Capability) -> OptionalParameter {
         OptionalParameter::Capability(c)
     }
 }
+*/
 
 impl OptionalParameter {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
@@ -921,11 +925,13 @@ impl OptionalParameter {
             Self::Reserved => Err(Error::Reserved),
             Self::Unassigned => Err(Error::Unassigned(0)),
             Self::Authentication => todo!(),
-            Self::Capability(c) => {
-                let mut buf = vec![OptionalParameterCode::Capability as u8];
-                let cbuf = c.to_wire()?;
-                buf.push(cbuf.len() as u8);
-                buf.extend_from_slice(&cbuf);
+            Self::Capabilities(cs) => {
+                let mut buf = vec![OptionalParameterCode::Capabilities as u8];
+                for c in cs {
+                    let cbuf = c.to_wire()?;
+                    buf.push(cbuf.len() as u8);
+                    buf.extend_from_slice(&cbuf);
+                }
                 Ok(buf)
             }
             Self::ExtendedLength => todo!(),
@@ -938,14 +944,19 @@ impl OptionalParameter {
         let (input, code) = parse_u8(input)?;
         let code = OptionalParameterCode::try_from(code)?;
         let (input, len) = parse_u8(input)?;
-        let (input, capability_input) = take(len)(input)?;
+        let (input, mut cap_input) = take(len)(input)?;
 
         match code {
             OptionalParameterCode::Reserved => Err(Error::Reserved),
             OptionalParameterCode::Authentication => todo!(),
-            OptionalParameterCode::Capability => {
-                let (_, cap) = Capability::from_wire(capability_input)?;
-                Ok((input, cap.into()))
+            OptionalParameterCode::Capabilities => {
+                let mut result = Vec::new();
+                while !cap_input.is_empty() {
+                    let (out, cap) = Capability::from_wire(cap_input)?;
+                    result.push(cap);
+                    cap_input = out;
+                }
+                Ok((input, OptionalParameter::Capabilities(result)))
             }
             OptionalParameterCode::ExtendedLength => todo!(),
         }
@@ -1336,7 +1347,8 @@ mod tests {
         assert_eq!(
             buf,
             vec![
-                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // marker
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // marker
                 0x17, 0x01, // length
                 3,    // type
             ]

@@ -3,7 +3,7 @@ use crate::messages::{
     UpdateMessage,
 };
 use crate::state::BgpState;
-use slog::{error, info, warn, Logger};
+use slog::{debug, error, info, warn, Logger};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -43,6 +43,19 @@ pub enum FsmState {
 
     /// Able to exchange update, notification and keepliave messages with peers.
     Established(TcpStream),
+}
+
+impl std::fmt::Display for FsmState {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            FsmState::Idle => write!(f, "idle"),
+            FsmState::Connect(_) => write!(f, "connect"),
+            FsmState::Active(_) => write!(f, "active"),
+            FsmState::OpenSent(_) => write!(f, "open sent"),
+            FsmState::OpenConfirm(_) => write!(f, "open confirm"),
+            FsmState::Established(_) => write!(f, "established"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -154,9 +167,6 @@ pub struct Session {
     /// Start the peer session automatically.
     pub allow_automatic_start: bool,
 
-    /// Restart the peer session automatically.
-    pub allow_automatic_restart: bool,
-
     /// Stop the peer automatically under certain conditions.
     /// TODO: list conditions
     pub allow_automatic_stop: bool,
@@ -199,7 +209,6 @@ impl Session {
         Arc::new(Mutex::new(Session {
             connect_retry_counter: 0,
             allow_automatic_start: false,
-            allow_automatic_restart: false,
             allow_automatic_stop: false,
             damp_peer_oscillations: false,
             idle_hold_timer: interval(idle_hold_time),
@@ -239,6 +248,8 @@ pub struct SessionRunner {
     asn: Asn,
     id: u32,
 
+    listen: String,
+
     log: Logger,
 }
 
@@ -255,6 +266,7 @@ impl SessionRunner {
         peer: String,
         asn: Asn,
         id: u32,
+        listen: String,
         log: Logger,
     ) -> SessionRunner {
         SessionRunner {
@@ -268,6 +280,7 @@ impl SessionRunner {
             hold_timer: interval(hold_time),
             asn,
             id,
+            listen,
             log,
         }
     }
@@ -275,16 +288,47 @@ impl SessionRunner {
     pub async fn start(&mut self) {
         let mut next = FsmState::Idle;
         loop {
-            next = match next {
-                FsmState::Idle => self.idle().await,
-                FsmState::Connect(stream) => self.on_connect(stream).await,
-                FsmState::Active(stream) => self.on_active(stream).await,
-                FsmState::OpenSent(stream) => self.on_open_sent(stream).await,
-                FsmState::OpenConfirm(stream) => {
-                    self.on_open_confirm(stream).await
+            match next {
+                FsmState::Idle => {
+                    next = self.idle().await;
+                    if !matches!(next, FsmState::Idle) {
+                        info!(self.log, "transition idle => {}", next);
+                    }
                 }
+
+                FsmState::Connect(stream) => {
+                    next = self.on_connect(stream).await;
+                    if !matches!(next, FsmState::Connect(_)) {
+                        info!(self.log, "transition connect => {}", next);
+                    }
+                }
+
+                FsmState::Active(stream) => {
+                    next = self.on_active(stream).await;
+                    if !matches!(next, FsmState::Active(_)) {
+                        info!(self.log, "transition active => {}", next);
+                    }
+                }
+
+                FsmState::OpenSent(stream) => {
+                    next = self.on_open_sent(stream).await;
+                    if !matches!(next, FsmState::OpenSent(_)) {
+                        info!(self.log, "transition open sent => {}", next);
+                    }
+                }
+
+                FsmState::OpenConfirm(stream) => {
+                    next = self.on_open_confirm(stream).await;
+                    if !matches!(next, FsmState::OpenConfirm(_)) {
+                        info!(self.log, "transition open confirm => {}", next);
+                    }
+                }
+
                 FsmState::Established(stream) => {
-                    self.on_established(stream).await
+                    next = self.on_established(stream).await;
+                    if !matches!(next, FsmState::Established(_)) {
+                        info!(self.log, "transition established => {}", next);
+                    }
                 }
             };
         }
@@ -304,7 +348,7 @@ impl SessionRunner {
     async fn on_start(&mut self) -> FsmState {
         self.session.lock().await.connect_retry_counter = 0;
 
-        let listener = TcpListener::bind("0.0.0.0:179").await.unwrap();
+        let listener = TcpListener::bind(&self.listen).await.unwrap();
 
         tokio::select! {
             _ = self.connect_retry_timer.tick() => {
@@ -327,9 +371,6 @@ impl SessionRunner {
             let n = stream.try_read(&mut buf[i..])?;
             i += n;
             if i < 19 {
-                if i > 0 {
-                    println!("i={}", i);
-                }
                 continue;
             }
             match Header::from_wire(&buf) {
@@ -339,10 +380,13 @@ impl SessionRunner {
         }
     }
 
-    async fn recv_msg(stream: &mut TcpStream) -> std::io::Result<Message> {
+    async fn recv_msg(
+        stream: &mut TcpStream,
+        log: &Logger,
+    ) -> std::io::Result<Message> {
         loop {
             let hdr = Self::recv_header(stream).await?;
-            println!("HDR: {:#?}", hdr);
+            debug!(log, "Header: {:#?}", hdr);
 
             let mut msgbuf = vec![0u8; (hdr.length - 19) as usize];
             stream.read_exact(&mut msgbuf).await.unwrap();
@@ -367,7 +411,7 @@ impl SessionRunner {
                 MessageType::KeepAlive => return Ok(Message::KeepAlive),
             };
 
-            println!("MSG: {:#?}", msg);
+            debug!(log, "Message: {:#?}", msg);
             return Ok(msg);
         }
     }
@@ -378,7 +422,7 @@ impl SessionRunner {
     }
 
     async fn on_active(&mut self, mut stream: TcpStream) -> FsmState {
-        let msg = Self::recv_msg(&mut stream).await;
+        let msg = Self::recv_msg(&mut stream, &self.log).await;
         let om =
             match msg {
                 Ok(Message::Open(om)) => om,
@@ -405,7 +449,7 @@ impl SessionRunner {
     }
 
     async fn on_open_sent(&mut self, mut stream: TcpStream) -> FsmState {
-        let msg = Self::recv_msg(&mut stream).await;
+        let msg = Self::recv_msg(&mut stream, &self.log).await;
         let om = match msg {
             Ok(Message::Open(om)) => om,
             Err(e) => {
@@ -467,17 +511,26 @@ impl SessionRunner {
         header_buf.extend_from_slice(&msg_buf);
         stream.writable().await.unwrap();
         stream.write_all(&header_buf).await.unwrap();
-        //stream.write_all(&header_buf).await.unwrap();
-        //stream.write_all(&msg_buf).await.unwrap();
     }
 
     async fn on_open_confirm(&mut self, mut stream: TcpStream) -> FsmState {
-        let msg = Self::recv_msg(&mut stream).await;
+        let msg = Self::recv_msg(&mut stream, &self.log).await;
         match msg {
             Ok(Message::KeepAlive) => {
                 self.keepalive_timer.reset();
                 self.hold_timer.reset();
                 FsmState::Established(stream)
+            }
+            Ok(Message::Notification(m)) => {
+                warn!(self.log, "notification received: {:#?}", m);
+                self.session.lock().await.connect_retry_counter += 1;
+                self.on_start().await
+            }
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    error!(self.log, "on open confirm: {:#?}", e);
+                }
+                FsmState::OpenConfirm(stream)
             }
             other => {
                 warn!(
@@ -498,9 +551,9 @@ impl SessionRunner {
             }
             _ = self.hold_timer.tick() => {
                 self.session.lock().await.connect_retry_counter += 1;
-                FsmState::Idle
+                self.on_start().await
             }
-            msg = Self::recv_msg(&mut stream) => {
+            msg = Self::recv_msg(&mut stream, &self.log) => {
                 match msg {
                     Ok(Message::Open(m)) => {
                         warn!(self.log,
@@ -517,14 +570,17 @@ impl SessionRunner {
                     }
                     Ok(Message::Notification(m)) => {
                         warn!(self.log, "notification received: {:#?}", m);
-                        FsmState::Idle
+                        self.session.lock().await.connect_retry_counter += 1;
+                        self.on_start().await
                     }
                     Ok(Message::KeepAlive) => {
                         self.hold_timer.reset();
                         FsmState::Established(stream)
                     }
                     Err(e) => {
-                        error!(self.log, "recv msg {:#?}", e);
+                        if e.kind() != std::io::ErrorKind::WouldBlock {
+                            error!(self.log, "recv msg {:#?}", e);
+                        }
                         FsmState::Established(stream)
                     }
                 }

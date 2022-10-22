@@ -12,6 +12,10 @@ use tokio::sync::Mutex;
 struct Args {
     /// Peer to connect to <addr>:<port>
     peer: String,
+
+    /// Listening address <addr>:<port>
+    #[arg(short, long, default_value = "0.0.0.0:179")]
+    listen: String,
 }
 
 #[tokio::main]
@@ -44,6 +48,7 @@ async fn main() {
         //Asn::FourOctet(395849),
         Asn::FourOctet(47),
         0x1de,
+        "0.0.0.0:179".to_string(),
         log.clone(),
     );
 
