@@ -8,6 +8,10 @@ edition = "2021"
 [dependencies]
 bgp = { version = "0.1.0", path = "../bgp" }
 clap = { version = "4.0.17", features = ["derive"] }
+colored = "2.0.0"
+dropshot = "0.8.0"
+schemars = "0.8.11"
+serde = { version = "1.0.147", features = ["derive"] }
 slog = "2.7.0"
 slog-async = "2.7.0"
 slog-envlogger = "2.2.0"
