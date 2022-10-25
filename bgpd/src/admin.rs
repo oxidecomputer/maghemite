@@ -24,9 +24,10 @@ const EVENT_CHANNEL_SIZE: usize = 64;
 pub struct HandlerContext { 
     config: RouterConfig,
     dispatcher: Arc<Dispatcher>,
+    log: Logger,
 }
 
-#[derive(Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct AddNeighborRequest {
     pub name: String,
     pub host: SocketAddr,
@@ -41,8 +42,10 @@ async fn add_neighbor(
     ctx: Arc<RequestContext<HandlerContext>>,
     request: TypedBody<AddNeighborRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let log = ctx.log.clone();
+    let log = ctx.context().log.clone();
     let rq = request.into_inner();
+
+    info!(log, "add neighbor: {:#?}", rq);
 
     tokio::spawn(async move {
         run_session(rq, ctx.context(), log).await;
@@ -51,7 +54,11 @@ async fn add_neighbor(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-async fn run_session(rq: AddNeighborRequest, ctx: &HandlerContext, log: Logger) {
+async fn run_session(
+    rq: AddNeighborRequest,
+    ctx: &HandlerContext,
+    log: Logger,
+) {
 
     let session = Session::new(
         Duration::from_secs(rq.hold_time),
@@ -164,10 +171,9 @@ pub fn start_server(
     .to_logger("admin")
     .map_err(|e| e.to_string())?;
 
-    let mut api = ApiDescription::new();
-    api.register(add_neighbor).unwrap();
+    let api = api_description();
 
-    let context = HandlerContext{ config, dispatcher };
+    let context = HandlerContext{ config, dispatcher, log: log.clone() };
 
     let server = HttpServerStarter::new(&ds_config, api, context, &ds_log)
         .map_err(|e| format!("new admin dropshot: {}", e))?;
@@ -181,4 +187,10 @@ pub fn start_server(
             Err(e) => error!(log, "admin: server start error {:?}", e),
         }
     }))
+}
+
+pub fn api_description() -> ApiDescription<HandlerContext> {
+    let mut api = ApiDescription::new();
+    api.register(add_neighbor).unwrap();
+    api
 }

@@ -1,6 +1,8 @@
+use std::fs::File;
+use crate::admin::api_description;
 use bgp::session::Asn;
 use bgp::router::Dispatcher;
-use clap::Parser;
+use clap::{Parser, Subcommand, Args};
 use slog::{Drain, Logger};
 use std::net::Ipv6Addr;
 use crate::admin::RouterConfig;
@@ -10,7 +12,21 @@ mod admin;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Commands
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands{
+    /// Run a BGP router instance.
+    Run(Run),
+    /// Generate the OpenAPI spec for this router.
+    Apigen,
+}
+
+#[derive(Args, Debug)]
+struct Run {
     /// Autonomous system number for this router
     asn: u32,
 
@@ -24,9 +40,23 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    let args = Args::parse();
+    let args = Cli::parse();
+    match args.command {
+        Commands::Run(r) => run(r).await,
+        Commands::Apigen => apigen().await,
+    }
+}
 
-    let disp = Arc::new(Dispatcher::new(args.listen));
+async fn apigen() {
+    let api = api_description();
+    let openapi = api.openapi("BGP Admin", "v0.1.0");
+    let mut out = File::create("bgp-admin.json").unwrap();
+    openapi.write(&mut out).unwrap();
+}
+
+async fn run(run: Run) {
+
+    let disp = Arc::new(Dispatcher::new(run.listen));
     let d = disp.clone();
     tokio::spawn(async move {
         d.run().await;
@@ -37,8 +67,8 @@ async fn main() {
         Ipv6Addr::UNSPECIFIED,
         8000,
         RouterConfig {
-            asn: Asn::FourOctet(args.asn),
-            id: args.id,
+            asn: Asn::FourOctet(run.asn),
+            id: run.id,
         },
         disp,
     );

@@ -23,6 +23,8 @@ members = [
     "tests",
     "bgp",
     "bgpd",
+    "bgp-admin-client",
+    "bgpadm",
 ]
 
 [workspace.dependencies]

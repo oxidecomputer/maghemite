@@ -1,0 +1,109 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "BGP Admin",
+    "version": "v0.1.0"
+  },
+  "paths": {
+    "/neighbor": {
+      "post": {
+        "operationId": "add_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddNeighborRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "Error": {
+        "description": "Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AddNeighborRequest": {
+        "type": "object",
+        "properties": {
+          "connect_retry": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "delay_open": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "host": {
+            "type": "string"
+          },
+          "keepalive": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "connect_retry",
+          "delay_open",
+          "hold_time",
+          "host",
+          "keepalive",
+          "name"
+        ]
+      },
+      "Error": {
+        "description": "Error information from a response.",
+        "type": "object",
+        "properties": {
+          "error_code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "request_id"
+        ]
+      }
+    }
+  }
+}
