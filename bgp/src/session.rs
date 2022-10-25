@@ -406,7 +406,8 @@ impl SessionRunner {
                 }
                 result = self.event_rx.recv() => {
                     match result.unwrap() {
-                        FsmEvent::Connected(stream) => return FsmState::Active(stream),
+                        FsmEvent::Connected(stream) =>
+                            return FsmState::Active(stream),
                         _ => continue,
                     }
                 }
@@ -615,7 +616,9 @@ impl SessionRunner {
                     Ok(Message::Update(m)) => {
                         self.hold_timer.reset();
                         info!(self.log, "update received: {:#?}", m);
+
                         //TODO apply update
+                        
                         FsmState::Established(stream)
                     }
                     Ok(Message::Notification(m)) => {
