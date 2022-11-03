@@ -206,8 +206,8 @@ impl Default for Config {
         Config {
             name: String::new(),
             interfaces: Vec::new(),
-            discovery_interval: 100,
-            peer_interval: 50,
+            discovery_interval: 250,
+            peer_interval: 250,
             peer_expire: 3000,
             peer_port: 0x1dd0,
             rpx_port: 0x1dd1,

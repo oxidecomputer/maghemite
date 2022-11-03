@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 icmpv6 = { path = "../icmpv6" }
-libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "siocgnds" }
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys", rev = "7365f153a5597d6b2c307eea72201da973224b22" }
+#libnet = { path = "/home/ry/src/netadm-sys/libnet" }
 tokio = { version = "1.21", features = ["full"] }
 socket2 = { version = "0.4", features = ["all"] }
 anyhow = "1"
@@ -23,11 +24,13 @@ hyper = { version = "0.14.20", features = ["full"] }
 futures = "0.3.24"
 
 [dependencies.dpd-api]
-git = "https://github.com/oxidecomputer/dendrite"
+#git = "https://github.com/oxidecomputer/dendrite"
+#branch = "softnpu"
+path = "/home/ry/src/dendrite/dpd-api"
 package = "dpd-api"
-branch = "softnpu"
 
 [dependencies.dendrite-common]
-git = "https://github.com/oxidecomputer/dendrite"
+#git = "https://github.com/oxidecomputer/dendrite"
+#branch = "softnpu"
+path = "/home/ry/src/dendrite/common"
 package = "common"
-branch = "softnpu"
