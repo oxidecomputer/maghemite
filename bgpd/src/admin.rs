@@ -1,27 +1,27 @@
-use std::sync::Arc;
-use colored::*;
-use tokio::sync::Mutex;
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
-use schemars::JsonSchema;
-use dropshot::{
-    HttpResponseUpdatedNoContent, TypedBody, HttpError, RequestContext,
-    endpoint, ConfigDropshot, ApiDescription, HttpServerStarter, ConfigLogging,
-    ConfigLoggingLevel,
-};
-use bgp::session::{Asn, FsmEvent, Session, SessionRunner, NeighborInfo};
 use bgp::messages::Message;
 use bgp::router::Dispatcher;
+use bgp::session::{Asn, FsmEvent, NeighborInfo, Session, SessionRunner};
 use bgp::state::BgpState;
-use tokio::sync::mpsc::channel;
-use slog::{debug, warn, error, info, Logger};
+use colored::*;
+use dropshot::{
+    endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
+    ConfigLoggingLevel, HttpError, HttpResponseUpdatedNoContent,
+    HttpServerStarter, RequestContext, TypedBody,
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use slog::{debug, error, info, warn, Logger};
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
-use tokio::task::JoinHandle;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::spawn;
+use tokio::sync::mpsc::channel;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 const EVENT_CHANNEL_SIZE: usize = 64;
 
-pub struct HandlerContext { 
+pub struct HandlerContext {
     config: RouterConfig,
     dispatcher: Arc<Dispatcher>,
     log: Logger,
@@ -59,7 +59,6 @@ async fn run_session(
     ctx: &HandlerContext,
     log: Logger,
 ) {
-
     let session = Session::new(
         Duration::from_secs(rq.hold_time),
         Duration::from_secs(rq.delay_open),
@@ -68,10 +67,11 @@ async fn run_session(
     let (to_session_tx, to_session_rx) = channel(EVENT_CHANNEL_SIZE);
     let (from_session_tx, from_session_rx) = channel(EVENT_CHANNEL_SIZE);
 
-    ctx.dispatcher.addr_to_session.lock().await.insert(
-        rq.host.ip(),
-        to_session_tx.clone(),
-    );
+    ctx.dispatcher
+        .addr_to_session
+        .lock()
+        .await
+        .insert(rq.host.ip(), to_session_tx.clone());
 
     let bgp_state = Arc::new(Mutex::new(BgpState::default()));
 
@@ -99,13 +99,13 @@ async fn run_session(
         let mut rx = from_session_rx;
         loop {
             match rx.recv().await.unwrap() {
-
                 FsmEvent::Transition(from, to) => {
-                    info!(lg, 
-                        "{} {} {} {} {}", 
+                    info!(
+                        lg,
+                        "{} {} {} {} {}",
                         format!("[{}]", neighbor.name).dimmed(),
                         "transition".blue(),
-                        from, 
+                        from,
                         "->".dimmed(),
                         to,
                     );
@@ -113,14 +113,16 @@ async fn run_session(
 
                 FsmEvent::Message(m) => {
                     if m == Message::KeepAlive {
-                        debug!(lg,
+                        debug!(
+                            lg,
                             "{} {} {:#?}",
                             format!("[{}]", neighbor.name).dimmed(),
                             "message".blue(),
                             m,
                         );
                     } else {
-                        info!(lg,
+                        info!(
+                            lg,
                             "{} {} {:#?}",
                             format!("[{}]", neighbor.name).dimmed(),
                             "message".blue(),
@@ -143,7 +145,6 @@ async fn run_session(
     to_session_tx.send(FsmEvent::ManualStart).await.unwrap();
 
     j.await.unwrap();
-
 }
 
 pub struct RouterConfig {
@@ -173,7 +174,11 @@ pub fn start_server(
 
     let api = api_description();
 
-    let context = HandlerContext{ config, dispatcher, log: log.clone() };
+    let context = HandlerContext {
+        config,
+        dispatcher,
+        log: log.clone(),
+    };
 
     let server = HttpServerStarter::new(&ds_config, api, context, &ds_log)
         .map_err(|e| format!("new admin dropshot: {}", e))?;

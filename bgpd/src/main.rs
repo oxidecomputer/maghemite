@@ -1,11 +1,11 @@
-use std::fs::File;
 use crate::admin::api_description;
-use bgp::session::Asn;
-use bgp::router::Dispatcher;
-use clap::{Parser, Subcommand, Args};
-use slog::{Drain, Logger};
-use std::net::Ipv6Addr;
 use crate::admin::RouterConfig;
+use bgp::router::Dispatcher;
+use bgp::session::Asn;
+use clap::{Args, Parser, Subcommand};
+use slog::{Drain, Logger};
+use std::fs::File;
+use std::net::Ipv6Addr;
 use std::sync::Arc;
 
 mod admin;
@@ -14,11 +14,11 @@ mod admin;
 #[command(version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands
+    command: Commands,
 }
 
 #[derive(Subcommand, Debug)]
-enum Commands{
+enum Commands {
     /// Run a BGP router instance.
     Run(Run),
     /// Generate the OpenAPI spec for this router.
@@ -55,7 +55,6 @@ async fn apigen() {
 }
 
 async fn run(run: Run) {
-
     let disp = Arc::new(Dispatcher::new(run.listen));
     let d = disp.clone();
     tokio::spawn(async move {
@@ -74,7 +73,6 @@ async fn run(run: Run) {
     );
 
     j.unwrap().await.unwrap();
-
 }
 
 fn init_logger() -> Logger {

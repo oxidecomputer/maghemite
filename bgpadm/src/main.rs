@@ -1,11 +1,11 @@
 use anyhow::Result;
-use std::net::IpAddr;
-use clap::{Parser, Subcommand, Args};
 use bgp_admin_client::types;
 use bgp_admin_client::Client;
-use std::net::SocketAddr;
+use clap::{Args, Parser, Subcommand};
 use slog::Drain;
 use slog::Logger;
+use std::net::IpAddr;
+use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -19,12 +19,12 @@ struct Cli {
 
     /// TCP port for admin interface
     #[arg(short, long, default_value_t = 8000)]
-    port: u16
+    port: u16,
 }
 
 #[derive(Subcommand, Debug)]
-enum Commands{
-    AddNeighbor(Neighbor)
+enum Commands {
+    AddNeighbor(Neighbor),
 }
 
 #[derive(Args, Debug)]
@@ -48,7 +48,7 @@ struct Neighbor {
 
 impl From<Neighbor> for types::AddNeighborRequest {
     fn from(n: Neighbor) -> types::AddNeighborRequest {
-        types::AddNeighborRequest{
+        types::AddNeighborRequest {
             name: n.name,
             host: SocketAddr::new(n.addr, n.port).to_string(),
             hold_time: n.hold_time,
@@ -59,21 +59,18 @@ impl From<Neighbor> for types::AddNeighborRequest {
     }
 }
 
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let log = init_logger();
 
-    let endpoint = format!(
-        "http://{}",
-        SocketAddr::new(cli.address, cli.port),
-    );
+    let endpoint =
+        format!("http://{}", SocketAddr::new(cli.address, cli.port),);
 
     let client = Client::new(&endpoint, log.clone());
 
     match cli.command {
-        Commands::AddNeighbor(nbr) => add_neighbor(nbr, client).await
+        Commands::AddNeighbor(nbr) => add_neighbor(nbr, client).await,
     }
     Ok(())
 }

@@ -1,9 +1,9 @@
-use tokio::net::TcpListener;
+use crate::session::FsmEvent;
 use std::collections::BTreeMap;
+use std::net::IpAddr;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
-use crate::session::FsmEvent;
-use std::net::IpAddr;
 
 pub struct Dispatcher {
     pub listen: String,
@@ -19,7 +19,6 @@ impl Dispatcher {
     }
 
     pub async fn run(&self) {
-
         loop {
             let listener = TcpListener::bind(&self.listen).await.unwrap();
             let (stream, addr) = listener.accept().await.unwrap();
@@ -30,6 +29,5 @@ impl Dispatcher {
                 None => continue,
             }
         }
-
     }
 }

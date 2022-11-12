@@ -5,9 +5,9 @@ use crate::messages::{
 use crate::state::BgpState;
 use slog::{error, info, warn, Logger};
 use std::fmt::{self, Display, Formatter};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -92,7 +92,6 @@ impl From<&FsmState> for FsmStateKind {
 
 #[derive(Debug)]
 pub enum FsmEvent {
-
     Transition(FsmStateKind, FsmStateKind),
 
     Message(Message),
@@ -100,7 +99,6 @@ pub enum FsmEvent {
     Connected(TcpStream),
 
     // from spec follows
-
     /// Local system administrator manually starts the peer connection.
     ManualStart,
 
@@ -327,7 +325,7 @@ impl SessionRunner {
         SessionRunner {
             session,
             event_rx,
-            event_tx: event_tx,
+            event_tx,
             _bgp_state: bgp_state,
             connect_retry_timer: interval(connect_retry_time),
             keepalive_timer: interval(keepalive_time),
@@ -376,9 +374,10 @@ impl SessionRunner {
             };
 
             if current_state != next_state {
-                self.event_tx.send(
-                    FsmEvent::Transition(current_state, next_state)
-                ).await.unwrap()
+                self.event_tx
+                    .send(FsmEvent::Transition(current_state, next_state))
+                    .await
+                    .unwrap()
             }
         }
     }
@@ -618,7 +617,7 @@ impl SessionRunner {
                         info!(self.log, "update received: {:#?}", m);
 
                         //TODO apply update
-                        
+
                         FsmState::Established(stream)
                     }
                     Ok(Message::Notification(m)) => {
