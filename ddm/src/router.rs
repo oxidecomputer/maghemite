@@ -901,7 +901,7 @@ mod tests {
         // assert expected prefix state
         //
 
-        // s-router1 should have the transit routers link-local address as a
+        // router1 should have the transit routers link-local address as a
         // nexthop for fd00:2::/64
         let nexthops = s1.nexthops(pfx2).await;
         debug!(log, "{:?}", nexthops);

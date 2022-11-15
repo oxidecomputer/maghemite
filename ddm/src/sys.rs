@@ -12,6 +12,8 @@ use slog::{debug, error, info, warn, Logger};
 
 use crate::router::Config;
 
+const DDM_DPD_TAG: &str = "ddmd";
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Route {
     pub dest: IpAddr,
@@ -138,7 +140,7 @@ pub fn get_routes_dendrite(
     host: String,
     port: u16,
 ) -> Result<Vec<Route>, String> {
-    let api = dpd_api::Api::new(host, port)
+    let api = dpd_api::Api::new(DDM_DPD_TAG, host, port)
         .map_err(|e| format!("dpd api new: {}", e))?;
 
     let mut cookie = "".to_string();
@@ -191,7 +193,7 @@ pub fn add_routes_dendrite(
 ) -> Result<(), String> {
     debug!(log, "sending to dpd host={} port={}", host, port);
 
-    let dpd_api = dpd_api::Api::new(host.into(), port)
+    let dpd_api = dpd_api::Api::new(DDM_DPD_TAG, host, port)
         .map_err(|e| format!("dpdapi new: {}", e))?;
 
     for r in routes {
@@ -213,7 +215,7 @@ pub fn add_routes_dendrite(
         };
 
         // TODO vioif -> tfport
-        let egress_port = match get_neighbor_port(&gw, "vioif", log) {
+        let egress_port = match get_neighbor_port(&gw, "tfport", log) {
             Some(port) => {
                 debug!(log, "found neighbor port: {:?} -> {:?}", gw, port);
                 port
@@ -226,7 +228,7 @@ pub fn add_routes_dendrite(
             }
         };
 
-        let egress_port = format!("{}:0", egress_port + 1);
+        let egress_port = format!("{}:0", egress_port);
 
         if let Err(e) = dpd_api.route_ipv6_add(&cidr, egress_port, Some(gw)) {
             // If this comes back as 409 conflict, that just means the route is
@@ -269,13 +271,17 @@ fn get_neighbor_port(
             }
             let s = &s[0..i];
             let name = String::from_utf8_lossy(s);
+            // TODO this is gross, use link type properties rather than futzing
+            // around with strings.
             if let Some(suffix) = name.strip_prefix(prefix) {
-                match suffix.trim().parse::<usize>() {
-                    Ok(n) => {
-                        return Some(n);
-                    }
-                    Err(_) => {
-                        continue;
+                if let Some(tfport) = suffix.strip_suffix("_0") {
+                    match tfport.trim().parse::<usize>() {
+                        Ok(n) => {
+                            return Some(n);
+                        }
+                        Err(_) => {
+                            continue;
+                        }
                     }
                 }
             }
@@ -291,7 +297,7 @@ pub fn remove_routes_dendrite(
     port: u16,
     log: Logger,
 ) -> Result<(), String> {
-    let dpd_api = dpd_api::Api::new(host, port)
+    let dpd_api = dpd_api::Api::new(DDM_DPD_TAG, host, port)
         .map_err(|e| format!("dpd api new: {}", e))?;
 
     for r in routes {

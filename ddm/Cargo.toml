@@ -24,10 +24,10 @@ futures = "0.3.24"
 
 [dependencies.dpd-api]
 git = "https://github.com/oxidecomputer/dendrite"
+branch = "tfport-softnpu"
 package = "dpd-api"
-branch = "softnpu"
 
 [dependencies.dendrite-common]
 git = "https://github.com/oxidecomputer/dendrite"
+branch = "tfport-softnpu"
 package = "common"
-branch = "softnpu"
