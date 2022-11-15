@@ -206,8 +206,8 @@ impl Default for Config {
         Config {
             name: String::new(),
             interfaces: Vec::new(),
-            discovery_interval: 250,
-            peer_interval: 250,
+            discovery_interval: 100,
+            peer_interval: 50,
             peer_expire: 3000,
             peer_port: 0x1dd0,
             rpx_port: 0x1dd1,
@@ -901,7 +901,7 @@ mod tests {
         // assert expected prefix state
         //
 
-        // s-router1 should have the transit routers link-local address as a
+        // router1 should have the transit routers link-local address as a
         // nexthop for fd00:2::/64
         let nexthops = s1.nexthops(pfx2).await;
         debug!(log, "{:?}", nexthops);

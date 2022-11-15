@@ -12,11 +12,6 @@
 #: name = "ddm-admin.json"
 #: from_output = "/out/ddm-admin.json"
 #:
-#: [[publish]]
-#: series = "openapi"
-#: name = "bgp-admin.json"
-#: from_output = "/out/bgp-admin.json"
-#:
 
 set -o errexit
 set -o pipefail
@@ -25,5 +20,4 @@ set -o xtrace
 banner copy
 pfexec mkdir -p /out
 pfexec chown "$UID" /out
-cp openapi/ddm-admin.json /out/ddm-admin.json
-cp openapi/bgp-admin.json /out/bgp-admin.json
+cp ddm-openapi/ddm-admin.json /out/ddm-admin.json
