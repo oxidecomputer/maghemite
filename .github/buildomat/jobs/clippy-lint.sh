@@ -3,7 +3,7 @@
 #: name = "clippy-lint"
 #: variety = "basic"
 #: target = "helios"
-#: rust_toolchain = "nightly-2021-11-24"
+#: rust_toolchain = "stable"
 #: output_rules = [
 #:   "/work/debug/*",
 #:   "/work/release/*",

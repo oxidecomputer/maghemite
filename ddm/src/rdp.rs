@@ -100,9 +100,13 @@ impl Receiver {
                 None => Ipv6Addr::UNSPECIFIED,
             };
 
-            let msg = match parse_icmpv6(unsafe {
-                &MaybeUninit::slice_assume_init_ref(&buf)[..size]
-            }) {
+            //TODO trade for `MaybeUninit::slice_assume_init_ref` when it
+            //becomes available in stable Rust.
+            let ibuf =
+                &unsafe { &*(&buf as *const [MaybeUninit<u8>] as *const [u8]) }
+                    [..size];
+
+            let msg = match parse_icmpv6(ibuf) {
                 Some(packet) => packet,
                 None => {
                     trace!(self.log, "parse error");

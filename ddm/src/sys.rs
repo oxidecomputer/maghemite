@@ -219,16 +219,17 @@ pub fn add_routes_dendrite(
 
         // TODO this is gross, use link type properties rather than futzing
         // around with strings.
-        let egress_port_num = 
-            interface.name
-                .strip_prefix("tfport")
-                .ok_or(format!("expected tfport prefix {}", interface.name))?
-                .strip_suffix("_0")
-                .ok_or(format!("expected _0 suffix {}", interface.name))?
-                .trim()
-                .parse::<usize>()
-                .map_err(|_|
-                    format!("expected tofino port number {}", interface.name))?;
+        let egress_port_num = interface
+            .name
+            .strip_prefix("tfport")
+            .ok_or(format!("expected tfport prefix {}", interface.name))?
+            .strip_suffix("_0")
+            .ok_or(format!("expected _0 suffix {}", interface.name))?
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| {
+                format!("expected tofino port number {}", interface.name)
+            })?;
 
         let egress_port = format!("{}:0", egress_port_num);
 
