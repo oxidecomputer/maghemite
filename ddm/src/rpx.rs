@@ -82,6 +82,7 @@ struct HandlerContext {
     log: Logger,
     config: Config,
     router: Arc<Mutex<RouterState>>,
+    interface: Interface,
 }
 
 pub(crate) fn start_server(
@@ -90,11 +91,13 @@ pub(crate) fn start_server(
     port: u16,
     router: Arc<Mutex<RouterState>>,
     config: Config,
+    interface: Interface,
 ) -> Result<JoinHandle<()>, String> {
     let context = HandlerContext {
         router,
         config,
         log: log.clone(),
+        interface,
     };
 
     let sa = SocketAddrV6::new(addr, port, 0, 0);
@@ -187,7 +190,12 @@ async fn advertise_handler(
     }
 
     info!(context.log, "adding routes");
-    match sys::add_routes(&context.log, &context.config, advertisement.into()) {
+    match sys::add_routes(
+        &context.log,
+        &context.config,
+        advertisement.into(),
+        context.interface.clone(),
+    ) {
         Ok(_) => {}
         Err(e) => {
             error!(context.log, "add route to system failed: {}", e);

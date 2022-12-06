@@ -269,16 +269,17 @@ impl Router {
         trace!(self.log, "starting rpx");
 
         let s = self.state.lock().await;
-        let interfaces: Vec<Interface> = s.interfaces.keys().copied().collect();
+        let interfaces: Vec<Interface> = s.interfaces.keys().cloned().collect();
         drop(s);
 
-        for i in interfaces {
+        for ifx in interfaces {
             let t = rpx::start_server(
                 self.log.clone(),
-                i.ll_addr,
+                ifx.ll_addr,
                 self.config.rpx_port,
                 self.state.clone(),
                 self.config.clone(),
+                ifx.clone(),
             )?;
             self.threadpile.push(t);
         }
@@ -319,7 +320,7 @@ impl Router {
                                 match Self::solicit(
                                     config.clone(),
                                     state.clone(),
-                                    ifx,
+                                    ifx.clone(),
                                     nbr.addr,
                                     &log,
                                 )
@@ -449,7 +450,7 @@ impl Router {
         }
 
         // add routes to the underlying system
-        sys::add_routes(log, &config, advertisement.into())
+        sys::add_routes(log, &config, advertisement.into(), ifx)
     }
 
     async fn start_discovery(&mut self) {
@@ -460,7 +461,7 @@ impl Router {
         trace!(self.log, "starting discovery");
 
         let s = self.state.lock().await;
-        let interfaces: Vec<Interface> = s.interfaces.keys().copied().collect();
+        let interfaces: Vec<Interface> = s.interfaces.keys().cloned().collect();
         drop(s);
 
         for i in interfaces {
@@ -519,7 +520,7 @@ impl Router {
                         }
                     };
                     state.lock().await.interfaces.insert(
-                        interface,
+                        interface.clone(),
                         Some(NeighboringRouter {
                             addr,
                             session: Arc::new(session),
@@ -615,10 +616,11 @@ async fn discover_neighboring_router(
     }
 }
 
-#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Interface {
     pub ifnum: i32,
     pub ll_addr: Ipv6Addr,
+    pub name: String,
 }
 
 impl TryFrom<&IpInfo> for Interface {
@@ -632,6 +634,7 @@ impl TryFrom<&IpInfo> for Interface {
         Ok(Interface {
             ll_addr,
             ifnum: info.index,
+            name: info.ifname.clone(),
         })
     }
 }

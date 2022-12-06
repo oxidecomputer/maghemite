@@ -8,9 +8,9 @@ use libnet::Ipv6Prefix;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use slog::{debug, error, info, warn, Logger};
+use slog::{debug, info, warn, Logger};
 
-use crate::router::Config;
+use crate::router::{Config, Interface};
 
 const DDM_DPD_TAG: &str = "ddmd";
 
@@ -41,6 +41,7 @@ impl From<Route> for libnet::route::Route {
             //TODO libnet should return a u8 as nothing > 128 is a valid mask
             mask: r.prefix_len as u32,
             gw: r.gw,
+            delay: 0,
         }
     }
 }
@@ -64,11 +65,12 @@ pub fn add_routes(
     log: &Logger,
     config: &Config,
     routes: Vec<Route>,
+    interface: Interface,
 ) -> Result<(), String> {
     match &config.dpd {
         Some(dpd) => {
             info!(log, "sending routes to dendrite");
-            add_routes_dendrite(routes, &dpd.host, dpd.port, log)
+            add_routes_dendrite(routes, &dpd.host, dpd.port, interface, log)
         }
         None => {
             info!(log, "sending routes to illumos");
@@ -189,6 +191,7 @@ pub fn add_routes_dendrite(
     routes: Vec<Route>,
     host: &str,
     port: u16,
+    interface: Interface,
     log: &Logger,
 ) -> Result<(), String> {
     debug!(log, "sending to dpd host={} port={}", host, port);
@@ -214,21 +217,20 @@ pub fn add_routes_dendrite(
             }
         };
 
-        // TODO vioif -> tfport
-        let egress_port = match get_neighbor_port(&gw, "tfport", log) {
-            Some(port) => {
-                debug!(log, "found neighbor port: {:?} -> {:?}", gw, port);
-                port
-            }
-            None => {
-                // TODO(ry) there are a number of reasons why an ndp entry may
-                // be transiently unavailable, there should be some (possibly
-                // asynchronous) retry logic here.
-                return Err(format!("no egress port for {}", gw));
-            }
-        };
+        // TODO this is gross, use link type properties rather than futzing
+        // around with strings.
+        let egress_port_num = 
+            interface.name
+                .strip_prefix("tfport")
+                .ok_or(format!("expected tfport prefix {}", interface.name))?
+                .strip_suffix("_0")
+                .ok_or(format!("expected _0 suffix {}", interface.name))?
+                .trim()
+                .parse::<usize>()
+                .map_err(|_|
+                    format!("expected tofino port number {}", interface.name))?;
 
-        let egress_port = format!("{}:0", egress_port);
+        let egress_port = format!("{}:0", egress_port_num);
 
         if let Err(e) = dpd_api.route_ipv6_add(&cidr, egress_port, Some(gw)) {
             // If this comes back as 409 conflict, that just means the route is
@@ -242,52 +244,6 @@ pub fn add_routes_dendrite(
     }
 
     Ok(())
-}
-
-fn get_neighbor_port(
-    addr: &Ipv6Addr,
-    prefix: &str,
-    log: &Logger,
-) -> Option<usize> {
-    let nbrs = match libnet::get_neighbors() {
-        Ok(x) => x,
-        Err(e) => {
-            error!(log, "get neighbors: {}", e);
-            return None;
-        }
-    };
-    for n in nbrs {
-        let v6 = Ipv6Addr::from(n.ndpre_l3_addr.s6_addr);
-        if &v6 == addr {
-            let s = n.ndpre_ifname.as_slice();
-
-            // determine length of name
-            let mut i = 0;
-            for x in s {
-                if *x == 0 {
-                    break;
-                }
-                i += 1;
-            }
-            let s = &s[0..i];
-            let name = String::from_utf8_lossy(s);
-            // TODO this is gross, use link type properties rather than futzing
-            // around with strings.
-            if let Some(suffix) = name.strip_prefix(prefix) {
-                if let Some(tfport) = suffix.strip_suffix("_0") {
-                    match tfport.trim().parse::<usize>() {
-                        Ok(n) => {
-                            return Some(n);
-                        }
-                        Err(_) => {
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 #[allow(dead_code)] // TODO-cleanup Remove once this is used.

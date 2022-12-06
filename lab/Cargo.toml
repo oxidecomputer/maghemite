@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "softnpu" }
+libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anyhow = "1.0"
 tokio = { version = "1.21", features = ["full"] }
 

@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 icmpv6 = { path = "../icmpv6" }
-libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "siocgnds" }
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "ddm" }
 tokio = { version = "1.21", features = ["full"] }
 socket2 = { version = "0.4", features = ["all"] }
 anyhow = "1"
