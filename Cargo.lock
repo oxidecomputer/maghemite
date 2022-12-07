@@ -91,7 +91,7 @@ checksum = "216261ddc8289130e551ddcd5ce8a064710c0d064a4d2895c67151c92b5443f6"
 [[package]]
 name = "api_identity"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0a9d21d8c68fa154d49d48c368b7d69affd581bb"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5e97a542e659d91e8f32c325f0c47f0f3ef97658"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -204,7 +204,7 @@ checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 [[package]]
 name = "bhyve_api"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/propolis#057843891ef48f6544572d17fbe01b509cce3b0c"
+source = "git+https://github.com/oxidecomputer/propolis#8723a0e50449cd7f90e2e0896c4114dc826240fc"
 dependencies = [
  "bitflags",
  "libc",
@@ -912,7 +912,7 @@ dependencies = [
 [[package]]
 name = "dladm"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/propolis#057843891ef48f6544572d17fbe01b509cce3b0c"
+source = "git+https://github.com/oxidecomputer/propolis#8723a0e50449cd7f90e2e0896c4114dc826240fc"
 dependencies = [
  "libc",
  "num_enum",
@@ -977,7 +977,7 @@ dependencies = [
 [[package]]
 name = "dropshot"
 version = "0.8.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#a493ae0130a5ec9d801aaf288190ff7d287c3e5c"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#9ef1c8e9276254b2ed271f73dd294d62d0310a3d"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1017,7 +1017,7 @@ dependencies = [
 [[package]]
 name = "dropshot_endpoint"
 version = "0.8.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#a493ae0130a5ec9d801aaf288190ff7d287c3e5c"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#9ef1c8e9276254b2ed271f73dd294d62d0310a3d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2149,7 +2149,7 @@ dependencies = [
 [[package]]
 name = "nexus-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0a9d21d8c68fa154d49d48c368b7d69affd581bb"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5e97a542e659d91e8f32c325f0c47f0f3ef97658"
 dependencies = [
  "chrono",
  "omicron-common",
@@ -2313,7 +2313,7 @@ source = "git+https://github.com/jmesmon/rust-libzfs?branch=master#ecd5a922247a6
 [[package]]
 name = "omicron-common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0a9d21d8c68fa154d49d48c368b7d69affd581bb"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5e97a542e659d91e8f32c325f0c47f0f3ef97658"
 dependencies = [
  "anyhow",
  "api_identity",
@@ -2391,9 +2391,9 @@ dependencies = [
 
 [[package]]
 name = "openssl"
-version = "0.10.43"
+version = "0.10.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "020433887e44c27ff16365eaa2d380547a94544ad509aff6eb5b6e3e0b27b376"
+checksum = "29d971fd5722fec23977260f6e81aa67d2f22cadbdc2aa049f1022d9a3be1566"
 dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
@@ -2423,9 +2423,9 @@ checksum = "ff011a302c396a5197692431fc1948019154afc178baf7d8e37367442a4601cf"
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.78"
+version = "0.9.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07d5c8cb6e57b3a3612064d7b18b117912b4ce70955c2504d4b741c9e244b132"
+checksum = "5454462c0eced1e97f2ec09036abc8da362e66802f66fd20f86854d9d8cbcbc4"
 dependencies = [
  "autocfg",
  "cc",
@@ -2443,7 +2443,7 @@ checksum = "9b7820b9daea5457c9f21c69448905d723fbd21136ccf521748f23fd49e723ee"
 [[package]]
 name = "oximeter"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0a9d21d8c68fa154d49d48c368b7d69affd581bb"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5e97a542e659d91e8f32c325f0c47f0f3ef97658"
 dependencies = [
  "bytes 1.3.0",
  "chrono",
@@ -2458,7 +2458,7 @@ dependencies = [
 [[package]]
 name = "oximeter-macro-impl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0a9d21d8c68fa154d49d48c368b7d69affd581bb"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5e97a542e659d91e8f32c325f0c47f0f3ef97658"
 dependencies = [
  "bytes 1.3.0",
  "proc-macro2",
@@ -2469,7 +2469,7 @@ dependencies = [
 [[package]]
 name = "oximeter-producer"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0a9d21d8c68fa154d49d48c368b7d69affd581bb"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5e97a542e659d91e8f32c325f0c47f0f3ef97658"
 dependencies = [
  "chrono",
  "dropshot",
@@ -2989,7 +2989,7 @@ dependencies = [
 [[package]]
 name = "propolis"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/propolis#057843891ef48f6544572d17fbe01b509cce3b0c"
+source = "git+https://github.com/oxidecomputer/propolis#8723a0e50449cd7f90e2e0896c4114dc826240fc"
 dependencies = [
  "anyhow",
  "bhyve_api",
@@ -3029,7 +3029,7 @@ dependencies = [
 [[package]]
 name = "propolis-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/propolis#057843891ef48f6544572d17fbe01b509cce3b0c"
+source = "git+https://github.com/oxidecomputer/propolis#8723a0e50449cd7f90e2e0896c4114dc826240fc"
 dependencies = [
  "base64",
  "crucible-client-types",
@@ -3050,7 +3050,7 @@ dependencies = [
 [[package]]
 name = "propolis-server"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/propolis#057843891ef48f6544572d17fbe01b509cce3b0c"
+source = "git+https://github.com/oxidecomputer/propolis#8723a0e50449cd7f90e2e0896c4114dc826240fc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3091,7 +3091,7 @@ dependencies = [
 [[package]]
 name = "propolis-server-config"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/propolis#057843891ef48f6544572d17fbe01b509cce3b0c"
+source = "git+https://github.com/oxidecomputer/propolis#8723a0e50449cd7f90e2e0896c4114dc826240fc"
 dependencies = [
  "serde",
  "serde_derive",
@@ -3102,7 +3102,7 @@ dependencies = [
 [[package]]
 name = "propolis_types"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/propolis#057843891ef48f6544572d17fbe01b509cce3b0c"
+source = "git+https://github.com/oxidecomputer/propolis#8723a0e50449cd7f90e2e0896c4114dc826240fc"
 dependencies = [
  "schemars",
  "serde",
@@ -4806,7 +4806,7 @@ name = "util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=siocgnds)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=ddm)",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -4851,7 +4851,7 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 [[package]]
 name = "viona_api"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/propolis#057843891ef48f6544572d17fbe01b509cce3b0c"
+source = "git+https://github.com/oxidecomputer/propolis#8723a0e50449cd7f90e2e0896c4114dc826240fc"
 
 [[package]]
 name = "walkdir"
