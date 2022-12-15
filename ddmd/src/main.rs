@@ -1,60 +1,61 @@
-use std::net::Ipv6Addr;
-use std::sync::Arc;
-
-use once_cell::sync::Lazy;
+use clap::Parser;
 use slog::error;
 use slog::info;
 use slog::warn;
 use slog::Drain;
 use slog::Logger;
-use structopt::clap::AppSettings::*;
-use structopt::StructOpt;
+use std::net::Ipv6Addr;
+use std::sync::Arc;
 
-#[derive(Debug, StructOpt)]
-#[structopt(
-    name = "ddm-illumos",
-    about = "illumos ddm control plane",
-    global_setting(ColorAuto),
-    global_setting(ColoredHelp)
-)]
+#[derive(Debug, Parser)]
+#[clap(name = "ddmd", about = "ddm control plane daemon")]
 struct Opt {
     /// Port to use for admin server
+    #[arg(long, default_value_t = 8000)]
     admin_port: u16,
 
     /// Admin address to listen on
+    #[arg(long, default_value_t = Ipv6Addr::UNSPECIFIED)]
     admin_address: Ipv6Addr,
 
     /// Address objects to route over.
-    #[structopt(required = true)]
+    #[arg(short, long = "addr", name = "addr")]
     addresses: Vec<String>,
 
-    #[structopt(subcommand)]
+    /// Milliseconds between peer hails.
+    #[arg(long, default_value_t = 50)]
+    pub hail_interval: u64,
+
+    /// Milliseconds between router solicitations.
+    #[arg(long, default_value_t = 50)]
+    pub discovery_interval: u64,
+
+    /// Milliseconds to wait for hail response
+    #[arg(long, default_value_t = 250)]
+    pub hail_timeout: u64,
+
+    #[clap(subcommand)]
     subcommand: SubCommand,
 }
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 enum SubCommand {
     Server,
     Transit(Transit),
 }
 
-// structopt needs a non-temporary `&str` for default values, so we'll stash the
-// default dpd port into a lazy `String`.
-static DPD_DEFAULT_PORT: Lazy<String> =
-    Lazy::new(|| dpd_api::default_port().to_string());
-
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 struct Transit {
-    #[structopt(long)]
+    #[arg(long)]
     dendrite: bool,
-    #[structopt(long, default_value = "localhost")]
+    #[arg(long, default_value = "localhost")]
     dpd_host: String,
-    #[structopt(long, default_value = &DPD_DEFAULT_PORT)]
+    #[arg(long, default_value_t = dpd_api::default_port())]
     dpd_port: u16,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    let opt = Opt::from_args();
+    let opt = Opt::parse();
 
     let log = init_logger();
     info!(log, "starting illumos ddm control plane");
@@ -66,6 +67,9 @@ async fn main() -> Result<(), String> {
             name,
             interfaces: opt.addresses,
             router_kind: ddm::protocol::RouterKind::Server,
+            peer_interval: opt.hail_interval,
+            peer_timeout: opt.hail_timeout,
+            discovery_interval: opt.discovery_interval,
             ..Default::default()
         },
         SubCommand::Transit(t) => {
@@ -82,6 +86,9 @@ async fn main() -> Result<(), String> {
                 interfaces: opt.addresses,
                 dpd,
                 router_kind: ddm::protocol::RouterKind::Transit,
+                peer_interval: opt.hail_interval,
+                peer_timeout: opt.hail_timeout,
+                discovery_interval: opt.discovery_interval,
                 ..Default::default()
             }
         }

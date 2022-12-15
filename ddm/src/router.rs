@@ -166,8 +166,11 @@ pub struct Config {
     /// discovery.
     pub discovery_interval: u64,
 
-    /// How many milliseconds to wait between peer pings.
+    /// How many milliseconds to wait between peer hails.
     pub peer_interval: u64,
+
+    /// How many milliseconds to wait for a hail response.
+    pub peer_timeout: u64,
 
     /// How many milliseconds to wait until expiring a peer.
     pub peer_expire: u64,
@@ -208,6 +211,7 @@ impl Default for Config {
             interfaces: Vec::new(),
             discovery_interval: 100,
             peer_interval: 50,
+            peer_timeout: 250,
             peer_expire: 3000,
             peer_port: 0x1dd0,
             rpx_port: 0x1dd1,
@@ -515,7 +519,10 @@ impl Router {
                                 log,
                                 "start peer session on {:?}: {}", interface, e
                             );
-                            sleep(Duration::from_millis(100)).await;
+                            sleep(Duration::from_millis(
+                                config.discovery_interval,
+                            ))
+                            .await;
                             continue;
                         }
                     };
@@ -531,7 +538,8 @@ impl Router {
                     return;
                 }
                 Err(e) => {
-                    sleep(Duration::from_millis(100)).await;
+                    sleep(Duration::from_millis(config.discovery_interval))
+                        .await;
                     error!(log, "discovery error on {:?}: {}", interface, e);
                 }
             }

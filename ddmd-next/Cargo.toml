@@ -1,0 +1,20 @@
+[package]
+name = "ddmd-next"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.0.29", features = ["derive"] }
+ddm-next = { path = "../ddm-next" }
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "ddm" }
+slog = "2.7.0"
+slog-async = "2.7.0"
+slog-envlogger = "2.2.0"
+slog-term = "2.9.0"
+tokio = "1.23.0"
+ctrlc = { version = "3.2.4", features = ["termination"] }
+
+[dependencies.dpd-api]
+git = "https://github.com/oxidecomputer/dendrite"
+package = "dpd-api"
+branch = "main"

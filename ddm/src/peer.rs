@@ -265,21 +265,26 @@ impl Session {
 
         let resp = client.request(req);
 
-        let mut response = match timeout(Duration::from_millis(250), resp).await
-        {
-            Ok(resp) => match resp {
-                Ok(r) => r,
+        let mut response =
+            match timeout(Duration::from_millis(config.peer_timeout), resp)
+                .await
+            {
+                Ok(resp) => match resp {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Err(format!(
+                            "hyper send request to {}: {}",
+                            &uri, e,
+                        ))
+                    }
+                },
                 Err(e) => {
                     return Err(format!(
-                        "hyper send request to {}: {}",
-                        &uri, e,
+                        "hail response timeout to {}: {}",
+                        uri, e
                     ))
                 }
-            },
-            Err(e) => {
-                return Err(format!("peer request timeout to {}: {}", uri, e))
-            }
-        };
+            };
 
         let body = match response.body_mut().data().await {
             Some(body) => body.map_err(|e| e.to_string())?,
