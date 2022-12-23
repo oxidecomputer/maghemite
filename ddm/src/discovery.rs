@@ -178,12 +178,16 @@ pub(crate) fn handler(
     db: Db,
     log: Logger,
 ) -> Result<(), DiscoveryError> {
+    // listening on 2 sockets, solicitations are sent to DDM_MADDR, but
+    // advertisements are sent to the unicast source addresses of a
+    // solicitation. Binding to a link-scoped multicast address is required for
+    // the interface passed in as scope_id to be honored. Listening on :: causes
+    // chaos as all solicitations show up on all sockets.
     let mc = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
     let uc = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+
     dbg!(log, config.if_index, "starting discovery handler");
-    // XXX listening on :: is important here, as solicitations are sent to
-    // DDM_MADDR, but advertisements are sent to the unicast source addresses
-    // from whence solicitations came
+
     let mc_sa: SockAddr =
         SocketAddrV6::new(DDM_MADDR, DDM_PORT, 0, config.if_index).into();
     mc.set_reuse_address(true)?;

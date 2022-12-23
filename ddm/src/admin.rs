@@ -1,11 +1,5 @@
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::net::Ipv6Addr;
-use std::net::SocketAddrV6;
-use std::sync::Arc;
-use tokio::task::JoinHandle;
-
+use crate::db::{Db, Ipv6Prefix, PeerInfo};
+use crate::sm::{AdminEvent, Event};
 use dropshot::endpoint;
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
@@ -17,99 +11,36 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
-use slog::error;
-use slog::info;
-use slog::warn;
-use slog::Logger;
+use slog::{error, info, warn, Logger};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::spawn;
 
-use crate::net::Ipv6Prefix;
-use crate::peer;
-use crate::protocol::RouterKind;
-use crate::router::Router;
-
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
+#[derive(Clone)]
 pub struct HandlerContext {
-    pub router: Arc<Router>,
+    event_channels: Vec<Sender<Event>>,
+    db: Db,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-struct PeerInfo {
-    status: peer::Status,
-    addr: Ipv6Addr,
-    host: Option<String>,
-    kind: Option<RouterKind>,
-}
-
-#[endpoint { method = GET, path = "/peers" }]
-async fn get_peers(
-    ctx: Arc<RequestContext<HandlerContext>>,
-) -> Result<HttpResponseOk<HashMap<usize, PeerInfo>>, HttpError> {
-    let mut result = HashMap::new();
-
-    let context = ctx.context();
-    let state = context.router.state.lock().await;
-
-    for (ifx, nbr) in &state.interfaces {
-        let nbr = match nbr {
-            Some(nbr) => nbr,
-            None => continue,
-        };
-
-        result.insert(
-            ifx.ifnum as usize,
-            PeerInfo {
-                status: nbr.session.status().await,
-                addr: nbr.session.info.addr,
-                host: nbr.session.info.host.lock().await.clone(),
-                kind: *nbr.session.info.router_kind.lock().await,
-            },
-        );
-    }
-
-    Ok(HttpResponseOk(result))
-}
-
-type PrefixMap = BTreeMap<Ipv6Addr, HashSet<Ipv6Prefix>>;
-
-#[endpoint { method = GET, path = "/prefixes" }]
-async fn get_prefixes(
-    ctx: Arc<RequestContext<HandlerContext>>,
-) -> Result<HttpResponseOk<PrefixMap>, HttpError> {
-    let context = ctx.context();
-    let state = context.router.state.lock().await;
-
-    Ok(HttpResponseOk(state.remote_prefixes.clone()))
-}
-
-#[endpoint { method = PUT, path = "/prefix" }]
-async fn advertise_prefixes(
-    ctx: Arc<RequestContext<HandlerContext>>,
-    request: TypedBody<HashSet<Ipv6Prefix>>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let context = ctx.context();
-    let router = &context.router;
-
-    router
-        .advertise(request.into_inner())
-        .await
-        .map_err(HttpError::for_internal_error)?;
-
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-pub fn start_server(
-    log: Logger,
-    addr: Ipv6Addr,
+pub fn handler(
+    addr: IpAddr,
     port: u16,
-    router: Arc<Router>,
-) -> Result<JoinHandle<()>, String> {
-    let sa = SocketAddrV6::new(addr, port, 0, 0);
+    event_channels: Vec<Sender<Event>>,
+    db: Db,
+    log: Logger,
+) -> Result<(), String> {
+    let context = Mutex::new(HandlerContext { event_channels, db });
+
+    let sa: SocketAddr = match addr {
+        IpAddr::V4(a) => SocketAddrV4::new(a, port).into(),
+        IpAddr::V6(a) => SocketAddrV6::new(a, port, 0, 0).into(),
+    };
 
     let config = ConfigDropshot {
-        bind_address: sa.into(),
+        bind_address: sa,
         ..Default::default()
     };
 
@@ -119,31 +50,111 @@ pub fn start_server(
     .to_logger("admin")
     .map_err(|e| e.to_string())?;
 
-    let mut api = ApiDescription::new();
-    api.register(get_peers).unwrap();
-    api.register(get_prefixes).unwrap();
-    api.register(advertise_prefixes).unwrap();
-
-    let context = HandlerContext { router };
-
-    let server = HttpServerStarter::new(&config, api, context, &ds_log)
-        .map_err(|e| format!("new admin dropshot: {}", e))?;
+    let api = api_description()?;
 
     info!(log, "admin: listening on {}", sa);
 
     let log = log.clone();
-    Ok(spawn(async move {
+    spawn(async move {
+        let server = HttpServerStarter::new(&config, api, context, &ds_log)
+            .map_err(|e| format!("new admin dropshot: {}", e))
+            .unwrap();
+
         match server.start().await {
             Ok(_) => warn!(log, "admin: unexpected server exit"),
             Err(e) => error!(log, "admin: server start error {:?}", e),
         }
-    }))
+    });
+
+    Ok(())
 }
 
-pub fn api_description() -> Result<ApiDescription<HandlerContext>, String> {
+#[endpoint { method = GET, path = "/peers" }]
+async fn get_peers(
+    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+    Ok(HttpResponseOk(ctx.db.peers()))
+}
+
+type PrefixMap = BTreeMap<Ipv6Addr, HashSet<Ipv6Prefix>>;
+
+#[endpoint { method = GET, path = "/prefixes" }]
+async fn get_prefixes(
+    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<PrefixMap>, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+    let imported = ctx.db.imported();
+
+    let mut result = PrefixMap::default();
+
+    for route in imported {
+        if let Some(entry) = result.get_mut(&route.nexthop) {
+            entry.insert(route.destination);
+        } else {
+            let mut s = HashSet::new();
+            s.insert(route.destination);
+            result.insert(route.nexthop, s);
+        }
+    }
+
+    Ok(HttpResponseOk(result))
+}
+
+#[endpoint { method = PUT, path = "/prefix" }]
+async fn advertise_prefixes(
+    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+    request: TypedBody<HashSet<Ipv6Prefix>>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+    let prefixes = request.into_inner();
+    ctx.db.originate(&prefixes);
+
+    for e in &ctx.event_channels {
+        e.send(Event::Admin(AdminEvent::Announce(prefixes.clone())))
+            .unwrap(); //TODO(unwrap)
+    }
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = DELETE, path = "/prefix" }]
+async fn withdraw_prefixes(
+    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+    request: TypedBody<HashSet<Ipv6Prefix>>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+    let prefixes = request.into_inner();
+    ctx.db.withdraw(&prefixes);
+
+    for e in &ctx.event_channels {
+        e.send(Event::Admin(AdminEvent::Withdraw(prefixes.clone())))
+            .unwrap(); //TODO(unwrap)
+    }
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = PUT, path = "/sync" }]
+async fn sync(
+    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+
+    for e in &ctx.event_channels {
+        e.send(Event::Admin(AdminEvent::Sync)).unwrap(); //TODO(unwrap)
+    }
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub fn api_description() -> Result<ApiDescription<Mutex<HandlerContext>>, String>
+{
     let mut api = ApiDescription::new();
     api.register(get_peers)?;
     api.register(advertise_prefixes)?;
+    api.register(withdraw_prefixes)?;
     api.register(get_prefixes)?;
+    api.register(sync)?;
     Ok(api)
 }

@@ -1,26 +1,18 @@
 [workspace]
 
 default-members = [
-    "icmpv6",
     "ddm",
-    "ddm-next",
-    "ddmadm-next",
-    "ddmd-next",
-    "ddmd",
     "ddmadm",
+    "ddmd",
     "ddm-admin-client",
     "util",
 ]
 
 members = [
     "lab",
-    "icmpv6",
     "ddm",
-    "ddm-next",
-    "ddmadm-next",
-    "ddmd-next",
-    "ddmd",
     "ddmadm",
+    "ddmd",
     "ddm-admin-client",
     "console",
     "package",

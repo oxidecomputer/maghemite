@@ -27,15 +27,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ansi_term"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d52a9bb7ec0cf484c551830a7ce27bd20d67eac647e1befb56b0be4ee39a55d2"
-dependencies = [
- "winapi 0.3.9",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.67"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -198,21 +189,6 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "2.34.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0610544180c38b88101fecf2dd634b174a62eef6946f84dfc6a7127512b381c"
-dependencies = [
- "ansi_term",
- "atty",
- "bitflags",
- "strsim 0.8.0",
- "textwrap 0.11.0",
- "unicode-width",
- "vec_map",
-]
-
-[[package]]
-name = "clap"
 version = "3.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71655c45cb9845d3270c9d6df84ebe72b4dad3c2ba3f7023ad47c144e4e473a5"
@@ -223,9 +199,9 @@ dependencies = [
  "clap_lex 0.2.4",
  "indexmap",
  "once_cell",
- "strsim 0.10.0",
+ "strsim",
  "termcolor",
- "textwrap 0.16.0",
+ "textwrap",
 ]
 
 [[package]]
@@ -239,7 +215,7 @@ dependencies = [
  "clap_lex 0.3.0",
  "is-terminal",
  "once_cell",
- "strsim 0.10.0",
+ "strsim",
  "termcolor",
 ]
 
@@ -502,44 +478,6 @@ dependencies = [
  "common 0.1.0 (git+https://github.com/oxidecomputer/dendrite?branch=tfport-softnpu)",
  "dpd-api 0.2.0 (git+https://github.com/oxidecomputer/dendrite?branch=tfport-softnpu)",
  "dropshot",
- "futures",
- "hyper 0.14.23",
- "icmpv6",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=ddm)",
- "schemars",
- "serde",
- "serde_json",
- "slog",
- "slog-async",
- "slog-envlogger",
- "slog-term",
- "socket2 0.4.7",
- "thiserror",
- "tokio 1.23.0",
- "util",
-]
-
-[[package]]
-name = "ddm-admin-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "percent-encoding",
- "progenitor",
- "reqwest 0.11.13",
- "serde",
- "serde_json",
- "slog",
-]
-
-[[package]]
-name = "ddm-next"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "common 0.1.0 (git+https://github.com/oxidecomputer/dendrite?branch=tfport-softnpu)",
- "dpd-api 0.2.0 (git+https://github.com/oxidecomputer/dendrite?branch=tfport-softnpu)",
- "dropshot",
  "hostname",
  "hyper 0.14.23",
  "ispf",
@@ -556,7 +494,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ddm-next-admin-client"
+name = "ddm-admin-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -573,25 +511,10 @@ name = "ddmadm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ddm",
- "ddm-admin-client",
- "slog",
- "slog-async",
- "slog-envlogger",
- "slog-term",
- "structopt",
- "tokio 1.23.0",
-]
-
-[[package]]
-name = "ddmadm-next"
-version = "0.1.0"
-dependencies = [
- "anyhow",
  "clap 4.0.29",
  "colored",
- "ddm-next",
- "ddm-next-admin-client",
+ "ddm",
+ "ddm-admin-client",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -605,24 +528,8 @@ name = "ddmd"
 version = "0.1.0"
 dependencies = [
  "clap 4.0.29",
- "ddm",
- "dpd-api 0.2.0 (git+https://github.com/oxidecomputer/dendrite?branch=tfport-softnpu)",
- "hostname",
- "once_cell",
- "slog",
- "slog-async",
- "slog-envlogger",
- "slog-term",
- "tokio 1.23.0",
-]
-
-[[package]]
-name = "ddmd-next"
-version = "0.1.0"
-dependencies = [
- "clap 4.0.29",
  "ctrlc",
- "ddm-next",
+ "ddm",
  "dpd-api 0.2.0 (git+https://github.com/oxidecomputer/dendrite?branch=main)",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=ddm)",
  "slog",
@@ -1295,14 +1202,6 @@ checksum = "0703ae284fc167426161c2e3f1da3ea71d94b21bedbcc9494e92b28e334e3dca"
 dependencies = [
  "cxx",
  "cxx-build",
-]
-
-[[package]]
-name = "icmpv6"
-version = "0.1.0"
-dependencies = [
- "schemars",
- "serde",
 ]
 
 [[package]]
@@ -2849,39 +2748,9 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "strsim"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
-
-[[package]]
-name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
-
-[[package]]
-name = "structopt"
-version = "0.3.26"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c6b5c64445ba8094a6ab0c3cd2ad323e07171012d9c98b0b15651daf1787a10"
-dependencies = [
- "clap 2.34.0",
- "lazy_static",
- "structopt-derive",
-]
-
-[[package]]
-name = "structopt-derive"
-version = "0.4.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcb5ae327f9cc13b68763b5749770cb9e048a99bd9dfdfa58d0cf05d5f64afe0"
-dependencies = [
- "heck 0.3.3",
- "proc-macro-error",
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "syn"
@@ -2954,15 +2823,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bab24d30b911b2376f3a13cc2cd443142f0c81dda04c118693e35b3835757755"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "textwrap"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d326610f408c7a4eb6f51c37c330e496b08506c9457c9d34287ecc38809fb060"
-dependencies = [
- "unicode-width",
 ]
 
 [[package]]
@@ -3439,12 +3299,6 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
-
-[[package]]
-name = "vec_map"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 
 [[package]]
 name = "version_check"
