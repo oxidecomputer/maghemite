@@ -61,6 +61,35 @@
             "$ref": "#/components/responses/Error"
           }
         }
+      },
+      "delete": {
+        "operationId": "withdraw_prefixes",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_Ipv6Prefix",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Ipv6Prefix"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/prefixes": {
@@ -84,6 +113,22 @@
                 }
               }
             }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/sync": {
+      "put": {
+        "operationId": "sync",
+        "responses": {
+          "204": {
+            "description": "resource updated"
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -135,7 +180,7 @@
             "type": "string",
             "format": "ipv6"
           },
-          "mask": {
+          "len": {
             "type": "integer",
             "format": "uint8",
             "minimum": 0
@@ -143,7 +188,7 @@
         },
         "required": [
           "addr",
-          "mask"
+          "len"
         ]
       },
       "PeerInfo": {
@@ -154,41 +199,35 @@
             "format": "ipv6"
           },
           "host": {
-            "nullable": true,
             "type": "string"
           },
           "kind": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/RouterKind"
-              }
-            ]
+            "$ref": "#/components/schemas/RouterKind"
           },
           "status": {
-            "$ref": "#/components/schemas/Status"
+            "$ref": "#/components/schemas/PeerStatus"
           }
         },
         "required": [
           "addr",
+          "host",
+          "kind",
           "status"
         ]
       },
-      "RouterKind": {
-        "type": "string",
-        "enum": [
-          "Server",
-          "Transit"
-        ]
-      },
-      "Status": {
+      "PeerStatus": {
         "type": "string",
         "enum": [
           "NoContact",
-          "HailResponseSent",
-          "HailResponseReceived",
           "Active",
           "Expired"
+        ]
+      },
+      "RouterKind": {
+        "type": "integer",
+        "enum": [
+          0,
+          1
         ]
       }
     }

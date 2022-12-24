@@ -4,12 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.21", features = ["full"] }
-structopt = "0.3"
-anyhow = "1"
-slog = "2.7"
-slog-term = "2.7"
-slog-async = "2.7"
-slog-envlogger = "2.2"
+clap = { version = "4.0.29", features = ["derive"] }
 ddm = { path = "../ddm" }
 ddm-admin-client = { path = "../ddm-admin-client" }
+slog = "2.7.0"
+slog-term = "2.9.0"
+slog-envlogger = "2.2.0"
+slog-async = "2.7.0"
+tokio = "1.23.0"
+tabwriter = { version = "1", features = ["ansi_formatting"] }
+colored = "2.0.0"
+anyhow = "1.0.67"

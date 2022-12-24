@@ -1,36 +1,27 @@
 use anyhow::Result;
-use ddm::net::Ipv6Prefix;
+use clap::Parser;
+use colored::*;
+use ddm::db::Ipv6Prefix;
 use ddm_admin_client::types;
 use ddm_admin_client::Client;
-use slog::error;
-use slog::Drain;
-use slog::Logger;
-use std::net::Ipv6Addr;
-use std::net::SocketAddrV6;
-use structopt::clap::AppSettings::*;
-use structopt::StructOpt;
+use slog::{Drain, Logger};
+use std::io::{stdout, Write};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use tabwriter::TabWriter;
 
-#[derive(Debug, StructOpt)]
-#[structopt(
-    name = "ddmadm",
-    about = "A DDM router administration CLI",
-    global_setting(ColorAuto),
-    global_setting(ColoredHelp)
-)]
-struct Opt {
-    /// Address of the router
-    #[structopt(short, long, default_value = "::1")]
-    address: Ipv6Addr,
+#[derive(Debug, Parser)]
+struct Arg {
+    #[arg(short, long, default_value_t = Ipv6Addr::UNSPECIFIED.into())]
+    address: IpAddr,
 
-    /// Port to use
-    #[structopt(short, long, default_value = "8000")]
+    #[arg(short, long, default_value_t = 8000)]
     port: u16,
 
-    #[structopt(subcommand)]
-    subcommand: SubCommand,
+    #[clap(subcommand)]
+    subcmd: SubCommand,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 enum SubCommand {
     /// Get a DDM router's peers
     GetPeers,
@@ -38,65 +29,108 @@ enum SubCommand {
     /// Get the prefixes a DDM router knows about.
     GetPrefixes,
 
-    /// Get the set of active DDM routes on a router.
-    //TODO GetRoutes,
+    /// Advertise prefixes from a DDM router.
+    AdvertisePrefixes(Prefixes),
 
-    /// Advertise a prefix from a DDM router.
-    AdvertisePrefix(AdvertiseCommand),
+    /// Withdraw prefixes from a DDM router.
+    WithdrawPrefixes(Prefixes),
+
+    /// Sync prefix information from peers.
+    Sync,
 }
 
-#[derive(Debug, StructOpt)]
-struct AdvertiseCommand {
-    /// IPv6 Prefix to advertise
+#[derive(Debug, Parser)]
+struct Prefixes {
     prefixes: Vec<Ipv6Prefix>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let opt = Opt::from_args();
-    let log = init_logger();
+    run().await
+}
 
-    let endpoint =
-        format!("http://{}", SocketAddrV6::new(opt.address, opt.port, 0, 0));
+async fn run() -> Result<()> {
+    let arg = Arg::parse();
+    let sa: SocketAddr = match arg.address {
+        IpAddr::V4(a) => SocketAddrV4::new(a, arg.port).into(),
+        IpAddr::V6(a) => SocketAddrV6::new(a, arg.port, 0, 0).into(),
+    };
+    let endpoint = format!("http://{}", sa);
+    let log = init_logger();
     let client = Client::new(&endpoint, log.clone());
 
-    match opt.subcommand {
+    match arg.subcmd {
         SubCommand::GetPeers => {
-            match client.get_peers().await {
-                Ok(msg) => println!("{:#?}", msg),
-                Err(e) => error!(log, "{}", e),
-            };
+            let msg = client.get_peers().await?;
+            let mut tw = TabWriter::new(stdout());
+            writeln!(
+                &mut tw,
+                "{}\t{}\t{}\t{}\t{}",
+                "Interface".dimmed(),
+                "Host".dimmed(),
+                "Address".dimmed(),
+                "Kind".dimmed(),
+                "Status".dimmed(),
+            )?;
+            for (index, info) in &msg.into_inner() {
+                writeln!(
+                    &mut tw,
+                    "{}\t{}\t{}\t{}\t{:?}",
+                    index,
+                    info.host,
+                    info.addr,
+                    match *info.kind {
+                        0 => "Server",
+                        1 => "Transit",
+                        _ => "?",
+                    },
+                    info.status,
+                )?;
+            }
+            tw.flush()?;
         }
-
         SubCommand::GetPrefixes => {
-            match client.get_prefixes().await {
-                Ok(msg) => println!("{:#?}", msg),
-                Err(e) => error!(log, "{}", e),
-            };
+            let msg = client.get_prefixes().await?;
+            let mut tw = TabWriter::new(stdout());
+            writeln!(
+                &mut tw,
+                "{}\t{}",
+                "Destination".dimmed(),
+                "Next Hop".dimmed(),
+            )?;
+            for (nexthop, destinations) in msg.into_inner() {
+                for dest in &destinations {
+                    writeln!(
+                        &mut tw,
+                        "{}/{}\t{}",
+                        dest.addr, dest.len, nexthop,
+                    )?;
+                }
+            }
+            tw.flush()?;
         }
-
-        /* TODO
-        SubCommand::GetRoutes => {
-            match client.get_routes().await {
-                Ok(msg) => println!("{:#?}", msg),
-                Err(e) => error!(log, "{}", e),
-            };
-        }
-        */
-        SubCommand::AdvertisePrefix(ac) => {
-            // TODO a better way to deal with translating the client type back
-            // into the type it was derived from in the first place?
+        SubCommand::AdvertisePrefixes(ac) => {
             let mut prefixes: Vec<types::Ipv6Prefix> = Vec::new();
             for p in ac.prefixes {
                 prefixes.push(types::Ipv6Prefix {
                     addr: p.addr,
-                    mask: p.mask,
+                    len: p.len,
                 });
             }
-            match client.advertise_prefixes(&prefixes).await {
-                Ok(msg) => println!("{:#?}", msg),
-                Err(e) => error!(log, "{}", e),
-            };
+            client.advertise_prefixes(&prefixes).await?;
+        }
+        SubCommand::WithdrawPrefixes(ac) => {
+            let mut prefixes: Vec<types::Ipv6Prefix> = Vec::new();
+            for p in ac.prefixes {
+                prefixes.push(types::Ipv6Prefix {
+                    addr: p.addr,
+                    len: p.len,
+                });
+            }
+            client.withdraw_prefixes(&prefixes).await?;
+        }
+        SubCommand::Sync => {
+            client.sync().await?;
         }
     }
 
@@ -107,9 +141,6 @@ fn init_logger() -> Logger {
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::FullFormat::new(decorator).build().fuse();
     let drain = slog_envlogger::new(drain).fuse();
-    let drain = slog_async::Async::new(drain)
-        .chan_size(0x2000)
-        .build()
-        .fuse();
+    let drain = slog_async::Async::new(drain).build().fuse();
     slog::Logger::root(drain, slog::o!())
 }

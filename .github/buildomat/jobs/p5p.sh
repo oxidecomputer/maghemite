@@ -3,7 +3,7 @@
 #: name = "mg-p5p"
 #: variety = "basic"
 #: target = "helios"
-#: rust_toolchain = "nightly"
+#: rust_toolchain = "stable"
 #: output_rules = [
 #:   "=/out/mg.p5p",
 #:   "=/out/mg.p5p.sha256",

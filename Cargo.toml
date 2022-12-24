@@ -1,11 +1,18 @@
 [workspace]
 
+default-members = [
+    "ddm",
+    "ddmadm",
+    "ddmd",
+    "ddm-admin-client",
+    "util",
+]
+
 members = [
     "lab",
-    "icmpv6",
     "ddm",
-    "ddmd",
     "ddmadm",
+    "ddmd",
     "ddm-admin-client",
     "console",
     "package",
