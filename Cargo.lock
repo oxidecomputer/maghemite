@@ -487,7 +487,6 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "slog",
- "slog-envlogger",
  "socket2 0.4.7",
  "thiserror",
  "tokio 1.23.0",
@@ -497,7 +496,6 @@ dependencies = [
 name = "ddm-admin-client"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "percent-encoding",
  "progenitor",
  "reqwest 0.11.13",
