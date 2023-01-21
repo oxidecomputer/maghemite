@@ -5,6 +5,7 @@ use crate::{dbg, discovery, err, exchange, wrn};
 use slog::{error, Logger};
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread::sleep;
@@ -245,16 +246,28 @@ impl Exchange {
         Self { ctx, peer, log }
     }
 
-    fn initial_pull(&self) {
-        while let Err(e) = crate::exchange::pull(
-            self.ctx.clone(),
-            self.peer,
-            self.ctx.rt.clone(),
-            self.log.clone(),
-        ) {
-            sleep(Duration::from_millis(self.ctx.config.solicit_interval));
-            wrn!(self.log, self.ctx.config.if_index, "exchange pull: {}", e);
-        }
+    fn initial_pull(&self, stop: Arc<AtomicBool>) {
+        let ctx = self.ctx.clone();
+        let peer = self.peer;
+        let rt = self.ctx.rt.clone();
+        let log = self.log.clone();
+        let interval = self.ctx.config.solicit_interval;
+        let if_index = self.ctx.config.if_index;
+
+        spawn(move || {
+            while let Err(e) = crate::exchange::pull(
+                ctx.clone(),
+                peer,
+                rt.clone(),
+                log.clone(),
+            ) {
+                sleep(Duration::from_millis(interval));
+                wrn!(log, if_index, "exchange pull: {}", e);
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+        });
     }
 }
 
@@ -271,10 +284,12 @@ impl State for Exchange {
         )
         .unwrap(); //TODO unwrap
 
+        let pull_stop = Arc::new(AtomicBool::new(false));
+
         // Do an initial pull, in the event that exchange events are fired while
         // this pull is taking place, they will be queued and handled in the
         // loop below.
-        self.initial_pull();
+        self.initial_pull(pull_stop.clone());
 
         loop {
             let e = match event.recv() {
@@ -358,6 +373,7 @@ impl State for Exchange {
                             e,
                         );
                     }
+                    pull_stop.store(true, Ordering::Relaxed);
                     return (
                         Box::new(Solicit::new(
                             self.ctx.clone(),
