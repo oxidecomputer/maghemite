@@ -292,6 +292,7 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
         import.insert(Route {
             destination: *prefix,
             nexthop: ctx.peer,
+            ifname: ctx.ctx.config.if_name.clone(),
         });
         add.push(crate::sys::Route::new(
             prefix.addr.into(),
@@ -310,12 +311,15 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
         withdraw.insert(Route {
             destination: *prefix,
             nexthop: ctx.peer,
+            ifname: ctx.ctx.config.if_name.clone(),
         });
-        del.push(crate::sys::Route::new(
+        let mut r = crate::sys::Route::new(
             prefix.addr.into(),
             prefix.len,
             ctx.peer.into(),
-        ));
+        );
+        r.ifname = ctx.ctx.config.if_name.clone();
+        del.push(r);
     }
     ctx.ctx.db.delete_import(&withdraw);
     if let Err(e) =

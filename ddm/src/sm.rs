@@ -359,7 +359,9 @@ impl State for Exchange {
                         self.ctx.db.remove_nexthop_routes(self.peer);
                     let mut routes: Vec<crate::sys::Route> = Vec::new();
                     for x in &to_remove {
-                        routes.push((*x).into());
+                        let mut r: crate::sys::Route = x.clone().into();
+                        r.ifname = self.ctx.config.if_name.clone();
+                        routes.push(r);
                     }
                     if let Err(e) = crate::sys::remove_routes(
                         &self.log,
