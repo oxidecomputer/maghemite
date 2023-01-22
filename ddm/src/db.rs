@@ -38,7 +38,7 @@ impl Db {
     }
 
     pub fn import(&self, r: &HashSet<Route>) {
-        self.data.lock().unwrap().imported.extend(r);
+        self.data.lock().unwrap().imported.extend(r.clone());
     }
 
     pub fn delete_import(&self, r: &HashSet<Route>) {
@@ -67,7 +67,7 @@ impl Db {
         let mut removed = HashSet::new();
         for x in &data.imported {
             if x.nexthop == nexthop {
-                removed.insert(*x);
+                removed.insert(x.clone());
             }
         }
         for x in &removed {
@@ -174,9 +174,10 @@ impl std::str::FromStr for Ipv6Prefix {
 }
 
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct Route {
     pub destination: Ipv6Prefix,
     pub nexthop: Ipv6Addr,
+    pub ifname: String,
 }

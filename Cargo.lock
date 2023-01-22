@@ -1389,7 +1389,7 @@ dependencies = [
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys?branch=ddm#3f68d6660fdb45d8c77beebaa405fbb945dface4"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=ddm#91c72ec129f1a3c2d9fe8a90a5dfb81f1ff9daac"
 dependencies = [
  "anyhow",
  "cfg-if 1.0.0",

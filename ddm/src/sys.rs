@@ -14,6 +14,7 @@ pub struct Route {
     pub prefix_len: u8,
     pub gw: IpAddr,
     pub egress_port: u16,
+    pub ifname: String,
 }
 
 impl Route {
@@ -23,6 +24,7 @@ impl Route {
             prefix_len,
             gw,
             egress_port: 0,
+            ifname: String::new(),
         }
     }
 }
@@ -35,6 +37,7 @@ impl From<crate::db::Route> for Route {
             prefix_len: r.destination.len,
             gw: r.nexthop.into(),
             egress_port: 0,
+            ifname: r.ifname,
         }
     }
 }
@@ -47,6 +50,10 @@ impl From<libnet::route::Route> for Route {
             prefix_len: r.mask.try_into().unwrap(),
             gw: r.gw,
             egress_port: 0,
+            ifname: match r.ifx {
+                Some(ifx) => ifx,
+                None => String::new(),
+            },
         }
     }
 }
@@ -59,6 +66,11 @@ impl From<Route> for libnet::route::Route {
             mask: r.prefix_len as u32,
             gw: r.gw,
             delay: 0,
+            ifx: if !r.ifname.is_empty() {
+                Some(r.ifname)
+            } else {
+                None
+            },
         }
     }
 }
@@ -96,7 +108,7 @@ pub fn add_routes(
         }
         None => {
             info!(log, "sending {} routes to illumos", routes.len());
-            add_routes_illumos(routes)
+            add_routes_illumos(routes, &config.if_name)
         }
     }
 }
@@ -251,6 +263,7 @@ pub fn get_routes_dendrite(
             prefix_len,
             gw,
             egress_port,
+            ifname: String::new(),
         });
     }
 
@@ -272,7 +285,10 @@ pub fn get_routes_illumos() -> Result<Vec<Route>, String> {
     Ok(result)
 }
 
-pub fn add_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
+pub fn add_routes_illumos(
+    routes: Vec<Route>,
+    ifname: &str,
+) -> Result<(), String> {
     for r in routes {
         let gw = r.gw;
 
@@ -280,7 +296,7 @@ pub fn add_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
         if addr_is_local(gw)? || addr_is_local(r.dest)? {
             continue;
         }
-        match libnet::ensure_route_present(r.into(), gw) {
+        match libnet::ensure_route_present(r.into(), gw, Some(ifname.into())) {
             Ok(_) => {}
             Err(e) => return Err(format!("set route: {}", e)),
         }
@@ -304,7 +320,8 @@ fn addr_is_local(gw: IpAddr) -> Result<bool, String> {
 pub fn remove_routes_illumos(routes: Vec<Route>) -> Result<(), String> {
     for r in routes {
         let gw = r.gw;
-        match libnet::delete_route(r.into(), gw) {
+        match libnet::delete_route(r.clone().into(), gw, Some(r.ifname.clone()))
+        {
             Ok(_) => {}
             Err(e) => return Err(format!("set route: {}", e)),
         }

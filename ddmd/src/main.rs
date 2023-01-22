@@ -131,7 +131,8 @@ fn termination_handler(db: Db, dendrite: Option<DpdConfig>, log: Logger) {
     ctrlc::set_handler(move || {
         const SIGTERM_EXIT: i32 = 130;
         let imported = db.imported();
-        let routes: Vec<Route> = imported.iter().map(|x| (*x).into()).collect();
+        let routes: Vec<Route> =
+            imported.iter().map(|x| (x.clone()).into()).collect();
         ddm::sys::remove_routes(&log, &dendrite, routes)
             .expect("route removal on termination");
         std::process::exit(SIGTERM_EXIT);
