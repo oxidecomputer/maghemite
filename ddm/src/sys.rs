@@ -50,7 +50,10 @@ impl From<libnet::route::Route> for Route {
             prefix_len: r.mask.try_into().unwrap(),
             gw: r.gw,
             egress_port: 0,
-            ifname: String::new(), //TODO
+            ifname: match r.ifx {
+                Some(ifx) => ifx,
+                None => String::new(),
+            },
         }
     }
 }
@@ -63,6 +66,11 @@ impl From<Route> for libnet::route::Route {
             mask: r.prefix_len as u32,
             gw: r.gw,
             delay: 0,
+            ifx: if !r.ifname.is_empty() {
+                Some(r.ifname)
+            } else {
+                None
+            },
         }
     }
 }
