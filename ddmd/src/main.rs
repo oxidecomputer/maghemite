@@ -38,7 +38,7 @@ struct Arg {
     #[arg(long, default_value_t = String::from("localhost"))]
     dpd_host: String,
 
-    #[arg(long, default_value_t = dpd_api::default_port())]
+    #[arg(long, default_value_t = dpd_client::default_port())]
     dpd_port: u16,
 }
 
@@ -133,7 +133,8 @@ fn termination_handler(db: Db, dendrite: Option<DpdConfig>, log: Logger) {
         let imported = db.imported();
         let routes: Vec<Route> =
             imported.iter().map(|x| (x.clone()).into()).collect();
-        ddm::sys::remove_routes(&log, &dendrite, routes)
+        let h = Arc::new(tokio::runtime::Handle::current());
+        ddm::sys::remove_routes(&log, &dendrite, routes, &h)
             .expect("route removal on termination");
         std::process::exit(SIGTERM_EXIT);
     })

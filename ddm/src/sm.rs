@@ -367,6 +367,7 @@ impl State for Exchange {
                         &self.log,
                         &self.ctx.config.dpd,
                         routes,
+                        &self.ctx.rt,
                     ) {
                         err!(
                             self.log,

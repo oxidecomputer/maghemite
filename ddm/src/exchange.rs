@@ -197,11 +197,11 @@ pub fn handler(
     peer: Ipv6Addr,
     log: Logger,
 ) -> Result<tokio::task::JoinHandle<()>, String> {
-    let context = Mutex::new(HandlerContext {
+    let context = Arc::new(Mutex::new(HandlerContext {
         ctx: ctx.clone(),
         log: log.clone(),
         peer,
-    });
+    }));
 
     let sa = SocketAddrV6::new(addr, ctx.config.exchange_port, 0, 0);
 
@@ -240,8 +240,8 @@ pub fn handler(
     }))
 }
 
-pub fn api_description() -> Result<ApiDescription<Mutex<HandlerContext>>, String>
-{
+pub fn api_description(
+) -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, String> {
     let mut api = ApiDescription::new();
     api.register(push_handler)?;
     api.register(pull_handler)?;
@@ -250,7 +250,7 @@ pub fn api_description() -> Result<ApiDescription<Mutex<HandlerContext>>, String
 
 #[endpoint { method = PUT, path = "/push" }]
 async fn push_handler(
-    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().unwrap();
@@ -263,7 +263,7 @@ async fn push_handler(
 
 #[endpoint { method = GET, path = "/pull" }]
 async fn pull_handler(
-    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<HashSet<Ipv6Prefix>>, HttpError> {
     let ctx = ctx.context().lock().unwrap();
     let db = ctx.ctx.db.dump();
@@ -301,7 +301,9 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
         ));
     }
     ctx.ctx.db.import(&import);
-    if let Err(e) = crate::sys::add_routes(&ctx.log, &ctx.ctx.config, add) {
+    if let Err(e) =
+        crate::sys::add_routes(&ctx.log, &ctx.ctx.config, add, &ctx.ctx.rt)
+    {
         err!(ctx.log, ctx.ctx.config.if_index, "add system route: {}", e);
     }
 
@@ -322,9 +324,12 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
         del.push(r);
     }
     ctx.ctx.db.delete_import(&withdraw);
-    if let Err(e) =
-        crate::sys::remove_routes(&ctx.log, &ctx.ctx.config.dpd, del)
-    {
+    if let Err(e) = crate::sys::remove_routes(
+        &ctx.log,
+        &ctx.ctx.config.dpd,
+        del,
+        &ctx.ctx.rt,
+    ) {
         err!(ctx.log, ctx.ctx.config.if_index, "add system route: {}", e);
     }
 

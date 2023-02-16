@@ -1,10 +1,14 @@
 use crate::sm::{Config, DpdConfig};
 use dendrite_common::network::{Cidr, Ipv6Cidr};
+use dpd_client::types;
+use dpd_client::Client;
+use dpd_client::ClientState;
 use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{debug, info, warn, Logger};
 use std::net::{IpAddr, Ipv6Addr};
+use std::sync::Arc;
 
 const DDM_DPD_TAG: &str = "ddmd";
 
@@ -94,6 +98,7 @@ pub fn add_routes(
     log: &Logger,
     config: &Config,
     routes: Vec<Route>,
+    rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<(), String> {
     match &config.dpd {
         Some(dpd) => {
@@ -103,6 +108,7 @@ pub fn add_routes(
                 &dpd.host,
                 dpd.port,
                 &config.if_name,
+                rt,
                 log,
             )
         }
@@ -118,12 +124,16 @@ pub fn add_routes_dendrite(
     host: &str,
     port: u16,
     if_name: &str,
+    rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) -> Result<(), String> {
     debug!(log, "sending to dpd host={} port={}", host, port);
 
-    let dpd_api = dpd_api::Api::new(DDM_DPD_TAG, host, port)
-        .map_err(|e| format!("dpdapi new: {}", e))?;
+    let client_state = ClientState {
+        tag: DDM_DPD_TAG.into(),
+        log: log.clone(),
+    };
+    let client = Client::new(&format!("http://{host}:{port}"), client_state);
 
     for r in routes {
         let cidr = match r.dest {
@@ -156,15 +166,18 @@ pub fn add_routes_dendrite(
 
         let egress_port = format!("{}:0", egress_port_num);
 
-        if let Err(e) = dpd_api.route_ipv6_add(&cidr, egress_port, Some(gw)) {
-            // If this comes back as 409 conflict, that just means the route is
-            // already there.
-            if e.to_string().contains("409") {
-                warn!(log, "attempt to add route that exists {}", cidr);
-            } else {
-                return Err(format!("dpd route add: {}", e));
-            }
-        }
+        let route = types::Route {
+            tag: DDM_DPD_TAG.into(),
+            cidr: cidr.into(),
+            egress_port: egress_port.clone(),
+            nexthop: Some(gw.into()),
+        };
+
+        let client = client.clone();
+
+        rt.spawn(async move {
+            client.route_ipv6_entry_post(&cidr, &route).await.unwrap(); //TODO unwrap
+        });
     }
 
     Ok(())
@@ -174,6 +187,7 @@ pub fn remove_routes(
     log: &Logger,
     dpd: &Option<DpdConfig>,
     routes: Vec<Route>,
+    rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<(), String> {
     match dpd {
         Some(dpd) => {
@@ -182,7 +196,7 @@ pub fn remove_routes(
             // destination prefix with two different destination egress ports,
             // we want to be able to delete one but not the other. Looks like
             // this would be an update to the dpd api.
-            remove_routes_dendrite(routes, &dpd.host, dpd.port, log)
+            remove_routes_dendrite(routes, &dpd.host, dpd.port, rt, log)
         }
         None => {
             info!(log, "removing {} routes from illumos", routes.len());
@@ -195,10 +209,14 @@ pub fn remove_routes_dendrite(
     routes: Vec<Route>,
     host: &str,
     port: u16,
+    rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) -> Result<(), String> {
-    let dpd_api = dpd_api::Api::new(DDM_DPD_TAG, host, port)
-        .map_err(|e| format!("dpd api new: {}", e))?;
+    let client_state = ClientState {
+        tag: DDM_DPD_TAG.into(),
+        log: log.clone(),
+    };
+    let client = Client::new(&format!("http://{host}:{port}"), client_state);
 
     for r in routes {
         let cidr = match r.dest {
@@ -212,9 +230,11 @@ pub fn remove_routes_dendrite(
             }
         };
 
-        dpd_api
-            .route_ipv6_del(&cidr)
-            .map_err(|e| format!("dpd route del: {}", e))?;
+        let client = client.clone();
+
+        rt.spawn(async move {
+            client.route_ipv6_entry_delete(&cidr).await.unwrap(); //TODO unwrap
+        });
     }
 
     Ok(())
@@ -223,14 +243,24 @@ pub fn remove_routes_dendrite(
 pub fn get_routes_dendrite(
     host: String,
     port: u16,
+    rt: &Arc<tokio::runtime::Handle>,
+    log: Logger,
 ) -> Result<Vec<Route>, String> {
-    let api = dpd_api::Api::new(DDM_DPD_TAG, host, port)
-        .map_err(|e| format!("dpd api new: {}", e))?;
+    let client_state = ClientState {
+        tag: DDM_DPD_TAG.into(),
+        log: log.clone(),
+    };
+    let client = Client::new(&format!("http://{host}:{port}"), client_state);
 
-    let mut cookie = "".to_string();
-    let routes = api
-        .route_ipv6_get_range(None, &mut cookie)
-        .map_err(|e| format!("dpd get routes: {}", e))?;
+    let routes = rt.block_on(async {
+        //TODO unwrap
+        client
+            .route_ipv6_get(None, None)
+            .await
+            .unwrap()
+            .items
+            .to_vec()
+    });
     let mut result = Vec::new();
 
     for r in routes {

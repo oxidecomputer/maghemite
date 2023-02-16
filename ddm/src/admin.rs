@@ -32,7 +32,7 @@ pub fn handler(
     db: Db,
     log: Logger,
 ) -> Result<(), String> {
-    let context = Mutex::new(HandlerContext { event_channels, db });
+    let context = Arc::new(Mutex::new(HandlerContext { event_channels, db }));
 
     let sa: SocketAddr = match addr {
         IpAddr::V4(a) => SocketAddrV4::new(a, port).into(),
@@ -71,7 +71,7 @@ pub fn handler(
 
 #[endpoint { method = GET, path = "/peers" }]
 async fn get_peers(
-    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
     let ctx = ctx.context().lock().unwrap();
     Ok(HttpResponseOk(ctx.db.peers()))
@@ -81,7 +81,7 @@ type PrefixMap = BTreeMap<Ipv6Addr, HashSet<Ipv6Prefix>>;
 
 #[endpoint { method = GET, path = "/prefixes" }]
 async fn get_prefixes(
-    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<PrefixMap>, HttpError> {
     let ctx = ctx.context().lock().unwrap();
     let imported = ctx.db.imported();
@@ -103,7 +103,7 @@ async fn get_prefixes(
 
 #[endpoint { method = PUT, path = "/prefix" }]
 async fn advertise_prefixes(
-    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<HashSet<Ipv6Prefix>>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().unwrap();
@@ -120,7 +120,7 @@ async fn advertise_prefixes(
 
 #[endpoint { method = DELETE, path = "/prefix" }]
 async fn withdraw_prefixes(
-    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<HashSet<Ipv6Prefix>>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().unwrap();
@@ -137,7 +137,7 @@ async fn withdraw_prefixes(
 
 #[endpoint { method = PUT, path = "/sync" }]
 async fn sync(
-    ctx: Arc<RequestContext<Mutex<HandlerContext>>>,
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().unwrap();
 
@@ -148,8 +148,8 @@ async fn sync(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-pub fn api_description() -> Result<ApiDescription<Mutex<HandlerContext>>, String>
-{
+pub fn api_description(
+) -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, String> {
     let mut api = ApiDescription::new();
     api.register(get_peers)?;
     api.register(advertise_prefixes)?;
