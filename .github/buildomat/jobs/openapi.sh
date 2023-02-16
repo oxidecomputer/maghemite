@@ -2,7 +2,7 @@
 #:
 #: name = "openapi"
 #: variety = "basic"
-#: target = "helios"
+#: target = "helios-latest"
 #: output_rules = [
 #:   "/out/*.json",
 #: ]

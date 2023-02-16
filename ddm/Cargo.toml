@@ -19,12 +19,12 @@ hyper = "0.14.23"
 serde_json = "1.0.89"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "ddm" }
 
-[dependencies.dpd-api]
+[dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "tfport-softnpu"
-package = "dpd-api"
+branch = "vni-tostring-confilct"
+package = "dpd-client"
 
 [dependencies.dendrite-common]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "tfport-softnpu"
+branch = "vni-tostring-confilct"
 package = "common"

@@ -14,7 +14,7 @@ slog-term = "2.9.0"
 tokio = "1.23.0"
 ctrlc = { version = "3.2.4", features = ["termination"] }
 
-[dependencies.dpd-api]
+[dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-package = "dpd-api"
-branch = "main"
+branch = "vni-tostring-confilct"
+package = "dpd-client"

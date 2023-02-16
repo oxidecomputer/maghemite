@@ -2,7 +2,7 @@
 #:
 #: name = "mg-p5p"
 #: variety = "basic"
-#: target = "helios"
+#: target = "helios-latest"
 #: rust_toolchain = "stable"
 #: output_rules = [
 #:   "=/out/mg.p5p",
@@ -11,7 +11,6 @@
 #:
 #: access_repos = [
 #:   "oxidecomputer/dendrite",
-#:   "oxidecomputer/falcon",
 #: ]
 #:
 #: [[publish]]
