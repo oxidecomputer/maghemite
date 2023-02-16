@@ -21,10 +21,10 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "ddm" }
 
 [dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "vni-tostring-confilct"
+branch = "main"
 package = "dpd-client"
 
 [dependencies.dendrite-common]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "vni-tostring-confilct"
+branch = "main"
 package = "common"

@@ -270,7 +270,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=vni-tostring-confilct#20a0ebfbc27193c953ae5fcdc2bc7f77c580bf9a"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=main#1be01b5c8cf1599a942b39f61f304d1961e9d257"
 dependencies = [
  "anyhow",
  "rand",
@@ -570,7 +570,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=vni-tostring-confilct#20a0ebfbc27193c953ae5fcdc2bc7f77c580bf9a"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=main#1be01b5c8cf1599a942b39f61f304d1961e9d257"
 dependencies = [
  "chrono",
  "common",
