@@ -39,4 +39,15 @@ for x in $(svcprop -c -p config/interfaces "${SMF_FMRI}"); do
     args+=( "$x" )
 done
 
-exec /opt/oxide/mg-ddm/ddmd "${args[@]}"
+if [[ -e /opt/oxide/mg-ddm/bin/ddmd ]];
+then
+    # mg-ddm.tar.gz gets the binaries at /opt/oxide/mg-ddm/bin/
+    exec /opt/oxide/mg-ddm/bin/ddmd "${args[@]}"
+elif [[ -e /opt/oxide/mg-ddm/ddmd ]];
+then
+    # maghemite.tar gets the binaries at /opt/oxide/mg-ddm/
+    exec /opt/oxide/mg-ddm/ddmd "${args[@]}"
+else
+    exit 1
+fi
+

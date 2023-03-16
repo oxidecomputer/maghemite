@@ -21,6 +21,16 @@
 #: name = "maghemite.sha256.txt"
 #: from_output = "/out/maghemite.sha256.txt"
 #:
+#: [[publish]]
+#: series = "image"
+#: name = "mg-ddm.tar.gz"
+#: from_output = "/out/mg-ddm.tar.gz"
+#:
+#: [[publish]]
+#: series = "image"
+#: name = "mg-ddm.sha256.txt"
+#: from_output = "/out/mg-ddm.sha256.txt"
+#:
 
 set -o errexit
 set -o pipefail
@@ -42,5 +52,10 @@ banner copy
 pfexec mkdir -p /out
 pfexec chown "$UID" /out
 mv out/maghemite.tar /out/maghemite.tar
+mv out/mg-ddm.tar.gz /out/mg-ddm.tar.gz
+
+banner checksum
 cd /out
 digest -a sha256 maghemite.tar > maghemite.sha256.txt
+digest -a sha256 mg-ddm.tar.gz > mg-ddm.sha256.txt
+
