@@ -176,7 +176,7 @@ pub fn add_routes_dendrite(
         let client = client.clone();
 
         rt.spawn(async move {
-            client.route_ipv6_entry_post(&cidr, &route).await.unwrap(); //TODO unwrap
+            client.route_ipv6_create(&route).await.unwrap(); //TODO unwrap
         });
     }
 
@@ -233,7 +233,7 @@ pub fn remove_routes_dendrite(
         let client = client.clone();
 
         rt.spawn(async move {
-            client.route_ipv6_entry_delete(&cidr).await.unwrap(); //TODO unwrap
+            client.route_ipv6_delete(&cidr).await.unwrap(); //TODO unwrap
         });
     }
 
@@ -255,7 +255,7 @@ pub fn get_routes_dendrite(
     let routes = rt.block_on(async {
         //TODO unwrap
         client
-            .route_ipv6_get(None, None)
+            .route_ipv6_list(None, None)
             .await
             .unwrap()
             .items
