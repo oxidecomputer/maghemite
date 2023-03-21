@@ -29,6 +29,9 @@ enum SubCommand {
     /// Get the prefixes a DDM router knows about.
     GetPrefixes,
 
+    /// Get the prefixes a DDM router has originated.
+    GetOriginated,
+
     /// Advertise prefixes from a DDM router.
     AdvertisePrefixes(Prefixes),
 
@@ -106,6 +109,15 @@ async fn run() -> Result<()> {
                         dest.addr, dest.len, nexthop,
                     )?;
                 }
+            }
+            tw.flush()?;
+        }
+        SubCommand::GetOriginated => {
+            let msg = client.get_originated().await?;
+            let mut tw = TabWriter::new(stdout());
+            writeln!(&mut tw, "{}", "Prefix".dimmed(),)?;
+            for prefix in msg.into_inner() {
+                writeln!(&mut tw, "{}/{}", prefix.addr, prefix.len,)?;
             }
             tw.flush()?;
         }

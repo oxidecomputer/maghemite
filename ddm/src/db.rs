@@ -52,6 +52,10 @@ impl Db {
         self.data.lock().unwrap().originated.extend(p);
     }
 
+    pub fn originated(&self) -> HashSet<Ipv6Prefix> {
+        self.data.lock().unwrap().originated.clone()
+    }
+
     pub fn withdraw(&self, p: &HashSet<Ipv6Prefix>) {
         for prefix in p {
             self.data.lock().unwrap().originated.remove(prefix);

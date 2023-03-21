@@ -5,6 +5,34 @@
     "version": "v0.1.0"
   },
   "paths": {
+    "/originated": {
+      "get": {
+        "operationId": "get_originated",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_Ipv6Prefix",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Ipv6Prefix"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/peers": {
       "get": {
         "operationId": "get_peers",

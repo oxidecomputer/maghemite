@@ -79,6 +79,15 @@ async fn get_peers(
 
 type PrefixMap = BTreeMap<Ipv6Addr, HashSet<Ipv6Prefix>>;
 
+#[endpoint { method = GET, path = "/originated" }]
+async fn get_originated(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<HashSet<Ipv6Prefix>>, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+    let originated = ctx.db.originated();
+    Ok(HttpResponseOk(originated))
+}
+
 #[endpoint { method = GET, path = "/prefixes" }]
 async fn get_prefixes(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
@@ -155,6 +164,7 @@ pub fn api_description(
     api.register(advertise_prefixes)?;
     api.register(withdraw_prefixes)?;
     api.register(get_prefixes)?;
+    api.register(get_originated)?;
     api.register(sync)?;
     Ok(api)
 }
