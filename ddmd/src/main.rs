@@ -66,6 +66,8 @@ async fn main() {
         false => None,
     };
 
+    let rt = Arc::new(tokio::runtime::Handle::current());
+
     for name in arg.addresses {
         let info = get_ipaddr_info(&name).unwrap();
         let addr = match info.addr {
@@ -83,14 +85,13 @@ async fn main() {
             dpd: dpd.clone(),
             addr,
         };
-        let rt = Arc::new(tokio::runtime::Handle::current());
         let ctx = SmContext {
             config,
             db: db.clone(),
             event_channels: Vec::new(),
             tx: tx.clone(),
             log: log.clone(),
-            rt,
+            rt: rt.clone(),
         };
         let sm = StateMachine { ctx, rx: Some(rx) };
         sms.push(sm);
@@ -113,7 +114,7 @@ async fn main() {
         sm.run().unwrap();
     }
 
-    termination_handler(db.clone(), dpd, log.clone());
+    termination_handler(db.clone(), dpd, rt, log.clone());
 
     ddm::admin::handler(
         arg.admin_addr,
@@ -127,14 +128,18 @@ async fn main() {
     std::thread::park();
 }
 
-fn termination_handler(db: Db, dendrite: Option<DpdConfig>, log: Logger) {
+fn termination_handler(
+    db: Db,
+    dendrite: Option<DpdConfig>,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) {
     ctrlc::set_handler(move || {
         const SIGTERM_EXIT: i32 = 130;
         let imported = db.imported();
         let routes: Vec<Route> =
             imported.iter().map(|x| (x.clone()).into()).collect();
-        let h = Arc::new(tokio::runtime::Handle::current());
-        ddm::sys::remove_routes(&log, &dendrite, routes, &h)
+        ddm::sys::remove_routes(&log, &dendrite, routes, &rt)
             .expect("route removal on termination");
         std::process::exit(SIGTERM_EXIT);
     })
