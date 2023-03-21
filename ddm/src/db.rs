@@ -184,4 +184,5 @@ pub struct Route {
     pub destination: Ipv6Prefix,
     pub nexthop: Ipv6Addr,
     pub ifname: String,
+    pub path: Vec<String>,
 }

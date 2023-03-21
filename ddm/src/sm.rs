@@ -1,6 +1,7 @@
 // Copyright 2022 Oxide Computer Company
 
 use crate::db::{Db, Ipv6Prefix, RouterKind};
+use crate::exchange::PathVector;
 use crate::{dbg, discovery, err, exchange, wrn};
 use slog::{error, Logger};
 use std::collections::HashSet;
@@ -20,10 +21,10 @@ pub enum AdminEvent {
     Sync,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Push {
-    pub announce: HashSet<Ipv6Prefix>,
-    pub withdraw: HashSet<Ipv6Prefix>,
+    pub announce: HashSet<PathVector>,
+    pub withdraw: HashSet<PathVector>,
 }
 
 #[derive(Debug)]
@@ -129,6 +130,7 @@ pub struct SmContext {
     pub tx: Sender<Event>,
     pub event_channels: Vec<Sender<Event>>,
     pub rt: Arc<tokio::runtime::Handle>,
+    pub hostname: String,
     pub log: Logger,
 }
 
@@ -140,6 +142,7 @@ pub struct StateMachine {
 impl StateMachine {
     pub fn run(&mut self) -> Result<(), SmError> {
         discovery::handler(
+            self.ctx.hostname.clone(),
             self.ctx.config.clone(),
             self.ctx.tx.clone(),
             self.ctx.db.clone(),
@@ -301,18 +304,32 @@ impl State for Exchange {
             };
             match e {
                 Event::Admin(AdminEvent::Announce(prefixes)) => {
+                    let pv: HashSet<PathVector> = prefixes
+                        .iter()
+                        .map(|x| PathVector {
+                            destination: *x,
+                            path: vec![self.ctx.hostname.clone()],
+                        })
+                        .collect();
                     crate::exchange::announce(
                         self.ctx.config.clone(),
-                        prefixes,
+                        pv,
                         self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
                     );
                 }
                 Event::Admin(AdminEvent::Withdraw(prefixes)) => {
+                    let pv: HashSet<PathVector> = prefixes
+                        .iter()
+                        .map(|x| PathVector {
+                            destination: *x,
+                            path: vec![self.ctx.hostname.clone()],
+                        })
+                        .collect();
                     crate::exchange::withdraw(
                         self.ctx.config.clone(),
-                        prefixes,
+                        pv,
                         self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),

@@ -67,6 +67,10 @@ async fn main() {
     };
 
     let rt = Arc::new(tokio::runtime::Handle::current());
+    let hostname = hostname::get()
+        .expect("failed to get hostname")
+        .to_string_lossy()
+        .to_string();
 
     for name in arg.addresses {
         let info = get_ipaddr_info(&name).unwrap();
@@ -91,6 +95,7 @@ async fn main() {
             event_channels: Vec::new(),
             tx: tx.clone(),
             log: log.clone(),
+            hostname: hostname.clone(),
             rt: rt.clone(),
         };
         let sm = StateMachine { ctx, rx: Some(rx) };

@@ -1,4 +1,5 @@
 use crate::db::{Db, Ipv6Prefix, PeerInfo};
+use crate::exchange::PathVector;
 use crate::sm::{AdminEvent, Event};
 use dropshot::endpoint;
 use dropshot::ApiDescription;
@@ -77,7 +78,7 @@ async fn get_peers(
     Ok(HttpResponseOk(ctx.db.peers()))
 }
 
-type PrefixMap = BTreeMap<Ipv6Addr, HashSet<Ipv6Prefix>>;
+type PrefixMap = BTreeMap<Ipv6Addr, HashSet<PathVector>>;
 
 #[endpoint { method = GET, path = "/originated" }]
 async fn get_originated(
@@ -99,10 +100,16 @@ async fn get_prefixes(
 
     for route in imported {
         if let Some(entry) = result.get_mut(&route.nexthop) {
-            entry.insert(route.destination);
+            entry.insert(PathVector {
+                destination: route.destination,
+                path: route.path,
+            });
         } else {
             let mut s = HashSet::new();
-            s.insert(route.destination);
+            s.insert(PathVector {
+                destination: route.destination,
+                path: route.path,
+            });
             result.insert(route.nexthop, s);
         }
     }

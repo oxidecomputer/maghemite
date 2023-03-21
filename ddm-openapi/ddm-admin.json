@@ -129,12 +129,12 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Map_of_Set_of_Ipv6Prefix",
+                  "title": "Map_of_Set_of_PathVector",
                   "type": "object",
                   "additionalProperties": {
                     "type": "array",
                     "items": {
-                      "$ref": "#/components/schemas/Ipv6Prefix"
+                      "$ref": "#/components/schemas/PathVector"
                     },
                     "uniqueItems": true
                   }
@@ -217,6 +217,24 @@
         "required": [
           "addr",
           "len"
+        ]
+      },
+      "PathVector": {
+        "type": "object",
+        "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/Ipv6Prefix"
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "destination",
+          "path"
         ]
       },
       "PeerInfo": {

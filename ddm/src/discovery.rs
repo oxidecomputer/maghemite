@@ -173,6 +173,7 @@ struct Neighbor {
 }
 
 pub(crate) fn handler(
+    hostname: String,
     config: Config,
     event: Sender<Event>,
     db: Db,
@@ -205,7 +206,7 @@ pub(crate) fn handler(
         uc_socket: Arc::new(uc),
         nbr: Arc::new(RwLock::new(None)),
         log: log.clone(),
-        hostname: hostname::get()?.to_string_lossy().to_string(),
+        hostname,
         event,
         config,
         db,

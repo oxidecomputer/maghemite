@@ -97,16 +97,21 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
-                "{}\t{}",
+                "{}\t{}\t{}",
                 "Destination".dimmed(),
                 "Next Hop".dimmed(),
+                "Path".dimmed(),
             )?;
             for (nexthop, destinations) in msg.into_inner() {
-                for dest in &destinations {
+                for pv in &destinations {
+                    let strpath = pv.path.join(" ");
                     writeln!(
                         &mut tw,
-                        "{}/{}\t{}",
-                        dest.addr, dest.len, nexthop,
+                        "{}/{}\t{}\t{}",
+                        pv.destination.addr,
+                        pv.destination.len,
+                        nexthop,
+                        strpath,
                     )?;
                 }
             }
