@@ -33,9 +33,9 @@ use slog::Logger;
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 #[derive(Clone)]
@@ -128,41 +128,33 @@ pub(crate) fn pull(
     let resp = client.request(req);
     let log_ = log.clone();
 
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    rt.spawn(async move {
+    let body = rt.block_on(async move {
         match timeout(Duration::from_millis(250), resp).await {
-            Ok(response) => {
-                match response {
-                    Ok(data) => {
-                        let body = hyper::body::to_bytes(data.into_body())
-                            .await
-                            .unwrap(); //TODO unwrap
-                        let pv: HashSet<PathVector> =
-                            serde_json::from_slice(&body).unwrap(); //TODO unwrap
-
-                        let update = Update::announce(pv);
-
-                        let hctx = HandlerContext {
-                            ctx,
-                            peer: addr,
-                            log: log_,
-                        };
-                        handle_update(&update, &hctx);
-                        tx.send(Ok(())).unwrap();
-                    }
-                    Err(e) => {
-                        tx.send(Err(ExchangeError::Hyper(e))).unwrap();
+            Ok(response) => match response {
+                Ok(data) => {
+                    match hyper::body::to_bytes(data.into_body()).await {
+                        Ok(data) => Ok(data),
+                        Err(e) => Err(ExchangeError::Hyper(e)),
                     }
                 }
-            }
-            Err(e) => {
-                tx.send(Err(ExchangeError::Timeout(e))).unwrap();
-            }
+                Err(e) => Err(ExchangeError::Hyper(e)),
+            },
+            Err(e) => Err(ExchangeError::Timeout(e)),
         }
-    });
+    })?;
 
-    rx.recv().unwrap()
+    let pv: HashSet<PathVector> = serde_json::from_slice(&body).unwrap(); //TODO unwrap
+
+    let update = Update::announce(pv);
+
+    let hctx = HandlerContext {
+        ctx,
+        peer: addr,
+        log: log_,
+    };
+    handle_update(&update, &hctx);
+
+    Ok(())
 }
 
 fn send_update(
@@ -263,7 +255,7 @@ async fn push_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = ctx.context().lock().await;
     let update = request.into_inner();
 
     handle_update(&update, &ctx);
@@ -275,7 +267,7 @@ async fn push_handler(
 async fn pull_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<HashSet<PathVector>>, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = ctx.context().lock().await;
     let db = ctx.ctx.db.dump();
     let mut prefixes = HashSet::new();
     // Only transit routers redistribute prefixes

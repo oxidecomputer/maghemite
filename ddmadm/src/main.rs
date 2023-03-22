@@ -102,8 +102,11 @@ async fn run() -> Result<()> {
                 "Next Hop".dimmed(),
                 "Path".dimmed(),
             )?;
-            for (nexthop, destinations) in msg.into_inner() {
-                for pv in &destinations {
+            for (nexthop, mut destinations) in msg.into_inner() {
+                for pv in &mut destinations {
+                    // show path from perspective of this node, e.g. nearest node
+                    // first
+                    pv.path.reverse();
                     let strpath = pv.path.join(" ");
                     writeln!(
                         &mut tw,
