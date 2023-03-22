@@ -393,6 +393,35 @@ impl State for Exchange {
                             e,
                         );
                     }
+                    // if we're a transit router propagate withdraws for the
+                    // expired peer.
+                    if self.ctx.config.kind == RouterKind::Transit {
+                        dbg!(
+                            self.log,
+                            self.ctx.config.if_index,
+                            "redistributing expire to {} peers",
+                            self.ctx.event_channels.len()
+                        );
+                        let pv = to_remove
+                            .iter()
+                            .map(|x| PathVector {
+                                destination: x.destination,
+                                path: {
+                                    let mut ps = x.path.clone();
+                                    ps.push(self.ctx.hostname.clone());
+                                    ps
+                                },
+                            })
+                            .collect();
+                        let push = Push {
+                            announce: HashSet::new(),
+                            withdraw: pv,
+                        };
+                        for ec in &self.ctx.event_channels {
+                            ec.send(Event::Peer(PeerEvent::Push(push.clone())))
+                                .unwrap();
+                        }
+                    }
                     pull_stop.store(true, Ordering::Relaxed);
                     return (
                         Box::new(Solicit::new(
