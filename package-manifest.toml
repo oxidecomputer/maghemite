@@ -1,8 +1,21 @@
 [package.maghemite]
-rust.binary_names = ["ddmd", "ddmadm"]
-rust.release = true
 service_name = "mg-ddm"
-zone = false
-[[package.maghemite.paths]]
-from = "smf"
-to = "pkg"
+source.type = "local"
+source.rust.binary_names = ["ddmd", "ddmadm"]
+source.rust.release = true
+source.paths = [
+  { from = "smf", to = "pkg" }
+]
+output.type = "tarball"
+
+[package.mg-ddm]
+service_name = "mg-ddm"
+source.type = "local"
+source.rust.binary_names = ["ddmd", "ddmadm"]
+source.rust.release = true
+source.paths = [
+  { from = "smf/ddm_method_script.sh", to = "/opt/oxide/mg-ddm/pkg/ddm_method_script.sh" },
+  { from = "smf/ddm/manifest.xml", to = "/var/svc/manifest/site/mg-ddm/manifest.xml" }
+]
+output.type = "zone"
+

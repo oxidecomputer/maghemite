@@ -1580,11 +1580,12 @@ source = "git+https://github.com/jmesmon/rust-libzfs?branch=master#ecd5a922247a6
 
 [[package]]
 name = "omicron-zone-package"
-version = "0.4.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "222c900d9a67df941c61590869a2a23de13d6cc613d9aaa5dd09c98b1e8dde45"
+checksum = "1fc07ae764740e9da85fd0ec5e7a5834f6c24dada2d78c2313525f1afd2d02e1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "filetime",
  "flate2",
