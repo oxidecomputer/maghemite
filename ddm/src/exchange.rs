@@ -255,10 +255,16 @@ async fn push_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().await;
+    let ctx = ctx.context().lock().await.clone();
     let update = request.into_inner();
 
-    handle_update(&update, &ctx);
+    tokio::task::spawn_blocking(move || {
+        handle_update(&update, &ctx);
+    })
+    .await
+    .map_err(|e| {
+        HttpError::for_internal_error(format!("spawn update thread {}", e))
+    })?;
 
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -267,8 +273,14 @@ async fn push_handler(
 async fn pull_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<HashSet<PathVector>>, HttpError> {
-    let ctx = ctx.context().lock().await;
-    let db = ctx.ctx.db.dump();
+    let ctx = ctx.context().lock().await.clone();
+
+    let db = tokio::task::spawn_blocking(move || ctx.ctx.db.dump())
+        .await
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("spawn db dump thread {}", e))
+        })?;
+
     let mut prefixes = HashSet::new();
     // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
