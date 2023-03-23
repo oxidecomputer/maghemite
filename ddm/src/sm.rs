@@ -3,7 +3,7 @@
 use crate::db::{Db, Ipv6Prefix, RouterKind};
 use crate::exchange::PathVector;
 use crate::{dbg, discovery, err, exchange, wrn};
-use slog::{error, Logger};
+use slog::{error, info, Logger};
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -272,6 +272,34 @@ impl Exchange {
             }
         });
     }
+
+    fn wait_for_exchange_server_to_start(
+        &self,
+    ) -> Result<(), exchange::ExchangeError> {
+        info!(self.log, "waiting for exchange server to start");
+        let mut retries = 0;
+        let limit = 50; //TODO as parameter
+        let interval = 100; // TODO as parameter
+        loop {
+            match exchange::do_pull(
+                &self.ctx,
+                &self.ctx.config.addr,
+                &self.ctx.rt,
+            ) {
+                Ok(_) => break,
+                Err(e) => {
+                    if retries < limit {
+                        retries += 1;
+                        sleep(Duration::from_millis(interval))
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl State for Exchange {
@@ -288,6 +316,8 @@ impl State for Exchange {
         .unwrap(); //TODO unwrap
 
         let pull_stop = Arc::new(AtomicBool::new(false));
+
+        self.wait_for_exchange_server_to_start().unwrap(); //TODO unwrap
 
         // Do an initial pull, in the event that exchange events are fired while
         // this pull is taking place, they will be queued and handled in the

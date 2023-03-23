@@ -108,12 +108,11 @@ pub(crate) fn withdraw(
     send_update(config, update, addr, rt, log);
 }
 
-pub(crate) fn pull(
-    ctx: SmContext,
-    addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
-    log: Logger,
-) -> Result<(), ExchangeError> {
+pub(crate) fn do_pull(
+    ctx: &SmContext,
+    addr: &Ipv6Addr,
+    rt: &Arc<tokio::runtime::Handle>,
+) -> Result<HashSet<PathVector>, ExchangeError> {
     let uri = format!(
         "http://[{}%{}]:{}/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
@@ -126,7 +125,6 @@ pub(crate) fn pull(
         .unwrap(); //TODO unwrap
 
     let resp = client.request(req);
-    let log_ = log.clone();
 
     let body = rt.block_on(async move {
         match timeout(Duration::from_millis(250), resp).await {
@@ -143,14 +141,23 @@ pub(crate) fn pull(
         }
     })?;
 
-    let pv: HashSet<PathVector> = serde_json::from_slice(&body).unwrap(); //TODO unwrap
+    Ok(serde_json::from_slice(&body).unwrap()) //TODO unwrap
+}
+
+pub(crate) fn pull(
+    ctx: SmContext,
+    addr: Ipv6Addr,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let pv: HashSet<PathVector> = do_pull(&ctx, &addr, &rt)?;
 
     let update = Update::announce(pv);
 
     let hctx = HandlerContext {
         ctx,
         peer: addr,
-        log: log_,
+        log: log.clone(),
     };
     handle_update(&update, &hctx);
 
