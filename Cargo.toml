@@ -45,13 +45,14 @@ progenitor = { git = "https://github.com/oxidecomputer/progenitor", branch = "ma
 clap = { version = "4.0.29", features = ["derive"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "2.0.0"
+ctrlc = { version = "3.2.4", features = ["termination"] }
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "854890b7db8347d3ab4c7546b18dc51e5995894c"
+rev = "57759f883fcdf658475eaeb7341d6c4c52ce0432"
 package = "dpd-client"
 
 [workspace.dependencies.dendrite-common]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "854890b7db8347d3ab4c7546b18dc51e5995894c"
+rev = "57759f883fcdf658475eaeb7341d6c4c52ce0432"
 package = "common"

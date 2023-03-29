@@ -327,7 +327,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=854890b7db8347d3ab4c7546b18dc51e5995894c#854890b7db8347d3ab4c7546b18dc51e5995894c"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=57759f883fcdf658475eaeb7341d6c4c52ce0432#57759f883fcdf658475eaeb7341d6c4c52ce0432"
 dependencies = [
  "anyhow",
  "rand",
@@ -643,7 +643,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?rev=854890b7db8347d3ab4c7546b18dc51e5995894c#854890b7db8347d3ab4c7546b18dc51e5995894c"
+source = "git+https://github.com/oxidecomputer/dendrite?rev=57759f883fcdf658475eaeb7341d6c4c52ce0432#57759f883fcdf658475eaeb7341d6c4c52ce0432"
 dependencies = [
  "chrono",
  "common",
@@ -656,6 +656,7 @@ dependencies = [
  "serde",
  "serde_json",
  "slog",
+ "tokio",
 ]
 
 [[package]]

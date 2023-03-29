@@ -8,6 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{debug, info, warn, Logger};
 use std::net::{IpAddr, Ipv6Addr};
+use std::str::FromStr;
 use std::sync::Arc;
 
 const DDM_DPD_TAG: &str = "ddmd";
@@ -164,12 +165,19 @@ pub fn add_routes_dendrite(
             .parse::<usize>()
             .map_err(|_| format!("expected tofino port number {}", if_name))?;
 
-        let egress_port = format!("{}:0", egress_port_num);
+        // TODO this assumes ddm only operates on rear ports, which will not be
+        // true for multi-rack deployments.
+        let switch_port =
+            types::PortId::from_str(&format!("rear{}/0", egress_port_num - 1))?;
+
+        // TODO breakout considerations
+        let link = types::LinkId(0);
 
         let route = types::Route {
             tag: DDM_DPD_TAG.into(),
             cidr: cidr.into(),
-            egress_port: egress_port.clone(),
+            switch_port,
+            link,
             nexthop: Some(gw.into()),
         };
 
@@ -272,11 +280,11 @@ pub fn get_routes_dendrite(
             Cidr::V6(cidr) => (cidr.prefix.into(), cidr.prefix_len),
             _ => continue,
         };
-        let parts: Vec<&str> = r.egress_port.split(':').collect();
+        let parts: Vec<&str> = r.switch_port.split(':').collect();
         if parts.is_empty() {
             return Err(format!(
                 "expected port format M:N, got {}",
-                r.egress_port
+                r.switch_port.as_str()
             ));
         }
         let egress_port = match parts[0].parse::<u16>() {
@@ -284,7 +292,8 @@ pub fn get_routes_dendrite(
             Err(e) => {
                 return Err(format!(
                     "expected port format M:N, got {}: {}",
-                    r.egress_port, e,
+                    r.switch_port.as_str(),
+                    e,
                 ))
             }
         };
