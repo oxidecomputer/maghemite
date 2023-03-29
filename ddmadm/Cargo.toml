@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clap = { version = "4.0.29", features = ["derive"] }
 ddm = { path = "../ddm" }
 ddm-admin-client = { path = "../ddm-admin-client" }
-slog = "2.7.0"
-slog-term = "2.9.0"
-slog-envlogger = "2.2.0"
-slog-async = "2.7.0"
-tokio = "1.23.0"
-tabwriter = { version = "1", features = ["ansi_formatting"] }
-colored = "2.0.0"
-anyhow = "1.0.67"
+clap.workspace = true
+slog.workspace = true
+slog-term.workspace = true
+slog-envlogger.workspace = true
+slog-async.workspace = true
+tokio.workspace = true
+tabwriter.workspace = true
+colored.workspace = true
+anyhow.workspace = true

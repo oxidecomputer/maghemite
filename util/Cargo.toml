@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "ddm" }
-socket2 = { version = "0.4", features = ["all"] }
-anyhow = "1"
-slog = "2.7"
-slog-term = "2.7"
-slog-async = "2.7"
-slog-envlogger = "2.2"
+libnet.workspace = true
+socket2.workspace = true
+anyhow.workspace = true
+slog.workspace = true
+slog-term.workspace = true
+slog-async.workspace = true
+slog-envlogger.workspace = true
