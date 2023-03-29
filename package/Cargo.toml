@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1"
-tokio = "1.21"
 omicron-zone-package = "0.5.1"
+anyhow.workspace = true
+tokio.workspace = true

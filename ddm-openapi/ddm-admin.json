@@ -5,6 +5,34 @@
     "version": "v0.1.0"
   },
   "paths": {
+    "/originated": {
+      "get": {
+        "operationId": "get_originated",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_Ipv6Prefix",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Ipv6Prefix"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/peers": {
       "get": {
         "operationId": "get_peers",
@@ -101,12 +129,12 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Map_of_Set_of_Ipv6Prefix",
+                  "title": "Map_of_Set_of_PathVector",
                   "type": "object",
                   "additionalProperties": {
                     "type": "array",
                     "items": {
-                      "$ref": "#/components/schemas/Ipv6Prefix"
+                      "$ref": "#/components/schemas/PathVector"
                     },
                     "uniqueItems": true
                   }
@@ -189,6 +217,24 @@
         "required": [
           "addr",
           "len"
+        ]
+      },
+      "PathVector": {
+        "type": "object",
+        "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/Ipv6Prefix"
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "destination",
+          "path"
         ]
       },
       "PeerInfo": {

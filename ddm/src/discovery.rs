@@ -173,6 +173,7 @@ struct Neighbor {
 }
 
 pub(crate) fn handler(
+    hostname: String,
     config: Config,
     event: Sender<Event>,
     db: Db,
@@ -205,7 +206,7 @@ pub(crate) fn handler(
         uc_socket: Arc::new(uc),
         nbr: Arc::new(RwLock::new(None)),
         log: log.clone(),
-        hostname: hostname::get()?.to_string_lossy().to_string(),
+        hostname,
         event,
         config,
         db,
@@ -260,6 +261,7 @@ fn expire(ctx: HandlerContext) -> Result<(), DiscoveryError> {
                 );
             }
         }
+        drop(guard);
         sleep(Duration::from_millis(ctx.config.solicit_interval));
     });
     Ok(())
@@ -363,6 +365,7 @@ fn handle_advertisement(
                 last_seen: Instant::now(),
                 kind,
             });
+            drop(guard);
             ctx.db.set_peer(
                 ctx.config.if_index,
                 PeerInfo {
@@ -394,6 +397,7 @@ fn handle_advertisement(
             last_seen: Instant::now(),
             kind,
         });
+        drop(guard);
         ctx.db.set_peer(
             ctx.config.if_index,
             PeerInfo {

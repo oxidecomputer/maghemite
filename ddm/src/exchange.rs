@@ -33,9 +33,9 @@ use slog::Logger;
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 #[derive(Clone)]
@@ -45,20 +45,28 @@ pub struct HandlerContext {
     log: Logger,
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
+)]
+pub struct PathVector {
+    pub destination: Ipv6Prefix,
+    pub path: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 struct Update {
-    pub announce: HashSet<Ipv6Prefix>,
-    pub withdraw: HashSet<Ipv6Prefix>,
+    pub announce: HashSet<PathVector>,
+    pub withdraw: HashSet<PathVector>,
 }
 
 impl Update {
-    fn announce(prefixes: HashSet<Ipv6Prefix>) -> Self {
+    fn announce(prefixes: HashSet<PathVector>) -> Self {
         Self {
             announce: prefixes,
             ..Default::default()
         }
     }
-    fn withdraw(prefixes: HashSet<Ipv6Prefix>) -> Self {
+    fn withdraw(prefixes: HashSet<PathVector>) -> Self {
         Self {
             withdraw: prefixes,
             ..Default::default()
@@ -80,32 +88,31 @@ pub enum ExchangeError {
 
 pub(crate) fn announce(
     config: Config,
-    prefixes: HashSet<Ipv6Prefix>,
-    addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
-    log: Logger,
-) {
-    let update = Update::announce(prefixes);
-    send_update(config, update, addr, rt, log);
-}
-
-pub(crate) fn withdraw(
-    config: Config,
-    prefixes: HashSet<Ipv6Prefix>,
-    addr: Ipv6Addr,
-    rt: Arc<tokio::runtime::Handle>,
-    log: Logger,
-) {
-    let update = Update::withdraw(prefixes);
-    send_update(config, update, addr, rt, log);
-}
-
-pub(crate) fn pull(
-    ctx: SmContext,
+    prefixes: HashSet<PathVector>,
     addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
+    let update = Update::announce(prefixes);
+    send_update(config, update, addr, rt, log)
+}
+
+pub(crate) fn withdraw(
+    config: Config,
+    prefixes: HashSet<PathVector>,
+    addr: Ipv6Addr,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let update = Update::withdraw(prefixes);
+    send_update(config, update, addr, rt, log)
+}
+
+pub(crate) fn do_pull(
+    ctx: &SmContext,
+    addr: &Ipv6Addr,
+    rt: &Arc<tokio::runtime::Handle>,
+) -> Result<HashSet<PathVector>, ExchangeError> {
     let uri = format!(
         "http://[{}%{}]:{}/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
@@ -118,41 +125,43 @@ pub(crate) fn pull(
         .unwrap(); //TODO unwrap
 
     let resp = client.request(req);
-    let log_ = log.clone();
 
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    rt.spawn(async move {
+    let body = rt.block_on(async move {
         match timeout(Duration::from_millis(250), resp).await {
-            Ok(response) => {
-                match response {
-                    Ok(data) => {
-                        let body = hyper::body::to_bytes(data.into_body())
-                            .await
-                            .unwrap(); //TODO unwrap
-                        let prefixes: HashSet<Ipv6Prefix> =
-                            serde_json::from_slice(&body).unwrap(); //TODO unwrap
-                        let update = Update::announce(prefixes);
-                        let hctx = HandlerContext {
-                            ctx,
-                            peer: addr,
-                            log: log_,
-                        };
-                        handle_update(&update, &hctx);
-                        tx.send(Ok(())).unwrap();
-                    }
-                    Err(e) => {
-                        tx.send(Err(ExchangeError::Hyper(e))).unwrap();
+            Ok(response) => match response {
+                Ok(data) => {
+                    match hyper::body::to_bytes(data.into_body()).await {
+                        Ok(data) => Ok(data),
+                        Err(e) => Err(ExchangeError::Hyper(e)),
                     }
                 }
-            }
-            Err(e) => {
-                tx.send(Err(ExchangeError::Timeout(e))).unwrap();
-            }
+                Err(e) => Err(ExchangeError::Hyper(e)),
+            },
+            Err(e) => Err(ExchangeError::Timeout(e)),
         }
-    });
+    })?;
 
-    rx.recv().unwrap()
+    Ok(serde_json::from_slice(&body).unwrap()) //TODO unwrap
+}
+
+pub(crate) fn pull(
+    ctx: SmContext,
+    addr: Ipv6Addr,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let pv: HashSet<PathVector> = do_pull(&ctx, &addr, &rt)?;
+
+    let update = Update::announce(pv);
+
+    let hctx = HandlerContext {
+        ctx,
+        peer: addr,
+        log: log.clone(),
+    };
+    handle_update(&update, &hctx);
+
+    Ok(())
 }
 
 fn send_update(
@@ -161,7 +170,7 @@ fn send_update(
     addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
-) {
+) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update).unwrap(); //TODO unwrap
     let uri = format!(
         "http://[{}%{}]:{}/push",
@@ -177,18 +186,23 @@ fn send_update(
 
     let resp = client.request(req);
 
-    rt.spawn(async move {
-        match timeout(Duration::from_millis(250), resp).await {
-            Ok(_) => {}
-            Err(e) => err!(
-                log,
-                config.if_index,
-                "peer request timeout to {}: {}",
-                uri,
-                e,
-            ),
-        };
-    });
+    rt.block_on(async move {
+        match timeout(Duration::from_millis(config.exchange_timeout), resp)
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                err!(
+                    log,
+                    config.if_index,
+                    "peer request timeout to {}: {}",
+                    uri,
+                    e,
+                );
+                Err(e.into())
+            }
+        }
+    })
 }
 
 pub fn handler(
@@ -253,10 +267,16 @@ async fn push_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = ctx.context().lock().await.clone();
     let update = request.into_inner();
 
-    handle_update(&update, &ctx);
+    tokio::task::spawn_blocking(move || {
+        handle_update(&update, &ctx);
+    })
+    .await
+    .map_err(|e| {
+        HttpError::for_internal_error(format!("spawn update thread {}", e))
+    })?;
 
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -264,9 +284,15 @@ async fn push_handler(
 #[endpoint { method = GET, path = "/pull" }]
 async fn pull_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-) -> Result<HttpResponseOk<HashSet<Ipv6Prefix>>, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
-    let db = ctx.ctx.db.dump();
+) -> Result<HttpResponseOk<HashSet<PathVector>>, HttpError> {
+    let ctx = ctx.context().lock().await.clone();
+
+    let db = tokio::task::spawn_blocking(move || ctx.ctx.db.dump())
+        .await
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("spawn db dump thread {}", e))
+        })?;
+
     let mut prefixes = HashSet::new();
     // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
@@ -275,11 +301,20 @@ async fn pull_handler(
             if route.nexthop == ctx.peer {
                 continue;
             }
-            prefixes.insert(route.destination);
+            let mut pv = PathVector {
+                destination: route.destination,
+                path: route.path.clone(),
+            };
+            pv.path.push(ctx.ctx.hostname.clone());
+            prefixes.insert(pv);
         }
     }
     for prefix in &db.originated {
-        prefixes.insert(*prefix);
+        let pv = PathVector {
+            destination: *prefix,
+            path: vec![ctx.ctx.hostname.clone()],
+        };
+        prefixes.insert(pv);
     }
 
     Ok(HttpResponseOk(prefixes))
@@ -290,13 +325,14 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
     let mut add = Vec::new();
     for prefix in &update.announce {
         import.insert(Route {
-            destination: *prefix,
+            destination: prefix.destination,
             nexthop: ctx.peer,
             ifname: ctx.ctx.config.if_name.clone(),
+            path: prefix.path.clone(),
         });
         add.push(crate::sys::Route::new(
-            prefix.addr.into(),
-            prefix.len,
+            prefix.destination.addr.into(),
+            prefix.destination.len,
             ctx.peer.into(),
         ));
     }
@@ -311,13 +347,14 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
     let mut del = Vec::new();
     for prefix in &update.withdraw {
         withdraw.insert(Route {
-            destination: *prefix,
+            destination: prefix.destination,
             nexthop: ctx.peer,
             ifname: ctx.ctx.config.if_name.clone(),
+            path: prefix.path.clone(),
         });
         let mut r = crate::sys::Route::new(
-            prefix.addr.into(),
-            prefix.len,
+            prefix.destination.addr.into(),
+            prefix.destination.len,
             ctx.peer.into(),
         );
         r.ifname = ctx.ctx.config.if_name.clone();
@@ -342,12 +379,28 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
             "redistributing update to {} peers",
             ctx.ctx.event_channels.len()
         );
+        let push = crate::sm::Push {
+            announce: update
+                .announce
+                .iter()
+                .map(|x| {
+                    let mut pv = x.clone();
+                    pv.path.push(ctx.ctx.hostname.clone());
+                    pv
+                })
+                .collect(),
+            withdraw: update
+                .withdraw
+                .iter()
+                .map(|x| {
+                    let mut pv = x.clone();
+                    pv.path.push(ctx.ctx.hostname.clone());
+                    pv
+                })
+                .collect(),
+        };
         for ec in &ctx.ctx.event_channels {
-            ec.send(Event::Peer(PeerEvent::Push(crate::sm::Push {
-                announce: update.announce.clone(),
-                withdraw: update.withdraw.clone(),
-            })))
-            .unwrap();
+            ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
         }
     }
 }
