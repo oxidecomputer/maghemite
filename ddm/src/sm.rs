@@ -107,6 +107,9 @@ pub struct Config {
     /// (milliseconds).
     pub expire_threshold: u64,
 
+    /// How long to wait for a response to exchange messages.
+    pub exchange_timeout: u64,
+
     /// The kind of router this is, server or transit.
     pub kind: RouterKind,
 
@@ -300,6 +303,63 @@ impl Exchange {
 
         Ok(())
     }
+
+    fn expire_peer(
+        &mut self,
+        exchange_thread: &tokio::task::JoinHandle<()>,
+        pull_stop: &AtomicBool,
+    ) {
+        exchange_thread.abort();
+        let to_remove = self.ctx.db.remove_nexthop_routes(self.peer);
+        let mut routes: Vec<crate::sys::Route> = Vec::new();
+        for x in &to_remove {
+            let mut r: crate::sys::Route = x.clone().into();
+            r.ifname = self.ctx.config.if_name.clone();
+            routes.push(r);
+        }
+        if let Err(e) = crate::sys::remove_routes(
+            &self.log,
+            &self.ctx.config.dpd,
+            routes,
+            &self.ctx.rt,
+        ) {
+            err!(
+                self.log,
+                self.ctx.config.if_index,
+                "failed to remove routes: {}",
+                e,
+            );
+        }
+        // if we're a transit router propagate withdraws for the
+        // expired peer.
+        if self.ctx.config.kind == RouterKind::Transit {
+            dbg!(
+                self.log,
+                self.ctx.config.if_index,
+                "redistributing expire to {} peers",
+                self.ctx.event_channels.len()
+            );
+            let pv = to_remove
+                .iter()
+                .map(|x| PathVector {
+                    destination: x.destination,
+                    path: {
+                        let mut ps = x.path.clone();
+                        ps.push(self.ctx.hostname.clone());
+                        ps
+                    },
+                })
+                .collect();
+            let push = Push {
+                announce: HashSet::new(),
+                withdraw: pv,
+            };
+            for ec in &self.ctx.event_channels {
+                ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
+            }
+        }
+        pull_stop.store(true, Ordering::Relaxed);
+    }
 }
 
 impl State for Exchange {
@@ -341,13 +401,17 @@ impl State for Exchange {
                             path: vec![self.ctx.hostname.clone()],
                         })
                         .collect();
-                    crate::exchange::announce(
+                    if crate::exchange::announce(
                         self.ctx.config.clone(),
                         pv,
                         self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
-                    );
+                    )
+                    .is_err()
+                    {
+                        self.expire_peer(&exchange_thread, &pull_stop);
+                    }
                 }
                 Event::Admin(AdminEvent::Withdraw(prefixes)) => {
                     let pv: HashSet<PathVector> = prefixes
@@ -357,13 +421,17 @@ impl State for Exchange {
                             path: vec![self.ctx.hostname.clone()],
                         })
                         .collect();
-                    crate::exchange::withdraw(
+                    if crate::exchange::withdraw(
                         self.ctx.config.clone(),
                         pv,
                         self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
-                    );
+                    )
+                    .is_err()
+                    {
+                        self.expire_peer(&exchange_thread, &pull_stop);
+                    }
                 }
                 Event::Admin(AdminEvent::Sync) => {
                     if let Err(e) = crate::exchange::pull(
@@ -381,78 +449,33 @@ impl State for Exchange {
                     }
                 }
                 Event::Peer(PeerEvent::Push(push)) => {
-                    if !push.announce.is_empty() {
-                        crate::exchange::announce(
+                    if !push.announce.is_empty()
+                        && crate::exchange::announce(
                             self.ctx.config.clone(),
                             push.announce,
                             self.peer,
                             self.ctx.rt.clone(),
                             self.log.clone(),
-                        );
+                        )
+                        .is_err()
+                    {
+                        self.expire_peer(&exchange_thread, &pull_stop);
                     }
-                    if !push.withdraw.is_empty() {
-                        crate::exchange::withdraw(
+                    if !push.withdraw.is_empty()
+                        && crate::exchange::withdraw(
                             self.ctx.config.clone(),
                             push.withdraw,
                             self.peer,
                             self.ctx.rt.clone(),
                             self.log.clone(),
-                        );
+                        )
+                        .is_err()
+                    {
+                        self.expire_peer(&exchange_thread, &pull_stop);
                     }
                 }
                 Event::Neighbor(NeighborEvent::Expire) => {
-                    exchange_thread.abort();
-                    let to_remove =
-                        self.ctx.db.remove_nexthop_routes(self.peer);
-                    let mut routes: Vec<crate::sys::Route> = Vec::new();
-                    for x in &to_remove {
-                        let mut r: crate::sys::Route = x.clone().into();
-                        r.ifname = self.ctx.config.if_name.clone();
-                        routes.push(r);
-                    }
-                    if let Err(e) = crate::sys::remove_routes(
-                        &self.log,
-                        &self.ctx.config.dpd,
-                        routes,
-                        &self.ctx.rt,
-                    ) {
-                        err!(
-                            self.log,
-                            self.ctx.config.if_index,
-                            "failed to remove routes: {}",
-                            e,
-                        );
-                    }
-                    // if we're a transit router propagate withdraws for the
-                    // expired peer.
-                    if self.ctx.config.kind == RouterKind::Transit {
-                        dbg!(
-                            self.log,
-                            self.ctx.config.if_index,
-                            "redistributing expire to {} peers",
-                            self.ctx.event_channels.len()
-                        );
-                        let pv = to_remove
-                            .iter()
-                            .map(|x| PathVector {
-                                destination: x.destination,
-                                path: {
-                                    let mut ps = x.path.clone();
-                                    ps.push(self.ctx.hostname.clone());
-                                    ps
-                                },
-                            })
-                            .collect();
-                        let push = Push {
-                            announce: HashSet::new(),
-                            withdraw: pv,
-                        };
-                        for ec in &self.ctx.event_channels {
-                            ec.send(Event::Peer(PeerEvent::Push(push.clone())))
-                                .unwrap();
-                        }
-                    }
-                    pull_stop.store(true, Ordering::Relaxed);
+                    self.expire_peer(&exchange_thread, &pull_stop);
                     return (
                         Box::new(Solicit::new(
                             self.ctx.clone(),

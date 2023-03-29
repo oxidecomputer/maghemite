@@ -14,30 +14,45 @@ struct Arg {
     #[arg(short, long = "addr", name = "addr")]
     addresses: Vec<String>,
 
-    #[arg(long, default_value_t = 1701)]
+    /// How long to wait between solicitations (milliseconds).
+    #[arg(long, default_value_t = 2000)]
     solicit_interval: u64,
 
-    #[arg(long, default_value_t = 0x1701)]
+    /// How long to wait without a solicitation response before expiring a peer
+    /// (milliseconds).
+    #[arg(long, default_value_t = 5000)]
     expire_threshold: u64,
 
+    /// How long to wait for a response to exchange messages.
+    #[arg(long, default_value_t = 3000)]
+    pub exchange_timeout: u64,
+
+    /// Address to listen on for the admin API.
     #[arg(long, default_value_t = Ipv6Addr::UNSPECIFIED.into())]
     admin_addr: IpAddr,
 
+    /// Port to listen on for the admin API.
     #[arg(long, default_value_t = 8000)]
     admin_port: u16,
 
+    /// Kind of router to run.
     #[arg(long, default_value_t = RouterKind::Server)]
     kind: RouterKind,
 
+    /// The tcp port to listen on for exchange messages.
     #[arg(long, default_value_t = 0xdddd)]
     exchange_port: u16,
 
+    /// Whether or not to use Dendrite as the underlying routing and forwarding
+    /// platform.
     #[arg(long, default_value_t = false)]
     dendrite: bool,
 
+    /// Hostname for the Dendrite dpd server.
     #[arg(long, default_value_t = String::from("localhost"))]
     dpd_host: String,
 
+    /// Listening port for the Dendrite dpd server.
     #[arg(long, default_value_t = dpd_client::default_port())]
     dpd_port: u16,
 }
@@ -82,6 +97,7 @@ async fn main() {
         let config = ddm::sm::Config {
             solicit_interval: arg.solicit_interval,
             expire_threshold: arg.expire_threshold,
+            exchange_timeout: arg.exchange_timeout,
             exchange_port: arg.exchange_port,
             if_name: info.ifname.clone(),
             if_index: info.index as u32,

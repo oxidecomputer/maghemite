@@ -92,9 +92,9 @@ pub(crate) fn announce(
     addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
-) {
+) -> Result<(), ExchangeError> {
     let update = Update::announce(prefixes);
-    send_update(config, update, addr, rt, log);
+    send_update(config, update, addr, rt, log)
 }
 
 pub(crate) fn withdraw(
@@ -103,9 +103,9 @@ pub(crate) fn withdraw(
     addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
-) {
+) -> Result<(), ExchangeError> {
     let update = Update::withdraw(prefixes);
-    send_update(config, update, addr, rt, log);
+    send_update(config, update, addr, rt, log)
 }
 
 pub(crate) fn do_pull(
@@ -170,7 +170,7 @@ fn send_update(
     addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
-) {
+) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update).unwrap(); //TODO unwrap
     let uri = format!(
         "http://[{}%{}]:{}/push",
@@ -186,18 +186,23 @@ fn send_update(
 
     let resp = client.request(req);
 
-    rt.spawn(async move {
-        match timeout(Duration::from_millis(250), resp).await {
-            Ok(_) => {}
-            Err(e) => err!(
-                log,
-                config.if_index,
-                "peer request timeout to {}: {}",
-                uri,
-                e,
-            ),
-        };
-    });
+    rt.block_on(async move {
+        match timeout(Duration::from_millis(config.exchange_timeout), resp)
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                err!(
+                    log,
+                    config.if_index,
+                    "peer request timeout to {}: {}",
+                    uri,
+                    e,
+                );
+                Err(e.into())
+            }
+        }
+    })
 }
 
 pub fn handler(
