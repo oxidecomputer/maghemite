@@ -293,7 +293,7 @@ fn expire(
             drop(ctx);
             // Ensure read handlers have registered the stop event.
             sleep(Duration::from_millis(wait));
-            emit_nbr_expire(event, log, if_index);
+            emit_solicit_fail(event, log, if_index);
             break;
         }
         sleep(Duration::from_millis(ctx.config.solicit_interval));
@@ -470,6 +470,12 @@ fn emit_nbr_update(ctx: &HandlerContext, addr: &Ipv6Addr) {
 fn emit_nbr_expire(event: Sender<Event>, log: Logger, if_index: u32) {
     if let Err(e) = event.send(NeighborEvent::Expire.into()) {
         err!(log, if_index, "send nbr expire: {}", e);
+    }
+}
+
+fn emit_solicit_fail(event: Sender<Event>, log: Logger, if_index: u32) {
+    if let Err(e) = event.send(NeighborEvent::SolicitFail.into()) {
+        err!(log, if_index, "send solicit fail: {}", e);
     }
 }
 

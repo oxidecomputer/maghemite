@@ -36,6 +36,7 @@ pub enum PeerEvent {
 #[derive(Debug)]
 pub enum NeighborEvent {
     Advertise(Ipv6Addr),
+    SolicitFail,
     Expire,
 }
 
@@ -97,6 +98,10 @@ pub struct Config {
 
     /// Interface name this state machine is associated with.
     pub if_name: String,
+
+    /// Address object name the state machine uses for peering. Must correspond
+    /// to IPv6 link local address.
+    pub aobj_name: String,
 
     /// Link local Ipv6 address this state machine is associated with
     pub addr: Ipv6Addr,
@@ -191,14 +196,14 @@ impl State for Init {
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
         loop {
-            let info = match get_ipaddr_info(&self.ctx.config.if_name) {
+            let info = match get_ipaddr_info(&self.ctx.config.aobj_name) {
                 Ok(info) => info,
                 Err(e) => {
                     wrn!(
                         self.log,
                         self.ctx.config.if_index,
                         "failed to get IPv6 address for interface {}: {}",
-                        &self.ctx.config.if_name,
+                        &self.ctx.config.aobj_name,
                         e
                     );
                     sleep(Duration::from_millis(self.ctx.config.ip_addr_wait));
@@ -212,7 +217,7 @@ impl State for Init {
                         self.log,
                         self.ctx.config.if_index,
                         "specified address {} is not IPv6",
-                        &self.ctx.config.if_name
+                        &self.ctx.config.aobj_name
                     );
                     sleep(Duration::from_millis(self.ctx.config.ip_addr_wait));
                     continue;
@@ -225,8 +230,17 @@ impl State for Init {
                 &addr,
                 info.index,
             );
+            self.ctx.config.if_name = info.ifname.clone();
             self.ctx.config.if_index = info.index as u32;
             self.ctx.config.addr = addr;
+            discovery::handler(
+                self.ctx.hostname.clone(),
+                self.ctx.config.clone(),
+                self.ctx.tx.clone(),
+                self.ctx.db.clone(),
+                self.ctx.log.clone(),
+            )
+            .unwrap(); // TODO unwrap
             return (
                 Box::new(Solicit::new(self.ctx.clone(), self.log.clone())),
                 event,
@@ -251,14 +265,6 @@ impl State for Solicit {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
-        discovery::handler(
-            self.ctx.hostname.clone(),
-            self.ctx.config.clone(),
-            self.ctx.tx.clone(),
-            self.ctx.db.clone(),
-            self.ctx.log.clone(),
-        )
-        .unwrap(); // TODO unwrap
         loop {
             let e = match event.recv() {
                 Ok(e) => e,
@@ -288,7 +294,8 @@ impl State for Solicit {
                         event,
                     );
                 }
-                Event::Neighbor(NeighborEvent::Expire) => {
+                Event::Neighbor(NeighborEvent::Expire) => {}
+                Event::Neighbor(NeighborEvent::SolicitFail) => {
                     return (
                         Box::new(Init::new(self.ctx.clone(), self.log.clone())),
                         event,
@@ -555,6 +562,13 @@ impl State for Exchange {
                             self.ctx.clone(),
                             self.log.clone(),
                         )),
+                        event,
+                    );
+                }
+                Event::Neighbor(NeighborEvent::SolicitFail) => {
+                    self.expire_peer(&exchange_thread, &pull_stop);
+                    return (
+                        Box::new(Init::new(self.ctx.clone(), self.log.clone())),
                         event,
                     );
                 }
