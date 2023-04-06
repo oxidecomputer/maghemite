@@ -233,6 +233,9 @@ impl State for Init {
             self.ctx.config.if_name = info.ifname.clone();
             self.ctx.config.if_index = info.index as u32;
             self.ctx.config.addr = addr;
+
+            // Now that we have an ip address to run discovery on, start the
+            // discovery handler and jump into the solicit state.
             discovery::handler(
                 self.ctx.hostname.clone(),
                 self.ctx.config.clone(),

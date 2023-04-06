@@ -280,11 +280,10 @@ fn expire(
             }
         }
         drop(guard);
-        // We can expire for a failure to solict, but we don't want to emit the
-        // expiration until we drop the context and exit this loop. Otherwise we
-        // could create a race on the sockets in the loop by trying to listen on
-        // a unicast address that a socket waiting to be dropped is already
-        // listening on.
+        // We don't want to emit a solicit failure event until we drop the
+        // handler context. Otherwise we could create a race on the discovery
+        // sockets by trying to listen on a unicast address that a socket
+        // waiting to be dropped is already listening on.
         if stop.load(Ordering::Relaxed) {
             let event = ctx.event.clone();
             let log = ctx.log.clone();
