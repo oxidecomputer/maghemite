@@ -92,6 +92,7 @@ use slog::Logger;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::mem::MaybeUninit;
 use std::net::{Ipv6Addr, SocketAddrV6};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::thread::{sleep, spawn};
@@ -196,10 +197,16 @@ pub(crate) fn handler(
     mc.bind(&mc_sa)?;
     mc.join_multicast_v6(&DDM_MADDR, config.if_index)?;
     mc.set_multicast_loop_v6(false)?;
+    mc.set_read_timeout(Some(Duration::from_millis(
+        config.discovery_read_timeout,
+    )))?;
 
     let uc_sa: SockAddr =
         SocketAddrV6::new(config.addr, DDM_PORT, 0, config.if_index).into();
     uc.bind(&uc_sa)?;
+    uc.set_read_timeout(Some(Duration::from_millis(
+        config.discovery_read_timeout,
+    )))?;
 
     let ctx = HandlerContext {
         mc_socket: Arc::new(mc),
@@ -212,24 +219,31 @@ pub(crate) fn handler(
         db,
     };
 
-    send_solicitations(ctx.clone());
-    listen(ctx.clone(), ctx.mc_socket.clone())?;
-    listen(ctx.clone(), ctx.uc_socket.clone())?;
-    expire(ctx)?;
+    let stop = Arc::new(AtomicBool::new(false));
+
+    send_solicitations(ctx.clone(), stop.clone());
+    listen(ctx.clone(), ctx.mc_socket.clone(), stop.clone())?;
+    listen(ctx.clone(), ctx.uc_socket.clone(), stop.clone())?;
+    expire(ctx, stop)?;
 
     Ok(())
 }
 
-fn send_solicitations(ctx: HandlerContext) {
+fn send_solicitations(ctx: HandlerContext, stop: Arc<AtomicBool>) {
     spawn(move || loop {
         if let Err(e) = solicit(&ctx) {
             err!(ctx.log, ctx.config.if_index, "solicit failed: {}", e);
+            stop.store(true, Ordering::Relaxed);
+            break;
         }
         sleep(Duration::from_millis(ctx.config.solicit_interval));
     });
 }
 
-fn expire(ctx: HandlerContext) -> Result<(), DiscoveryError> {
+fn expire(
+    ctx: HandlerContext,
+    stop: Arc<AtomicBool>,
+) -> Result<(), DiscoveryError> {
     spawn(move || loop {
         let mut guard = match ctx.nbr.write() {
             Ok(nbr) => nbr,
@@ -250,7 +264,11 @@ fn expire(ctx: HandlerContext) -> Result<(), DiscoveryError> {
                 );
                 *guard = None;
                 ctx.db.remove_peer(ctx.config.if_index);
-                emit_nbr_expire(&ctx);
+                emit_nbr_expire(
+                    ctx.event.clone(),
+                    ctx.log.clone(),
+                    ctx.config.if_index,
+                );
             } else if dt.as_millis() > ctx.config.solicit_interval.into() {
                 wrn!(
                     &ctx.log,
@@ -262,28 +280,57 @@ fn expire(ctx: HandlerContext) -> Result<(), DiscoveryError> {
             }
         }
         drop(guard);
+        // We don't want to emit a solicit failure event until we drop the
+        // handler context. Otherwise we could create a race on the discovery
+        // sockets by trying to listen on a unicast address that a socket
+        // waiting to be dropped is already listening on.
+        if stop.load(Ordering::Relaxed) {
+            let event = ctx.event.clone();
+            let log = ctx.log.clone();
+            let if_index = ctx.config.if_index;
+            let wait = ctx.config.discovery_read_timeout;
+            drop(ctx);
+            // Ensure read handlers have registered the stop event.
+            sleep(Duration::from_millis(wait));
+            emit_solicit_fail(event, log, if_index);
+            break;
+        }
         sleep(Duration::from_millis(ctx.config.solicit_interval));
     });
     Ok(())
 }
 
-fn listen(ctx: HandlerContext, s: Arc<Socket>) -> Result<(), DiscoveryError> {
+fn listen(
+    ctx: HandlerContext,
+    s: Arc<Socket>,
+    stop: Arc<AtomicBool>,
+) -> Result<(), DiscoveryError> {
     spawn(move || loop {
-        if let Some((addr, msg)) = recv(&ctx, s.clone()) {
+        if let Some((addr, msg)) = recv(&ctx, &s) {
             handle_msg(&ctx, msg, &addr);
         };
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
     });
     Ok(())
 }
 
 fn recv(
     ctx: &HandlerContext,
-    s: Arc<Socket>,
+    s: &Arc<Socket>,
 ) -> Option<(Ipv6Addr, DiscoveryPacket)> {
     let mut buf = [MaybeUninit::new(0); 1024];
     let (n, sa) = match s.recv_from(&mut buf) {
         Err(e) => {
-            err!(ctx.log, ctx.config.if_index, "icmp recv: {}", e);
+            if e.kind() != std::io::ErrorKind::WouldBlock {
+                err!(
+                    ctx.log,
+                    ctx.config.if_index,
+                    "discovery recv: {}",
+                    e.kind()
+                );
+            }
             return None;
         }
         Ok(result) => result,
@@ -419,9 +466,15 @@ fn emit_nbr_update(ctx: &HandlerContext, addr: &Ipv6Addr) {
     }
 }
 
-fn emit_nbr_expire(ctx: &HandlerContext) {
-    if let Err(e) = ctx.event.send(NeighborEvent::Expire.into()) {
-        err!(ctx.log, ctx.config.if_index, "send nbr expire: {}", e);
+fn emit_nbr_expire(event: Sender<Event>, log: Logger, if_index: u32) {
+    if let Err(e) = event.send(NeighborEvent::Expire.into()) {
+        err!(log, if_index, "send nbr expire: {}", e);
+    }
+}
+
+fn emit_solicit_fail(event: Sender<Event>, log: Logger, if_index: u32) {
+    if let Err(e) = event.send(NeighborEvent::SolicitFail.into()) {
+        err!(log, if_index, "send solicit fail: {}", e);
     }
 }
 

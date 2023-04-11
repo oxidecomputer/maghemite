@@ -2,10 +2,11 @@
 
 use crate::db::{Db, Ipv6Prefix, RouterKind};
 use crate::exchange::PathVector;
-use crate::{dbg, discovery, err, exchange, wrn};
+use crate::{dbg, discovery, err, exchange, inf, wrn};
+use libnet::get_ipaddr_info;
 use slog::{error, info, Logger};
 use std::collections::HashSet;
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -35,6 +36,7 @@ pub enum PeerEvent {
 #[derive(Debug)]
 pub enum NeighborEvent {
     Advertise(Ipv6Addr),
+    SolicitFail,
     Expire,
 }
 
@@ -97,11 +99,22 @@ pub struct Config {
     /// Interface name this state machine is associated with.
     pub if_name: String,
 
+    /// Address object name the state machine uses for peering. Must correspond
+    /// to IPv6 link local address.
+    pub aobj_name: String,
+
     /// Link local Ipv6 address this state machine is associated with
     pub addr: Ipv6Addr,
 
     /// How long to wait between solicitations (milliseconds).
     pub solicit_interval: u64,
+
+    /// How often to check for link failure while waiting for discovery messges.
+    pub discovery_read_timeout: u64,
+
+    /// How long to wait between attempts to get an IP address for a specified
+    /// address object.
+    pub ip_addr_wait: u64,
 
     /// How long to wait without a solicitation response before expiring a peer
     /// (milliseconds).
@@ -144,20 +157,12 @@ pub struct StateMachine {
 
 impl StateMachine {
     pub fn run(&mut self) -> Result<(), SmError> {
-        discovery::handler(
-            self.ctx.hostname.clone(),
-            self.ctx.config.clone(),
-            self.ctx.tx.clone(),
-            self.ctx.db.clone(),
-            self.ctx.log.clone(),
-        )?;
-
         let ctx = self.ctx.clone();
         let mut rx = self.rx.take().unwrap();
         let log = self.ctx.log.clone();
         spawn(move || {
             let mut state: Box<dyn State> =
-                Box::new(Solicit::new(ctx.clone(), log.clone()));
+                Box::new(Init::new(ctx.clone(), log.clone()));
             loop {
                 (state, rx) = state.run(rx);
             }
@@ -172,6 +177,79 @@ trait State {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>);
+}
+
+struct Init {
+    ctx: SmContext,
+    log: Logger,
+}
+
+impl Init {
+    fn new(ctx: SmContext, log: Logger) -> Self {
+        Self { ctx, log }
+    }
+}
+
+impl State for Init {
+    fn run(
+        &mut self,
+        event: Receiver<Event>,
+    ) -> (Box<dyn State>, Receiver<Event>) {
+        loop {
+            let info = match get_ipaddr_info(&self.ctx.config.aobj_name) {
+                Ok(info) => info,
+                Err(e) => {
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_index,
+                        "failed to get IPv6 address for interface {}: {}",
+                        &self.ctx.config.aobj_name,
+                        e
+                    );
+                    sleep(Duration::from_millis(self.ctx.config.ip_addr_wait));
+                    continue;
+                }
+            };
+            let addr = match info.addr {
+                IpAddr::V6(a) => a,
+                IpAddr::V4(_) => {
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_index,
+                        "specified address {} is not IPv6",
+                        &self.ctx.config.aobj_name
+                    );
+                    sleep(Duration::from_millis(self.ctx.config.ip_addr_wait));
+                    continue;
+                }
+            };
+            inf!(
+                self.log,
+                self.ctx.config.if_index,
+                "sm initialized with addr {} on if index {}",
+                &addr,
+                info.index,
+            );
+            self.ctx.config.if_name = info.ifname.clone();
+            self.ctx.config.if_index = info.index as u32;
+            self.ctx.config.addr = addr;
+
+            // Now that we have an ip address to run discovery on, start the
+            // discovery handler and jump into the solicit state.
+            discovery::handler(
+                self.ctx.hostname.clone(),
+                self.ctx.config.clone(),
+                self.ctx.tx.clone(),
+                self.ctx.db.clone(),
+                self.ctx.log.clone(),
+            )
+            .unwrap(); // TODO unwrap
+            return (
+                Box::new(Solicit::new(self.ctx.clone(), self.log.clone())),
+                event,
+            );
+        }
+    }
 }
 
 struct Solicit {
@@ -220,6 +298,12 @@ impl State for Solicit {
                     );
                 }
                 Event::Neighbor(NeighborEvent::Expire) => {}
+                Event::Neighbor(NeighborEvent::SolicitFail) => {
+                    return (
+                        Box::new(Init::new(self.ctx.clone(), self.log.clone())),
+                        event,
+                    );
+                }
                 Event::Peer(e) => {
                     wrn!(
                         self.log,
@@ -481,6 +565,13 @@ impl State for Exchange {
                             self.ctx.clone(),
                             self.log.clone(),
                         )),
+                        event,
+                    );
+                }
+                Event::Neighbor(NeighborEvent::SolicitFail) => {
+                    self.expire_peer(&exchange_thread, &pull_stop);
+                    return (
+                        Box::new(Init::new(self.ctx.clone(), self.log.clone())),
                         event,
                     );
                 }

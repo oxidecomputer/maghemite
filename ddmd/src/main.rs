@@ -2,7 +2,6 @@ use clap::Parser;
 use ddm::db::{Db, RouterKind};
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
 use ddm::sys::Route;
-use libnet::get_ipaddr_info;
 use slog::{Drain, Logger};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::mpsc::channel;
@@ -22,6 +21,16 @@ struct Arg {
     /// (milliseconds).
     #[arg(long, default_value_t = 5000)]
     expire_threshold: u64,
+
+    /// How often to check for link failure while waiting for discovery messges
+    /// (milliseconds).
+    #[arg(long, default_value_t = 1000)]
+    discovery_read_timeout: u64,
+
+    /// How long to wait between attempts to get an IP address for a specified
+    /// address object (milliseconds).
+    #[arg(long, default_value_t = 1000)]
+    ip_addr_wait: u64,
 
     /// How long to wait for a response to exchange messages.
     #[arg(long, default_value_t = 3000)]
@@ -88,22 +97,20 @@ async fn main() {
         .to_string();
 
     for name in arg.addresses {
-        let info = get_ipaddr_info(&name).unwrap();
-        let addr = match info.addr {
-            IpAddr::V6(a) => a,
-            IpAddr::V4(_) => panic!("{} is not an ipv6 address", name),
-        };
         let (tx, rx) = channel();
         let config = ddm::sm::Config {
             solicit_interval: arg.solicit_interval,
             expire_threshold: arg.expire_threshold,
+            discovery_read_timeout: arg.discovery_read_timeout,
+            ip_addr_wait: arg.ip_addr_wait,
             exchange_timeout: arg.exchange_timeout,
             exchange_port: arg.exchange_port,
-            if_name: info.ifname.clone(),
-            if_index: info.index as u32,
+            aobj_name: name.clone(),
+            if_name: String::new(),
+            if_index: 0,
             kind: arg.kind,
             dpd: dpd.clone(),
-            addr,
+            addr: Ipv6Addr::UNSPECIFIED,
         };
         let ctx = SmContext {
             config,
