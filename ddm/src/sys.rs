@@ -157,8 +157,8 @@ pub fn add_routes_dendrite(
         // TODO this is gross, use link type properties rather than futzing
         // around with strings.
         let egress_port_num = if_name
-            .strip_prefix("tfport")
-            .ok_or(format!("expected tfport prefix {}", if_name))?
+            .strip_prefix("tfportrear")
+            .ok_or(format!("expected tfportrear prefix {}", if_name))?
             .strip_suffix("_0")
             .ok_or(format!("expected _0 suffix {}", if_name))?
             .trim()
@@ -168,7 +168,7 @@ pub fn add_routes_dendrite(
         // TODO this assumes ddm only operates on rear ports, which will not be
         // true for multi-rack deployments.
         let switch_port =
-            types::PortId::from_str(&format!("rear{}/0", egress_port_num - 1))?;
+            types::PortId::from_str(&format!("rear{}/0", egress_port_num))?;
 
         // TODO breakout considerations
         let link = types::LinkId(0);
