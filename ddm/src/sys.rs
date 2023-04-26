@@ -158,9 +158,9 @@ pub fn add_routes_dendrite(
         // around with strings.
         let egress_port_num = if_name
             .strip_prefix("tfportrear")
-            .ok_or(format!("expected tfportrear prefix {}", if_name))?
+            .ok_or_else(|| format!("expected tfportrear prefix {}", if_name))?
             .strip_suffix("_0")
-            .ok_or(format!("expected _0 suffix {}", if_name))?
+            .ok_or_else(|| format!("expected _0 suffix {}", if_name))?
             .trim()
             .parse::<usize>()
             .map_err(|_| format!("expected tofino port number {}", if_name))?;
