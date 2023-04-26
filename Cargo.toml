@@ -49,10 +49,10 @@ ctrlc = { version = "3.2.4", features = ["termination"] }
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "57759f883fcdf658475eaeb7341d6c4c52ce0432"
+rev = "040d1e9550d8ca50f5bdb6e0f446c4716c164380"
 package = "dpd-client"
 
 [workspace.dependencies.dendrite-common]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "57759f883fcdf658475eaeb7341d6c4c52ce0432"
+rev = "040d1e9550d8ca50f5bdb6e0f446c4716c164380"
 package = "common"
