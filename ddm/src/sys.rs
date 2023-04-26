@@ -168,7 +168,7 @@ pub fn add_routes_dendrite(
         // TODO this assumes ddm only operates on rear ports, which will not be
         // true for multi-rack deployments.
         let switch_port =
-            types::PortId::from_str(&format!("rear{}/0", egress_port_num))?;
+            types::PortId::from_str(&format!("rear{}", egress_port_num))?;
 
         // TODO breakout considerations
         let link = types::LinkId(0);
