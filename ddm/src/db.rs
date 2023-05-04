@@ -62,8 +62,13 @@ impl Db {
         }
     }
 
-    pub fn set_peer(&self, index: u32, info: PeerInfo) {
-        self.data.lock().unwrap().peers.insert(index, info);
+    /// Set peer info at the given index. Returns true if peer information was
+    /// changed.
+    pub fn set_peer(&self, index: u32, info: PeerInfo) -> bool {
+        match self.data.lock().unwrap().peers.insert(index, info.clone()) {
+            Some(previous) => previous == info,
+            None => true,
+        }
     }
 
     pub fn remove_nexthop_routes(&self, nexthop: Ipv6Addr) -> HashSet<Route> {
@@ -94,7 +99,7 @@ pub enum PeerStatus {
     Expired,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct PeerInfo {
     pub status: PeerStatus,
     pub addr: Ipv6Addr,
