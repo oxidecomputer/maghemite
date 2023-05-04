@@ -17,8 +17,16 @@ use thiserror::Error;
 
 #[derive(Debug)]
 pub enum AdminEvent {
+    /// Announce a set of IPv6 prefixes
     Announce(HashSet<Ipv6Prefix>),
+
+    /// Withdraw a set of IPv6 prefixes
     Withdraw(HashSet<Ipv6Prefix>),
+
+    /// Expire the peer at the specified address
+    Expire(Ipv6Addr),
+
+    /// Synchronize with active peers by pulling their prefixes.
     Sync,
 }
 
@@ -394,6 +402,8 @@ impl Exchange {
         pull_stop: &AtomicBool,
     ) {
         exchange_thread.abort();
+        // TODO: this
+        self.ctx.db.remove_peer(self.ctx.config.if_index);
         let to_remove = self.ctx.db.remove_nexthop_routes(self.peer);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
         for x in &to_remove {
@@ -495,6 +505,13 @@ impl State for Exchange {
                     .is_err()
                     {
                         self.expire_peer(&exchange_thread, &pull_stop);
+                        return (
+                            Box::new(Solicit::new(
+                                self.ctx.clone(),
+                                self.log.clone(),
+                            )),
+                            event,
+                        );
                     }
                 }
                 Event::Admin(AdminEvent::Withdraw(prefixes)) => {
@@ -515,6 +532,25 @@ impl State for Exchange {
                     .is_err()
                     {
                         self.expire_peer(&exchange_thread, &pull_stop);
+                        return (
+                            Box::new(Solicit::new(
+                                self.ctx.clone(),
+                                self.log.clone(),
+                            )),
+                            event,
+                        );
+                    }
+                }
+                Event::Admin(AdminEvent::Expire(peer)) => {
+                    if self.peer == peer {
+                        self.expire_peer(&exchange_thread, &pull_stop);
+                        return (
+                            Box::new(Solicit::new(
+                                self.ctx.clone(),
+                                self.log.clone(),
+                            )),
+                            event,
+                        );
                     }
                 }
                 Event::Admin(AdminEvent::Sync) => {
@@ -544,6 +580,13 @@ impl State for Exchange {
                         .is_err()
                     {
                         self.expire_peer(&exchange_thread, &pull_stop);
+                        return (
+                            Box::new(Solicit::new(
+                                self.ctx.clone(),
+                                self.log.clone(),
+                            )),
+                            event,
+                        );
                     }
                     if !push.withdraw.is_empty()
                         && crate::exchange::withdraw(
@@ -556,6 +599,13 @@ impl State for Exchange {
                         .is_err()
                     {
                         self.expire_peer(&exchange_thread, &pull_stop);
+                        return (
+                            Box::new(Solicit::new(
+                                self.ctx.clone(),
+                                self.log.clone(),
+                            )),
+                            event,
+                        );
                     }
                 }
                 Event::Neighbor(NeighborEvent::Expire) => {

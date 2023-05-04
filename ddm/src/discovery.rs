@@ -263,7 +263,6 @@ fn expire(
                     nbr.addr
                 );
                 *guard = None;
-                ctx.db.remove_peer(ctx.config.if_index);
                 emit_nbr_expire(
                     ctx.event.clone(),
                     ctx.log.clone(),
@@ -445,19 +444,19 @@ fn handle_advertisement(
             kind,
         });
         drop(guard);
-        ctx.db.set_peer(
-            ctx.config.if_index,
-            PeerInfo {
-                status: PeerStatus::Active,
-                addr: *sender,
-                host: hostname,
-                kind,
-            },
-        );
-        emit_nbr_update(ctx, sender);
     } else {
         current_nbr.last_seen = Instant::now();
     }
+    ctx.db.set_peer(
+        ctx.config.if_index,
+        PeerInfo {
+            status: PeerStatus::Active,
+            addr: *sender,
+            host: hostname,
+            kind,
+        },
+    );
+    emit_nbr_update(ctx, sender);
 }
 
 fn emit_nbr_update(ctx: &HandlerContext, addr: &Ipv6Addr) {

@@ -10,8 +10,11 @@ use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::HttpServerStarter;
+use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use slog::{error, info, warn, Logger};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -76,6 +79,26 @@ async fn get_peers(
 ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
     let ctx = ctx.context().lock().unwrap();
     Ok(HttpResponseOk(ctx.db.peers()))
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct ExpirePathParams {
+    addr: Ipv6Addr,
+}
+
+#[endpoint { method = DELETE, path = "/peers/{addr}" }]
+async fn expire_peer(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    params: Path<ExpirePathParams>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let addr = params.into_inner().addr;
+    let ctx = ctx.context().lock().unwrap();
+
+    for e in &ctx.event_channels {
+        e.send(Event::Admin(AdminEvent::Expire(addr))).unwrap(); //TODO unwrap
+    }
+
+    Ok(HttpResponseUpdatedNoContent())
 }
 
 type PrefixMap = BTreeMap<Ipv6Addr, HashSet<PathVector>>;
@@ -168,6 +191,7 @@ pub fn api_description(
 ) -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, String> {
     let mut api = ApiDescription::new();
     api.register(get_peers)?;
+    api.register(expire_peer)?;
     api.register(advertise_prefixes)?;
     api.register(withdraw_prefixes)?;
     api.register(get_prefixes)?;
