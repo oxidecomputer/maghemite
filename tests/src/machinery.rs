@@ -128,6 +128,23 @@ impl Zfs {
         PathBuf::from(&format!("/{}/{}", self.name, name))
     }
 
+    pub fn copy_from_zone(
+        &self,
+        name: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<()> {
+        let from = format!("/{}/{}/root/{}", self.name, name, from);
+        println!("cp {} {}", from, to);
+        std::process::Command::new(PFEXEC)
+            .env_clear()
+            .arg("cp")
+            .arg(from)
+            .arg(to)
+            .output()?;
+        Ok(())
+    }
+
     pub fn copy_to_zone(&self, name: &str, from: &str, to: &str) -> Result<()> {
         let to = format!("/{}/{}/root/{}", self.name, name, to);
         println!("cp {} {}", from, to);
@@ -291,4 +308,24 @@ impl Drop for Zone {
         drop(self.install.take());
         drop(self.config.take());
     }
+}
+
+#[macro_export]
+macro_rules! wait_for_eq {
+    ($lhs:expr, $rhs:expr, $period:expr, $count:expr) => {
+        let mut ok = false;
+        for _ in 0..$count {
+            if $lhs == $rhs {
+                ok = true;
+                break;
+            }
+            sleep(Duration::from_secs($period));
+        }
+        if !ok {
+            assert_eq!($lhs, $rhs);
+        }
+    };
+    ($lhs:expr, $rhs:expr) => {
+        wait_for_eq!($lhs, $rhs, 1, 10);
+    };
 }

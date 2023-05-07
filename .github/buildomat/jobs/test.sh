@@ -5,8 +5,7 @@
 #: target = "helios-latest"
 #: rust_toolchain = "stable"
 #: output_rules = [
-#:   "/work/debug/*",
-#:   "/work/release/*",
+#:   "/work/*.log",
 #: ]
 #: access_repos = [
 #:   "oxidecomputer/dendrite",

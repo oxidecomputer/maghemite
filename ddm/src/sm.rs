@@ -307,6 +307,11 @@ impl State for Solicit {
                 }
                 Event::Neighbor(NeighborEvent::Expire) => {}
                 Event::Neighbor(NeighborEvent::SolicitFail) => {
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_index,
+                        "exiting solicit state due to failed solicit",
+                    );
                     return (
                         Box::new(Init::new(self.ctx.clone(), self.log.clone())),
                         event,
@@ -402,7 +407,6 @@ impl Exchange {
         pull_stop: &AtomicBool,
     ) {
         exchange_thread.abort();
-        // TODO: this
         self.ctx.db.remove_peer(self.ctx.config.if_index);
         let to_remove = self.ctx.db.remove_nexthop_routes(self.peer);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
@@ -495,15 +499,25 @@ impl State for Exchange {
                             path: vec![self.ctx.hostname.clone()],
                         })
                         .collect();
-                    if crate::exchange::announce(
+                    if let Err(e) = crate::exchange::announce(
                         self.ctx.config.clone(),
                         pv,
                         self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
-                    )
-                    .is_err()
-                    {
+                    ) {
+                        err!(
+                            self.log,
+                            self.ctx.config.if_index,
+                            "announce: {}",
+                            e,
+                        );
+                        wrn!(
+                            self.log,
+                            self.ctx.config.if_index,
+                            "expiring peer {} due to failed announce",
+                            self.peer,
+                        );
                         self.expire_peer(&exchange_thread, &pull_stop);
                         return (
                             Box::new(Solicit::new(
@@ -522,15 +536,25 @@ impl State for Exchange {
                             path: vec![self.ctx.hostname.clone()],
                         })
                         .collect();
-                    if crate::exchange::withdraw(
+                    if let Err(e) = crate::exchange::withdraw(
                         self.ctx.config.clone(),
                         pv,
                         self.peer,
                         self.ctx.rt.clone(),
                         self.log.clone(),
-                    )
-                    .is_err()
-                    {
+                    ) {
+                        err!(
+                            self.log,
+                            self.ctx.config.if_index,
+                            "withdraw: {}",
+                            e,
+                        );
+                        wrn!(
+                            self.log,
+                            self.ctx.config.if_index,
+                            "expiring peer {} due to failed withdraw",
+                            self.peer,
+                        );
                         self.expire_peer(&exchange_thread, &pull_stop);
                         return (
                             Box::new(Solicit::new(
@@ -543,6 +567,12 @@ impl State for Exchange {
                 }
                 Event::Admin(AdminEvent::Expire(peer)) => {
                     if self.peer == peer {
+                        inf!(
+                            self.log,
+                            self.ctx.config.if_index,
+                            "administratively expiring peer {}",
+                            peer,
+                        );
                         self.expire_peer(&exchange_thread, &pull_stop);
                         return (
                             Box::new(Solicit::new(
@@ -569,46 +599,81 @@ impl State for Exchange {
                     }
                 }
                 Event::Peer(PeerEvent::Push(push)) => {
-                    if !push.announce.is_empty()
-                        && crate::exchange::announce(
+                    inf!(
+                        self.log,
+                        self.ctx.config.if_index,
+                        "push from {}: {:#?}",
+                        self.peer,
+                        push,
+                    );
+                    if !push.announce.is_empty() {
+                        if let Err(e) = crate::exchange::announce(
                             self.ctx.config.clone(),
                             push.announce,
                             self.peer,
                             self.ctx.rt.clone(),
                             self.log.clone(),
-                        )
-                        .is_err()
-                    {
-                        self.expire_peer(&exchange_thread, &pull_stop);
-                        return (
-                            Box::new(Solicit::new(
-                                self.ctx.clone(),
-                                self.log.clone(),
-                            )),
-                            event,
-                        );
+                        ) {
+                            err!(
+                                self.log,
+                                self.ctx.config.if_index,
+                                "announce: {}",
+                                e,
+                            );
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_index,
+                                "expiring peer {} due to failed announce",
+                                self.peer,
+                            );
+                            self.expire_peer(&exchange_thread, &pull_stop);
+                            return (
+                                Box::new(Solicit::new(
+                                    self.ctx.clone(),
+                                    self.log.clone(),
+                                )),
+                                event,
+                            );
+                        }
                     }
-                    if !push.withdraw.is_empty()
-                        && crate::exchange::withdraw(
+                    if !push.withdraw.is_empty() {
+                        if let Err(e) = crate::exchange::withdraw(
                             self.ctx.config.clone(),
                             push.withdraw,
                             self.peer,
                             self.ctx.rt.clone(),
                             self.log.clone(),
-                        )
-                        .is_err()
-                    {
-                        self.expire_peer(&exchange_thread, &pull_stop);
-                        return (
-                            Box::new(Solicit::new(
-                                self.ctx.clone(),
-                                self.log.clone(),
-                            )),
-                            event,
-                        );
+                        ) {
+                            err!(
+                                self.log,
+                                self.ctx.config.if_index,
+                                "withdraw: {}",
+                                e,
+                            );
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_index,
+                                "expiring peer {} due to failed withdraw",
+                                self.peer,
+                            );
+                            self.expire_peer(&exchange_thread, &pull_stop);
+                            return (
+                                Box::new(Solicit::new(
+                                    self.ctx.clone(),
+                                    self.log.clone(),
+                                )),
+                                event,
+                            );
+                        }
                     }
                 }
                 Event::Neighbor(NeighborEvent::Expire) => {
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_index,
+                        "expiring peer {} due to discovery event",
+                        self.peer,
+                    );
                     self.expire_peer(&exchange_thread, &pull_stop);
                     return (
                         Box::new(Solicit::new(
@@ -619,6 +684,12 @@ impl State for Exchange {
                     );
                 }
                 Event::Neighbor(NeighborEvent::SolicitFail) => {
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_index,
+                        "expiring peer {} due to failed solicit",
+                        self.peer,
+                    );
                     self.expire_peer(&exchange_thread, &pull_stop);
                     return (
                         Box::new(Init::new(self.ctx.clone(), self.log.clone())),
