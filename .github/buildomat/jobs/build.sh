@@ -1,6 +1,6 @@
 #!/bin/bash
 #:
-#: name = "build-and-test"
+#: name = "build"
 #: variety = "basic"
 #: target = "helios-latest"
 #: rust_toolchain = "stable"
@@ -12,6 +12,26 @@
 #:   "oxidecomputer/dendrite",
 #: ]
 #:
+#: [[publish]]
+#: series = "release"
+#: name = "ddmd"
+#: from_output = "/work/release/ddmd"
+#:
+#: [[publish]]
+#: series = "release"
+#: name = "ddmadm"
+#: from_output = "/work/release/ddmadm"
+#:
+#: [[publish]]
+#: series = "debug"
+#: name = "ddmd"
+#: from_output = "/work/debug/ddmd"
+#:
+#: [[publish]]
+#: series = "debug"
+#: name = "ddmadm"
+#: from_output = "/work/debug/ddmadm"
+#:
 
 set -o errexit
 set -o pipefail
@@ -19,6 +39,10 @@ set -o xtrace
 
 cargo --version
 rustc --version
+
+banner "check"
+cargo fmt -- --check
+cargo clippy --all-targets -- --deny warnings
 
 banner "build"
 ptime -m cargo build
@@ -30,22 +54,3 @@ do
     cp target/$x/ddmd /work/$x/ddmd
     cp target/$x/ddmadm /work/$x/ddmadm
 done
-
-banner "check"
-cargo fmt -- --check
-
-banner "test"
-
-export RUST_LOG=trace
-
-banner "rdp"
-pfexec cargo test rs_send_recv
-
-banner "peer"
-pfexec cargo test peer_session1
-
-banner "dpx x2"
-pfexec cargo test rs_dpx_x2
-
-banner "dpx 1x2"
-pfexec cargo test rs_dpx_1x2

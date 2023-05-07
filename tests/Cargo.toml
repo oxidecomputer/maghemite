@@ -1,0 +1,16 @@
+[package]
+name = "mg-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zone = { git = "https://github.com/oxidecomputer/zone" }
+ddm-admin-client = { path = "../ddm-admin-client" }
+
+libnet.workspace = true
+anyhow.workspace = true
+slog.workspace = true
+slog-term.workspace = true
+slog-envlogger.workspace = true
+slog-async.workspace = true
+tokio.workspace = true
