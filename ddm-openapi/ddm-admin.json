@@ -60,6 +60,33 @@
         }
       }
     },
+    "/peers/{addr}": {
+      "delete": {
+        "operationId": "expire_peer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ipv6"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/prefix": {
       "put": {
         "operationId": "advertise_prefixes",

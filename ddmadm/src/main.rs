@@ -23,8 +23,11 @@ struct Arg {
 
 #[derive(Debug, Parser)]
 enum SubCommand {
-    /// Get a DDM router's peers
+    /// Get a DDM router's peers.
     GetPeers,
+
+    /// Expire a peer.
+    ExpirePeer(Peer),
 
     /// Get the prefixes a DDM router knows about.
     GetPrefixes,
@@ -45,6 +48,11 @@ enum SubCommand {
 #[derive(Debug, Parser)]
 struct Prefixes {
     prefixes: Vec<Ipv6Prefix>,
+}
+
+#[derive(Debug, Parser)]
+struct Peer {
+    addr: Ipv6Addr,
 }
 
 #[tokio::main]
@@ -91,6 +99,9 @@ async fn run() -> Result<()> {
                 )?;
             }
             tw.flush()?;
+        }
+        SubCommand::ExpirePeer(peer) => {
+            client.expire_peer(&peer.addr).await?;
         }
         SubCommand::GetPrefixes => {
             let msg = client.get_prefixes().await?;

@@ -263,7 +263,6 @@ fn expire(
                     nbr.addr
                 );
                 *guard = None;
-                ctx.db.remove_peer(ctx.config.if_index);
                 emit_nbr_expire(
                     ctx.event.clone(),
                     ctx.log.clone(),
@@ -395,8 +394,26 @@ fn handle_advertisement(
             return;
         }
     };
-    let mut current_nbr = match &mut *guard {
-        Some(nbr) => nbr,
+    match &mut *guard {
+        Some(nbr) => {
+            if *sender != nbr.addr {
+                inf!(
+                    ctx.log,
+                    ctx.config.if_index,
+                    "nbr {}@{} {} -> {}@{} {}",
+                    nbr.hostname,
+                    nbr.addr,
+                    nbr.kind,
+                    sender,
+                    hostname,
+                    kind
+                );
+                nbr.last_seen = Instant::now();
+                nbr.kind = kind;
+                nbr.addr = *sender;
+            }
+            nbr.last_seen = Instant::now();
+        }
         None => {
             inf!(
                 ctx.log,
@@ -412,51 +429,20 @@ fn handle_advertisement(
                 last_seen: Instant::now(),
                 kind,
             });
-            drop(guard);
-            ctx.db.set_peer(
-                ctx.config.if_index,
-                PeerInfo {
-                    status: PeerStatus::Active,
-                    addr: *sender,
-                    host: hostname,
-                    kind,
-                },
-            );
-            emit_nbr_update(ctx, sender);
-            return;
         }
     };
-    if *sender != current_nbr.addr {
-        inf!(
-            ctx.log,
-            ctx.config.if_index,
-            "nbr {}@{} {} -> {}@{} {}",
-            current_nbr.hostname,
-            current_nbr.addr,
-            current_nbr.kind,
-            sender,
-            hostname,
-            kind
-        );
-        *guard = Some(Neighbor {
+    drop(guard);
+    let updated = ctx.db.set_peer(
+        ctx.config.if_index,
+        PeerInfo {
+            status: PeerStatus::Active,
             addr: *sender,
-            hostname: hostname.clone(),
-            last_seen: Instant::now(),
+            host: hostname,
             kind,
-        });
-        drop(guard);
-        ctx.db.set_peer(
-            ctx.config.if_index,
-            PeerInfo {
-                status: PeerStatus::Active,
-                addr: *sender,
-                host: hostname,
-                kind,
-            },
-        );
+        },
+    );
+    if updated {
         emit_nbr_update(ctx, sender);
-    } else {
-        current_nbr.last_seen = Instant::now();
     }
 }
 

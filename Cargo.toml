@@ -7,6 +7,7 @@ default-members = [
     "ddm-admin-client",
     "util",
     "mg-ddm-verify",
+    "tests",
 ]
 
 members = [
@@ -19,6 +20,7 @@ members = [
     "package",
     "util",
     "mg-ddm-verify",
+    "tests",
 ]
 
 [workspace.dependencies]
@@ -49,10 +51,10 @@ ctrlc = { version = "3.2.4", features = ["termination"] }
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "040d1e9550d8ca50f5bdb6e0f446c4716c164380"
+rev = "03450f9e50e492630b418380c49a71472baf300c"
 package = "dpd-client"
 
 [workspace.dependencies.dendrite-common]
 git = "https://github.com/oxidecomputer/dendrite"
-rev = "040d1e9550d8ca50f5bdb6e0f446c4716c164380"
+rev = "03450f9e50e492630b418380c49a71472baf300c"
 package = "common"
