@@ -1,5 +1,3 @@
-use crate::machinery::*;
-use crate::wait_for_eq;
 use anyhow::{anyhow, Result};
 use ddm_admin_client::types::Ipv6Prefix;
 use ddm_admin_client::Client;
@@ -8,6 +6,7 @@ use std::net::Ipv6Addr;
 use std::thread::sleep;
 use std::time::Duration;
 use zone::Zlogin;
+use ztest::*;
 
 struct RouterZone<'a> {
     ifx: Vec<&'a str>,
@@ -53,27 +52,8 @@ impl<'a> RouterZone<'a> {
         })
     }
 
-    fn zcmd(&self, z: &Zlogin, cmd: &str) -> Result<String> {
-        println!("[{}] {}", self.zone.name, cmd);
-        match z.exec_blocking(cmd) {
-            Ok(out) => {
-                println!("{}", out);
-                Ok(out)
-            }
-            Err(e) => {
-                println!("{}", e);
-                Err(anyhow!("{}", e))
-            }
-        }
-    }
-
-    fn zexec(&self, cmd: &str) -> Result<String> {
-        let z = Zlogin::new(&self.zone.name);
-        self.zcmd(&z, cmd)
-    }
-
     fn stop_router(&self) -> Result<String> {
-        self.zexec("pkill ddmd")
+        self.zone.zexec("pkill ddmd")
     }
 
     fn start_router(&self) -> Result<()> {
@@ -84,7 +64,7 @@ impl<'a> RouterZone<'a> {
             .join(" ");
 
         let kind = if self.transit { "transit" } else { "server" };
-        self.zexec(&format!(
+        self.zone.zexec(&format!(
             "{} /opt/ddmd --kind {} {} &> /opt/ddmd.log &",
             "RUST_LOG=trace RUST_BACKTRACE=1", kind, addrs
         ))?;
@@ -95,11 +75,9 @@ impl<'a> RouterZone<'a> {
         println!("running zone {} setup", self.zone.name);
 
         let z = Zlogin::new(&self.zone.name);
-        while !self.zcmd(&z, "svcs milestone/network")?.contains("online") {
-            sleep(Duration::from_secs(1));
-        }
-        self.zcmd(&z, "dladm")?;
-        self.zcmd(
+        self.zone.wait_for_network()?;
+        self.zone.zcmd(&z, "dladm")?;
+        self.zone.zcmd(
             &z,
             &format!(
                 "ipadm create-addr -t -T static -a 10.0.0.{}/24 {}/v4",
@@ -108,13 +86,13 @@ impl<'a> RouterZone<'a> {
         )?;
 
         for ifx in &self.ifx[1..] {
-            self.zcmd(
+            self.zone.zcmd(
                 &z,
                 &format!("ipadm create-addr -t -T addrconf {}/v6", ifx),
             )?;
         }
 
-        self.zcmd(
+        self.zone.zcmd(
             &z,
             &format!(
                 "ipadm create-addr -t -T static -a fd00:{}::1/64 lo0/u6",
@@ -123,8 +101,8 @@ impl<'a> RouterZone<'a> {
         )?;
 
         if self.transit {
-            self.zcmd(&z, "routeadm -e ipv6-forwarding")?;
-            self.zcmd(&z, "routeadm -u")?;
+            self.zone.zcmd(&z, "routeadm -e ipv6-forwarding")?;
+            self.zone.zcmd(&z, "routeadm -u")?;
         }
 
         self.zfs.copy_bin_to_zone(&self.zone.name, "ddmd")?;
@@ -136,9 +114,16 @@ impl<'a> RouterZone<'a> {
     }
 }
 
+impl<'a> std::ops::Deref for RouterZone<'a> {
+    type Target = Zone;
+    fn deref(&self) -> &Zone {
+        &self.zone
+    }
+}
+
 impl<'a> Drop for RouterZone<'a> {
     fn drop(&mut self) {
-        if let Err(e) = self.zexec("pkill ddmd") {
+        if let Err(e) = self.zone.zexec("pkill ddmd") {
             eprintln!("failed to stop ddmd: {}", e);
         }
         if let Err(e) = self.zfs.copy_from_zone(
