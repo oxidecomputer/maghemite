@@ -8,6 +8,8 @@ use std::time::Duration;
 use zone::Zlogin;
 use ztest::*;
 
+const ZONE_BRAND: &str = "sparse";
+
 struct RouterZone<'a> {
     ifx: Vec<&'a str>,
     zfs: &'a Zfs,
@@ -43,7 +45,7 @@ impl<'a> RouterZone<'a> {
     ) -> Result<Self> {
         let mut ifx = vec![mgmt];
         ifx.extend_from_slice(rtr_ifx);
-        let zone = Zone::new(name, zfs, &ifx)?;
+        let zone = Zone::new(name, ZONE_BRAND, zfs, &ifx)?;
         Ok(Self {
             ifx,
             zfs,
