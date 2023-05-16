@@ -35,7 +35,6 @@ fi
 set -o errexit
 set -o pipefail
 
-
 banner "test"
 cargo build --bin ddmd --bin ddmadm
 pfexec cargo test -p mg-tests test_trio -- --nocapture

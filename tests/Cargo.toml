@@ -14,3 +14,4 @@ slog-term.workspace = true
 slog-envlogger.workspace = true
 slog-async.workspace = true
 tokio.workspace = true
+ztest.workspace = true
