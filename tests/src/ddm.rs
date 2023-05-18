@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use ddm_admin_client::types::Ipv6Prefix;
 use ddm_admin_client::Client;
 use slog::{Drain, Logger};
+use std::env;
 use std::net::Ipv6Addr;
 use std::thread::sleep;
 use std::time::Duration;
@@ -141,6 +142,17 @@ impl<'a> Drop for RouterZone<'a> {
     }
 }
 
+macro_rules! run_topo {
+    ($fn:expr) => {
+        if env::var("TEST_INTERACTIVE").is_err() {
+            $fn
+        } else {
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line).unwrap();
+        }
+    };
+}
+
 #[tokio::test]
 async fn test_trio() -> Result<()> {
     // A trio. Two server routers and one transit router.
@@ -187,7 +199,7 @@ async fn test_trio() -> Result<()> {
     s2.setup(2)?;
     t1.setup(3)?;
 
-    run_trio_tests(&s1, &s2, &t1).await?;
+    run_topo!(run_trio_tests(&s1, &s2, &t1).await?);
 
     Ok(())
 }
@@ -307,6 +319,156 @@ async fn run_trio_tests(
     wait_for_eq!(t1.get_prefixes().await?.len(), 2);
 
     println!("peer expiration recovery passed");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_quartet() -> Result<()> {
+    // A quartet of servers in a star topology.
+    //
+    //               +----+
+    //  +------------| s1 |
+    //  |            +----+
+    //  |               |
+    //  |   +----+   +----+   +----+
+    //  |   | s2 |---| t1 |---| s3 |
+    //  |   +----+   +----+   +----+
+    //  |      |        |       |
+    //  |    +--------------------+
+    //  +----|        mgmt        |     etherstub
+    //       +--------------------+
+
+    let s1_t1 = SimnetLink::new("s1t1", "t1s1")?;
+    let s2_t1 = SimnetLink::new("s2t1", "t1s2")?;
+    let s3_t1 = SimnetLink::new("s3t1", "t1s3")?;
+
+    let mgmt0 = Etherstub::new("mgmt0")?;
+
+    let mg0 = Vnic::new("mg0", &mgmt0.name)?;
+    let mgs1 = Vnic::new("mgs1", &mgmt0.name)?;
+    let mgs2 = Vnic::new("mgs2", &mgmt0.name)?;
+    let mgs3 = Vnic::new("mgs3", &mgmt0.name)?;
+    let mgt1 = Vnic::new("mgt1", &mgmt0.name)?;
+
+    let _mgip = Ip::new("10.0.0.254/24", &mg0.name, "test")?;
+
+    let zfs = Zfs::new("mgtest")?;
+
+    println!("start zone s1");
+    let s1 = RouterZone::server("s1", &zfs, &mgs1.name, &[&s1_t1.end_a])?;
+    println!("start zone s2");
+    let s2 = RouterZone::server("s2", &zfs, &mgs2.name, &[&s2_t1.end_a])?;
+    println!("start zone s3");
+    let s3 = RouterZone::server("s3", &zfs, &mgs3.name, &[&s3_t1.end_a])?;
+    println!("start zone t1");
+    let t1 = RouterZone::transit(
+        "t1",
+        &zfs,
+        &mgt1.name,
+        &[&s1_t1.end_b, &s2_t1.end_b, &s3_t1.end_b],
+    )?;
+
+    println!("waiting for zones to come up");
+    sleep(Duration::from_secs(10));
+
+    s1.setup(1)?;
+    s2.setup(2)?;
+    s3.setup(3)?;
+    t1.setup(4)?;
+
+    run_topo!(run_quartet_tests(&s1, &s2, &s3, &t1).await?);
+
+    Ok(())
+}
+
+async fn run_quartet_tests(
+    _zs1: &RouterZone<'_>,
+    _zs2: &RouterZone<'_>,
+    zs3: &RouterZone<'_>,
+    _zt1: &RouterZone<'_>,
+) -> Result<()> {
+    let log = init_logger();
+    let s1 = Client::new("http://10.0.0.1:8000", log.clone());
+    let s2 = Client::new("http://10.0.0.2:8000", log.clone());
+    let s3 = Client::new("http://10.0.0.3:8000", log.clone());
+    let t1 = Client::new("http://10.0.0.4:8000", log.clone());
+
+    // If we never get a response from a server, return 99 as a sentinel value.
+    wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
+    wait_for_eq!(s2.get_peers().await.map_or(99, |x| x.len()), 1);
+    wait_for_eq!(s3.get_peers().await.map_or(99, |x| x.len()), 1);
+    wait_for_eq!(t1.get_peers().await.map_or(99, |x| x.len()), 3);
+
+    println!("initial peering test passed");
+
+    s1.advertise_prefixes(&vec![Ipv6Prefix {
+        addr: "fd00:1::".parse().unwrap(),
+        len: 64,
+    }])
+    .await?;
+
+    s3.advertise_prefixes(&vec![Ipv6Prefix {
+        addr: "fd00:3::".parse().unwrap(),
+        len: 64,
+    }])
+    .await?;
+
+    // s1/s3 should now have 1 prefixe
+    wait_for_eq!(
+        s1.get_prefixes()
+            .await?
+            .values()
+            .map(|x| x.len())
+            .sum::<usize>(),
+        1
+    );
+    wait_for_eq!(
+        s3.get_prefixes()
+            .await?
+            .values()
+            .map(|x| x.len())
+            .sum::<usize>(),
+        1
+    );
+
+    // s3 should be able to ping s1
+    zs3.zexec("ping fd00:1::1")?;
+
+    s2.advertise_prefixes(&vec![Ipv6Prefix {
+        addr: "fd00:1::".parse().unwrap(),
+        len: 64,
+    }])
+    .await?;
+
+    // s3 should now have 2 prefixes
+    wait_for_eq!(
+        s3.get_prefixes()
+            .await?
+            .values()
+            .map(|x| x.len())
+            .sum::<usize>(),
+        2
+    );
+
+    s2.withdraw_prefixes(&vec![Ipv6Prefix {
+        addr: "fd00:1::".parse().unwrap(),
+        len: 64,
+    }])
+    .await?;
+
+    // s3 should still have 1 prefix left
+    wait_for_eq!(
+        s3.get_prefixes()
+            .await?
+            .values()
+            .map(|x| x.len())
+            .sum::<usize>(),
+        1
+    );
+
+    // s3 should be able to ping s1 even after s2 withdrew s1's prefix
+    zs3.zexec("ping fd00:1::1")?;
 
     Ok(())
 }

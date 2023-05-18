@@ -361,6 +361,11 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
         del.push(r);
     }
     ctx.ctx.db.delete_import(&withdraw);
+    // TODO we cannot simply delete the route here. If we have other paths to
+    // the destination with the same nexthop, we'll be left with a route in the
+    // DB but not the underlying forwarding platform. We cannot delete a
+    // (destination, nexthop) pair until all path-vector routes with that
+    // tuple are gone.
     if let Err(e) = crate::sys::remove_routes(
         &ctx.log,
         &ctx.ctx.config.dpd,
