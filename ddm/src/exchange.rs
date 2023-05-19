@@ -323,6 +323,7 @@ async fn pull_handler(
 fn handle_update(update: &Update, ctx: &HandlerContext) {
     let mut import = HashSet::new();
     let mut add = Vec::new();
+    let db = &ctx.ctx.db;
     for prefix in &update.announce {
         import.insert(Route {
             destination: prefix.destination,
@@ -336,7 +337,7 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
             ctx.peer.into(),
         ));
     }
-    ctx.ctx.db.import(&import);
+    db.import(&import);
     if let Err(e) =
         crate::sys::add_routes(&ctx.log, &ctx.ctx.config, add, &ctx.ctx.rt)
     {
@@ -344,7 +345,6 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
     }
 
     let mut withdraw = HashSet::new();
-    let mut del = Vec::new();
     for prefix in &update.withdraw {
         withdraw.insert(Route {
             destination: prefix.destination,
@@ -352,27 +352,41 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
             ifname: ctx.ctx.config.if_name.clone(),
             path: prefix.path.clone(),
         });
-        let mut r = crate::sys::Route::new(
-            prefix.destination.addr.into(),
-            prefix.destination.len,
-            ctx.peer.into(),
-        );
-        r.ifname = ctx.ctx.config.if_name.clone();
-        del.push(r);
     }
-    ctx.ctx.db.delete_import(&withdraw);
-    // TODO we cannot simply delete the route here. If we have other paths to
+    db.delete_import(&withdraw);
+
+    // We cannot simply delete withdrawn routes here. If we have other paths to
     // the destination with the same nexthop, we'll be left with a route in the
     // DB but not the underlying forwarding platform. We cannot delete a
-    // (destination, nexthop) pair until all path-vector routes with that
-    // tuple are gone.
+    // (destination, nexthop) pair until all path-vector routes with that tuple
+    // are gone. Another way to say this is that while we track routes by path,
+    // the underlying forwarding platform only knows about a vector. And since
+    // there can be many paths along vector, we can only delete a route from the
+    // forwarding platform if the complete vector is gone.
+    let mut del = Vec::new();
+    for w in &withdraw {
+        if db.routes_by_vector(w.destination, w.nexthop).is_empty() {
+            let mut r = crate::sys::Route::new(
+                w.destination.addr.into(),
+                w.destination.len,
+                w.nexthop.into(),
+            );
+            r.ifname = ctx.ctx.config.if_name.clone();
+            del.push(r);
+        }
+    }
     if let Err(e) = crate::sys::remove_routes(
         &ctx.log,
         &ctx.ctx.config.dpd,
         del,
         &ctx.ctx.rt,
     ) {
-        err!(ctx.log, ctx.ctx.config.if_index, "add system route: {}", e);
+        err!(
+            ctx.log,
+            ctx.ctx.config.if_index,
+            "remove system route: {}",
+            e
+        );
     }
 
     // distribute updates

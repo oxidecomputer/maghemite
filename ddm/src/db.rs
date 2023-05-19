@@ -88,6 +88,21 @@ impl Db {
     pub fn remove_peer(&self, index: u32) {
         self.data.lock().unwrap().peers.remove(&index);
     }
+
+    pub fn routes_by_vector(
+        &self,
+        dst: Ipv6Prefix,
+        nexthop: Ipv6Addr,
+    ) -> Vec<Route> {
+        let data = self.data.lock().unwrap();
+        let mut result = Vec::new();
+        for x in &data.imported {
+            if x.destination == dst && x.nexthop == nexthop {
+                result.push(x.clone());
+            }
+        }
+        result
+    }
 }
 
 #[derive(
