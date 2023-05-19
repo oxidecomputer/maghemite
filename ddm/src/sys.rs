@@ -183,9 +183,11 @@ pub fn add_routes_dendrite(
 
         let client = client.clone();
 
-        rt.spawn(async move {
-            client.route_ipv6_create(&route).await.unwrap(); //TODO unwrap
-        });
+        rt.block_on(async move {
+            //TODO you are here, we need a route_ipv6_set from dendrite
+            client.route_ipv6_create(&route).await
+        })
+        .map_err(|e| format!("dpd route create: {}", e))?;
     }
 
     Ok(())
@@ -240,9 +242,8 @@ pub fn remove_routes_dendrite(
 
         let client = client.clone();
 
-        rt.spawn(async move {
-            client.route_ipv6_delete(&cidr).await.unwrap(); //TODO unwrap
-        });
+        rt.block_on(async move { client.route_ipv6_delete(&cidr).await })
+            .map_err(|e| format!("dpd route delete: {}", e))?;
     }
 
     Ok(())
@@ -260,15 +261,12 @@ pub fn get_routes_dendrite(
     };
     let client = Client::new(&format!("http://{host}:{port}"), client_state);
 
-    let routes = rt.block_on(async {
-        //TODO unwrap
-        client
-            .route_ipv6_list(None, None)
-            .await
-            .unwrap()
-            .items
-            .to_vec()
-    });
+    let routes = rt
+        .block_on(async { client.route_ipv6_list(None, None).await })
+        .map_err(|e| format!("dpd route list: {}", e))?
+        .items
+        .to_vec();
+
     let mut result = Vec::new();
 
     for r in routes {
