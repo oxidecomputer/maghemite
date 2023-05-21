@@ -183,11 +183,8 @@ pub fn add_routes_dendrite(
 
         let client = client.clone();
 
-        rt.block_on(async move {
-            //TODO you are here, we need a route_ipv6_set from dendrite
-            client.route_ipv6_create(&route).await
-        })
-        .map_err(|e| format!("dpd route create: {}", e))?;
+        rt.block_on(async move { client.route_ipv6_set(&route).await })
+            .map_err(|e| format!("dpd route create: {}", e))?;
     }
 
     Ok(())
