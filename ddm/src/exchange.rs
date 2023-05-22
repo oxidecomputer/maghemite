@@ -194,7 +194,7 @@ fn send_update(
             Err(e) => {
                 err!(
                     log,
-                    config.if_index,
+                    config.if_name,
                     "peer request timeout to {}: {}",
                     uri,
                     e,
@@ -232,7 +232,7 @@ pub fn handler(
 
     let api = api_description()?;
 
-    inf!(log, ctx.config.if_index, "exchange: listening on {}", sa);
+    inf!(log, ctx.config.if_name, "exchange: listening on {}", sa);
 
     let log = log.clone();
 
@@ -241,12 +241,12 @@ pub fn handler(
         match server.unwrap().start().await {
             Ok(_) => wrn!(
                 log,
-                ctx.config.if_index,
+                ctx.config.if_name,
                 "exchange: unexpected server exit"
             ),
             Err(e) => err!(
                 log,
-                ctx.config.if_index,
+                ctx.config.if_name,
                 "exchange: server start error {:?}",
                 e
             ),
@@ -331,17 +331,19 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
             ifname: ctx.ctx.config.if_name.clone(),
             path: prefix.path.clone(),
         });
-        add.push(crate::sys::Route::new(
+        let mut r = crate::sys::Route::new(
             prefix.destination.addr.into(),
             prefix.destination.len,
             ctx.peer.into(),
-        ));
+        );
+        r.ifname = ctx.ctx.config.if_name.clone();
+        add.push(r);
     }
     db.import(&import);
     if let Err(e) =
         crate::sys::add_routes(&ctx.log, &ctx.ctx.config, add, &ctx.ctx.rt)
     {
-        err!(ctx.log, ctx.ctx.config.if_index, "add system route: {}", e);
+        err!(ctx.log, ctx.ctx.config.if_name, "add system route: {}", e);
     }
 
     let mut withdraw = HashSet::new();
@@ -377,13 +379,14 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
     }
     if let Err(e) = crate::sys::remove_routes(
         &ctx.log,
+        &ctx.ctx.config.if_name,
         &ctx.ctx.config.dpd,
         del,
         &ctx.ctx.rt,
     ) {
         err!(
             ctx.log,
-            ctx.ctx.config.if_index,
+            ctx.ctx.config.if_name,
             "remove system route: {}",
             e
         );
@@ -394,7 +397,7 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
     if ctx.ctx.config.kind == RouterKind::Transit {
         dbg!(
             ctx.log,
-            ctx.ctx.config.if_index,
+            ctx.ctx.config.if_name,
             "redistributing update to {} peers",
             ctx.ctx.event_channels.len()
         );

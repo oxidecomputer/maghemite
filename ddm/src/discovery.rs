@@ -188,7 +188,7 @@ pub(crate) fn handler(
     let mc = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
     let uc = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
 
-    dbg!(log, config.if_index, "starting discovery handler");
+    dbg!(log, config.if_name, "starting discovery handler");
 
     let mc_sa: SockAddr =
         SocketAddrV6::new(DDM_MADDR, DDM_PORT, 0, config.if_index).into();
@@ -232,7 +232,7 @@ pub(crate) fn handler(
 fn send_solicitations(ctx: HandlerContext, stop: Arc<AtomicBool>) {
     spawn(move || loop {
         if let Err(e) = solicit(&ctx) {
-            err!(ctx.log, ctx.config.if_index, "solicit failed: {}", e);
+            err!(ctx.log, ctx.config.if_name, "solicit failed: {}", e);
             stop.store(true, Ordering::Relaxed);
             break;
         }
@@ -248,7 +248,7 @@ fn expire(
         let mut guard = match ctx.nbr.write() {
             Ok(nbr) => nbr,
             Err(e) => {
-                err!(ctx.log, ctx.config.if_index, "lock nbr on expire: {}", e);
+                err!(ctx.log, ctx.config.if_name, "lock nbr on expire: {}", e);
                 return;
             }
         };
@@ -257,7 +257,7 @@ fn expire(
             if dt.as_millis() > ctx.config.expire_threshold.into() {
                 wrn!(
                     &ctx.log,
-                    ctx.config.if_index,
+                    ctx.config.if_name,
                     "neighbor {}@{} expire",
                     &nbr.hostname,
                     nbr.addr
@@ -266,12 +266,12 @@ fn expire(
                 emit_nbr_expire(
                     ctx.event.clone(),
                     ctx.log.clone(),
-                    ctx.config.if_index,
+                    &ctx.config.if_name,
                 );
             } else if dt.as_millis() > ctx.config.solicit_interval.into() {
                 wrn!(
                     &ctx.log,
-                    ctx.config.if_index,
+                    ctx.config.if_name,
                     "neighbor {}@{} missed solicit interval",
                     &nbr.hostname,
                     nbr.addr
@@ -286,12 +286,12 @@ fn expire(
         if stop.load(Ordering::Relaxed) {
             let event = ctx.event.clone();
             let log = ctx.log.clone();
-            let if_index = ctx.config.if_index;
+            let if_name = ctx.config.if_name.clone();
             let wait = ctx.config.discovery_read_timeout;
             drop(ctx);
             // Ensure read handlers have registered the stop event.
             sleep(Duration::from_millis(wait));
-            emit_solicit_fail(event, log, if_index);
+            emit_solicit_fail(event, log, &if_name);
             break;
         }
         sleep(Duration::from_millis(ctx.config.solicit_interval));
@@ -325,7 +325,7 @@ fn recv(
             if e.kind() != std::io::ErrorKind::WouldBlock {
                 err!(
                     ctx.log,
-                    ctx.config.if_index,
+                    ctx.config.if_name,
                     "discovery recv: {}",
                     e.kind()
                 );
@@ -338,7 +338,7 @@ fn recv(
     let addr = match sa.as_socket_ipv6() {
         Some(sa) => *sa.ip(),
         None => {
-            err!(ctx.log, ctx.config.if_index, "non-v6 neighbor? {:?}", sa);
+            err!(ctx.log, ctx.config.if_name, "non-v6 neighbor? {:?}", sa);
             return None;
         }
     };
@@ -348,12 +348,12 @@ fn recv(
     let msg: DiscoveryPacket = match ispf::from_bytes_be(ibuf) {
         Ok(msg) => msg,
         Err(e) => {
-            err!(ctx.log, ctx.config.if_index, "parse discovery msg {}", e);
+            err!(ctx.log, ctx.config.if_name, "parse discovery msg {}", e);
             return None;
         }
     };
 
-    trc!(ctx.log, ctx.config.if_index, "recv: {:?}", msg);
+    trc!(ctx.log, ctx.config.if_name, "recv: {:?}", msg);
 
     Some((addr, msg))
 }
@@ -372,10 +372,10 @@ fn handle_solicitation(
     sender: &Ipv6Addr,
     hostname: String,
 ) {
-    trc!(&ctx.log, ctx.config.if_index, "solicit from {}", hostname);
+    trc!(&ctx.log, ctx.config.if_name, "solicit from {}", hostname);
 
     if let Err(e) = advertise(ctx, Some(*sender)) {
-        err!(ctx.log, ctx.config.if_index, "icmp advertise: {}", e);
+        err!(ctx.log, ctx.config.if_name, "icmp advertise: {}", e);
     }
 }
 
@@ -385,12 +385,12 @@ fn handle_advertisement(
     hostname: String,
     kind: RouterKind,
 ) {
-    trc!(&ctx.log, ctx.config.if_index, "advert from {}", &hostname);
+    trc!(&ctx.log, ctx.config.if_name, "advert from {}", &hostname);
 
     let mut guard = match ctx.nbr.write() {
         Ok(nbr) => nbr,
         Err(e) => {
-            err!(ctx.log, ctx.config.if_index, "lock nbr on adv: {}", e);
+            err!(ctx.log, ctx.config.if_name, "lock nbr on adv: {}", e);
             return;
         }
     };
@@ -399,7 +399,7 @@ fn handle_advertisement(
             if *sender != nbr.addr {
                 inf!(
                     ctx.log,
-                    ctx.config.if_index,
+                    ctx.config.if_name,
                     "nbr {}@{} {} -> {}@{} {}",
                     nbr.hostname,
                     nbr.addr,
@@ -417,7 +417,7 @@ fn handle_advertisement(
         None => {
             inf!(
                 ctx.log,
-                ctx.config.if_index,
+                ctx.config.if_name,
                 "nbr is {}@{} {}",
                 sender,
                 hostname,
@@ -448,19 +448,19 @@ fn handle_advertisement(
 
 fn emit_nbr_update(ctx: &HandlerContext, addr: &Ipv6Addr) {
     if let Err(e) = ctx.event.send(NeighborEvent::Advertise(*addr).into()) {
-        err!(ctx.log, ctx.config.if_index, "send nbr event: {}", e);
+        err!(ctx.log, ctx.config.if_name, "send nbr event: {}", e);
     }
 }
 
-fn emit_nbr_expire(event: Sender<Event>, log: Logger, if_index: u32) {
+fn emit_nbr_expire(event: Sender<Event>, log: Logger, if_name: &str) {
     if let Err(e) = event.send(NeighborEvent::Expire.into()) {
-        err!(log, if_index, "send nbr expire: {}", e);
+        err!(log, if_name, "send nbr expire: {}", e);
     }
 }
 
-fn emit_solicit_fail(event: Sender<Event>, log: Logger, if_index: u32) {
+fn emit_solicit_fail(event: Sender<Event>, log: Logger, if_name: &str) {
     if let Err(e) = event.send(NeighborEvent::SolicitFail.into()) {
-        err!(log, if_index, "send solicit fail: {}", e);
+        err!(log, if_name, "send solicit fail: {}", e);
     }
 }
 

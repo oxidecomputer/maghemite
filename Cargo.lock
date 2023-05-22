@@ -533,8 +533,7 @@ dependencies = [
  "libnet",
  "slog",
  "slog-async",
- "slog-envlogger",
- "slog-term",
+ "slog-bunyan",
  "tokio",
 ]
 

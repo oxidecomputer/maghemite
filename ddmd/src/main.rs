@@ -167,7 +167,7 @@ fn termination_handler(
         let imported = db.imported();
         let routes: Vec<Route> =
             imported.iter().map(|x| (x.clone()).into()).collect();
-        ddm::sys::remove_routes(&log, &dendrite, routes, &rt)
+        ddm::sys::remove_routes(&log, "shutdown-all", &dendrite, routes, &rt)
             .expect("route removal on termination");
         std::process::exit(SIGTERM_EXIT);
     })
@@ -175,9 +175,10 @@ fn termination_handler(
 }
 
 pub(crate) fn init_logger() -> Logger {
-    let decorator = slog_term::TermDecorator::new().build();
-    let drain = slog_term::FullFormat::new(decorator).build().fuse();
-    let drain = slog_envlogger::new(drain).fuse();
-    let drain = slog_async::Async::new(drain).build().fuse();
+    let drain = slog_bunyan::new(std::io::stdout()).build().fuse();
+    let drain = slog_async::Async::new(drain)
+        .chan_size(0x8000)
+        .build()
+        .fuse();
     slog::Logger::root(drain, slog::o!())
 }

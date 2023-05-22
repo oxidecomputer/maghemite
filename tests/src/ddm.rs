@@ -181,12 +181,12 @@ async fn test_trio() -> Result<()> {
     let zfs = Zfs::new("mgtest")?;
 
     println!("start zone s1");
-    let s1 = RouterZone::server("s1", &zfs, &mgs1.name, &[&s1_t1.end_a])?;
+    let s1 = RouterZone::server("trio.s1", &zfs, &mgs1.name, &[&s1_t1.end_a])?;
     println!("start zone s2");
-    let s2 = RouterZone::server("s2", &zfs, &mgs2.name, &[&s2_t1.end_a])?;
+    let s2 = RouterZone::server("trio.s2", &zfs, &mgs2.name, &[&s2_t1.end_a])?;
     println!("start zone t1");
     let t1 = RouterZone::transit(
-        "t1",
+        "trio.t1",
         &zfs,
         &mgt1.name,
         &[&s1_t1.end_b, &s2_t1.end_b],
@@ -356,14 +356,17 @@ async fn test_quartet() -> Result<()> {
     let zfs = Zfs::new("mgtest")?;
 
     println!("start zone s1");
-    let s1 = RouterZone::server("s1", &zfs, &mgs1.name, &[&s1_t1.end_a])?;
+    let s1 =
+        RouterZone::server("quartet.s1", &zfs, &mgs1.name, &[&s1_t1.end_a])?;
     println!("start zone s2");
-    let s2 = RouterZone::server("s2", &zfs, &mgs2.name, &[&s2_t1.end_a])?;
+    let s2 =
+        RouterZone::server("quartet.s2", &zfs, &mgs2.name, &[&s2_t1.end_a])?;
     println!("start zone s3");
-    let s3 = RouterZone::server("s3", &zfs, &mgs3.name, &[&s3_t1.end_a])?;
+    let s3 =
+        RouterZone::server("quartet.s3", &zfs, &mgs3.name, &[&s3_t1.end_a])?;
     println!("start zone t1");
     let t1 = RouterZone::transit(
-        "t1",
+        "quartet.t1",
         &zfs,
         &mgt1.name,
         &[&s1_t1.end_b, &s2_t1.end_b, &s3_t1.end_b],

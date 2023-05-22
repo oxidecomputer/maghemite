@@ -4,7 +4,7 @@ use crate::db::{Db, Ipv6Prefix, RouterKind};
 use crate::exchange::PathVector;
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use libnet::get_ipaddr_info;
-use slog::{error, info, Logger};
+use slog::Logger;
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -209,7 +209,7 @@ impl State for Init {
                 Err(e) => {
                     wrn!(
                         self.log,
-                        self.ctx.config.if_index,
+                        self.ctx.config.if_name,
                         "failed to get IPv6 address for interface {}: {}",
                         &self.ctx.config.aobj_name,
                         e
@@ -223,7 +223,7 @@ impl State for Init {
                 IpAddr::V4(_) => {
                     wrn!(
                         self.log,
-                        self.ctx.config.if_index,
+                        self.ctx.config.if_name,
                         "specified address {} is not IPv6",
                         &self.ctx.config.aobj_name
                     );
@@ -231,16 +231,17 @@ impl State for Init {
                     continue;
                 }
             };
-            inf!(
-                self.log,
-                self.ctx.config.if_index,
-                "sm initialized with addr {} on if index {}",
-                &addr,
-                info.index,
-            );
             self.ctx.config.if_name = info.ifname.clone();
             self.ctx.config.if_index = info.index as u32;
             self.ctx.config.addr = addr;
+            inf!(
+                self.log,
+                self.ctx.config.if_name,
+                "sm initialized with addr {} on if {} index {}",
+                &addr,
+                &info.ifname,
+                info.index,
+            );
 
             // Now that we have an ip address to run discovery on, start the
             // discovery handler and jump into the solicit state.
@@ -282,7 +283,7 @@ impl State for Solicit {
                 Err(e) => {
                     err!(
                         self.log,
-                        self.ctx.config.if_index,
+                        self.ctx.config.if_name,
                         "solicit event recv: {}",
                         e
                     );
@@ -293,7 +294,7 @@ impl State for Solicit {
                 Event::Neighbor(NeighborEvent::Advertise(addr)) => {
                     dbg!(
                         self.log,
-                        self.ctx.config.if_index,
+                        self.ctx.config.if_name,
                         "transition solicit -> exchange"
                     );
                     return (
@@ -309,7 +310,7 @@ impl State for Solicit {
                 Event::Neighbor(NeighborEvent::SolicitFail) => {
                     wrn!(
                         self.log,
-                        self.ctx.config.if_index,
+                        self.ctx.config.if_name,
                         "exiting solicit state due to failed solicit",
                     );
                     return (
@@ -320,7 +321,7 @@ impl State for Solicit {
                 Event::Peer(e) => {
                     wrn!(
                         self.log,
-                        self.ctx.config.if_index,
+                        self.ctx.config.if_name,
                         "peer event in solicit state: {:?}",
                         e
                     );
@@ -328,7 +329,7 @@ impl State for Solicit {
                 Event::Admin(e) => {
                     wrn!(
                         self.log,
-                        self.ctx.config.if_index,
+                        self.ctx.config.if_name,
                         "admin event in solicit state: {:?}",
                         e
                     );
@@ -355,7 +356,7 @@ impl Exchange {
         let rt = self.ctx.rt.clone();
         let log = self.log.clone();
         let interval = self.ctx.config.solicit_interval;
-        let if_index = self.ctx.config.if_index;
+        let if_name = self.ctx.config.if_name.clone();
 
         spawn(move || {
             while let Err(e) = crate::exchange::pull(
@@ -365,7 +366,7 @@ impl Exchange {
                 log.clone(),
             ) {
                 sleep(Duration::from_millis(interval));
-                wrn!(log, if_index, "exchange pull: {}", e);
+                wrn!(log, if_name, "exchange pull: {}", e);
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
@@ -376,7 +377,11 @@ impl Exchange {
     fn wait_for_exchange_server_to_start(
         &self,
     ) -> Result<(), exchange::ExchangeError> {
-        info!(self.log, "waiting for exchange server to start");
+        inf!(
+            self.log,
+            self.ctx.config.if_name,
+            "waiting for exchange server to start"
+        );
         let mut retries = 0;
         let limit = 50; //TODO as parameter
         let interval = 100; // TODO as parameter
@@ -417,13 +422,14 @@ impl Exchange {
         }
         if let Err(e) = crate::sys::remove_routes(
             &self.log,
+            &self.ctx.config.if_name,
             &self.ctx.config.dpd,
             routes,
             &self.ctx.rt,
         ) {
             err!(
                 self.log,
-                self.ctx.config.if_index,
+                self.ctx.config.if_name,
                 "failed to remove routes: {}",
                 e,
             );
@@ -433,7 +439,7 @@ impl Exchange {
         if self.ctx.config.kind == RouterKind::Transit {
             dbg!(
                 self.log,
-                self.ctx.config.if_index,
+                self.ctx.config.if_name,
                 "redistributing expire to {} peers",
                 self.ctx.event_channels.len()
             );
@@ -486,7 +492,12 @@ impl State for Exchange {
             let e = match event.recv() {
                 Ok(e) => e,
                 Err(e) => {
-                    error!(self.log, "exchange event recv: {}", e);
+                    err!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "exchange event recv: {}",
+                        e
+                    );
                     continue;
                 }
             };
@@ -508,13 +519,13 @@ impl State for Exchange {
                     ) {
                         err!(
                             self.log,
-                            self.ctx.config.if_index,
+                            self.ctx.config.if_name,
                             "announce: {}",
                             e,
                         );
                         wrn!(
                             self.log,
-                            self.ctx.config.if_index,
+                            self.ctx.config.if_name,
                             "expiring peer {} due to failed announce",
                             self.peer,
                         );
@@ -545,13 +556,13 @@ impl State for Exchange {
                     ) {
                         err!(
                             self.log,
-                            self.ctx.config.if_index,
+                            self.ctx.config.if_name,
                             "withdraw: {}",
                             e,
                         );
                         wrn!(
                             self.log,
-                            self.ctx.config.if_index,
+                            self.ctx.config.if_name,
                             "expiring peer {} due to failed withdraw",
                             self.peer,
                         );
@@ -569,7 +580,7 @@ impl State for Exchange {
                     if self.peer == peer {
                         inf!(
                             self.log,
-                            self.ctx.config.if_index,
+                            self.ctx.config.if_name,
                             "administratively expiring peer {}",
                             peer,
                         );
@@ -592,7 +603,7 @@ impl State for Exchange {
                     ) {
                         err!(
                             self.log,
-                            self.ctx.config.if_index,
+                            self.ctx.config.if_name,
                             "exchange pull: {}",
                             e
                         );
@@ -601,7 +612,7 @@ impl State for Exchange {
                 Event::Peer(PeerEvent::Push(push)) => {
                     inf!(
                         self.log,
-                        self.ctx.config.if_index,
+                        self.ctx.config.if_name,
                         "push from {}: {:#?}",
                         self.peer,
                         push,
@@ -616,13 +627,13 @@ impl State for Exchange {
                         ) {
                             err!(
                                 self.log,
-                                self.ctx.config.if_index,
+                                self.ctx.config.if_name,
                                 "announce: {}",
                                 e,
                             );
                             wrn!(
                                 self.log,
-                                self.ctx.config.if_index,
+                                self.ctx.config.if_name,
                                 "expiring peer {} due to failed announce",
                                 self.peer,
                             );
@@ -646,13 +657,13 @@ impl State for Exchange {
                         ) {
                             err!(
                                 self.log,
-                                self.ctx.config.if_index,
+                                self.ctx.config.if_name,
                                 "withdraw: {}",
                                 e,
                             );
                             wrn!(
                                 self.log,
-                                self.ctx.config.if_index,
+                                self.ctx.config.if_name,
                                 "expiring peer {} due to failed withdraw",
                                 self.peer,
                             );
@@ -670,7 +681,7 @@ impl State for Exchange {
                 Event::Neighbor(NeighborEvent::Expire) => {
                     wrn!(
                         self.log,
-                        self.ctx.config.if_index,
+                        self.ctx.config.if_name,
                         "expiring peer {} due to discovery event",
                         self.peer,
                     );
@@ -686,7 +697,7 @@ impl State for Exchange {
                 Event::Neighbor(NeighborEvent::SolicitFail) => {
                     wrn!(
                         self.log,
-                        self.ctx.config.if_index,
+                        self.ctx.config.if_name,
                         "expiring peer {} due to failed solicit",
                         self.peer,
                     );
