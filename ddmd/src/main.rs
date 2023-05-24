@@ -8,6 +8,7 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 
 #[derive(Debug, Parser)]
+#[command(version, about, long_about = None, styles = get_styles())]
 struct Arg {
     /// Address objects to route over.
     #[arg(short, long = "addr", name = "addr")]
@@ -181,4 +182,26 @@ pub(crate) fn init_logger() -> Logger {
         .build()
         .fuse();
     slog::Logger::root(drain, slog::o!())
+}
+
+pub fn get_styles() -> clap::builder::Styles {
+    clap::builder::Styles::styled()
+        .header(anstyle::Style::new().bold().underline().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(245, 207, 101)),
+        )))
+        .literal(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(72, 213, 151)),
+        )))
+        .invalid(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(72, 213, 151)),
+        )))
+        .valid(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(72, 213, 151)),
+        )))
+        .usage(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(245, 207, 101)),
+        )))
+        .error(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(232, 104, 134)),
+        )))
 }

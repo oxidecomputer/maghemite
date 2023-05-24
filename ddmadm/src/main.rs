@@ -10,6 +10,7 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use tabwriter::TabWriter;
 
 #[derive(Debug, Parser)]
+#[command(version, about, long_about = None, styles = get_styles())]
 struct Arg {
     #[arg(short, long, default_value_t = Ipv6Addr::UNSPECIFIED.into())]
     address: IpAddr,
@@ -174,4 +175,26 @@ fn init_logger() -> Logger {
     let drain = slog_envlogger::new(drain).fuse();
     let drain = slog_async::Async::new(drain).build().fuse();
     slog::Logger::root(drain, slog::o!())
+}
+
+pub fn get_styles() -> clap::builder::Styles {
+    clap::builder::Styles::styled()
+        .header(anstyle::Style::new().bold().underline().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(245, 207, 101)),
+        )))
+        .literal(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(72, 213, 151)),
+        )))
+        .invalid(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(72, 213, 151)),
+        )))
+        .valid(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(72, 213, 151)),
+        )))
+        .usage(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(245, 207, 101)),
+        )))
+        .error(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(232, 104, 134)),
+        )))
 }

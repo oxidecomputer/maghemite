@@ -45,11 +45,12 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" 
 percent-encoding = "2.1"
 reqwest = { version = "0.11", features = ["json", "stream", "rustls-tls"] }
 progenitor = { git = "https://github.com/oxidecomputer/progenitor", branch = "main" }
-clap = { version = "4.0.29", features = ["derive"] }
+clap = { version = "4.2.5", features = ["derive", "unstable-styles"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "2.0.0"
 ctrlc = { version = "3.2.4", features = ["termination"] }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
+anstyle = "1.0.0"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
