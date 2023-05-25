@@ -436,16 +436,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctrlc"
-version = "3.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7394a21d012ce5c850497fb774b167d81b99f060025fbf06ee92b9848bd97eb2"
-dependencies = [
- "nix",
- "windows-sys 0.48.0",
-]
-
-[[package]]
 name = "ddm"
 version = "0.1.0"
 dependencies = [
@@ -503,7 +493,6 @@ version = "0.1.0"
 dependencies = [
  "anstyle",
  "clap",
- "ctrlc",
  "ddm",
  "dpd-client",
  "hostname",
@@ -1425,18 +1414,6 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "tempfile",
-]
-
-[[package]]
-name = "nix"
-version = "0.26.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfdda3d196821d6af13126e40375cdf7da646a96114af134d5f417a9a1dc8e1a"
-dependencies = [
- "bitflags",
- "cfg-if",
- "libc",
- "static_assertions",
 ]
 
 [[package]]
@@ -2583,12 +2560,6 @@ name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
-
-[[package]]
-name = "static_assertions"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "strsim"

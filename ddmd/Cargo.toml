@@ -12,6 +12,5 @@ slog-bunyan.workspace = true
 slog-async.workspace = true
 tokio.workspace = true
 hostname.workspace = true
-ctrlc.workspace = true
 dpd-client.workspace = true
 anstyle.workspace = true

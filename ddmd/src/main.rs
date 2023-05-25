@@ -163,7 +163,10 @@ fn termination_handler(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) {
-    ctrlc::set_handler(move || {
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("error setting termination handler");
         const SIGTERM_EXIT: i32 = 130;
         let imported = db.imported();
         let routes: Vec<Route> =
@@ -171,8 +174,7 @@ fn termination_handler(
         ddm::sys::remove_routes(&log, "shutdown-all", &dendrite, routes, &rt)
             .expect("route removal on termination");
         std::process::exit(SIGTERM_EXIT);
-    })
-    .expect("error setting termination handler");
+    });
 }
 
 pub(crate) fn init_logger() -> Logger {

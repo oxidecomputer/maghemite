@@ -37,6 +37,7 @@ impl<'a> SoftnpuZone<'a> {
     }
 
     fn setup(&self) -> Result<()> {
+        self.zone.wait_for_network()?;
         self.zfs.copy_workspace_to_zone(
             &self.zone.name,
             "download/softnpu",
@@ -58,7 +59,8 @@ impl<'a> SoftnpuZone<'a> {
             "opt/softnpu.toml",
         )?;
         self.zone.zexec(&format!(
-            "{} {} {}  &> {} &",
+            "{} {} {} {}  &> {} &",
+            "RUST_LOG=debug RUST_BACKTRACE=1",
             "/opt/softnpu",
             "--uds-path /opt/mnt",
             "/opt/softnpu.toml",
@@ -172,6 +174,9 @@ impl<'a> RouterZone<'a> {
             ))?;
             self.zone.zexec("svcadm refresh dendrite:default")?;
             self.zone.zexec("svcadm restart dendrite:default")?;
+            // wait for dendrite to come up
+            println!("wait 10s for dendrite to come up ...");
+            sleep(Duration::from_secs(10));
             self.zone.zexec("svcadm enable tfport")?;
             self.zone.zexec(&format!(
                 "{} /opt/ddmd --kind transit --dendrite {} &> /opt/ddmd.log &",
@@ -246,7 +251,7 @@ impl<'a> RouterZone<'a> {
             // Wait for these files to show up in the zone. Testing has shown
             // that this is not instant and subsequent steps can fail if the
             // copy is not complete.
-            println!("waiting for copy of files to zone to complete ...");
+            println!("waiting 3s for copy of files to zone to complete ...");
             sleep(Duration::from_secs(3));
         }
 
@@ -509,14 +514,14 @@ async fn test_quartet() -> Result<()> {
     //       scrimlet              sidecar         | '-----'  '-----'
     //     ,-----------,     ,-----------------,   |   '----------'
     //     |      ,-----,  ,-----, ,-----, ,-----, |
-    //     |      | tf0 |--| sr0 |-|     |-| sw0 |-'      sled1
+    //     |      | tf0 |--| sr0 |-|     |-| sw0 |-'      sled2
     //     |      '-----'  '-----' |     | '-----'     ,----------,
     //    ,-----, ,-----,  ,-----, |soft | ,-----,   ,-----,  ,-----,
     //  *-| mg1 | | tf1 |--| sr1 |-|  npu|-| sw1 |---| sl1 |  | mg3 |-*
     //    '-----' '-----'  '-----' |     | '-----'   '-----'  '-----'
     //     |      ,-----,  ,-----, |     | ,-----,     '----------'
     //     |      | tf2 |--| sr2 |-|     |-| sw2 |-,
-    //     |      '-----'  '-----' '-----' '-----' |      sled1
+    //     |      '-----'  '-----' '-----' '-----' |      sled3
     //     '-----------'     '-----------------'   |   ,----------,
     //                                             | ,-----,  ,-----,
     //                                             '-| sl2 |  | mg4 |-*
