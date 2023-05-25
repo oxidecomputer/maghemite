@@ -183,16 +183,17 @@ impl<'a> RouterZone<'a> {
                 "RUST_LOG=trace RUST_BACKTRACE=1", addrs
             ))?;
 
+            self.zone.zexec("ipadm")?;
+
             for i in 0..self.ifx[1..].len() {
-                self.zone.zexec(
-                    // TODO ewww
-                    &format!(
-                        "{} rear{i}/0 `{} tfportrear{i}_0/v6 -p -o addr | {}`",
-                        "/opt/oxide/dendrite/bin/swadm addr add",
-                        "ipadm show-addr",
-                        "sed 's/%.*//g'",
-                    ),
-                )?;
+                let addr = self.zone.zexec(&format!(
+                    "ipadm show-addr tfportrear{i}_0/v6 -p -o addr | {}",
+                    "sed 's/[%/].*//g'",
+                ))?;
+                self.zone.zexec(&format!(
+                    "/opt/oxide/dendrite/bin/swadm addr add rear{i}/0 {}",
+                    addr,
+                ))?;
             }
         } else {
             self.zone.zexec(&format!(
@@ -564,16 +565,16 @@ async fn test_quartet() -> Result<()> {
 
     println!("start zone s1");
     let s1 =
-        RouterZone::server("quartet.s1", &zfs, &mgs1.name, &[&sl0_sw0.end_a])?;
+        RouterZone::server("s1.quartet", &zfs, &mgs1.name, &[&sl0_sw0.end_a])?;
     println!("start zone s2");
     let s2 =
-        RouterZone::server("quartet.s2", &zfs, &mgs2.name, &[&sl1_sw1.end_a])?;
+        RouterZone::server("s2.quartet", &zfs, &mgs2.name, &[&sl1_sw1.end_a])?;
     println!("start zone s3");
     let s3 =
-        RouterZone::server("quartet.s3", &zfs, &mgs3.name, &[&sl2_sw2.end_a])?;
+        RouterZone::server("s3.quartet", &zfs, &mgs3.name, &[&sl2_sw2.end_a])?;
     println!("start zone t1");
     let t1 = RouterZone::transit(
-        "quartet.t1",
+        "t1.quartet",
         &zfs,
         &mgt1.name,
         &[&tf0_sr0.end_a, &tf1_sr1.end_a, &tf2_sr2.end_a],
