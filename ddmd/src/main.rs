@@ -8,6 +8,7 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 
 #[derive(Debug, Parser)]
+#[command(version, about, long_about = None, styles = get_styles())]
 struct Arg {
     /// Address objects to route over.
     #[arg(short, long = "addr", name = "addr")]
@@ -162,22 +163,47 @@ fn termination_handler(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) {
-    ctrlc::set_handler(move || {
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("error setting termination handler");
         const SIGTERM_EXIT: i32 = 130;
         let imported = db.imported();
         let routes: Vec<Route> =
             imported.iter().map(|x| (x.clone()).into()).collect();
-        ddm::sys::remove_routes(&log, &dendrite, routes, &rt)
+        ddm::sys::remove_routes(&log, "shutdown-all", &dendrite, routes, &rt)
             .expect("route removal on termination");
         std::process::exit(SIGTERM_EXIT);
-    })
-    .expect("error setting termination handler");
+    });
 }
 
 pub(crate) fn init_logger() -> Logger {
-    let decorator = slog_term::TermDecorator::new().build();
-    let drain = slog_term::FullFormat::new(decorator).build().fuse();
-    let drain = slog_envlogger::new(drain).fuse();
-    let drain = slog_async::Async::new(drain).build().fuse();
+    let drain = slog_bunyan::new(std::io::stdout()).build().fuse();
+    let drain = slog_async::Async::new(drain)
+        .chan_size(0x8000)
+        .build()
+        .fuse();
     slog::Logger::root(drain, slog::o!())
+}
+
+pub fn get_styles() -> clap::builder::Styles {
+    clap::builder::Styles::styled()
+        .header(anstyle::Style::new().bold().underline().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(245, 207, 101)),
+        )))
+        .literal(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(72, 213, 151)),
+        )))
+        .invalid(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(72, 213, 151)),
+        )))
+        .valid(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(72, 213, 151)),
+        )))
+        .usage(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(245, 207, 101)),
+        )))
+        .error(anstyle::Style::new().bold().fg_color(Some(
+            anstyle::Color::Rgb(anstyle::RgbColor(232, 104, 134)),
+        )))
 }

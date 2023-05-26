@@ -28,6 +28,7 @@ slog = { version = "2.7.0", features = ["max_level_trace", "release_max_level_tr
 slog-term = "2.9.0"
 slog-envlogger = "2.2.0"
 slog-async = "2.7.0"
+slog-bunyan = "2.4.0"
 socket2 = { version = "0.4.7", features = ["all"] }
 ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.150", features = ["derive"] }
@@ -44,11 +45,12 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" 
 percent-encoding = "2.1"
 reqwest = { version = "0.11", features = ["json", "stream", "rustls-tls"] }
 progenitor = { git = "https://github.com/oxidecomputer/progenitor", branch = "main" }
-clap = { version = "4.0.29", features = ["derive"] }
+clap = { version = "4.2.5", features = ["derive", "unstable-styles"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "2.0.0"
 ctrlc = { version = "3.2.4", features = ["termination"] }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
+anstyle = "1.0.0"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
