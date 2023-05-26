@@ -6,6 +6,10 @@ default-members = [
     "ddmadm",
     "ddmd",
     "ddm-admin-client",
+    "bfd/lib",
+    "bfd/daemon",
+    "bfd/client",
+    "bfd/cli",
     "util",
     "mg-ddm-verify",
     "tests",
@@ -24,6 +28,10 @@ members = [
     "ddmadm",
     "ddmd",
     "ddm-admin-client",
+    "bfd/lib",
+    "bfd/daemon",
+    "bfd/client",
+    "bfd/cli",
     "package",
     "util",
     "mg-ddm-verify",
@@ -38,7 +46,7 @@ members = [
 ]
 
 [workspace.dependencies]
-slog = { version = "2.7.0", features = ["max_level_trace"] }
+slog = { version = "2.7.0", features = ["max_level_trace", "release_max_level_debug"] }
 slog-term = "2.9"
 slog-envlogger = "2.2"
 slog-async = "2.8"

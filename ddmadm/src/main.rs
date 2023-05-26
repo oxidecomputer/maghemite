@@ -16,9 +16,11 @@ use tabwriter::TabWriter;
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None, styles = oxide_cli_style())]
 struct Arg {
+    /// Address of the router's admin API.
     #[arg(short, long, default_value_t = Ipv6Addr::UNSPECIFIED.into())]
     address: IpAddr,
 
+    /// Admin API TCP port.
     #[arg(short, long, default_value_t = 8000)]
     port: u16,
 

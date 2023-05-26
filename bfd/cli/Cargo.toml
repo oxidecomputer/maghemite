@@ -1,0 +1,17 @@
+[package]
+name = "bfdadm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bfd-client = { path = "../client" }
+clap.workspace = true
+tokio.workspace = true
+tabwriter.workspace = true
+colored.workspace = true
+anyhow.workspace = true
+anstyle.workspace = true
+slog.workspace = true
+slog-term.workspace = true
+slog-envlogger.workspace = true
+slog-async.workspace = true
