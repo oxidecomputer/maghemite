@@ -171,8 +171,7 @@ fn termination_handler(
         let imported = db.imported();
         let routes: Vec<Route> =
             imported.iter().map(|x| (x.clone()).into()).collect();
-        ddm::sys::remove_routes(&log, "shutdown-all", &dendrite, routes, &rt)
-            .expect("route removal on termination");
+        ddm::sys::remove_routes(&log, "shutdown-all", &dendrite, routes, &rt);
         std::process::exit(SIGTERM_EXIT);
     });
 }

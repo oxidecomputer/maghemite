@@ -340,11 +340,7 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
         add.push(r);
     }
     db.import(&import);
-    if let Err(e) =
-        crate::sys::add_routes(&ctx.log, &ctx.ctx.config, add, &ctx.ctx.rt)
-    {
-        err!(ctx.log, ctx.ctx.config.if_name, "add system route: {}", e);
-    }
+    crate::sys::add_routes(&ctx.log, &ctx.ctx.config, add, &ctx.ctx.rt);
 
     let mut withdraw = HashSet::new();
     for prefix in &update.withdraw {
@@ -377,20 +373,13 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
             del.push(r);
         }
     }
-    if let Err(e) = crate::sys::remove_routes(
+    crate::sys::remove_routes(
         &ctx.log,
         &ctx.ctx.config.if_name,
         &ctx.ctx.config.dpd,
         del,
         &ctx.ctx.rt,
-    ) {
-        err!(
-            ctx.log,
-            ctx.ctx.config.if_name,
-            "remove system route: {}",
-            e
-        );
-    }
+    );
 
     // distribute updates
 
