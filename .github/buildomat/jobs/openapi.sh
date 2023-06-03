@@ -4,13 +4,18 @@
 #: variety = "basic"
 #: target = "helios-latest"
 #: output_rules = [
-#:   "/out/*.json",
+#:   "/out/*",
 #: ]
 #:
 #: [[publish]]
 #: series = "openapi"
 #: name = "ddm-admin.json"
 #: from_output = "/out/ddm-admin.json"
+#:
+#: [[publish]]
+#: series = "openapi"
+#: name = "ddm-admin.json.sha256.txt"
+#: from_output = "/out/ddm-admin.json.sha256.txt"
 #:
 
 set -o errexit
@@ -21,3 +26,4 @@ banner copy
 pfexec mkdir -p /out
 pfexec chown "$UID" /out
 cp ddm-openapi/ddm-admin.json /out/ddm-admin.json
+digest -a sha256 /out/ddm-admin.json > /out/ddm-admin.json.sha256.txt
