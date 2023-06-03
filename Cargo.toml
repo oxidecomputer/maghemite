@@ -24,7 +24,7 @@ members = [
 ]
 
 [workspace.dependencies]
-slog = { version = "2.7.0", features = ["max_level_trace", "release_max_level_trace"] }
+slog = { version = "2.7.0", features = ["max_level_trace"] }
 slog-term = "2.9.0"
 slog-envlogger = "2.2.0"
 slog-async = "2.7.0"
