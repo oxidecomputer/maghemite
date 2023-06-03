@@ -1,5 +1,5 @@
 use crate::sm::{Config, DpdConfig};
-use crate::{dbg, inf, wrn};
+use crate::{dbg, err, inf, wrn};
 use dendrite_common::network::{Cidr, Ipv6Cidr};
 use dpd_client::types;
 use dpd_client::Client;
@@ -101,7 +101,7 @@ pub fn add_routes(
     config: &Config,
     routes: Vec<Route>,
     rt: &Arc<tokio::runtime::Handle>,
-) -> Result<(), String> {
+) {
     match &config.dpd {
         Some(dpd) => {
             inf!(
@@ -117,7 +117,7 @@ pub fn add_routes(
                 &config.if_name,
                 rt,
                 log,
-            )
+            );
         }
         None => {
             inf!(
@@ -126,7 +126,7 @@ pub fn add_routes(
                 "sending {} routes to illumos",
                 routes.len(),
             );
-            add_routes_illumos(log, routes, &config.if_name)
+            add_routes_illumos(log, routes, &config.if_name);
         }
     }
 }
@@ -135,11 +135,11 @@ pub fn add_routes_dendrite(
     routes: Vec<Route>,
     host: &str,
     port: u16,
-    if_name: &str,
+    ifname: &str,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
-) -> Result<(), String> {
-    dbg!(log, if_name, "sending to dpd host={} port={}", host, port);
+) {
+    dbg!(log, ifname, "sending to dpd host={} port={}", host, port);
 
     let client_state = ClientState {
         tag: DDM_DPD_TAG.into(),
@@ -154,36 +154,47 @@ pub fn add_routes_dendrite(
                 prefix_len: r.prefix_len,
             },
             _ => {
-                return Err(format!("unsupported dst: {:?}", r.dest));
+                err!(log, ifname, "unsupported dst: {:?}", r.dest);
+                continue;
             }
         };
 
         let gw = match r.gw {
             IpAddr::V6(gw) => gw,
             _ => {
-                return Err(format!("unsupported gw: {:?}", r.gw));
+                err!(log, ifname, "unsupported gw: {:?}", r.gw);
+                continue;
             }
         };
 
         // TODO this is gross, use link type properties rather than futzing
         // around with strings.
-        let egress_port_num = if_name
+        let Some(egress_port_num) = ifname
             .strip_prefix("tfportrear")
-            .ok_or_else(|| format!("expected tfportrear prefix {}", if_name))?
-            .strip_suffix("_0")
-            .ok_or_else(|| format!("expected _0 suffix {}", if_name))?
-            .trim()
-            .parse::<usize>()
-            .map_err(|_| format!("expected tofino port number {}", if_name))?;
+            .and_then(|x| x.strip_suffix("_0"))
+            .map(|x| x.trim())
+            .and_then(|x| x.parse::<usize>().ok())
+        else {
+            err!(log, ifname, "expected tfportrear");
+            continue;
+        };
 
         // TODO this assumes ddm only operates on rear ports, which will not be
         // true for multi-rack deployments.
-        let switch_port =
-            types::PortId::from_str(&format!("rear{}", egress_port_num))?;
+        let switch_port = match types::PortId::from_str(&format!(
+            "rear{}",
+            egress_port_num
+        )) {
+            Ok(swp) => swp,
+            Err(e) => {
+                err!(log, ifname, "bad port name: {e}");
+                continue;
+            }
+        };
 
         inf!(
             log,
-            if_name,
+            ifname,
             "adding route {} -> {} on port {:?}/{}",
             r.dest,
             r.gw,
@@ -204,11 +215,12 @@ pub fn add_routes_dendrite(
 
         let client = client.clone();
 
-        rt.block_on(async move { client.route_ipv6_set(&route).await })
-            .map_err(|e| format!("dpd route create: {}", e))?;
+        if let Err(e) =
+            rt.block_on(async move { client.route_ipv6_set(&route).await })
+        {
+            err!(log, ifname, "dpd route create: {e}");
+        }
     }
-
-    Ok(())
 }
 
 pub fn remove_routes(
@@ -217,7 +229,7 @@ pub fn remove_routes(
     dpd: &Option<DpdConfig>,
     routes: Vec<Route>,
     rt: &Arc<tokio::runtime::Handle>,
-) -> Result<(), String> {
+) {
     match dpd {
         Some(dpd) => {
             inf!(
@@ -230,11 +242,13 @@ pub fn remove_routes(
             // destination prefix with two different destination egress ports,
             // we want to be able to delete one but not the other. Looks like
             // this would be an update to the dpd api.
-            remove_routes_dendrite(routes, &dpd.host, dpd.port, rt, ifname, log)
+            remove_routes_dendrite(
+                routes, &dpd.host, dpd.port, rt, ifname, log,
+            );
         }
         None => {
             inf!(log, ifname, "removing {} routes from illumos", routes.len(),);
-            remove_routes_illumos(log, ifname, routes)
+            remove_routes_illumos(log, ifname, routes);
         }
     }
 }
@@ -246,7 +260,7 @@ pub fn remove_routes_dendrite(
     rt: &Arc<tokio::runtime::Handle>,
     ifname: &str,
     log: &Logger,
-) -> Result<(), String> {
+) {
     let client_state = ClientState {
         tag: DDM_DPD_TAG.into(),
         log: log.clone(),
@@ -271,11 +285,13 @@ pub fn remove_routes_dendrite(
 
         let client = client.clone();
 
-        rt.block_on(async move { client.route_ipv6_delete(&cidr).await })
-            .map_err(|e| format!("dpd route delete: {}", e))?;
+        if let Err(e) =
+            rt.block_on(async move { client.route_ipv6_delete(&cidr).await })
+        {
+            err!(log, ifname, "dpd route delete: {e}");
+            continue;
+        }
     }
-
-    Ok(())
 }
 
 pub fn get_routes_dendrite(
@@ -351,27 +367,26 @@ pub fn get_routes_illumos() -> Result<Vec<Route>, String> {
     Ok(result)
 }
 
-pub fn add_routes_illumos(
-    log: &Logger,
-    routes: Vec<Route>,
-    ifname: &str,
-) -> Result<(), String> {
+pub fn add_routes_illumos(log: &Logger, routes: Vec<Route>, ifname: &str) {
     for r in routes {
         let gw = r.gw;
 
         inf!(log, ifname, "adding route {} -> {}", r.dest, r.gw,);
 
         // don't add with a local destination or gateway
-        if addr_is_local(gw)? || addr_is_local(r.dest)? {
+        if let Ok(true) = addr_is_local(gw) {
             continue;
         }
-        match libnet::ensure_route_present(r.into(), gw, Some(ifname.into())) {
-            Ok(_) => {}
-            Err(e) => return Err(format!("set route: {}", e)),
+        if let Ok(true) = addr_is_local(r.dest) {
+            continue;
+        }
+
+        if let Err(e) =
+            libnet::ensure_route_present(r.into(), gw, Some(ifname.into()))
+        {
+            err!(log, ifname, "set route: {}", e);
         }
     }
-
-    Ok(())
 }
 
 fn addr_is_local(gw: IpAddr) -> Result<bool, String> {
@@ -386,20 +401,15 @@ fn addr_is_local(gw: IpAddr) -> Result<bool, String> {
     Ok(false)
 }
 
-pub fn remove_routes_illumos(
-    log: &Logger,
-    ifname: &str,
-    routes: Vec<Route>,
-) -> Result<(), String> {
+pub fn remove_routes_illumos(log: &Logger, ifname: &str, routes: Vec<Route>) {
     for r in routes {
         let gw = r.gw;
         inf!(log, ifname, "removing route {} -> {}", r.dest, r.gw,);
-        match libnet::delete_route(r.clone().into(), gw, Some(r.ifname.clone()))
+        if let Err(e) =
+            libnet::delete_route(r.clone().into(), gw, Some(r.ifname.clone()))
         {
-            Ok(_) => {}
-            Err(e) => return Err(format!("set route: {}", e)),
+            err!(log, ifname, "set route: {e}");
+            continue;
         }
     }
-
-    Ok(())
 }

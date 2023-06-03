@@ -420,20 +420,13 @@ impl Exchange {
             r.ifname = self.ctx.config.if_name.clone();
             routes.push(r);
         }
-        if let Err(e) = crate::sys::remove_routes(
+        crate::sys::remove_routes(
             &self.log,
             &self.ctx.config.if_name,
             &self.ctx.config.dpd,
             routes,
             &self.ctx.rt,
-        ) {
-            err!(
-                self.log,
-                self.ctx.config.if_name,
-                "failed to remove routes: {}",
-                e,
-            );
-        }
+        );
         // if we're a transit router propagate withdraws for the
         // expired peer.
         if self.ctx.config.kind == RouterKind::Transit {

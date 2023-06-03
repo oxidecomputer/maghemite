@@ -408,9 +408,9 @@ async fn run_trio_tests(
     }])
     .await?;
 
-    wait_for_eq!(s1.get_prefixes().await?.len(), 0);
-    wait_for_eq!(s2.get_prefixes().await?.len(), 1);
-    wait_for_eq!(t1.get_prefixes().await?.len(), 1);
+    wait_for_eq!(prefix_count(&s1).await?, 0);
+    wait_for_eq!(prefix_count(&s2).await?, 1);
+    wait_for_eq!(prefix_count(&t1).await?, 1);
 
     println!("advertise from one passed");
 
@@ -420,9 +420,9 @@ async fn run_trio_tests(
     }])
     .await?;
 
-    wait_for_eq!(s1.get_prefixes().await?.len(), 1);
-    wait_for_eq!(s2.get_prefixes().await?.len(), 1);
-    wait_for_eq!(t1.get_prefixes().await?.len(), 2);
+    wait_for_eq!(prefix_count(&s1).await?, 1);
+    wait_for_eq!(prefix_count(&s2).await?, 1);
+    wait_for_eq!(prefix_count(&t1).await?, 2);
 
     println!("advertise from two passed");
 
@@ -432,25 +432,25 @@ async fn run_trio_tests(
     println!("connectivity test passed");
 
     zt1.stop_router()?;
-    wait_for_eq!(s1.get_prefixes().await?.len(), 0);
-    wait_for_eq!(s2.get_prefixes().await?.len(), 0);
+    wait_for_eq!(prefix_count(&s1).await?, 0);
+    wait_for_eq!(prefix_count(&s2).await?, 0);
     zt1.start_router()?;
-    wait_for_eq!(s1.get_prefixes().await?.len(), 1);
-    wait_for_eq!(s2.get_prefixes().await?.len(), 1);
-    wait_for_eq!(t1.get_prefixes().await.map_or(99, |x| x.len()), 2);
+    wait_for_eq!(prefix_count(&s1).await?, 1);
+    wait_for_eq!(prefix_count(&s2).await?, 1);
+    wait_for_eq!(prefix_count(&t1).await.unwrap_or(99), 2);
     zs1.zexec("ping fd00:2::1")?;
     zs2.zexec("ping fd00:1::1")?;
 
     println!("transit router restart passed");
 
     zs1.stop_router()?;
-    wait_for_eq!(s2.get_prefixes().await?.len(), 0);
-    wait_for_eq!(t1.get_prefixes().await?.len(), 1);
+    wait_for_eq!(prefix_count(&s2).await?, 0);
+    wait_for_eq!(prefix_count(&t1).await?, 1);
     zs1.start_router()?;
 
-    wait_for_eq!(s1.get_prefixes().await.map_or(99, |x| x.len()), 1);
-    wait_for_eq!(s2.get_prefixes().await?.len(), 0);
-    wait_for_eq!(t1.get_prefixes().await?.len(), 1);
+    wait_for_eq!(prefix_count(&s1).await.unwrap_or(99), 1);
+    wait_for_eq!(prefix_count(&s2).await?, 0);
+    wait_for_eq!(prefix_count(&t1).await?, 1);
 
     s1.advertise_prefixes(&vec![Ipv6Prefix {
         addr: "fd00:1::".parse().unwrap(),
@@ -458,9 +458,9 @@ async fn run_trio_tests(
     }])
     .await?;
 
-    wait_for_eq!(s1.get_prefixes().await?.len(), 1);
-    wait_for_eq!(s2.get_prefixes().await?.len(), 1);
-    wait_for_eq!(t1.get_prefixes().await?.len(), 2);
+    wait_for_eq!(prefix_count(&s1).await?, 1);
+    wait_for_eq!(prefix_count(&s2).await?, 1);
+    wait_for_eq!(prefix_count(&t1).await?, 2);
 
     zs1.zexec("ping fd00:2::1")?;
     zs2.zexec("ping fd00:1::1")?;
@@ -475,9 +475,9 @@ async fn run_trio_tests(
         .addr;
 
     t1.expire_peer(&p0).await?;
-    wait_for_eq!(s1.get_prefixes().await?.len(), 1);
-    wait_for_eq!(s2.get_prefixes().await?.len(), 1);
-    wait_for_eq!(t1.get_prefixes().await?.len(), 2);
+    wait_for_eq!(prefix_count(&s1).await?, 1);
+    wait_for_eq!(prefix_count(&s2).await?, 1);
+    wait_for_eq!(prefix_count(&t1).await?, 2);
 
     s2.withdraw_prefixes(&vec![Ipv6Prefix {
         addr: "fd00:2::".parse().unwrap(),
@@ -485,9 +485,9 @@ async fn run_trio_tests(
     }])
     .await?;
 
-    wait_for_eq!(s1.get_prefixes().await?.len(), 0);
-    wait_for_eq!(s2.get_prefixes().await?.len(), 1);
-    wait_for_eq!(t1.get_prefixes().await?.len(), 1);
+    wait_for_eq!(prefix_count(&s1).await?, 0);
+    wait_for_eq!(prefix_count(&s2).await?, 1);
+    wait_for_eq!(prefix_count(&t1).await?, 1);
 
     s2.advertise_prefixes(&vec![Ipv6Prefix {
         addr: "fd00:2::".parse().unwrap(),
@@ -495,11 +495,35 @@ async fn run_trio_tests(
     }])
     .await?;
 
-    wait_for_eq!(s1.get_prefixes().await?.len(), 1);
-    wait_for_eq!(s2.get_prefixes().await?.len(), 1);
-    wait_for_eq!(t1.get_prefixes().await?.len(), 2);
+    wait_for_eq!(prefix_count(&s1).await?, 1);
+    wait_for_eq!(prefix_count(&s2).await?, 1);
+    wait_for_eq!(prefix_count(&t1).await?, 2);
 
     println!("peer expiration recovery passed");
+
+    // ensure that when an advertisement with a duplicate route is made, all
+    // routes make it in the kernel of receivers.
+    s2.advertise_prefixes(&vec![
+        Ipv6Prefix {
+            addr: "fd00:2::".parse().unwrap(),
+            len: 64,
+        },
+        Ipv6Prefix {
+            addr: "fd00:3::".parse().unwrap(),
+            len: 64,
+        },
+        Ipv6Prefix {
+            addr: "fd00:4::".parse().unwrap(),
+            len: 64,
+        },
+    ])
+    .await?;
+    wait_for_eq!(prefix_count(&s1).await?, 3);
+
+    let kernel_count = zs1.zexec("netstat -nrf inet6 | grep fd00 | wc -l")?;
+    assert_eq!(kernel_count, "3");
+
+    println!("redundant advertise passed");
 
     Ok(())
 }
@@ -627,23 +651,9 @@ async fn run_quartet_tests(
     }])
     .await?;
 
-    // s1/s3 should now have 1 prefixe
-    wait_for_eq!(
-        s1.get_prefixes()
-            .await?
-            .values()
-            .map(|x| x.len())
-            .sum::<usize>(),
-        1
-    );
-    wait_for_eq!(
-        s3.get_prefixes()
-            .await?
-            .values()
-            .map(|x| x.len())
-            .sum::<usize>(),
-        1
-    );
+    // s1/s3 should now have 1 prefix
+    wait_for_eq!(prefix_count(&s1).await?, 1);
+    wait_for_eq!(prefix_count(&s3).await?, 1);
 
     // s3 should be able to ping s1
     zs3.zexec("ping fd00:1::1")?;
@@ -656,14 +666,7 @@ async fn run_quartet_tests(
     .await?;
 
     // s3 should now have 2 prefixes
-    wait_for_eq!(
-        s3.get_prefixes()
-            .await?
-            .values()
-            .map(|x| x.len())
-            .sum::<usize>(),
-        2
-    );
+    wait_for_eq!(prefix_count(&s3).await?, 2);
 
     s2.withdraw_prefixes(&vec![Ipv6Prefix {
         addr: "fd00:1::".parse().unwrap(),
@@ -683,19 +686,20 @@ async fn run_quartet_tests(
     sleep(Duration::from_secs(5));
 
     // s3 should still have 1 prefix left
-    wait_for_eq!(
-        s3.get_prefixes()
-            .await?
-            .values()
-            .map(|x| x.len())
-            .sum::<usize>(),
-        1
-    );
+    wait_for_eq!(prefix_count(&s3).await?, 1);
 
     // s3 should be able to ping s1 even after s2 withdrew s1's prefix
     zs3.zexec("ping fd00:1::1")?;
 
     Ok(())
+}
+
+async fn prefix_count(c: &Client) -> Result<usize> {
+    Ok(c.get_prefixes()
+        .await?
+        .values()
+        .map(|x| x.len())
+        .sum::<usize>())
 }
 
 fn init_logger() -> Logger {
