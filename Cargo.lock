@@ -21,9 +21,9 @@ dependencies = [
 
 [[package]]
 name = "aho-corasick"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67fc08ce920c31afb70f013dcce1bfc3a3195de6a228474e45e1f145b36f8d04"
+checksum = "43f6cb1bf222025340178f382c426f13757b2960e89779dfcb319c32542a5a41"
 dependencies = [
  "memchr",
 ]
@@ -256,9 +256,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.3.1"
+version = "4.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ed2379f8603fa2b7509891660e802b88c70a79a6427a70abb5968054de2c28"
+checksum = "401a4694d2bf92537b6867d94de48c4842089645fdcdf6c71865b175d836e9c2"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -280,9 +280,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.3.1"
+version = "4.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59e9ef9a08ee1c0e1f2e162121665ac45ac3783b0f897db7244ae75ad9a8f65b"
+checksum = "b8cd2b2a819ad6eec39e8f1d6b53001af1e5469f8c177579cdaeb313115b825f"
 dependencies = [
  "heck 0.4.1",
  "proc-macro2",
@@ -585,7 +585,7 @@ dependencies = [
 [[package]]
 name = "dropshot"
 version = "0.9.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#4be76343647319bd95efd63b081670c872afd427"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#c719b41bc4ba46e3e9e5d85f6efffab694e0f0ff"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -627,7 +627,7 @@ dependencies = [
 [[package]]
 name = "dropshot_endpoint"
 version = "0.9.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#4be76343647319bd95efd63b081670c872afd427"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#c719b41bc4ba46e3e9e5d85f6efffab694e0f0ff"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -759,9 +759,9 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9c384f161156f5260c24a097c56119f9be8c798586aecc13afbcbe7b7e26bf8"
+checksum = "a62bc1cf6f830c2ec14a513a9fb124d0a213a629668a4186f329db21fe045652"
 dependencies = [
  "percent-encoding",
 ]
@@ -1096,9 +1096,9 @@ dependencies = [
 
 [[package]]
 name = "idna"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e14ddfc70884202db2244c223200c204c2bda1bc6e0998d11b5e024d657209e6"
+checksum = "7d20d6b07bfbc108882d88ed8e37d39636dcc260e15e30c45e6ba089610b917c"
 dependencies = [
  "unicode-bidi",
  "unicode-normalization",
@@ -1211,9 +1211,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.144"
+version = "0.2.145"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b00cc1c228a6782d0f076e7b232802e0c5689d41bb5df366f2a6b6621cfdfe1"
+checksum = "fc86cde3ff845662b8f4ef6cb50ea0e20c524eb3d29ae048287e06a1b3fa6a81"
 
 [[package]]
 name = "libdlpi-sys"
@@ -1223,7 +1223,7 @@ source = "git+https://github.com/oxidecomputer/dlpi-sys#1d587ea98cf2d36f1b1624b0
 [[package]]
 name = "libfalcon"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=main#21b25c180c008eb3d2e615fe53186415f2395d58"
+source = "git+https://github.com/oxidecomputer/falcon?branch=main#cf8ae9da80486fde24d49e7a9d02390ec06bfb9b"
 dependencies = [
  "anyhow",
  "camino",
@@ -1258,7 +1258,7 @@ dependencies = [
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#068fa4ad57a255b285d855db6f2a8989894bb8bb"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#f114bd0d543d886cd453932e9f0967de57289bc2"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -1282,9 +1282,9 @@ checksum = "ef53942eb7bf7ff43a617b3e2c1c4a5ecf5944a7c1bc12d7ee39bbb15e5c1519"
 
 [[package]]
 name = "lock_api"
-version = "0.4.9"
+version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "435011366fe56583b16cf956f9df0095b405b82d76425bc8981c0e22e60ec4df"
+checksum = "c1cc9717a20b1bb222f333e6a92fd32f7d8a18ddc5a3191a11af45dcbf4dcd16"
 dependencies = [
  "autocfg",
  "scopeguard",
@@ -1515,9 +1515,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.17.2"
+version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9670a07f94779e00908f3e686eab508878ebb390ba6e604d3a284c00e8d0487b"
+checksum = "dd8b5dd2ae5ed71462c540258bedcb51965123ad7e7ccf4b9a8cafaa4a63576d"
 
 [[package]]
 name = "opaque-debug"
@@ -1583,7 +1583,7 @@ dependencies = [
 [[package]]
 name = "oximeter"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron#ca2061950edd55a0903232c5597a3ff43be35c56"
+source = "git+https://github.com/oxidecomputer/omicron#b12097824421a6060f87619b5dbe0f81b5e53492"
 dependencies = [
  "bytes",
  "chrono",
@@ -1598,7 +1598,7 @@ dependencies = [
 [[package]]
 name = "oximeter-macro-impl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron#ca2061950edd55a0903232c5597a3ff43be35c56"
+source = "git+https://github.com/oxidecomputer/omicron#b12097824421a6060f87619b5dbe0f81b5e53492"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1623,7 +1623,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3742b2c103b9f06bc9fff0a37ff4912935851bee6d36f3c02bcc755bcfec228f"
 dependencies = [
  "lock_api",
- "parking_lot_core 0.9.7",
+ "parking_lot_core 0.9.8",
 ]
 
 [[package]]
@@ -1642,15 +1642,15 @@ dependencies = [
 
 [[package]]
 name = "parking_lot_core"
-version = "0.9.7"
+version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9069cbb9f99e3a5083476ccb29ceb1de18b9118cafa53e90c9551235de2b9521"
+checksum = "93f00c865fe7cabf650081affecd3871070f26767e7b2070a3ffae14c654b447"
 dependencies = [
  "cfg-if",
  "libc",
- "redox_syscall 0.2.16",
+ "redox_syscall 0.3.5",
  "smallvec",
- "windows-sys 0.45.0",
+ "windows-targets 0.48.0",
 ]
 
 [[package]]
@@ -1661,9 +1661,9 @@ checksum = "9f746c4065a8fa3fe23974dd82f15431cc8d40779821001404d10d2e79ca7d79"
 
 [[package]]
 name = "percent-encoding"
-version = "2.2.0"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "478c572c3d73181ff3c2539045f6eb99e5491218eae919370993b890cdbdd98e"
+checksum = "9b2a4787296e9989611394c33f193f676704af1686e70b8f8033ab5ba9a35a94"
 
 [[package]]
 name = "pin-project"
@@ -1770,7 +1770,7 @@ dependencies = [
 [[package]]
 name = "progenitor"
 version = "0.3.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#2bb38c798f77fdb41c9e3b790cd7939e4ed8f538"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#7377251307456cddd90d67d2235819212e2a92e3"
 dependencies = [
  "progenitor-client 0.3.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
  "progenitor-impl 0.3.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
@@ -1781,7 +1781,7 @@ dependencies = [
 [[package]]
 name = "progenitor"
 version = "0.3.0"
-source = "git+https://github.com/oxidecomputer/progenitor#2bb38c798f77fdb41c9e3b790cd7939e4ed8f538"
+source = "git+https://github.com/oxidecomputer/progenitor#7377251307456cddd90d67d2235819212e2a92e3"
 dependencies = [
  "progenitor-client 0.3.0 (git+https://github.com/oxidecomputer/progenitor)",
  "progenitor-impl 0.3.0 (git+https://github.com/oxidecomputer/progenitor)",
@@ -1792,7 +1792,7 @@ dependencies = [
 [[package]]
 name = "progenitor-client"
 version = "0.3.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#2bb38c798f77fdb41c9e3b790cd7939e4ed8f538"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#7377251307456cddd90d67d2235819212e2a92e3"
 dependencies = [
  "bytes",
  "futures-core",
@@ -1806,7 +1806,7 @@ dependencies = [
 [[package]]
 name = "progenitor-client"
 version = "0.3.0"
-source = "git+https://github.com/oxidecomputer/progenitor#2bb38c798f77fdb41c9e3b790cd7939e4ed8f538"
+source = "git+https://github.com/oxidecomputer/progenitor#7377251307456cddd90d67d2235819212e2a92e3"
 dependencies = [
  "bytes",
  "futures-core",
@@ -1820,7 +1820,7 @@ dependencies = [
 [[package]]
 name = "progenitor-impl"
 version = "0.3.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#2bb38c798f77fdb41c9e3b790cd7939e4ed8f538"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#7377251307456cddd90d67d2235819212e2a92e3"
 dependencies = [
  "getopts",
  "heck 0.4.1",
@@ -1842,7 +1842,7 @@ dependencies = [
 [[package]]
 name = "progenitor-impl"
 version = "0.3.0"
-source = "git+https://github.com/oxidecomputer/progenitor#2bb38c798f77fdb41c9e3b790cd7939e4ed8f538"
+source = "git+https://github.com/oxidecomputer/progenitor#7377251307456cddd90d67d2235819212e2a92e3"
 dependencies = [
  "getopts",
  "heck 0.4.1",
@@ -1864,7 +1864,7 @@ dependencies = [
 [[package]]
 name = "progenitor-macro"
 version = "0.3.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#2bb38c798f77fdb41c9e3b790cd7939e4ed8f538"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#7377251307456cddd90d67d2235819212e2a92e3"
 dependencies = [
  "openapiv3",
  "proc-macro2",
@@ -1881,7 +1881,7 @@ dependencies = [
 [[package]]
 name = "progenitor-macro"
 version = "0.3.0"
-source = "git+https://github.com/oxidecomputer/progenitor#2bb38c798f77fdb41c9e3b790cd7939e4ed8f538"
+source = "git+https://github.com/oxidecomputer/progenitor#7377251307456cddd90d67d2235819212e2a92e3"
 dependencies = [
  "openapiv3",
  "proc-macro2",
@@ -2004,9 +2004,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.8.3"
+version = "1.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81ca098a9821bd52d6b24fd8b10bd081f47d39c22778cafaa75a2857a62c6390"
+checksum = "d0ab3ca65655bb1e41f2a8c8cd662eb4fb035e67c3f78da1d61dffe89d07300f"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -2924,7 +2924,7 @@ checksum = "497961ef93d974e23eb6f433eb5fe1b7930b659f06d12dec6fc44a8f554c0bba"
 [[package]]
 name = "typify"
 version = "0.0.13"
-source = "git+https://github.com/oxidecomputer/typify#43bd5bce4ada2a87152895d2abfc4888154242f3"
+source = "git+https://github.com/oxidecomputer/typify#f53fbe86fb6e9d6cc6b92d7d380abf711b0989f6"
 dependencies = [
  "typify-impl",
  "typify-macro",
@@ -2933,7 +2933,7 @@ dependencies = [
 [[package]]
 name = "typify-impl"
 version = "0.0.13"
-source = "git+https://github.com/oxidecomputer/typify#43bd5bce4ada2a87152895d2abfc4888154242f3"
+source = "git+https://github.com/oxidecomputer/typify#f53fbe86fb6e9d6cc6b92d7d380abf711b0989f6"
 dependencies = [
  "heck 0.4.1",
  "log",
@@ -2950,7 +2950,7 @@ dependencies = [
 [[package]]
 name = "typify-macro"
 version = "0.0.13"
-source = "git+https://github.com/oxidecomputer/typify#43bd5bce4ada2a87152895d2abfc4888154242f3"
+source = "git+https://github.com/oxidecomputer/typify#f53fbe86fb6e9d6cc6b92d7d380abf711b0989f6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3009,9 +3009,9 @@ checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
 name = "url"
-version = "2.3.1"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d68c799ae75762b8c3fe375feb6600ef5602c883c5d21eb51c09f22b83c4643"
+checksum = "50bff7831e19200a85b17131d085c25d7811bc4e186efdaf54bbd132994a88cb"
 dependencies = [
  "form_urlencoded",
  "idna",
@@ -3474,7 +3474,7 @@ dependencies = [
 [[package]]
 name = "ztest"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=main#21b25c180c008eb3d2e615fe53186415f2395d58"
+source = "git+https://github.com/oxidecomputer/falcon?branch=main#cf8ae9da80486fde24d49e7a9d02390ec06bfb9b"
 dependencies = [
  "anyhow",
  "libnet",
