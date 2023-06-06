@@ -66,5 +66,24 @@ set -o pipefail
 
 banner "test"
 cargo build --bin ddmd --bin ddmadm
+cargo build --release --bin ddmd --bin ddmadm
+
+#
+# trio tests
+#
+
+banner trio debug
 pfexec cargo test -p mg-tests test_trio -- --nocapture
+
+banner trio release
+pfexec cargo test --release -p mg-tests test_trio -- --nocapture
+
+#
+# quartest tests
+#
+
+banner quartet debug
 pfexec cargo test -p mg-tests test_quartet -- --nocapture
+
+banner quartet release
+pfexec cargo test --release -p mg-tests test_quartet -- --nocapture
