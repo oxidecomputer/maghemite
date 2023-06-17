@@ -14,26 +14,16 @@ const ZONE_BRAND: &str = "sparse";
 struct SoftnpuZone<'a> {
     zfs: &'a Zfs,
     zone: Zone,
-    testname: &'a str,
 }
 
 impl<'a> SoftnpuZone<'a> {
-    fn new(
-        name: &str,
-        zfs: &'a Zfs,
-        ifx: &[&'a str],
-        testname: &'a str,
-    ) -> Result<Self> {
-        let softnpu_mount = format!("/tmp/softnpu/{}", testname);
+    fn new(name: &str, zfs: &'a Zfs, ifx: &[&'a str]) -> Result<Self> {
+        let softnpu_mount = format!("/tmp/softnpu/{}", name);
         std::fs::create_dir_all(&softnpu_mount)?;
         let fs = &[FsMount::new(&softnpu_mount, "/opt/mnt")];
 
         let zone = Zone::new(name, ZONE_BRAND, zfs, ifx, fs)?;
-        Ok(Self {
-            zfs,
-            zone,
-            testname,
-        })
+        Ok(Self { zfs, zone })
     }
 
     fn setup(&self) -> Result<()> {
@@ -55,7 +45,7 @@ impl<'a> SoftnpuZone<'a> {
         )?;
         self.zfs.copy_workspace_to_zone(
             &self.zone.name,
-            &format!("tests/conf/softnpu-{}.toml", self.testname),
+            &format!("tests/conf/softnpu-{}.toml", self.zone.name),
             "opt/softnpu.toml",
         )?;
         self.zone.zexec(&format!(
@@ -103,7 +93,7 @@ impl<'a> RouterZone<'a> {
         mgmt: &'a str,
         rtr_ifx: &[&'a str],
     ) -> Result<Self> {
-        Self::new(name, zfs, mgmt, rtr_ifx, false, "")
+        Self::new(name, zfs, mgmt, rtr_ifx, false, "", "")
     }
 
     fn transit(
@@ -112,8 +102,9 @@ impl<'a> RouterZone<'a> {
         mgmt: &'a str,
         rtr_ifx: &[&'a str],
         testname: &str,
+        softnpu_name: &str,
     ) -> Result<Self> {
-        Self::new(name, zfs, mgmt, rtr_ifx, true, testname)
+        Self::new(name, zfs, mgmt, rtr_ifx, true, testname, softnpu_name)
     }
 
     fn new(
@@ -123,12 +114,13 @@ impl<'a> RouterZone<'a> {
         rtr_ifx: &[&'a str],
         transit: bool,
         testname: &str,
+        softnpu_name: &str,
     ) -> Result<Self> {
         let mut ifx = vec![mgmt];
         ifx.extend_from_slice(rtr_ifx);
 
         let fs = if transit {
-            let softnpu_mount = format!("/tmp/softnpu/{}", testname);
+            let softnpu_mount = format!("/tmp/softnpu/{}", softnpu_name);
             std::fs::create_dir_all(&softnpu_mount)?;
             vec![FsMount::new(&softnpu_mount, "/opt/mnt")]
         } else {
@@ -150,13 +142,9 @@ impl<'a> RouterZone<'a> {
     }
 
     fn start_router(&self) -> Result<()> {
-        let addrs = self.ifx[1..]
-            .iter()
-            .map(|x| format!("-a {}/v6", x))
-            .collect::<Vec<String>>()
-            .join(" ");
-
         if self.transit {
+            self.zone.zexec("svcadm restart manifest-import")?;
+            sleep(Duration::from_secs(3));
             self.zone.zexec("svcadm enable dendrite")?;
             self.zone.zexec(
                 "svccfg -s dendrite setprop config/address = [::1]:12224",
@@ -178,6 +166,20 @@ impl<'a> RouterZone<'a> {
             println!("wait 10s for dendrite to come up ...");
             sleep(Duration::from_secs(10));
             self.zone.zexec("svcadm enable tfport")?;
+
+            let rear_ports: Vec<&str> = self
+                .ifx
+                .clone()
+                .into_iter()
+                .filter(|x| x.starts_with("tfportrear"))
+                .collect();
+
+            let addrs = rear_ports
+                .iter()
+                .map(|x| format!("-a {}/v6", x))
+                .collect::<Vec<String>>()
+                .join(" ");
+
             self.zone.zexec(&format!(
                 "{} /opt/ddmd --kind transit --dendrite {} &> /opt/ddmd.log &",
                 "RUST_LOG=trace RUST_BACKTRACE=1", addrs
@@ -185,9 +187,9 @@ impl<'a> RouterZone<'a> {
 
             self.zone.zexec("ipadm")?;
 
-            for i in 0..self.ifx[1..].len() {
+            for (i, name) in rear_ports.iter().enumerate() {
                 let addr = self.zone.zexec(&format!(
-                    "ipadm show-addr tfportrear{i}_0/v6 -p -o addr | {}",
+                    "ipadm show-addr {name}/v6 -p -o addr | {}",
                     "sed 's/[%/].*//g'",
                 ))?;
                 self.zone.zexec(&format!(
@@ -196,6 +198,12 @@ impl<'a> RouterZone<'a> {
                 ))?;
             }
         } else {
+            let addrs = self.ifx[1..]
+                .iter()
+                .map(|x| format!("-a {}/v6", x))
+                .collect::<Vec<String>>()
+                .join(" ");
+
             self.zone.zexec(&format!(
                 "{} /opt/ddmd --kind server {} &> /opt/ddmd.log &",
                 "RUST_LOG=trace RUST_BACKTRACE=1", addrs
@@ -253,7 +261,7 @@ impl<'a> RouterZone<'a> {
             // that this is not instant and subsequent steps can fail if the
             // copy is not complete.
             println!("waiting 3s for copy of files to zone to complete ...");
-            sleep(Duration::from_secs(3));
+            sleep(Duration::from_secs(3)); // XXX
         }
 
         self.zfs.copy_bin_to_zone(&self.zone.name, "ddmd")?;
@@ -307,6 +315,7 @@ macro_rules! run_topo {
         if env::var("TEST_INTERACTIVE").is_err() {
             $fn
         } else {
+            println!("Entering interactive mode, press enter to quit ...");
             let mut line = String::new();
             std::io::stdin().read_line(&mut line).unwrap();
         }
@@ -356,7 +365,6 @@ async fn test_trio() -> Result<()> {
             &sl0_sw0.end_b,
             &sl1_sw1.end_b,
         ],
-        "trio",
     )?;
 
     println!("start zone s1");
@@ -370,6 +378,7 @@ async fn test_trio() -> Result<()> {
         &mg1.name,
         &[&tf0_sr0.end_a, &tf1_sr1.end_a],
         "trio",
+        "sidecar.trio",
     )?;
 
     println!("waiting for zones to come up");
@@ -584,7 +593,6 @@ async fn test_quartet() -> Result<()> {
             &sl1_sw1.end_b,
             &sl2_sw2.end_b,
         ],
-        "quartet",
     )?;
 
     println!("start zone s1");
@@ -603,6 +611,7 @@ async fn test_quartet() -> Result<()> {
         &mgt1.name,
         &[&tf0_sr0.end_a, &tf1_sr1.end_a, &tf2_sr2.end_a],
         "quartet",
+        "sidecar.quartet",
     )?;
 
     println!("waiting for zones to come up");
@@ -691,6 +700,139 @@ async fn run_quartet_tests(
     // s3 should be able to ping s1 even after s2 withdrew s1's prefix
     zs3.zexec("ping fd00:1::1")?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_diamond() -> Result<()> {
+    // A diamond topology to test anycast with two-way ECMP and failover.
+    //
+    //                          ┌─────────────────┐
+    //                          │    scrimlet     │
+    //                          │ ┌─────┐ ┌─────┐ │
+    //                          └─┤ tf0 ├─┤ tr0 ├─┘
+    //                            └─────┘ └─────┘
+    //                               │       │
+    //                               │       │
+    //                            ┌─────┐ ┌─────┐
+    //                          ┌─┤ sf0 ├─┤ sr0 ├─┐
+    //                          │ └─────┘ └─────┘ │
+    //    ┌──────────┐        ┌─┴───┐ sidecar ┌───┴─┐       ┌──────────┐
+    //    │   b   ┌──┴──┐  ┌──│ sw1 │         │ sw0 │──┐  ┌─┴───┐      │
+    //    │   o   │ bg0 │──┘  └─┬───┘         └───┬─┘  └──│ sl0 │   s  │
+    //    │   r   └──┬──┘       └─────────────────┘       └─┬───┘   l  │
+    //    │   d   ┌──┴──┐       ┌─────────────────┐       ┌─┴───┐   e  │
+    //    │   e   │ bg1 │──┐  ┌─┴───┐         ┌───┴─┐  ┌──│ sl1 │   d  │
+    //    │   r   └──┬──┘  └──│ sw3 │ sidecar │ sw2 │──┘  └─┬───┘      │
+    //    └──────────┘        └─┬───┘         └───┬─┘       └──────────┘
+    //                          │ ┌─────┐ ┌─────┐ │
+    //                          └─┤ sf1 ├─┤ sr1 ├─┘
+    //                            └─────┘ └─────┘
+    //                               │       │
+    //                               │       │
+    //                            ┌─────┐ ┌─────┐
+    //                          ┌─┤ tf1 ├─┤ tr1 ├─┐
+    //                          │ └─────┘ └─────┘ │
+    //                          │    scrimlet     │
+    //                          └─────────────────┘
+
+    let sl0_sw0 = SimnetLink::new("sl0", "sw0")?;
+    let sl1_sw2 = SimnetLink::new("sl1", "sw2")?;
+
+    let tr0_sr0 = SimnetLink::new("tfportrear0_0", "sr0")?;
+    let tf0_sf0 = SimnetLink::new("tf0", "sf0")?;
+
+    let tr1_sr1 = SimnetLink::new("tfportrear1_0", "sr1")?;
+    let tf1_sf1 = SimnetLink::new("tf1", "sf1")?;
+
+    let bg0_sw1 = SimnetLink::new("bg0", "sw1")?;
+    let bg1_sw3 = SimnetLink::new("bg1", "sw3")?;
+
+    let mgmt0 = Etherstub::new("mgmt0")?;
+    let mg0 = Vnic::new("mg0", &mgmt0.name)?;
+    let mg1 = Vnic::new("mg1", &mgmt0.name)?;
+    let mg2 = Vnic::new("mg2", &mgmt0.name)?;
+    let mg3 = Vnic::new("mg3", &mgmt0.name)?;
+
+    let _mgip = Ip::new("10.0.0.254/24", &mg0.name, "test")?;
+
+    let zfs = Zfs::new("mgdiamond")?;
+
+    let sidecar0 = SoftnpuZone::new(
+        "sidecar0.diamond",
+        &zfs,
+        &[
+            &sl0_sw0.end_b,
+            &tr0_sr0.end_b,
+            &tf0_sf0.end_b,
+            &bg0_sw1.end_b,
+        ],
+    )?;
+
+    let sidecar1 = SoftnpuZone::new(
+        "sidecar1.diamond",
+        &zfs,
+        &[
+            &sl1_sw2.end_b,
+            &tr1_sr1.end_b,
+            &tf1_sf1.end_b,
+            &bg1_sw3.end_b,
+        ],
+    )?;
+
+    let sled = RouterZone::server(
+        "sled.diamond",
+        &zfs,
+        &mg1.name,
+        &[&sl0_sw0.end_a, &sl1_sw2.end_a],
+    )?;
+
+    let scrimlet0 = RouterZone::transit(
+        "scrimlet0.diamond",
+        &zfs,
+        &mg2.name,
+        &[&tf0_sf0.end_a, &tr0_sr0.end_a],
+        "diamond",
+        "sidecar0.diamond",
+    )?;
+
+    let scrimlet1 = RouterZone::transit(
+        "scrimlet1.diamond",
+        &zfs,
+        &mg3.name,
+        &[&tf1_sf1.end_a, &tr1_sr1.end_a],
+        "diamond",
+        "sidecar1.diamond",
+    )?;
+
+    let border = Zone::new(
+        "border.diamond",
+        ZONE_BRAND,
+        &zfs,
+        &[&bg0_sw1.end_a, &bg1_sw3.end_a],
+        &[],
+    )?;
+
+    println!("waiting for zones to come up");
+    sleep(Duration::from_secs(10));
+
+    sidecar0.setup()?;
+    sidecar1.setup()?;
+    sled.setup(1)?;
+    scrimlet0.setup(2)?;
+    scrimlet1.setup(3)?;
+
+    run_topo!(run_diamond_tests(&scrimlet0, &scrimlet1, &sled, &border).await?);
+
+    Ok(())
+}
+
+async fn run_diamond_tests(
+    _scrimlet0: &RouterZone<'_>,
+    _scrimlet1: &RouterZone<'_>,
+    _sled: &RouterZone<'_>,
+    _border: &Zone,
+) -> Result<()> {
     Ok(())
 }
 

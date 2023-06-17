@@ -1,0 +1,11 @@
+[int0]
+fec = "None"
+speed = "Speed10G"
+autoneg = true
+kr = true
+
+[rear0]
+fec = "None"
+speed = "Speed100G"
+autoneg = true
+kr = true
