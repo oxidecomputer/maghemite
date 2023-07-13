@@ -2,7 +2,7 @@
 #:
 #: name = "mg-p5p"
 #: variety = "basic"
-#: target = "helios-latest"
+#: target = "helios-2.0"
 #: rust_toolchain = "stable"
 #: output_rules = [
 #:   "=/out/mg.p5p",

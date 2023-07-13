@@ -2,7 +2,7 @@
 #:
 #: name = "test"
 #: variety = "basic"
-#: target = "helios-latest"
+#: target = "helios-2.0"
 #: rust_toolchain = "stable"
 #: output_rules = [
 #:   "/work/*.log",
@@ -44,7 +44,7 @@ banner "collect"
 get_artifact softnpu image 63813af6e737d48b1204c7aedbb44fc029989c52 softnpu
 get_artifact sidecar-lite release 85e1b73d1155c637c98c6a35019b7f9e774e20ea libsidecar_lite.so
 get_artifact sidecar-lite release 85e1b73d1155c637c98c6a35019b7f9e774e20ea scadm
-get_artifact dendrite image efd4a27827d467e8d25034c276e8860b1c001bb5 dendrite-softnpu.tar.gz
+get_artifact dendrite image c2b793dc4b6576e7f25189d90907acb2a2119e9c dendrite-softnpu.tar.gz
 
 pushd download
 chmod +x softnpu
