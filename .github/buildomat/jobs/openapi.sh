@@ -2,7 +2,7 @@
 #:
 #: name = "openapi"
 #: variety = "basic"
-#: target = "helios-latest"
+#: target = "helios-2.0"
 #: output_rules = [
 #:   "/out/*",
 #: ]
