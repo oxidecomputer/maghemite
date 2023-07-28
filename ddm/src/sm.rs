@@ -374,17 +374,13 @@ impl Exchange {
         });
     }
 
-    fn wait_for_exchange_server_to_start(
-        &self,
-    ) -> Result<(), exchange::ExchangeError> {
+    fn wait_for_exchange_server_to_start(&self) {
         inf!(
             self.log,
             self.ctx.config.if_name,
             "waiting for exchange server to start"
         );
-        let mut retries = 0;
-        let limit = 50; //TODO as parameter
-        let interval = 100; // TODO as parameter
+        let interval = 250; // TODO as parameter
         loop {
             match exchange::do_pull(
                 &self.ctx,
@@ -393,17 +389,20 @@ impl Exchange {
             ) {
                 Ok(_) => break,
                 Err(e) => {
-                    if retries < limit {
-                        retries += 1;
-                        sleep(Duration::from_millis(interval))
-                    } else {
-                        return Err(e);
-                    }
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "exchange server not started: {e}",
+                    );
+                    inf!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "retrying in {interval} ms",
+                    );
+                    sleep(Duration::from_millis(interval))
                 }
             }
         }
-
-        Ok(())
     }
 
     fn expire_peer(
@@ -464,17 +463,30 @@ impl State for Exchange {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
-        let exchange_thread = exchange::handler(
-            self.ctx.clone(),
-            self.ctx.config.addr,
-            self.peer,
-            self.log.clone(),
-        )
-        .unwrap(); //TODO unwrap
+        let exchange_thread = loop {
+            match exchange::handler(
+                self.ctx.clone(),
+                self.ctx.config.addr,
+                self.peer,
+                self.log.clone(),
+            ) {
+                Ok(handle) => break handle,
+                Err(e) => {
+                    wrn!(
+                        self.log,
+                        self.ctx.config.if_name,
+                        "exchange handler start: {e}",
+                    );
+                    inf!(self.log, self.ctx.config.if_name, "retrying in 1 s",);
+                    sleep(Duration::from_secs(1));
+                    continue;
+                }
+            }
+        };
+
+        self.wait_for_exchange_server_to_start();
 
         let pull_stop = Arc::new(AtomicBool::new(false));
-
-        self.wait_for_exchange_server_to_start().unwrap(); //TODO unwrap
 
         // Do an initial pull, in the event that exchange events are fired while
         // this pull is taking place, they will be queued and handled in the

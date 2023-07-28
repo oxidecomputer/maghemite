@@ -230,15 +230,22 @@ pub fn handler(
     .to_logger("exchange")
     .map_err(|e| e.to_string())?;
 
-    let api = api_description()?;
-
     inf!(log, ctx.config.if_name, "exchange: listening on {}", sa);
 
     let log = log.clone();
 
+    let api = api_description()?;
+    let server = ctx.rt.block_on(async move {
+        match HttpServerStarter::new(&config, api, context, &ds_log) {
+            Ok(s) => Ok(s),
+            Err(e) => {
+                Err(format!("failed to start exchange server on {addr}: {e}"))
+            }
+        }
+    })?;
+
     Ok(ctx.rt.spawn(async move {
-        let server = HttpServerStarter::new(&config, api, context, &ds_log);
-        match server.unwrap().start().await {
+        match server.start().await {
             Ok(_) => wrn!(
                 log,
                 ctx.config.if_name,
