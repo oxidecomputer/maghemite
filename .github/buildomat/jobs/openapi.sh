@@ -30,7 +30,7 @@ banner copy
 pfexec mkdir -p /out
 pfexec chown "$UID" /out
 
-cp ddm-openapi/ddm-admin.json /out/ddm-admin.json
+cp openapi/ddm-admin.json /out/ddm-admin.json
 digest -a sha256 /out/ddm-admin.json > /out/ddm-admin.json.sha256.txt
 
 cp openapi/bgp-admin.json /out/bgp-admin.json
