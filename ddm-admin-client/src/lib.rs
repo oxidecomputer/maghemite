@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+pub use ddm::db::IpPrefix;
+
 progenitor::generate_api!(
     spec = "../openapi/ddm-admin.json",
     inner_type = slog::Logger,
@@ -15,4 +17,7 @@ progenitor::generate_api!(
     post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
         slog::debug!(log, "client response"; "result" => ?result);
     }),
+    replace = {
+        IpPrefix = ddm::db::IpPrefix,
+    }
 );

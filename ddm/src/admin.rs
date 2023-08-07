@@ -2,9 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::db::{Db, Ipv6Prefix, PeerInfo};
+use crate::db::{Db, Ipv6Prefix, PeerInfo, TunnelOrigin, TunnelRoute};
 use crate::exchange::PathVector;
-use crate::sm::{AdminEvent, Event};
+use crate::sm::{AdminEvent, Event, PrefixSet};
 use dropshot::endpoint;
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
@@ -116,6 +116,15 @@ async fn get_originated(
     Ok(HttpResponseOk(originated))
 }
 
+#[endpoint { method = GET, path = "/originated_tunnel_endpoints" }]
+async fn get_originated_tunnel_endpoints(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<HashSet<TunnelOrigin>>, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+    let originated = ctx.db.originated_tunnel();
+    Ok(HttpResponseOk(originated))
+}
+
 #[endpoint { method = GET, path = "/prefixes" }]
 async fn get_prefixes(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
@@ -144,6 +153,15 @@ async fn get_prefixes(
     Ok(HttpResponseOk(result))
 }
 
+#[endpoint { method = GET, path = "/tunnel_endpoints" }]
+async fn get_tunnel_endpoints(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<HashSet<TunnelRoute>>, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+    let imported = ctx.db.imported_tunnel();
+    Ok(HttpResponseOk(imported))
+}
+
 #[endpoint { method = PUT, path = "/prefix" }]
 async fn advertise_prefixes(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
@@ -154,8 +172,29 @@ async fn advertise_prefixes(
     ctx.db.originate(&prefixes);
 
     for e in &ctx.event_channels {
-        e.send(Event::Admin(AdminEvent::Announce(prefixes.clone())))
-            .unwrap(); //TODO(unwrap)
+        e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
+            prefixes.clone(),
+        ))))
+        .unwrap(); //TODO(unwrap)
+    }
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = PUT, path = "/tunnel_endpoint" }]
+async fn advertise_tunnel_endpoints(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    request: TypedBody<HashSet<TunnelOrigin>>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+    let endpoints = request.into_inner();
+    ctx.db.originate_tunnel(&endpoints);
+
+    for e in &ctx.event_channels {
+        e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
+            endpoints.clone(),
+        ))))
+        .unwrap(); //TODO(unwrap)
     }
 
     Ok(HttpResponseUpdatedNoContent())
@@ -171,8 +210,29 @@ async fn withdraw_prefixes(
     ctx.db.withdraw(&prefixes);
 
     for e in &ctx.event_channels {
-        e.send(Event::Admin(AdminEvent::Withdraw(prefixes.clone())))
-            .unwrap(); //TODO(unwrap)
+        e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
+            prefixes.clone(),
+        ))))
+        .unwrap(); //TODO(unwrap)
+    }
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = DELETE, path = "/tunnel_endpoint" }]
+async fn withdraw_tunnel_endpoints(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    request: TypedBody<HashSet<TunnelOrigin>>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+    let endpoints = request.into_inner();
+    ctx.db.withdraw_tunnel(&endpoints);
+
+    for e in &ctx.event_channels {
+        e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
+            endpoints.clone(),
+        ))))
+        .unwrap(); //TODO(unwrap)
     }
 
     Ok(HttpResponseUpdatedNoContent())
@@ -197,9 +257,13 @@ pub fn api_description(
     api.register(get_peers)?;
     api.register(expire_peer)?;
     api.register(advertise_prefixes)?;
+    api.register(advertise_tunnel_endpoints)?;
     api.register(withdraw_prefixes)?;
+    api.register(withdraw_tunnel_endpoints)?;
     api.register(get_prefixes)?;
+    api.register(get_tunnel_endpoints)?;
     api.register(get_originated)?;
+    api.register(get_originated_tunnel_endpoints)?;
     api.register(sync)?;
     Ok(api)
 }

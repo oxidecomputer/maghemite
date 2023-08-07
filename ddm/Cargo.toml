@@ -20,3 +20,5 @@ serde_json.workspace = true
 libnet.workspace = true
 dpd-client.workspace = true
 dendrite-common.workspace = true
+opte-ioctl.workspace = true
+oxide-vpc.workspace = true

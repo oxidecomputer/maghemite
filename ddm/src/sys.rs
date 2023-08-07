@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::db::TunnelRoute;
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
 use dendrite_common::network::{Cidr, Ipv6Cidr};
@@ -11,9 +12,11 @@ use dpd_client::types;
 use dpd_client::Client;
 use dpd_client::ClientState;
 use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
+use opte_ioctl::OpteHdl;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -101,7 +104,7 @@ impl From<Route> for IpPrefix {
     }
 }
 
-pub fn add_routes(
+pub fn add_underlay_routes(
     log: &Logger,
     config: &Config,
     routes: Vec<Route>,
@@ -229,7 +232,83 @@ pub fn add_routes_dendrite(
     }
 }
 
-pub fn remove_routes(
+pub fn add_tunnel_routes(
+    log: &Logger,
+    ifname: &str,
+    routes: &HashSet<TunnelRoute>,
+) -> Result<(), opte_ioctl::Error> {
+    use oxide_vpc::api::{
+        IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr, Ipv6PrefixLen,
+        SetVirt2BoundaryReq, TunnelEndpoint, Vni,
+    };
+    let hdl = OpteHdl::open(OpteHdl::XDE_CTL)?;
+    for r in routes {
+        inf!(
+            log,
+            ifname,
+            "adding tunnel route {} -[{}]-> {}",
+            r.overlay_prefix,
+            r.vni,
+            r.boundary_addr,
+        );
+        let vip = match r.overlay_prefix {
+            crate::db::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
+                p.addr.into(),
+                Ipv4PrefixLen::new(p.len).unwrap(),
+            )),
+            crate::db::IpPrefix::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
+                p.addr.into(),
+                Ipv6PrefixLen::new(p.len).unwrap(),
+            )),
+        };
+        let tep = TunnelEndpoint {
+            ip: r.boundary_addr.into(),
+            vni: Vni::new(r.vni).unwrap(),
+        };
+        let req = SetVirt2BoundaryReq { vip, tep };
+        hdl.set_v2b(&req)?;
+    }
+
+    Ok(())
+}
+
+pub fn remove_tunnel_routes(
+    log: &Logger,
+    ifname: &str,
+    routes: &HashSet<TunnelRoute>,
+) -> Result<(), opte_ioctl::Error> {
+    use oxide_vpc::api::{
+        ClearVirt2BoundaryReq, IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr,
+        Ipv6PrefixLen,
+    };
+    let hdl = OpteHdl::open(OpteHdl::XDE_CTL)?;
+    for r in routes {
+        inf!(
+            log,
+            ifname,
+            "adding tunnel route {} -[{}]-> {}",
+            r.overlay_prefix,
+            r.vni,
+            r.boundary_addr,
+        );
+        let vip = match r.overlay_prefix {
+            crate::db::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
+                p.addr.into(),
+                Ipv4PrefixLen::new(p.len).unwrap(),
+            )),
+            crate::db::IpPrefix::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
+                p.addr.into(),
+                Ipv6PrefixLen::new(p.len).unwrap(),
+            )),
+        };
+        let req = ClearVirt2BoundaryReq { vip };
+        hdl.clear_v2b(&req)?;
+    }
+
+    Ok(())
+}
+
+pub fn remove_underlay_routes(
     log: &Logger,
     ifname: &str,
     dpd: &Option<DpdConfig>,

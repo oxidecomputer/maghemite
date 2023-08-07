@@ -23,7 +23,7 @@ version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77c3a9648d43b9cd48db467b3f87fdd6e146bcc88ab0180006cef2179fe11d01"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "once_cell",
  "version_check",
  "zerocopy 0.7.32",
@@ -208,7 +208,7 @@ checksum = "2089b7e3f35b9dd2d0ed921ead4f6d318c27680d4a5bd167b3ee120edb105837"
 dependencies = [
  "addr2line",
  "cc",
- "cfg-if",
+ "cfg-if 1.0.0",
  "libc",
  "miniz_oxide",
  "object",
@@ -346,6 +346,12 @@ checksum = "f1174fb0b6ec23863f8b971027804a42614e347eafb0a95bf0b12cdae21fc4d0"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "cfg-if"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
 name = "cfg-if"
@@ -512,7 +518,7 @@ version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b540bd8bc810d3885c6ea91e2018302f68baba2129ab3e88f32389ee9370880d"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -527,7 +533,7 @@ version = "0.5.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82a9b73a36529d9c47029b9fb3a6f0ea3cc916a261195352ba19e770fc1748b2"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "crossbeam-utils",
 ]
 
@@ -538,7 +544,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e3681d554572a651dda4186cd47240627c3d0114d45a95f6ad27f2f22e7548d"
 dependencies = [
  "autocfg",
- "cfg-if",
+ "cfg-if 1.0.0",
  "crossbeam-utils",
 ]
 
@@ -548,7 +554,7 @@ version = "0.8.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3a430a770ebd84726f584a90ee7f020d28db52c6d02138900f22341f866d39c"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -567,7 +573,7 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6bd9c8e659a473bce955ae5c35b116af38af11a7acb0b480e01f3ed348aeb40"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "memchr",
 ]
 
@@ -623,7 +629,9 @@ dependencies = [
  "hostname",
  "hyper",
  "ispf",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
+ "opte-ioctl",
+ "oxide-vpc",
  "schemars",
  "serde",
  "serde_json",
@@ -638,6 +646,7 @@ dependencies = [
 name = "ddm-admin-client"
 version = "0.1.0"
 dependencies = [
+ "ddm",
  "percent-encoding",
  "progenitor",
  "reqwest",
@@ -674,7 +683,7 @@ dependencies = [
  "ddm",
  "dpd-client",
  "hostname",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "slog",
  "slog-async",
  "slog-bunyan",
@@ -720,7 +729,7 @@ version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b98cf8ebf19c3d1b223e151f99a4f9f0690dca41414773390fc824184ac833e1"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "dirs-sys-next",
 ]
 
@@ -876,7 +885,7 @@ version = "0.8.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7268b386296a025e474d5140678f75d6de9493ae55a5d709eeb9dd08149945e1"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -935,7 +944,7 @@ version = "0.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ee447700ac8aa0b2f2bd7bc4462ad686ba06baa6727ac149a2d6277f0d240fd"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "libc",
  "redox_syscall 0.4.1",
  "windows-sys 0.52.0",
@@ -1147,7 +1156,7 @@ version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe9006bed769170c11f845cf00c7c1e9092aeb3f268e007c3e760ac68008070f"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "libc",
  "wasi",
 ]
@@ -1405,6 +1414,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "illumos-sys-hdrs"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#fe70f180be97553d5e41e3f5272c74ff252a5190"
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1432,7 +1446,7 @@ version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5bbe824c507c5da5956355e86a746d82e0e1464f65d862cc5e71da70e94b2c"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -1493,6 +1507,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kstat-macro"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#fe70f180be97553d5e41e3f5272c74ff252a5190"
+dependencies = [
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "lab"
 version = "0.1.0"
 dependencies = [
@@ -1530,7 +1553,7 @@ dependencies = [
  "colored",
  "futures",
  "libc",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "portpicker",
  "propolis-client",
  "propolis-server-config",
@@ -1565,7 +1588,26 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#d44d9e084f39e844f8083d4d9b39a331061ebbcc"
 dependencies = [
  "anyhow",
- "cfg-if",
+ "cfg-if 1.0.0",
+ "colored",
+ "dlpi",
+ "libc",
+ "num_enum 0.5.11",
+ "nvpair",
+ "nvpair-sys",
+ "rusty-doors",
+ "socket2 0.4.10",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "libnet"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/netadm-sys#d44d9e084f39e844f8083d4d9b39a331061ebbcc"
+dependencies = [
+ "anyhow",
+ "cfg-if 1.0.0",
  "colored",
  "dlpi",
  "libc",
@@ -1621,6 +1663,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "managed"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
+
+[[package]]
 name = "match_cfg"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1632,7 +1680,7 @@ version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "digest",
 ]
 
@@ -1682,7 +1730,7 @@ dependencies = [
  "anyhow",
  "common",
  "dpd-client",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "rdb",
  "slog",
  "thiserror",
@@ -1704,7 +1752,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ddm-admin-client",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -2087,7 +2135,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8cde4d2d9200ad5909f8dac647e29482e07c3a35de8a13fce7c9c7747ad9f671"
 dependencies = [
  "bitflags 2.4.1",
- "cfg-if",
+ "cfg-if 1.0.0",
  "foreign-types 0.3.2",
  "libc",
  "once_cell",
@@ -2122,6 +2170,64 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "opte"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#fe70f180be97553d5e41e3f5272c74ff252a5190"
+dependencies = [
+ "cfg-if 0.1.10",
+ "dyn-clone",
+ "illumos-sys-hdrs",
+ "kstat-macro",
+ "opte-api",
+ "postcard",
+ "serde",
+ "smoltcp",
+ "version_check",
+ "zerocopy 0.6.6",
+]
+
+[[package]]
+name = "opte-api"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#fe70f180be97553d5e41e3f5272c74ff252a5190"
+dependencies = [
+ "cfg-if 0.1.10",
+ "illumos-sys-hdrs",
+ "ipnetwork",
+ "postcard",
+ "serde",
+ "smoltcp",
+]
+
+[[package]]
+name = "opte-ioctl"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#fe70f180be97553d5e41e3f5272c74ff252a5190"
+dependencies = [
+ "libc",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
+ "opte",
+ "oxide-vpc",
+ "postcard",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "oxide-vpc"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#fe70f180be97553d5e41e3f5272c74ff252a5190"
+dependencies = [
+ "cfg-if 0.1.10",
+ "illumos-sys-hdrs",
+ "opte",
+ "poptrie",
+ "serde",
+ "smoltcp",
+ "zerocopy 0.6.6",
 ]
 
 [[package]]
@@ -2182,7 +2288,7 @@ version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60a2cfe6f0ad2bfc16aefa463b497d5c7a5ecd44a23efa72aa342d90177356dc"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "instant",
  "libc",
  "redox_syscall 0.2.16",
@@ -2196,7 +2302,7 @@ version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c42a9226546d68acdd9c0a280d17ce19bfe27a46bf68784e4066115788d008e"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "libc",
  "redox_syscall 0.4.1",
  "smallvec",
@@ -2323,6 +2429,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69d3587f8a9e599cc7ec2c00e331f71c4e69a5f9a4b8a6efd5b07466b9736f9a"
 
 [[package]]
+name = "poptrie"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/poptrie#11c9ce88bfb950bdac1b5016e37c6aedc5ffd05b"
+
+[[package]]
 name = "portpicker"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2330,6 +2441,22 @@ checksum = "be97d76faf1bfab666e1375477b23fde79eccf0276e9b63b92a39d676a889ba9"
 dependencies = [
  "rand",
 ]
+
+[[package]]
+name = "postcard"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a25c0b0ae06fcffe600ad392aabfa535696c8973f2253d9ac83171924c58a858"
+dependencies = [
+ "postcard-cobs",
+ "serde",
+]
+
+[[package]]
+name = "postcard-cobs"
+version = "0.1.5-pre"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c68cb38ed13fd7bc9dd5db8f165b7c8d9c1a315104083a2b10f11354c2af97f"
 
 [[package]]
 name = "postgres-protocol"
@@ -3189,7 +3316,7 @@ version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "cpufeatures",
  "digest",
 ]
@@ -3200,7 +3327,7 @@ version = "0.10.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "793db75ad2bcafc3ffa7c68b215fee268f537982cd901d132f89c6343f3a3dc8"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "cpufeatures",
  "digest",
 ]
@@ -3350,6 +3477,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a491bfc47dffa70a3c267bc379e9de9f4b0a7195e474a94498189b177f8d18c"
 dependencies = [
  "thiserror",
+]
+
+[[package]]
+name = "smoltcp"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee34c1e1bfc7e9206cc0fb8030a90129b4e319ab53856249bb27642cab914fb3"
+dependencies = [
+ "bitflags 1.3.2",
+ "byteorder",
+ "managed",
 ]
 
 [[package]]
@@ -3539,7 +3677,7 @@ version = "3.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01ce4141aa927a6d1bd34a041795abd0db1cccba5d5f24b009f694bdf3a1f3fa"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "fastrand",
  "redox_syscall 0.4.1",
  "rustix",
@@ -3602,7 +3740,7 @@ version = "1.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fdd6f064ccff2d6567adcb3873ca630700f00b5ad3f060c25b5dcfd9a4ce152"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "once_cell",
 ]
 
@@ -4108,7 +4246,7 @@ name = "util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -4201,7 +4339,7 @@ version = "0.2.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ed0d4f68a3015cc185aff4db9506a015f4b96f95303897bfa23f846db54064e"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "wasm-bindgen-macro",
 ]
 
@@ -4226,7 +4364,7 @@ version = "0.4.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac36a15a220124ac510204aec1c3e5db8a22ab06fd6706d881dc6149f8ed9a12"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "js-sys",
  "wasm-bindgen",
  "web-sys",
@@ -4487,7 +4625,7 @@ version = "0.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "524e57b2c537c0f9b1e69f1965311ec12182b4122e45035b1508cd24d2adadb1"
 dependencies = [
- "cfg-if",
+ "cfg-if 1.0.0",
  "windows-sys 0.48.0",
 ]
 
@@ -4520,6 +4658,16 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "854e949ac82d619ee9a14c66a1b674ac730422372ccb759ce0c39cabcf2bf8e6"
+dependencies = [
+ "byteorder",
+ "zerocopy-derive 0.6.6",
+]
+
+[[package]]
+name = "zerocopy"
 version = "0.7.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74d4d3961e53fa4c9a25a8637fc2bfaf2595b3d3ae34875568a5cf64787716be"
@@ -4536,6 +4684,17 @@ dependencies = [
  "proc-macro2",
  "syn 1.0.109",
  "synstructure",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "125139de3f6b9d625c39e2efdd73d41bdac468ccd556556440e322be0e1bbd91"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.48",
 ]
 
 [[package]]
@@ -4601,7 +4760,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/falcon?branch=main#a223368cbb036279b3ddc1c803ce5a0219440204"
 dependencies = [
  "anyhow",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "tokio",
  "zone 0.3.0",
 ]

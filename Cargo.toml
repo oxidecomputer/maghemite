@@ -76,6 +76,14 @@ http = "0.2"
 humantime = "2.1"
 mg-common = { path = "mg-common" }
 
+[workspace.dependencies.opte-ioctl]
+git = "https://github.com/oxidecomputer/opte"
+branch = "boundary-services-overlay-flow-pinning"
+
+[workspace.dependencies.oxide-vpc]
+git = "https://github.com/oxidecomputer/opte"
+branch = "boundary-services-overlay-flow-pinning"
+
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
 branch = "main"

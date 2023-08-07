@@ -5,7 +5,7 @@
 use anyhow::Result;
 use clap::Parser;
 use colored::*;
-use ddm::db::Ipv6Prefix;
+use ddm::db::{IpPrefix, Ipv6Prefix};
 use ddm_admin_client::types;
 use ddm_admin_client::Client;
 use mg_common::cli::oxide_cli_style;
@@ -47,6 +47,18 @@ enum SubCommand {
     /// Withdraw prefixes from a DDM router.
     WithdrawPrefixes(Prefixes),
 
+    /// Get the tunnel endpoints a DDM router knows about.
+    GetTunnelEndpoints,
+
+    /// Get the tunnel endpoints a DDM router has originated.
+    GetOriginatedTunnelEndpoints,
+
+    /// Advertise prefixes from a DDM router.
+    AdvertiseTunnelEndpoint(TunnelEndpoint),
+
+    /// Withdraw prefixes from a DDM router.
+    WithdrawTunnelEndpoint(TunnelEndpoint),
+
     /// Sync prefix information from peers.
     Sync,
 }
@@ -54,6 +66,18 @@ enum SubCommand {
 #[derive(Debug, Parser)]
 struct Prefixes {
     prefixes: Vec<Ipv6Prefix>,
+}
+
+#[derive(Debug, Parser)]
+struct TunnelEndpoint {
+    #[arg(short, long)]
+    pub overlay_prefix: IpPrefix,
+
+    #[arg(short, long)]
+    pub boundary_addr: Ipv6Addr,
+
+    #[arg(short, long)]
+    pub vni: u32,
 }
 
 #[derive(Debug, Parser)]
@@ -165,6 +189,68 @@ async fn run() -> Result<()> {
                 });
             }
             client.withdraw_prefixes(&prefixes).await?;
+        }
+        SubCommand::GetTunnelEndpoints => {
+            let msg = client.get_tunnel_endpoints().await?;
+            let mut tw = TabWriter::new(stdout());
+            writeln!(
+                &mut tw,
+                "{}\t{}\t{}",
+                "Overlay Prefix".dimmed(),
+                "Boundary Address".dimmed(),
+                "VNI".dimmed(),
+            )?;
+            for endpoint in msg.into_inner() {
+                writeln!(
+                    &mut tw,
+                    "{}/{}\t{}\t{}",
+                    endpoint.overlay_prefix.addr(),
+                    endpoint.overlay_prefix.length(),
+                    endpoint.boundary_addr,
+                    endpoint.vni,
+                )?;
+            }
+            tw.flush()?;
+        }
+        SubCommand::GetOriginatedTunnelEndpoints => {
+            let msg = client.get_originated_tunnel_endpoints().await?;
+            let mut tw = TabWriter::new(stdout());
+            writeln!(
+                &mut tw,
+                "{}\t{}\t{}",
+                "Overlay Prefix".dimmed(),
+                "Boundary Address".dimmed(),
+                "VNI".dimmed(),
+            )?;
+            for endpoint in msg.into_inner() {
+                writeln!(
+                    &mut tw,
+                    "{}/{}\t{}\t{}",
+                    endpoint.overlay_prefix.addr(),
+                    endpoint.overlay_prefix.length(),
+                    endpoint.boundary_addr,
+                    endpoint.vni,
+                )?;
+            }
+            tw.flush()?;
+        }
+        SubCommand::AdvertiseTunnelEndpoint(ep) => {
+            client
+                .advertise_tunnel_endpoints(&vec![types::TunnelOrigin {
+                    overlay_prefix: ep.overlay_prefix,
+                    boundary_addr: ep.boundary_addr,
+                    vni: ep.vni,
+                }])
+                .await?;
+        }
+        SubCommand::WithdrawTunnelEndpoint(ep) => {
+            client
+                .withdraw_tunnel_endpoints(&vec![types::TunnelOrigin {
+                    overlay_prefix: ep.overlay_prefix,
+                    boundary_addr: ep.boundary_addr,
+                    vni: ep.vni,
+                }])
+                .await?;
         }
         SubCommand::Sync => {
             client.sync().await?;
