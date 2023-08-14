@@ -1,5 +1,6 @@
+use bgp::connection::BgpConnectionTcp;
 use bgp::messages::Message;
-use bgp::router::Dispatcher;
+use bgp::router::Router;
 use bgp::session::{Asn, FsmEvent, NeighborInfo, Session, SessionRunner};
 use bgp::state::BgpState;
 use colored::*;
@@ -12,18 +13,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{debug, error, info, warn, Logger};
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::sync::mpsc::channel;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread::spawn;
 use std::time::Duration;
-use tokio::spawn;
-use tokio::sync::mpsc::channel;
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-
-const EVENT_CHANNEL_SIZE: usize = 64;
 
 pub struct HandlerContext {
     config: RouterConfig,
-    dispatcher: Arc<Dispatcher>,
+    router: Arc<Router<BgpConnectionTcp>>,
     log: Logger,
 }
 
@@ -32,14 +31,16 @@ pub struct AddNeighborRequest {
     pub name: String,
     pub host: SocketAddr,
     pub hold_time: u64,
+    pub idle_hold_time: u64,
     pub delay_open: u64,
     pub connect_retry: u64,
     pub keepalive: u64,
+    pub resolution: u64,
 }
 
 #[endpoint { method = POST, path = "/neighbor" }]
 async fn add_neighbor(
-    ctx: Arc<RequestContext<HandlerContext>>,
+    ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddNeighborRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let log = ctx.context().log.clone();
@@ -47,30 +48,28 @@ async fn add_neighbor(
 
     info!(log, "add neighbor: {:#?}", rq);
 
-    tokio::spawn(async move {
-        run_session(rq, ctx.context(), log).await;
+    spawn(move || {
+        run_session(rq, ctx.context(), log);
     });
 
     Ok(HttpResponseUpdatedNoContent())
 }
 
-async fn run_session(
-    rq: AddNeighborRequest,
-    ctx: &HandlerContext,
-    log: Logger,
-) {
+fn run_session(rq: AddNeighborRequest, ctx: &HandlerContext, log: Logger) {
     let session = Session::new(
+        /*
         Duration::from_secs(rq.hold_time),
         Duration::from_secs(rq.delay_open),
+        */
     );
 
-    let (to_session_tx, to_session_rx) = channel(EVENT_CHANNEL_SIZE);
-    let (from_session_tx, from_session_rx) = channel(EVENT_CHANNEL_SIZE);
+    let (to_session_tx, to_session_rx) = channel();
+    let (from_session_tx, from_session_rx) = channel();
 
-    ctx.dispatcher
+    ctx.router
         .addr_to_session
         .lock()
-        .await
+        .unwrap()
         .insert(rq.host.ip(), to_session_tx.clone());
 
     let bgp_state = Arc::new(Mutex::new(BgpState::default()));
@@ -84,6 +83,8 @@ async fn run_session(
         Duration::from_secs(rq.connect_retry),
         Duration::from_secs(rq.keepalive),
         Duration::from_secs(rq.hold_time),
+        Duration::from_secs(rq.idle_hold_time),
+        Duration::from_secs(rq.delay_open),
         session,
         to_session_rx,
         from_session_tx,
@@ -91,14 +92,15 @@ async fn run_session(
         neighbor.clone(),
         ctx.config.asn,
         ctx.config.id,
+        Duration::from_millis(rq.resolution),
         log.clone(),
     );
 
     let lg = log.clone();
-    let j = tokio::spawn(async move {
-        let mut rx = from_session_rx;
+    let j = spawn(move || {
+        let rx = from_session_rx;
         loop {
-            match rx.recv().await.unwrap() {
+            match rx.recv().unwrap() {
                 FsmEvent::Transition(from, to) => {
                     info!(
                         lg,
@@ -138,13 +140,13 @@ async fn run_session(
         }
     });
 
-    tokio::spawn(async move {
-        runner.start().await;
+    spawn(move || {
+        runner.start();
     });
 
-    to_session_tx.send(FsmEvent::ManualStart).await.unwrap();
+    to_session_tx.send(FsmEvent::ManualStart).unwrap();
 
-    j.await.unwrap();
+    j.join().unwrap();
 }
 
 pub struct RouterConfig {
@@ -157,7 +159,7 @@ pub fn start_server(
     addr: Ipv6Addr,
     port: u16,
     config: RouterConfig,
-    dispatcher: Arc<Dispatcher>,
+    router: Arc<Router<BgpConnectionTcp>>,
 ) -> Result<JoinHandle<()>, String> {
     let sa = SocketAddrV6::new(addr, port, 0, 0);
 
@@ -174,11 +176,11 @@ pub fn start_server(
 
     let api = api_description();
 
-    let context = HandlerContext {
+    let context = Arc::new(HandlerContext {
         config,
-        dispatcher,
+        router,
         log: log.clone(),
-    };
+    });
 
     let server = HttpServerStarter::new(&ds_config, api, context, &ds_log)
         .map_err(|e| format!("new admin dropshot: {}", e))?;
@@ -186,7 +188,7 @@ pub fn start_server(
     info!(log, "admin: listening on {}", sa);
 
     let log = log.clone();
-    Ok(spawn(async move {
+    Ok(tokio::spawn(async move {
         match server.start().await {
             Ok(_) => warn!(log, "admin: unexpected server exit"),
             Err(e) => error!(log, "admin: server start error {:?}", e),
@@ -194,7 +196,7 @@ pub fn start_server(
     }))
 }
 
-pub fn api_description() -> ApiDescription<HandlerContext> {
+pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     let mut api = ApiDescription::new();
     api.register(add_neighbor).unwrap();
     api

@@ -200,13 +200,13 @@ checksum = "604178f6c5c21f02dc555784810edfb88d34ac2c73b2eae109655649ee73ce3d"
 name = "bgp"
 version = "0.1.0"
 dependencies = [
+ "lazy_static",
  "nom",
  "num_enum",
  "pretty-hex 0.3.0",
  "pretty_assertions",
  "slog",
  "thiserror",
- "tokio",
 ]
 
 [[package]]

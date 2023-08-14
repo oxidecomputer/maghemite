@@ -35,12 +35,34 @@ pub enum MessageType {
     KeepAlive = 4,
 }
 
+impl From<&Message> for MessageType {
+    fn from(m: &Message) -> Self {
+        match m {
+            Message::Open(_) => Self::Open,
+            Message::Update(_) => Self::Update,
+            Message::Notification(_) => Self::Notification,
+            Message::KeepAlive => Self::KeepAlive,
+        }
+    }
+}
+
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum Message {
     Open(OpenMessage),
     Update(UpdateMessage),
     Notification(NotificationMessage),
     KeepAlive,
+}
+
+impl Message {
+    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+        match self {
+            Self::Open(m) => m.to_wire(),
+            Self::Update(m) => m.to_wire(),
+            Self::Notification(m) => m.to_wire(),
+            Self::KeepAlive => Ok(Vec::new()),
+        }
+    }
 }
 
 impl From<OpenMessage> for Message {

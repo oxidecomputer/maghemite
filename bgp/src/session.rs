@@ -1,21 +1,16 @@
-use crate::messages::{
-    Header, Message, MessageType, NotificationMessage, OpenMessage,
-    UpdateMessage,
-};
+use crate::clock::Clock;
+use crate::connection::BgpConnection;
+use crate::messages::{Message, OpenMessage};
 use crate::state::BgpState;
-use slog::{error, info, warn, Logger};
+use slog::{info, warn, Logger};
 use std::fmt::{self, Display, Formatter};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::Mutex;
-use tokio::time::{interval, Interval};
 
 #[derive(Debug)]
-pub enum FsmState {
+pub enum FsmState<Cnx: BgpConnection> {
     /// Initial state. Refuse all incomming BGP connections. No resources
     /// allocated to peer.
     ///
@@ -32,28 +27,29 @@ pub enum FsmState {
     /// - DelayOpenTimerExpire -> OpenSent
     /// - TcpConnectionConfirmed -> OpenSent (unless delay_open = true)
     /// - BgpOpen -> OpenConfigm (only during delay_open interval)
-    Connect(TcpStream),
+    Connect,
 
     /// Trying to acquire peer by listening for and accepting a TCP connection.
-    Active(TcpStream),
+    Active(Cnx),
 
     /// Waiting for open message from peer.
-    OpenSent(TcpStream),
+    OpenSent(Cnx),
 
     /// Waiting for keepaliave or notification from peer.
-    OpenConfirm(TcpStream),
+    OpenConfirm(Cnx),
 
     /// Able to exchange update, notification and keepliave messages with peers.
-    Established(TcpStream),
+    Established(Cnx),
 }
 
-impl Display for FsmState {
+impl<Cnx: BgpConnection> Display for FsmState<Cnx> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let kind: FsmStateKind = self.into();
         write!(f, "{}", kind)
     }
 }
 
+//XXX
 #[derive(Debug, PartialEq, Eq)]
 pub enum FsmStateKind {
     Idle,
@@ -77,11 +73,11 @@ impl Display for FsmStateKind {
     }
 }
 
-impl From<&FsmState> for FsmStateKind {
-    fn from(s: &FsmState) -> FsmStateKind {
+impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKind {
+    fn from(s: &FsmState<Cnx>) -> FsmStateKind {
         match s {
             FsmState::Idle => FsmStateKind::Idle,
-            FsmState::Connect(_) => FsmStateKind::Connect,
+            FsmState::Connect => FsmStateKind::Connect,
             FsmState::Active(_) => FsmStateKind::Active,
             FsmState::OpenSent(_) => FsmStateKind::OpenSent,
             FsmState::OpenConfirm(_) => FsmStateKind::OpenConfirm,
@@ -90,13 +86,12 @@ impl From<&FsmState> for FsmStateKind {
     }
 }
 
-#[derive(Debug)]
-pub enum FsmEvent {
+pub enum FsmEvent<Cnx: BgpConnection> {
     Transition(FsmStateKind, FsmStateKind),
 
     Message(Message),
 
-    Connected(TcpStream),
+    Connected(Cnx),
 
     // from spec follows
     /// Local system administrator manually starts the peer connection.
@@ -197,6 +192,54 @@ pub enum FsmEvent {
     UpdateMsgErr,
 }
 
+impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Transition(from, to) => {
+                write!(f, "transition {from:?} -> {to:?}")
+            }
+            Self::Message(message) => write!(f, "message {message:?}"),
+            Self::Connected(_) => write!(f, "connected"),
+            Self::ManualStart => write!(f, "manual start"),
+            Self::ManualStop => write!(f, "manual stop"),
+            Self::AutomaticStart => write!(f, "automatic start"),
+            Self::PassiveManualStart => write!(f, "passive manual start"),
+            Self::PassiveAutomaticStart => write!(f, "passive automatic start"),
+            Self::DampedAutomaticStart => write!(f, "damped automatic start"),
+            Self::PassiveDampedAutomaticStart => {
+                write!(f, "passive admped automatic start")
+            }
+            Self::AutomaticStop => write!(f, "automatic stop"),
+            Self::ConnectRetryTimerExpires => {
+                write!(f, "connect retry time expires")
+            }
+            Self::HoldTimerExpires => write!(f, "hold timer expires"),
+            Self::KeepaliveTimerExpires => write!(f, "keepalive timer expires"),
+            Self::DelayOpenTimerExpires => {
+                write!(f, "delay open timer expires")
+            }
+            Self::IdleHoldTimerExpires => write!(f, "idle hold timeer expires"),
+            Self::TcpConnectionValid => write!(f, "tcp connection valid"),
+            Self::TcpConnectionInvalid => write!(f, "tcp connection invalid"),
+            Self::TcpConnectionAcked => write!(f, "tcp connection acked"),
+            Self::TcpConnectionConfirmed => {
+                write!(f, "tcp connection confirmed")
+            }
+            Self::TcpConnectionFails => write!(f, "tcp connection fails"),
+            Self::BgpOpen => write!(f, "bgp open"),
+            Self::DelayedBgpOpen => write!(f, "delay bgp open"),
+            Self::BgpHeaderErr => write!(f, "bgp header err"),
+            Self::BgpOpenMsgErr => write!(f, "bgp open message error"),
+            Self::OpenCollissionDump => write!(f, "open collission dump"),
+            Self::NotifyMsgVerErr => write!(f, "notify msg ver error"),
+            Self::NotifyMsg => write!(f, "notify message"),
+            Self::KeepAliveMsg => write!(f, "keepalive message"),
+            Self::UpdateMsg => write!(f, "update message"),
+            Self::UpdateMsgErr => write!(f, "update message error"),
+        }
+    }
+}
+
 pub struct Session {
     // Required Attributes
     /// Track how many times a connection has been attempted.
@@ -214,9 +257,6 @@ pub struct Session {
     /// flapping.
     pub damp_peer_oscillations: bool,
 
-    /// Amount of time that a peer is held in the idle state.
-    pub idle_hold_timer: Interval,
-
     /// Allow connections from peers that are not explicitly configured.
     pub accept_connections_unconfigured_peers: bool,
 
@@ -225,9 +265,6 @@ pub struct Session {
 
     /// Delay sending out the initial open message.
     pub delay_open: bool,
-
-    /// Interval to wait before sending out an open message.
-    pub delay_open_timer: Interval,
 
     /// Passively wait for the remote BGP peer to establish a TCP connection.
     pub passive_tcp_establishment: bool,
@@ -241,20 +278,15 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(
-        idle_hold_time: Duration,
-        delay_open_time: Duration,
-    ) -> Arc<Mutex<Session>> {
+    pub fn new() -> Arc<Mutex<Session>> {
         Arc::new(Mutex::new(Session {
             connect_retry_counter: 0,
             allow_automatic_start: false,
             allow_automatic_stop: false,
             damp_peer_oscillations: false,
-            idle_hold_timer: interval(idle_hold_time),
             accept_connections_unconfigured_peers: false,
             collision_detect_established_state: false,
             delay_open: true,
-            delay_open_timer: interval(delay_open_time),
             passive_tcp_establishment: false,
             send_notification_without_open: false,
             track_tcp_state: false,
@@ -283,21 +315,11 @@ pub struct NeighborInfo {
     pub host: SocketAddr,
 }
 
-pub struct SessionRunner {
+pub struct SessionRunner<Cnx: BgpConnection> {
     session: Arc<Mutex<Session>>,
-    event_rx: Receiver<FsmEvent>,
-    event_tx: Sender<FsmEvent>,
+    event_rx: Receiver<FsmEvent<Cnx>>,
+    event_tx: Sender<FsmEvent<Cnx>>,
     _bgp_state: Arc<Mutex<BgpState>>,
-
-    /// How long to wait between connection attempts.
-    pub connect_retry_timer: Interval,
-
-    /// How often to send out keepalive messages.
-    pub keepalive_timer: Interval,
-
-    /// How long to keep a session alive between keepalive, update and/or
-    /// notification messages.
-    pub hold_timer: Interval,
 
     asn: Asn,
     id: u32,
@@ -305,70 +327,81 @@ pub struct SessionRunner {
     neighbor: NeighborInfo,
 
     log: Logger,
+
+    clock: Clock,
 }
 
-impl SessionRunner {
+impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         connect_retry_time: Duration,
         keepalive_time: Duration,
         hold_time: Duration,
+        idle_hold_time: Duration,
+        delay_open_time: Duration,
         session: Arc<Mutex<Session>>,
-        event_rx: Receiver<FsmEvent>,
-        event_tx: Sender<FsmEvent>,
+        event_rx: Receiver<FsmEvent<Cnx>>,
+        event_tx: Sender<FsmEvent<Cnx>>,
         bgp_state: Arc<Mutex<BgpState>>,
         neighbor: NeighborInfo,
         asn: Asn,
         id: u32,
+        resolution: Duration,
         log: Logger,
-    ) -> SessionRunner {
+    ) -> SessionRunner<Cnx> {
         SessionRunner {
             session,
             event_rx,
-            event_tx,
+            event_tx: event_tx.clone(),
             _bgp_state: bgp_state,
-            connect_retry_timer: interval(connect_retry_time),
-            keepalive_timer: interval(keepalive_time),
-            hold_timer: interval(hold_time),
             asn,
             id,
             neighbor,
+            clock: Clock::new(
+                resolution,
+                connect_retry_time,
+                keepalive_time,
+                hold_time,
+                idle_hold_time,
+                delay_open_time,
+                event_tx.clone(),
+            ),
             log,
         }
     }
 
-    pub async fn start(&mut self) {
-        let mut current = FsmState::Idle;
+    pub fn start(&mut self) {
+        let mut current = FsmState::<Cnx>::Idle;
         loop {
             let current_state: FsmStateKind = (&current).into();
             let next_state = match current {
                 FsmState::Idle => {
-                    current = self.idle().await;
+                    current = self.idle();
                     (&current).into()
                 }
 
-                FsmState::Connect(stream) => {
-                    current = self.on_connect(stream).await;
+                FsmState::Connect => {
+                    current = self.on_connect();
                     (&current).into()
                 }
 
-                FsmState::Active(stream) => {
-                    current = self.on_active(stream).await;
+                FsmState::Active(conn) => {
+                    current = self.on_active(conn);
                     (&current).into()
                 }
 
-                FsmState::OpenSent(stream) => {
-                    current = self.on_open_sent(stream).await;
+                FsmState::OpenSent(conn) => {
+                    current = self.on_open_sent(conn);
                     (&current).into()
                 }
 
-                FsmState::OpenConfirm(stream) => {
-                    current = self.on_open_confirm(stream).await;
+                FsmState::OpenConfirm(conn) => {
+                    current = self.on_open_confirm(conn);
                     (&current).into()
                 }
 
-                FsmState::Established(stream) => {
-                    current = self.on_established(stream).await;
+                FsmState::Established(conn) => {
+                    current = self.on_established(conn);
                     (&current).into()
                 }
             };
@@ -376,153 +409,79 @@ impl SessionRunner {
             if current_state != next_state {
                 self.event_tx
                     .send(FsmEvent::Transition(current_state, next_state))
-                    .await
                     .unwrap()
             }
         }
     }
 
-    async fn idle(&mut self) -> FsmState {
-        match self.event_rx.recv().await {
-            None => FsmState::Idle,
-            Some(FsmEvent::ManualStart) => self.on_start().await,
+    fn idle(&mut self) -> FsmState<Cnx> {
+        //TODO(unwrap)
+        match self.event_rx.recv().unwrap() {
+            FsmEvent::ManualStart => FsmState::Connect,
             x => {
-                warn!(self.log, "Event {:?} not allowed in idle, ignoring", x);
+                warn!(self.log, "Event {:?} not allowed in idle", x);
                 FsmState::Idle
             }
         }
     }
 
-    async fn on_start(&mut self) -> FsmState {
-        self.session.lock().await.connect_retry_counter = 0;
-
+    fn on_connect(&mut self) -> FsmState<Cnx> {
+        self.session.lock().unwrap().connect_retry_counter = 0;
+        let conn = Cnx::new(self.neighbor.host);
+        conn.connect(self.event_tx.clone(), self.clock.resolution);
         loop {
-            tokio::select! {
-                _ = self.connect_retry_timer.tick() => {
-                    let stream = TcpStream::connect(
-                        &self.neighbor.host).await.unwrap();
-                    return FsmState::Connect(stream)
+            //TODO(unwrap)
+            match self.event_rx.recv().unwrap() {
+                FsmEvent::ConnectRetryTimerExpires => {
+                    conn.connect(self.event_tx.clone(), self.clock.resolution);
                 }
-                result = self.event_rx.recv() => {
-                    match result.unwrap() {
-                        FsmEvent::Connected(stream) =>
-                            return FsmState::Active(stream),
-                        _ => continue,
-                    }
+                FsmEvent::TcpConnectionConfirmed => {
+                    self.clock.timers.connect_retry_timer.disable();
+                    self.send_open(&conn);
+                    return FsmState::OpenSent(conn);
+                }
+                x => {
+                    warn!(self.log, "Event {:?} not allowed in connect", x);
+                    continue;
                 }
             }
         }
     }
 
-    async fn recv_header(stream: &mut TcpStream) -> std::io::Result<Header> {
-        let mut buf = [0u8; 19];
-        let mut i = 0;
-        loop {
-            stream.readable().await?;
-            //stream.read_exact(&mut buf).await?;
-            let n = stream.try_read(&mut buf[i..])?;
-            i += n;
-            if i < 19 {
-                continue;
-            }
-            match Header::from_wire(&buf) {
-                Ok(h) => return Ok(h),
-                Err(_) => continue,
-            };
-        }
-    }
-
-    async fn recv_msg(
-        stream: &mut TcpStream,
-        event_tx: &Sender<FsmEvent>,
-    ) -> std::io::Result<Message> {
-        loop {
-            let hdr = Self::recv_header(stream).await?;
-            let mut msgbuf = vec![0u8; (hdr.length - 19) as usize];
-            stream.read_exact(&mut msgbuf).await.unwrap();
-
-            let msg: Message = match hdr.typ {
-                MessageType::Open => match OpenMessage::from_wire(&msgbuf) {
-                    Ok(m) => m.into(),
-                    Err(_) => continue,
-                },
-                MessageType::Update => {
-                    match UpdateMessage::from_wire(&msgbuf) {
-                        Ok(m) => m.into(),
-                        Err(_) => continue,
-                    }
-                }
-                MessageType::Notification => {
-                    match NotificationMessage::from_wire(&msgbuf) {
-                        Ok(m) => m.into(),
-                        Err(_) => continue,
-                    }
-                }
-                MessageType::KeepAlive => Message::KeepAlive,
-            };
-
-            event_tx.send(FsmEvent::Message(msg.clone())).await.unwrap();
-            return Ok(msg);
-        }
-    }
-
-    async fn on_connect(&mut self, mut stream: TcpStream) -> FsmState {
-        self.send_open(&mut stream).await;
-        FsmState::OpenSent(stream)
-    }
-
-    async fn on_active(&mut self, mut stream: TcpStream) -> FsmState {
-        let msg = Self::recv_msg(&mut stream, &self.event_tx).await;
+    fn on_active(&mut self, conn: Cnx) -> FsmState<Cnx> {
         let om =
-            match msg {
-                Ok(Message::Open(om)) => om,
-                Err(e) => {
-                    if e.kind() == std::io::ErrorKind::WouldBlock {
-                        return FsmState::Active(stream);
-                    } else {
-                        error!(self.log, "on active recv: {:#?}", e);
-                        return self.on_start().await;
-                    }
-                }
+            match self.event_rx.recv().unwrap() {
+                FsmEvent::Message(Message::Open(om)) => om,
                 other => {
                     warn!(self.log,
                     "active: expected open message, received {:#?}, ignoring",
                     other);
-                    return FsmState::Active(stream);
+                    return FsmState::Active(conn);
                 }
             };
         if !self.open_is_valid(om) {
-            return FsmState::Active(stream);
+            return FsmState::Active(conn);
         }
-        self.send_keepalive(&mut stream).await;
-        FsmState::OpenConfirm(stream)
+        self.send_keepalive(&conn);
+        FsmState::OpenConfirm(conn)
     }
 
-    async fn on_open_sent(&mut self, mut stream: TcpStream) -> FsmState {
-        let msg = Self::recv_msg(&mut stream, &self.event_tx).await;
-        let om = match msg {
-            Ok(Message::Open(om)) => om,
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::WouldBlock {
-                    return FsmState::OpenSent(stream);
-                } else {
-                    error!(self.log, "on open sent recv: {:#?}", e);
-                    return self.on_start().await;
-                }
-            }
+    fn on_open_sent(&mut self, conn: Cnx) -> FsmState<Cnx> {
+        let om = match self.event_rx.recv().unwrap() {
+            FsmEvent::Message(Message::Open(om)) => om,
             other => {
                 warn!(
                     self.log,
                     "open sent: expected open, received {:#?}, ignoring", other
                 );
-                return FsmState::Active(stream);
+                return FsmState::Active(conn);
             }
         };
         if !self.open_is_valid(om) {
-            return FsmState::Active(stream);
+            return FsmState::Active(conn);
         }
-        self.send_keepalive(&mut stream).await;
-        FsmState::OpenConfirm(stream)
+        self.send_keepalive(&conn);
+        FsmState::OpenConfirm(conn)
     }
 
     fn open_is_valid(&self, _om: OpenMessage) -> bool {
@@ -530,112 +489,89 @@ impl SessionRunner {
         true
     }
 
-    async fn send_keepalive(&self, stream: &mut TcpStream) {
-        let header = Header {
-            length: 19,
-            typ: MessageType::KeepAlive,
-        };
-        let header_buf = header.to_wire();
-        stream.write_all(&header_buf).await.unwrap();
+    fn send_keepalive(&self, conn: &Cnx) {
+        //TODO(unwrap)
+        conn.send(Message::KeepAlive).unwrap();
     }
 
-    async fn send_open(&self, stream: &mut TcpStream) {
+    fn send_open(&self, conn: &Cnx) {
         let msg = match self.asn {
             Asn::FourOctet(asn) => OpenMessage::new4(
                 asn,
-                self.hold_timer.period().as_secs() as u16,
+                self.clock.timers.hold_timer.interval.as_secs() as u16,
                 self.id,
             ),
             Asn::TwoOctet(asn) => OpenMessage::new2(
                 asn,
-                self.hold_timer.period().as_secs() as u16,
+                self.clock.timers.hold_timer.interval.as_secs() as u16,
                 self.id,
             ),
         };
-        let msg_buf = msg.to_wire().unwrap();
-        let header = Header {
-            length: msg_buf.len() as u16 + 19,
-            typ: MessageType::Open,
-        };
-        let mut header_buf = header.to_wire().to_vec();
-        header_buf.extend_from_slice(&msg_buf);
-        stream.writable().await.unwrap();
-        stream.write_all(&header_buf).await.unwrap();
+        // TODO(unwrap)
+        conn.send(msg.into()).unwrap();
     }
 
-    async fn on_open_confirm(&mut self, mut stream: TcpStream) -> FsmState {
-        let msg = Self::recv_msg(&mut stream, &self.event_tx).await;
-        match msg {
-            Ok(Message::KeepAlive) => {
-                self.keepalive_timer.reset();
-                self.hold_timer.reset();
-                FsmState::Established(stream)
+    fn on_open_confirm(&mut self, conn: Cnx) -> FsmState<Cnx> {
+        //TODO(unwrap)
+        match self.event_rx.recv().unwrap() {
+            FsmEvent::Message(Message::KeepAlive) => {
+                self.clock.timers.keepalive_timer.reset();
+                self.clock.timers.hold_timer.reset();
+                FsmState::Established(conn)
             }
-            Ok(Message::Notification(m)) => {
+            FsmEvent::Message(Message::Notification(m)) => {
                 warn!(self.log, "notification received: {:#?}", m);
-                self.session.lock().await.connect_retry_counter += 1;
-                self.on_start().await
-            }
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::WouldBlock {
-                    error!(self.log, "on open confirm: {:#?}", e);
-                }
-                FsmState::OpenConfirm(stream)
+                self.session.lock().unwrap().connect_retry_counter += 1;
+                FsmState::Connect
             }
             other => {
                 warn!(
                     self.log,
-                    "Message {:?} not expected in open confirm, ignoring",
-                    other
+                    "Event {:?} not expected in open confirm, ignoring", other
                 );
-                FsmState::OpenConfirm(stream)
+                FsmState::OpenConfirm(conn)
             }
         }
     }
 
-    async fn on_established(&mut self, mut stream: TcpStream) -> FsmState {
-        tokio::select! {
-            _ = self.keepalive_timer.tick() => {
-                self.send_keepalive(&mut stream).await;
-                FsmState::Established(stream)
+    fn on_established(&mut self, conn: Cnx) -> FsmState<Cnx> {
+        match self.event_rx.recv().unwrap() {
+            FsmEvent::KeepaliveTimerExpires => {
+                self.send_keepalive(&conn);
+                FsmState::Established(conn)
             }
-            _ = self.hold_timer.tick() => {
-                self.session.lock().await.connect_retry_counter += 1;
-                self.on_start().await
+            FsmEvent::HoldTimerExpires => {
+                self.session.lock().unwrap().connect_retry_counter += 1;
+                FsmState::Connect
             }
-            msg = Self::recv_msg(&mut stream, &self.event_tx) => {
-                match msg {
-                    Ok(Message::Open(m)) => {
-                        warn!(self.log,
-                            "established: expected open message, \
-                            received {:#?}, ignoring",
-                            m);
-                        FsmState::Established(stream)
-                    }
-                    Ok(Message::Update(m)) => {
-                        self.hold_timer.reset();
-                        info!(self.log, "update received: {:#?}", m);
+            FsmEvent::Message(Message::Open(m)) => {
+                warn!(
+                    self.log,
+                    "established: expected open message, \
+                    received {:#?}, ignoring",
+                    m
+                );
+                FsmState::Established(conn)
+            }
+            FsmEvent::Message(Message::Update(m)) => {
+                self.clock.timers.hold_timer.reset();
+                info!(self.log, "update received: {:#?}", m);
 
-                        //TODO apply update
+                //TODO apply update
 
-                        FsmState::Established(stream)
-                    }
-                    Ok(Message::Notification(m)) => {
-                        warn!(self.log, "notification received: {:#?}", m);
-                        self.session.lock().await.connect_retry_counter += 1;
-                        self.on_start().await
-                    }
-                    Ok(Message::KeepAlive) => {
-                        self.hold_timer.reset();
-                        FsmState::Established(stream)
-                    }
-                    Err(e) => {
-                        if e.kind() != std::io::ErrorKind::WouldBlock {
-                            error!(self.log, "recv msg {:#?}", e);
-                        }
-                        FsmState::Established(stream)
-                    }
-                }
+                FsmState::Established(conn)
+            }
+            FsmEvent::Message(Message::Notification(m)) => {
+                warn!(self.log, "notification received: {:#?}", m);
+                self.session.lock().unwrap().connect_retry_counter += 1;
+                FsmState::Connect
+            }
+            FsmEvent::Message(Message::KeepAlive) => {
+                self.clock.timers.hold_timer.reset();
+                FsmState::Established(conn)
+            }
+            _ => {
+                todo!()
             }
         }
     }

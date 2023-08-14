@@ -23,6 +23,9 @@ pub enum Error {
     #[error("bad length")]
     BadLength { expected: u8, found: u8 },
 
+    #[error("io {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("unexpected end of input")]
     Eom,
 

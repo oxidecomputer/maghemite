@@ -1,30 +1,31 @@
+use crate::connection::{BgpConnection, BgpListener};
 use crate::session::FsmEvent;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use tokio::net::TcpListener;
-use tokio::sync::mpsc::Sender;
-use tokio::sync::Mutex;
+use std::sync::mpsc::Sender;
+use std::sync::Mutex;
 
-pub struct Dispatcher {
+pub struct Router<Cnx: BgpConnection> {
     pub listen: String,
-    pub addr_to_session: Mutex<BTreeMap<IpAddr, Sender<FsmEvent>>>,
+    pub addr_to_session: Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>,
 }
 
-impl Dispatcher {
-    pub fn new(listen: String) -> Dispatcher {
-        Dispatcher {
+impl<Cnx: BgpConnection> Router<Cnx> {
+    pub fn new(listen: String) -> Router<Cnx> {
+        Self {
             listen,
             addr_to_session: Mutex::new(BTreeMap::new()),
         }
     }
 
-    pub async fn run(&self) {
+    pub fn run<Listener: BgpListener<Cnx>>(&self) {
         loop {
-            let listener = TcpListener::bind(&self.listen).await.unwrap();
-            let (stream, addr) = listener.accept().await.unwrap();
-            match self.addr_to_session.lock().await.get(&addr.ip()) {
+            let listener = Listener::bind(&self.listen).unwrap();
+            let conn = listener.accept().unwrap();
+            let addr = conn.peer().ip();
+            match self.addr_to_session.lock().unwrap().get(&addr) {
                 Some(tx) => {
-                    tx.send(FsmEvent::Connected(stream)).await.unwrap();
+                    tx.send(FsmEvent::Connected(conn)).unwrap();
                 }
                 None => continue,
             }

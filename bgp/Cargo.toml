@@ -8,8 +8,8 @@ nom.workspace = true
 num_enum.workspace = true
 slog.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
 
 [dev-dependencies]
 pretty-hex.workspace = true
 pretty_assertions.workspace = true
+lazy_static.workspace = true

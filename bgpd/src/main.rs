@@ -1,6 +1,7 @@
 use crate::admin::api_description;
 use crate::admin::RouterConfig;
-use bgp::router::Dispatcher;
+use bgp::connection::BgpConnectionTcp;
+use bgp::router::Router;
 use bgp::session::Asn;
 use clap::{Args, Parser, Subcommand};
 use slog::{Drain, Logger};
@@ -55,12 +56,7 @@ async fn apigen() {
 }
 
 async fn run(run: Run) {
-    let disp = Arc::new(Dispatcher::new(run.listen));
-    let d = disp.clone();
-    tokio::spawn(async move {
-        d.run().await;
-    });
-
+    let router = Router::<BgpConnectionTcp>::new(run.listen);
     let j = admin::start_server(
         init_logger(),
         Ipv6Addr::UNSPECIFIED,
@@ -69,7 +65,7 @@ async fn run(run: Run) {
             asn: Asn::FourOctet(run.asn),
             id: run.id,
         },
-        disp,
+        Arc::new(router),
     );
 
     j.unwrap().await.unwrap();
