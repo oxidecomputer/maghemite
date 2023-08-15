@@ -16,6 +16,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
 }
 
 pub struct BgpListenerTcp {
+    addr: SocketAddr,
     listener: TcpListener,
 }
 
@@ -24,19 +25,21 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     where
         Self: Sized,
     {
+        let addr = addr.to_socket_addrs().unwrap().next().unwrap();
         Ok(Self {
             listener: TcpListener::bind(addr)?,
+            addr,
         })
     }
 
     fn accept(&self) -> Result<BgpConnectionTcp, Error> {
         let (conn, sa) = self.listener.accept()?;
-        Ok(BgpConnectionTcp::with_conn(conn, sa))
+        Ok(BgpConnectionTcp::with_conn(self.addr, sa, conn))
     }
 }
 
 pub trait BgpConnection: Send {
-    fn new(peer: SocketAddr) -> Self
+    fn new(source: Option<SocketAddr>, peer: SocketAddr) -> Self
     where
         Self: Sized;
 
@@ -49,20 +52,16 @@ pub trait BgpConnection: Send {
 }
 
 pub struct BgpConnectionTcp {
+    #[allow(dead_code)]
+    source: Option<SocketAddr>,
     peer: SocketAddr,
     conn: Arc<Mutex<Option<TcpStream>>>,
 }
 
 impl BgpConnection for BgpConnectionTcp {
-    fn new(peer: SocketAddr) -> Self {
+    fn new(source: Option<SocketAddr>, peer: SocketAddr) -> Self {
         let conn = Arc::new(Mutex::new(None));
-        /*XXX
-        Self::accept(
-            peer,
-            conn.clone(),
-        );
-        */
-        Self { peer, conn }
+        Self { source, peer, conn }
     }
 
     fn connect(&self, event_tx: Sender<FsmEvent<Self>>, timeout: Duration) {
@@ -91,8 +90,13 @@ impl BgpConnection for BgpConnectionTcp {
 }
 
 impl BgpConnectionTcp {
-    fn with_conn(conn: TcpStream, peer: SocketAddr) -> Self {
+    fn with_conn(
+        source: SocketAddr,
+        peer: SocketAddr,
+        conn: TcpStream,
+    ) -> Self {
         Self {
+            source: Some(source),
             peer,
             conn: Arc::new(Mutex::new(Some(conn))),
         }
@@ -146,7 +150,7 @@ impl ConnectionTcp {
 */
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
     use crate::messages::Message;
     use std::collections::HashMap;
@@ -156,35 +160,57 @@ mod test {
         static ref NET: Network = Network::new();
     }
 
-    struct Network {
-        endpoints: Mutex<HashMap<SocketAddr, Sender<Message>>>,
-        rx_in: Mutex<Receiver<Message>>,
-        tx_in: Mutex<Sender<Message>>,
+    pub struct Network {
+        #[allow(clippy::type_complexity)]
+        endpoints: Mutex<HashMap<
+            SocketAddr,
+            Sender<(SocketAddr, Endpoint<Message>)>
+        >>,
+    }
+
+    struct Listener {
+        rx: Receiver<(SocketAddr, Endpoint<Message>)>,
+    }
+
+    impl Listener {
+        fn accept(&self)
+        -> Result<(SocketAddr, Endpoint<Message>), std::sync::mpsc::RecvError> {
+            self.rx.recv()
+        }
     }
 
     impl Network {
         fn new() -> Self {
-            let (tx, rx) = std::sync::mpsc::channel();
-            Self{
-                endpoints: Mutex::new(HashMap::new()),
-                rx_in: Mutex::new(rx),
-                tx_in: Mutex::new(tx),
-            }
+            Self{endpoints: Mutex::new(HashMap::new())}
         }
 
-        fn bind(&self, sa: SocketAddr) -> Endpoint<Message> {
+        fn bind(&self, sa: SocketAddr) -> Listener {
             let (tx, rx) = std::sync::mpsc::channel();
-            let remote = Endpoint{
-                rx,
-                tx: self.tx_in.lock().unwrap().clone(),
-            };
             self.endpoints.lock().unwrap().insert(sa, tx);
-            remote
+            Listener{rx}
+        }
+
+        fn connect(
+            &self,
+            from: SocketAddr,
+            to: SocketAddr,
+            ep: Endpoint<Message>,
+        ) -> Result<(), Error> {
+
+            match self.endpoints.lock().unwrap().get(&from) {
+                None => return Err(Error::ChannelConnect),
+                Some(sender) => {
+                    sender.send((to, ep))
+                        .map_err(|e| Error::ChannelSend(e.to_string()))?;
+                }
+            };
+
+            Ok(())
         }
     }
 
-    struct BgpListenerChannel {
-        endpoint: Mutex<Option<Endpoint<Message>>>,
+    pub struct BgpListenerChannel {
+        listener: Listener,
         addr: SocketAddr,
     }
 
@@ -194,28 +220,30 @@ mod test {
             Self: Sized,
         {
             let addr = addr.to_socket_addrs().unwrap().next().unwrap();
-            Ok(Self{
-                addr,
-                endpoint: Mutex::new(Some(NET.bind(addr)))
-            })
+            let listener = NET.bind(addr);
+            Ok(Self{listener, addr})
         }
 
         fn accept(&self) -> Result<BgpConnectionChannel, Error> {
+            let (peer, endpoint) = self.listener.accept()?;
             Ok(BgpConnectionChannel::with_conn(
-                    self.endpoint.lock().unwrap().take().unwrap(),
+                    peer,
                     self.addr,
+                    endpoint,
             ))
         }
     }
 
-    struct BgpConnectionChannel {
+    pub struct BgpConnectionChannel {
+        addr: SocketAddr,
         peer: SocketAddr,
         conn: Arc<Mutex<Option<Endpoint<Message>>>>,
     }
 
     impl BgpConnection for BgpConnectionChannel {
-        fn new(peer: SocketAddr) -> Self {
+        fn new(addr: Option<SocketAddr>, peer: SocketAddr) -> Self {
             Self {
+                addr: addr.unwrap(),
                 peer,
                 conn: Arc::new(Mutex::new(None)),
             }
@@ -223,9 +251,24 @@ mod test {
 
         fn connect(
             &self,
-            _event_tx: Sender<FsmEvent<Self>>,
+            event_tx: Sender<FsmEvent<Self>>,
             _timeout: Duration,
         ) {
+            let (local, remote) = channel();
+            match NET.connect(
+                self.addr,
+                self.peer,
+                remote,
+            ) {
+                Ok(_) => {
+                    self.conn.lock().unwrap().replace(local);
+                    event_tx.send(FsmEvent::TcpConnectionConfirmed).unwrap();
+                }
+                Err(_e) => {
+                    //TODO log
+                }
+            }
+
             todo!();
         }
 
@@ -239,8 +282,13 @@ mod test {
     }
 
     impl BgpConnectionChannel {
-        fn with_conn(conn: Endpoint<Message>, peer: SocketAddr) -> Self {
+        fn with_conn(
+            addr: SocketAddr,
+            peer: SocketAddr,
+            conn: Endpoint<Message>, 
+        ) -> Self {
             Self {
+                addr,
                 peer,
                 conn: Arc::new(Mutex::new(Some(conn))),
             }

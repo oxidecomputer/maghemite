@@ -26,6 +26,12 @@ pub enum Error {
     #[error("io {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("channel recv {0}")]
+    ChannelRecv(#[from] std::sync::mpsc::RecvError),
+
+    #[error("channel send {0}")]
+    ChannelSend(String),
+
     #[error("unexpected end of input")]
     Eom,
 
@@ -70,6 +76,9 @@ pub enum Error {
 
     #[error("message parse error")]
     Parse(nom::Err<(Vec<u8>, nom::error::ErrorKind)>),
+
+    #[error("Channel connect error")]
+    ChannelConnect,
 }
 
 impl<'a> From<nom::Err<(&'a [u8], nom::error::ErrorKind)>> for Error {

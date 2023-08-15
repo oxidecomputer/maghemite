@@ -427,7 +427,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     fn on_connect(&mut self) -> FsmState<Cnx> {
         self.session.lock().unwrap().connect_retry_counter = 0;
-        let conn = Cnx::new(self.neighbor.host);
+        //TODO plumb source address option?
+        let conn = Cnx::new(None, self.neighbor.host);
         conn.connect(self.event_tx.clone(), self.clock.resolution);
         loop {
             //TODO(unwrap)
