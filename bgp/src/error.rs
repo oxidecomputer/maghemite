@@ -79,6 +79,9 @@ pub enum Error {
 
     #[error("Channel connect error")]
     ChannelConnect,
+
+    #[error("Attempt to send a message when not connected")]
+    NotConnected,
 }
 
 impl<'a> From<nom::Err<(&'a [u8], nom::error::ErrorKind)>> for Error {

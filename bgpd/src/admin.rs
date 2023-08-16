@@ -1,9 +1,8 @@
+use bgp::config::RouterConfig;
 use bgp::connection::BgpConnectionTcp;
-use bgp::messages::Message;
 use bgp::router::Router;
-use bgp::session::{Asn, FsmEvent, NeighborInfo, Session, SessionRunner};
+use bgp::session::{FsmEvent, NeighborInfo, Session, SessionRunner};
 use bgp::state::BgpState;
-use colored::*;
 use dropshot::{
     endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
     ConfigLoggingLevel, HttpError, HttpResponseUpdatedNoContent,
@@ -11,7 +10,7 @@ use dropshot::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use slog::{debug, error, info, warn, Logger};
+use slog::{error, info, warn, Logger};
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -26,6 +25,7 @@ pub struct HandlerContext {
     log: Logger,
 }
 
+//TODO use bgp::config::PeerConfig instead
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct AddNeighborRequest {
     pub name: String,
@@ -56,21 +56,11 @@ async fn add_neighbor(
 }
 
 fn run_session(rq: AddNeighborRequest, ctx: &HandlerContext, log: Logger) {
-    let session = Session::new(
-        /*
-        Duration::from_secs(rq.hold_time),
-        Duration::from_secs(rq.delay_open),
-        */
-    );
+    let session = Session::new();
 
-    let (to_session_tx, to_session_rx) = channel();
-    let (from_session_tx, from_session_rx) = channel();
+    let (event_tx, event_rx) = channel();
 
-    ctx.router
-        .addr_to_session
-        .lock()
-        .unwrap()
-        .insert(rq.host.ip(), to_session_tx.clone());
+    ctx.router.add_session(rq.host.ip(), event_tx.clone());
 
     let bgp_state = Arc::new(Mutex::new(BgpState::default()));
 
@@ -86,72 +76,24 @@ fn run_session(rq: AddNeighborRequest, ctx: &HandlerContext, log: Logger) {
         Duration::from_secs(rq.idle_hold_time),
         Duration::from_secs(rq.delay_open),
         session,
-        to_session_rx,
-        from_session_tx,
+        event_rx,
+        event_tx.clone(),
         bgp_state,
         neighbor.clone(),
         ctx.config.asn,
         ctx.config.id,
         Duration::from_millis(rq.resolution),
+        None,
         log.clone(),
     );
-
-    let lg = log.clone();
-    let j = spawn(move || {
-        let rx = from_session_rx;
-        loop {
-            match rx.recv().unwrap() {
-                FsmEvent::Transition(from, to) => {
-                    info!(
-                        lg,
-                        "{} {} {} {} {}",
-                        format!("[{}]", neighbor.name).dimmed(),
-                        "transition".blue(),
-                        from,
-                        "->".dimmed(),
-                        to,
-                    );
-                }
-
-                FsmEvent::Message(m) => {
-                    if m == Message::KeepAlive {
-                        debug!(
-                            lg,
-                            "{} {} {:#?}",
-                            format!("[{}]", neighbor.name).dimmed(),
-                            "message".blue(),
-                            m,
-                        );
-                    } else {
-                        info!(
-                            lg,
-                            "{} {} {:#?}",
-                            format!("[{}]", neighbor.name).dimmed(),
-                            "message".blue(),
-                            m,
-                        );
-                    }
-                }
-
-                eve => {
-                    info!(lg, "event: {:#?}", eve);
-                }
-            };
-        }
-    });
 
     spawn(move || {
         runner.start();
     });
 
-    to_session_tx.send(FsmEvent::ManualStart).unwrap();
+    event_tx.send(FsmEvent::ManualStart).unwrap();
 
-    j.join().unwrap();
-}
-
-pub struct RouterConfig {
-    pub asn: Asn,
-    pub id: u32,
+    std::thread::park();
 }
 
 pub fn start_server(

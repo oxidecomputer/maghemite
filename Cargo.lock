@@ -205,7 +205,11 @@ dependencies = [
  "num_enum",
  "pretty-hex 0.3.0",
  "pretty_assertions",
+ "schemars",
+ "serde",
  "slog",
+ "slog-async",
+ "slog-bunyan",
  "thiserror",
 ]
 

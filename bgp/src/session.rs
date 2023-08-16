@@ -2,7 +2,7 @@ use crate::clock::Clock;
 use crate::connection::BgpConnection;
 use crate::messages::{Message, OpenMessage};
 use crate::state::BgpState;
-use slog::{info, warn, Logger};
+use slog::{debug, info, warn, Logger};
 use std::fmt::{self, Display, Formatter};
 use std::net::SocketAddr;
 use std::sync::mpsc::{Receiver, Sender};
@@ -26,7 +26,7 @@ pub enum FsmState<Cnx: BgpConnection> {
     /// - ConnectRetryTimerExpire -> Connect
     /// - DelayOpenTimerExpire -> OpenSent
     /// - TcpConnectionConfirmed -> OpenSent (unless delay_open = true)
-    /// - BgpOpen -> OpenConfigm (only during delay_open interval)
+    /// - BgpOpen -> OpenConfirm (only during delay_open interval)
     Connect,
 
     /// Trying to acquire peer by listening for and accepting a TCP connection.
@@ -329,6 +329,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     log: Logger,
 
     clock: Clock,
+    bind_addr: Option<SocketAddr>,
 }
 
 impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
@@ -347,6 +348,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         asn: Asn,
         id: u32,
         resolution: Duration,
+        bind_addr: Option<SocketAddr>,
         log: Logger,
     ) -> SessionRunner<Cnx> {
         SessionRunner {
@@ -366,11 +368,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 delay_open_time,
                 event_tx.clone(),
             ),
+            bind_addr,
             log,
         }
     }
 
     pub fn start(&mut self) {
+        info!(self.log, "starting peer state machine");
         let mut current = FsmState::<Cnx>::Idle;
         loop {
             let current_state: FsmStateKind = (&current).into();
@@ -407,9 +411,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             };
 
             if current_state != next_state {
-                self.event_tx
-                    .send(FsmEvent::Transition(current_state, next_state))
-                    .unwrap()
+                info!(
+                    self.log,
+                    "[{}/{}] {} -> {}",
+                    self.id,
+                    self.neighbor.name,
+                    current_state,
+                    next_state,
+                );
             }
         }
     }
@@ -427,14 +436,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     fn on_connect(&mut self) -> FsmState<Cnx> {
         self.session.lock().unwrap().connect_retry_counter = 0;
-        //TODO plumb source address option?
-        let conn = Cnx::new(None, self.neighbor.host);
+        let conn =
+            Cnx::new(self.bind_addr, self.neighbor.host, self.log.clone());
         conn.connect(self.event_tx.clone(), self.clock.resolution);
+        self.clock.timers.connect_retry_timer.enable();
         loop {
             //TODO(unwrap)
             match self.event_rx.recv().unwrap() {
                 FsmEvent::ConnectRetryTimerExpires => {
                     conn.connect(self.event_tx.clone(), self.clock.resolution);
+                }
+                FsmEvent::Connected(accepted) => {
+                    self.clock.timers.connect_retry_timer.disable();
+                    self.send_open(&accepted);
+                    return FsmState::OpenSent(accepted);
                 }
                 FsmEvent::TcpConnectionConfirmed => {
                     self.clock.timers.connect_retry_timer.disable();
@@ -491,6 +506,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn send_keepalive(&self, conn: &Cnx) {
+        debug!(self.log, "sending keepalive");
         //TODO(unwrap)
         conn.send(Message::KeepAlive).unwrap();
     }
@@ -516,13 +532,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         //TODO(unwrap)
         match self.event_rx.recv().unwrap() {
             FsmEvent::Message(Message::KeepAlive) => {
-                self.clock.timers.keepalive_timer.reset();
                 self.clock.timers.hold_timer.reset();
+                self.clock.timers.hold_timer.enable();
+                self.clock.timers.keepalive_timer.reset();
+                self.clock.timers.keepalive_timer.enable();
                 FsmState::Established(conn)
             }
             FsmEvent::Message(Message::Notification(m)) => {
                 warn!(self.log, "notification received: {:#?}", m);
                 self.session.lock().unwrap().connect_retry_counter += 1;
+                self.clock.timers.hold_timer.disable();
+                self.clock.timers.keepalive_timer.disable();
                 FsmState::Connect
             }
             other => {
@@ -542,7 +562,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmState::Established(conn)
             }
             FsmEvent::HoldTimerExpires => {
+                warn!(self.log, "hold timer expired");
                 self.session.lock().unwrap().connect_retry_counter += 1;
+                self.clock.timers.hold_timer.disable();
+                self.clock.timers.keepalive_timer.disable();
                 FsmState::Connect
             }
             FsmEvent::Message(Message::Open(m)) => {
@@ -568,6 +591,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmState::Connect
             }
             FsmEvent::Message(Message::KeepAlive) => {
+                debug!(self.log, "keepalive received");
                 self.clock.timers.hold_timer.reset();
                 FsmState::Established(conn)
             }

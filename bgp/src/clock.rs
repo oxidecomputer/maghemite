@@ -119,7 +119,7 @@ impl Timer {
     pub fn new(interval: Duration) -> Self {
         Self {
             interval,
-            value: Arc::new(Mutex::new((true, interval))),
+            value: Arc::new(Mutex::new((false, interval))),
         }
     }
 
@@ -143,7 +143,8 @@ impl Timer {
     }
 
     pub fn expired(&self) -> bool {
-        self.value.lock().unwrap().1.is_zero()
+        let v = self.value.lock().unwrap();
+        v.0 && v.1.is_zero()
     }
 
     pub fn reset(&self) {

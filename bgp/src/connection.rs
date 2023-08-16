@@ -1,6 +1,8 @@
 use crate::error::Error;
-use crate::messages::Message;
+use crate::messages::{Header, Message, MessageType};
 use crate::session::FsmEvent;
+use slog::{error, Logger};
+use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -12,7 +14,11 @@ pub trait BgpListener<Cnx: BgpConnection> {
     where
         Self: Sized;
 
-    fn accept(&self) -> Result<Cnx, Error>;
+    fn accept(
+        &self,
+        log: Logger,
+        event_tx: Sender<FsmEvent<Cnx>>,
+    ) -> Result<Cnx, Error>;
 }
 
 pub struct BgpListenerTcp {
@@ -32,14 +38,18 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         })
     }
 
-    fn accept(&self) -> Result<BgpConnectionTcp, Error> {
+    fn accept(
+        &self,
+        log: Logger,
+        _event_tx: Sender<FsmEvent<BgpConnectionTcp>>, //TODO plumb
+    ) -> Result<BgpConnectionTcp, Error> {
         let (conn, sa) = self.listener.accept()?;
-        Ok(BgpConnectionTcp::with_conn(self.addr, sa, conn))
+        Ok(BgpConnectionTcp::with_conn(self.addr, sa, conn, log))
     }
 }
 
 pub trait BgpConnection: Send {
-    fn new(source: Option<SocketAddr>, peer: SocketAddr) -> Self
+    fn new(source: Option<SocketAddr>, peer: SocketAddr, log: Logger) -> Self
     where
         Self: Sized;
 
@@ -56,32 +66,56 @@ pub struct BgpConnectionTcp {
     source: Option<SocketAddr>,
     peer: SocketAddr,
     conn: Arc<Mutex<Option<TcpStream>>>,
+    log: Logger,
 }
 
 impl BgpConnection for BgpConnectionTcp {
-    fn new(source: Option<SocketAddr>, peer: SocketAddr) -> Self {
+    fn new(source: Option<SocketAddr>, peer: SocketAddr, log: Logger) -> Self {
         let conn = Arc::new(Mutex::new(None));
-        Self { source, peer, conn }
+        Self {
+            source,
+            peer,
+            conn,
+            log,
+        }
     }
 
+    //TODO: this is dumb - should just to synchronously since we have a timeout
+    //anyway.
     fn connect(&self, event_tx: Sender<FsmEvent<Self>>, timeout: Duration) {
         let peer = self.peer;
         let conn = self.conn.clone();
-        spawn(move || {
-            match TcpStream::connect_timeout(&peer, timeout) {
-                Ok(new_conn) => {
-                    conn.lock().unwrap().replace(new_conn);
-                    event_tx.send(FsmEvent::TcpConnectionConfirmed).unwrap();
-                }
-                Err(_e) => {
-                    //TODO log
-                }
+        let log = self.log.clone();
+        spawn(move || match TcpStream::connect_timeout(&peer, timeout) {
+            Ok(new_conn) => {
+                conn.lock().unwrap().replace(new_conn);
+                Self::recv(event_tx.clone(), timeout, log.clone());
+                event_tx.send(FsmEvent::TcpConnectionConfirmed).unwrap();
+            }
+            Err(e) => {
+                error!(log, "connect error: {e}");
             }
         });
     }
 
-    fn send(&self, _msg: Message) -> Result<(), Error> {
-        todo!();
+    fn send(&self, msg: Message) -> Result<(), Error> {
+        let msg_buf = msg.to_wire()?;
+        let header = Header {
+            length: msg_buf.len() as u16 + 19,
+            typ: MessageType::from(&msg),
+        };
+        let mut buf = header.to_wire().to_vec();
+        buf.extend_from_slice(&msg_buf);
+        let mut guard = self.conn.lock().unwrap();
+        match *guard {
+            Some(ref mut ch) => {
+                ch.write_all(&buf)?;
+            }
+            None => {
+                return Err(Error::NotConnected);
+            }
+        }
+        Ok(())
     }
 
     fn peer(&self) -> SocketAddr {
@@ -94,65 +128,30 @@ impl BgpConnectionTcp {
         source: SocketAddr,
         peer: SocketAddr,
         conn: TcpStream,
+        log: Logger,
     ) -> Self {
         Self {
             source: Some(source),
             peer,
             conn: Arc::new(Mutex::new(Some(conn))),
+            log,
         }
     }
-}
 
-/*
-struct DropSleep(Duration);
-
-impl Drop for DropSleep {
-    fn drop(&mut self) {
-        sleep(self.0);
-    }
-}
-
-impl ConnectionTcp {
-    fn accept(
-        resolution: Duration,
-        shutdown: Arc<AtomicBool>,
-        peer: SocketAddr,
-        conn: Arc<Mutex<Option<TcpStream>>>,
-        event_tx: Sender<FsmEvent>,
+    fn recv(
+        _event_tx: Sender<FsmEvent<Self>>,
+        _timeout: Duration,
+        _log: Logger,
     ) {
-        spawn(move || loop {
-            if shutdown.load(Ordering::Acquire) {
-                break;
-            }
-            let _d = DropSleep(resolution);
-            let listener = match TcpListener::bind(peer) {
-                Ok(l) => l,
-                Err(_e) => {
-                    //TODO log
-                    continue;
-                }
-            };
-            match listener.accept() {
-                Ok((new_conn, _peer)) => {
-                    //TODO check that the peer is expected one
-                    conn.lock().unwrap().replace(new_conn);
-                    event_tx.send(FsmEvent::TcpConnectionConfirmed).unwrap();
-                    break;
-                }
-                Err(_e) => {
-                    //TODO log
-                    continue;
-                }
-            };
-        });
+        todo!();
     }
 }
-*/
 
 #[cfg(test)]
 pub mod test {
     use super::*;
     use crate::messages::Message;
+    use slog::debug;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -162,10 +161,8 @@ pub mod test {
 
     pub struct Network {
         #[allow(clippy::type_complexity)]
-        endpoints: Mutex<HashMap<
-            SocketAddr,
-            Sender<(SocketAddr, Endpoint<Message>)>
-        >>,
+        endpoints:
+            Mutex<HashMap<SocketAddr, Sender<(SocketAddr, Endpoint<Message>)>>>,
     }
 
     struct Listener {
@@ -173,21 +170,25 @@ pub mod test {
     }
 
     impl Listener {
-        fn accept(&self)
-        -> Result<(SocketAddr, Endpoint<Message>), std::sync::mpsc::RecvError> {
+        fn accept(
+            &self,
+        ) -> Result<(SocketAddr, Endpoint<Message>), std::sync::mpsc::RecvError>
+        {
             self.rx.recv()
         }
     }
 
     impl Network {
         fn new() -> Self {
-            Self{endpoints: Mutex::new(HashMap::new())}
+            Self {
+                endpoints: Mutex::new(HashMap::new()),
+            }
         }
 
         fn bind(&self, sa: SocketAddr) -> Listener {
             let (tx, rx) = std::sync::mpsc::channel();
             self.endpoints.lock().unwrap().insert(sa, tx);
-            Listener{rx}
+            Listener { rx }
         }
 
         fn connect(
@@ -196,11 +197,11 @@ pub mod test {
             to: SocketAddr,
             ep: Endpoint<Message>,
         ) -> Result<(), Error> {
-
             match self.endpoints.lock().unwrap().get(&from) {
                 None => return Err(Error::ChannelConnect),
                 Some(sender) => {
-                    sender.send((to, ep))
+                    sender
+                        .send((to, ep))
                         .map_err(|e| Error::ChannelSend(e.to_string()))?;
                 }
             };
@@ -221,15 +222,17 @@ pub mod test {
         {
             let addr = addr.to_socket_addrs().unwrap().next().unwrap();
             let listener = NET.bind(addr);
-            Ok(Self{listener, addr})
+            Ok(Self { listener, addr })
         }
 
-        fn accept(&self) -> Result<BgpConnectionChannel, Error> {
+        fn accept(
+            &self,
+            log: Logger,
+            event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
+        ) -> Result<BgpConnectionChannel, Error> {
             let (peer, endpoint) = self.listener.accept()?;
             Ok(BgpConnectionChannel::with_conn(
-                    peer,
-                    self.addr,
-                    endpoint,
+                peer, self.addr, endpoint, event_tx, log,
             ))
         }
     }
@@ -237,47 +240,61 @@ pub mod test {
     pub struct BgpConnectionChannel {
         addr: SocketAddr,
         peer: SocketAddr,
-        conn: Arc<Mutex<Option<Endpoint<Message>>>>,
+        //XXX conn: Arc<Mutex<Option<Endpoint<Message>>>>,
+        conn_tx: Arc<Mutex<Option<Sender<Message>>>>,
+        log: Logger,
     }
 
     impl BgpConnection for BgpConnectionChannel {
-        fn new(addr: Option<SocketAddr>, peer: SocketAddr) -> Self {
+        fn new(
+            addr: Option<SocketAddr>,
+            peer: SocketAddr,
+            log: Logger,
+        ) -> Self {
             Self {
                 addr: addr.unwrap(),
                 peer,
-                conn: Arc::new(Mutex::new(None)),
+                conn_tx: Arc::new(Mutex::new(None)),
+                log,
             }
         }
 
-        fn connect(
-            &self,
-            event_tx: Sender<FsmEvent<Self>>,
-            _timeout: Duration,
-        ) {
+        fn connect(&self, event_tx: Sender<FsmEvent<Self>>, timeout: Duration) {
+            debug!(self.log, "connecting");
             let (local, remote) = channel();
-            match NET.connect(
-                self.addr,
-                self.peer,
-                remote,
-            ) {
-                Ok(_) => {
-                    self.conn.lock().unwrap().replace(local);
+            match NET.connect(self.addr, self.peer, remote) {
+                Ok(()) => {
+                    self.conn_tx.lock().unwrap().replace(local.tx);
+                    Self::recv(
+                        local.rx,
+                        event_tx.clone(),
+                        timeout,
+                        self.log.clone(),
+                    );
                     event_tx.send(FsmEvent::TcpConnectionConfirmed).unwrap();
                 }
-                Err(_e) => {
-                    //TODO log
+                Err(e) => {
+                    error!(self.log, "connect: {e}");
                 }
             }
-
-            todo!();
         }
 
-        fn send(&self, _msg: Message) -> Result<(), Error> {
-            todo!();
+        fn send(&self, msg: Message) -> Result<(), Error> {
+            let guard = self.conn_tx.lock().unwrap();
+            match *guard {
+                Some(ref ch) => {
+                    ch.send(msg)
+                        .map_err(|e| Error::ChannelSend(e.to_string()))?;
+                }
+                None => {
+                    return Err(Error::NotConnected);
+                }
+            }
+            Ok(())
         }
 
         fn peer(&self) -> SocketAddr {
-            todo!();
+            self.peer
         }
     }
 
@@ -285,13 +302,43 @@ pub mod test {
         fn with_conn(
             addr: SocketAddr,
             peer: SocketAddr,
-            conn: Endpoint<Message>, 
+            conn: Endpoint<Message>,
+            event_tx: Sender<FsmEvent<Self>>,
+            log: Logger,
         ) -> Self {
+            //TODO timeout as param
+            Self::recv(
+                conn.rx,
+                event_tx,
+                Duration::from_millis(100),
+                log.clone(),
+            );
             Self {
                 addr,
                 peer,
-                conn: Arc::new(Mutex::new(Some(conn))),
+                conn_tx: Arc::new(Mutex::new(Some(conn.tx))),
+                log,
             }
+        }
+
+        fn recv(
+            rx: Receiver<Message>,
+            event_tx: Sender<FsmEvent<Self>>,
+            _timeout: Duration, //TODO shutdown detection
+            log: Logger,
+        ) {
+            spawn(move || loop {
+                match rx.recv() {
+                    Ok(msg) => {
+                        debug!(log, "recv: {msg:#?}");
+                        event_tx.send(FsmEvent::Message(msg)).unwrap();
+                    }
+                    Err(_e) => {
+                        //TODO this goes a bit nuts .... sort out why
+                        //error!(log, "recv: {e}");
+                    }
+                }
+            });
         }
     }
 
@@ -318,5 +365,4 @@ pub mod test {
         let (tx_b, rx_a) = mpsc::channel();
         (Endpoint::new(rx_a, tx_a), Endpoint::new(rx_b, tx_b))
     }
-
 }

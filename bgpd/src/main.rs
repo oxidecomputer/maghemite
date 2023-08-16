@@ -1,10 +1,10 @@
 use crate::admin::api_description;
-use crate::admin::RouterConfig;
+use bgp::config::RouterConfig;
 use bgp::connection::BgpConnectionTcp;
+use bgp::log::init_logger;
 use bgp::router::Router;
 use bgp::session::Asn;
 use clap::{Args, Parser, Subcommand};
-use slog::{Drain, Logger};
 use std::fs::File;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
@@ -56,28 +56,19 @@ async fn apigen() {
 }
 
 async fn run(run: Run) {
-    let router = Router::<BgpConnectionTcp>::new(run.listen);
+    let cfg = RouterConfig {
+        asn: Asn::FourOctet(run.asn),
+        id: run.id,
+    };
+    let log = init_logger();
+    let router = Router::<BgpConnectionTcp>::new(run.listen, cfg, log.clone());
     let j = admin::start_server(
-        init_logger(),
+        log,
         Ipv6Addr::UNSPECIFIED,
         8000,
-        RouterConfig {
-            asn: Asn::FourOctet(run.asn),
-            id: run.id,
-        },
+        cfg,
         Arc::new(router),
     );
 
     j.unwrap().await.unwrap();
-}
-
-fn init_logger() -> Logger {
-    let decorator = slog_term::TermDecorator::new().build();
-    let drain = slog_term::FullFormat::new(decorator).build().fuse();
-    let drain = slog_envlogger::new(drain).fuse();
-    let drain = slog_async::Async::new(drain)
-        .chan_size(0x2000)
-        .build()
-        .fuse();
-    slog::Logger::root(drain, slog::o!())
 }
