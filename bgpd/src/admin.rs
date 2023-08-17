@@ -69,7 +69,7 @@ fn run_session(rq: AddNeighborRequest, ctx: &HandlerContext, log: Logger) {
         host: rq.host,
     };
 
-    let mut runner = SessionRunner::new(
+    let runner = SessionRunner::new(
         Duration::from_secs(rq.connect_retry),
         Duration::from_secs(rq.keepalive),
         Duration::from_secs(rq.hold_time),

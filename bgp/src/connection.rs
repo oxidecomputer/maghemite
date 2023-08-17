@@ -18,6 +18,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
         &self,
         log: Logger,
         event_tx: Sender<FsmEvent<Cnx>>,
+        timeout: Duration,
     ) -> Result<Cnx, Error>;
 }
 
@@ -32,16 +33,15 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         Self: Sized,
     {
         let addr = addr.to_socket_addrs().unwrap().next().unwrap();
-        Ok(Self {
-            listener: TcpListener::bind(addr)?,
-            addr,
-        })
+        let listener = TcpListener::bind(addr)?;
+        Ok(Self { listener, addr })
     }
 
     fn accept(
         &self,
         log: Logger,
         _event_tx: Sender<FsmEvent<BgpConnectionTcp>>, //TODO plumb
+        _timeout: Duration,                            //TODO implement
     ) -> Result<BgpConnectionTcp, Error> {
         let (conn, sa) = self.listener.accept()?;
         Ok(BgpConnectionTcp::with_conn(self.addr, sa, conn, log))
@@ -153,6 +153,7 @@ pub mod test {
     use crate::messages::Message;
     use slog::debug;
     use std::collections::HashMap;
+    use std::sync::mpsc::RecvTimeoutError;
     use std::sync::Mutex;
 
     lazy_static! {
@@ -172,12 +173,19 @@ pub mod test {
     impl Listener {
         fn accept(
             &self,
-        ) -> Result<(SocketAddr, Endpoint<Message>), std::sync::mpsc::RecvError>
-        {
-            self.rx.recv()
+            timeout: Duration,
+        ) -> Result<(SocketAddr, Endpoint<Message>), Error> {
+            self.rx.recv_timeout(timeout).map_err(|e| match e {
+                RecvTimeoutError::Timeout => Error::Timeout,
+                RecvTimeoutError::Disconnected => Error::Disconnected,
+            })
         }
     }
 
+    // NOTE: this is not designed to be a full fidelity TCP/IP drop in. It gives
+    // us enough functionality to pass messages between BGP routers to test
+    // state machine transitions above TCP connection tracking. That's all we're
+    // aiming for with this.
     impl Network {
         fn new() -> Self {
             Self {
@@ -197,11 +205,11 @@ pub mod test {
             to: SocketAddr,
             ep: Endpoint<Message>,
         ) -> Result<(), Error> {
-            match self.endpoints.lock().unwrap().get(&from) {
+            match self.endpoints.lock().unwrap().get(&to) {
                 None => return Err(Error::ChannelConnect),
                 Some(sender) => {
                     sender
-                        .send((to, ep))
+                        .send((from, ep))
                         .map_err(|e| Error::ChannelSend(e.to_string()))?;
                 }
             };
@@ -229,10 +237,11 @@ pub mod test {
             &self,
             log: Logger,
             event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
+            timeout: Duration,
         ) -> Result<BgpConnectionChannel, Error> {
-            let (peer, endpoint) = self.listener.accept()?;
+            let (peer, endpoint) = self.listener.accept(timeout)?;
             Ok(BgpConnectionChannel::with_conn(
-                peer, self.addr, endpoint, event_tx, log,
+                self.addr, peer, endpoint, event_tx, log,
             ))
         }
     }
@@ -240,7 +249,6 @@ pub mod test {
     pub struct BgpConnectionChannel {
         addr: SocketAddr,
         peer: SocketAddr,
-        //XXX conn: Arc<Mutex<Option<Endpoint<Message>>>>,
         conn_tx: Arc<Mutex<Option<Sender<Message>>>>,
         log: Logger,
     }
@@ -260,12 +268,13 @@ pub mod test {
         }
 
         fn connect(&self, event_tx: Sender<FsmEvent<Self>>, timeout: Duration) {
-            debug!(self.log, "connecting");
+            debug!(self.log, "[{}] connecting", self.peer);
             let (local, remote) = channel();
             match NET.connect(self.addr, self.peer, remote) {
                 Ok(()) => {
                     self.conn_tx.lock().unwrap().replace(local.tx);
                     Self::recv(
+                        self.peer,
                         local.rx,
                         event_tx.clone(),
                         timeout,
@@ -308,6 +317,7 @@ pub mod test {
         ) -> Self {
             //TODO timeout as param
             Self::recv(
+                peer,
                 conn.rx,
                 event_tx,
                 Duration::from_millis(100),
@@ -322,6 +332,7 @@ pub mod test {
         }
 
         fn recv(
+            peer: SocketAddr,
             rx: Receiver<Message>,
             event_tx: Sender<FsmEvent<Self>>,
             _timeout: Duration, //TODO shutdown detection
@@ -330,7 +341,7 @@ pub mod test {
             spawn(move || loop {
                 match rx.recv() {
                     Ok(msg) => {
-                        debug!(log, "recv: {msg:#?}");
+                        debug!(log, "[{peer}] recv: {msg:#?}");
                         event_tx.send(FsmEvent::Message(msg)).unwrap();
                     }
                     Err(_e) => {

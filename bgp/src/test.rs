@@ -1,7 +1,6 @@
 use crate::config::{PeerConfig, RouterConfig};
 use crate::connection::test::{BgpConnectionChannel, BgpListenerChannel};
-use crate::session::Asn;
-use crate::session::{NeighborInfo, Session, SessionRunner};
+use crate::session::{Asn, FsmStateKind, NeighborInfo, Session};
 use crate::state::BgpState;
 use slog::Logger;
 use std::net::SocketAddr;
@@ -13,10 +12,11 @@ use std::time::Duration;
 
 type Router = crate::router::Router<BgpConnectionChannel>;
 type FsmEvent = crate::session::FsmEvent<BgpConnectionChannel>;
+type SessionRunner = crate::session::SessionRunner<BgpConnectionChannel>;
 
 #[test]
-fn test_bgp_basics() {
-    let log = crate::log::init_logger();
+fn test_basic_peering() {
+    let log = crate::log::init_file_logger("r1.basic_peering.log");
 
     // Router 1 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -36,7 +36,7 @@ fn test_bgp_basics() {
         rtr.run::<BgpListenerChannel>(tx);
     });
 
-    new_session(
+    let r1_session = new_session(
         log.clone(),
         PeerConfig {
             name: "r2".into(),
@@ -56,6 +56,8 @@ fn test_bgp_basics() {
 
     // Router 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+    let log = crate::log::init_file_logger("r2.basic_peering.log");
+
     let (event_tx, event_rx) = channel();
 
     let r2 = Arc::new(Router::new(
@@ -73,7 +75,7 @@ fn test_bgp_basics() {
         rtr.run::<BgpListenerChannel>(tx);
     });
 
-    new_session(
+    let r2_session = new_session(
         log.clone(),
         PeerConfig {
             name: "r1".into(),
@@ -87,11 +89,37 @@ fn test_bgp_basics() {
         },
         r2.clone(),
         "2.0.0.1:179".parse().unwrap(),
-        event_tx,
+        event_tx.clone(),
         event_rx,
     );
 
+    std::thread::sleep(Duration::from_secs(1));
+
+    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Established);
+    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Established);
+
+    r2.shutdown();
+    r2_session.shutdown();
+
     std::thread::sleep(Duration::from_secs(10));
+    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Connect);
+    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Idle);
+
+    let rtr = r2.clone();
+    let tx = event_tx.clone();
+    spawn(move || {
+        rtr.run::<BgpListenerChannel>(tx);
+    });
+    let r = r2_session.clone();
+    spawn(move || {
+        r.start();
+    });
+    event_tx.send(FsmEvent::ManualStart).unwrap();
+
+    std::thread::sleep(Duration::from_secs(5));
+
+    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Established);
+    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Established);
 }
 
 fn new_session(
@@ -101,7 +129,7 @@ fn new_session(
     bind_addr: SocketAddr,
     event_tx: Sender<FsmEvent>,
     event_rx: Receiver<FsmEvent>,
-) {
+) -> Arc<SessionRunner> {
     let session = Session::new();
     let bgp_state = Arc::new(Mutex::new(BgpState::default()));
 
@@ -112,7 +140,7 @@ fn new_session(
         host: peer.host,
     };
 
-    let mut runner = SessionRunner::new(
+    let runner = Arc::new(SessionRunner::new(
         Duration::from_secs(peer.connect_retry),
         Duration::from_secs(peer.keepalive),
         Duration::from_secs(peer.hold_time),
@@ -128,11 +156,14 @@ fn new_session(
         Duration::from_millis(peer.resolution),
         Some(bind_addr),
         log.clone(),
-    );
+    ));
 
+    let r = runner.clone();
     spawn(move || {
-        runner.start();
+        r.start();
     });
 
     event_tx.send(FsmEvent::ManualStart).unwrap();
+
+    runner
 }

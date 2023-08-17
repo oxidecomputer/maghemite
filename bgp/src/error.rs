@@ -29,6 +29,12 @@ pub enum Error {
     #[error("channel recv {0}")]
     ChannelRecv(#[from] std::sync::mpsc::RecvError),
 
+    #[error("timeout")]
+    Timeout,
+
+    #[error("disconnected")]
+    Disconnected,
+
     #[error("channel send {0}")]
     ChannelSend(String),
 
