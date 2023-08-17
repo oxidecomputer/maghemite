@@ -296,7 +296,7 @@ impl Session {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash)]
 pub enum Asn {
     TwoOctet(u16),
     FourOctet(u32),

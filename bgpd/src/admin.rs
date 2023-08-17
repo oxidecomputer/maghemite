@@ -2,7 +2,6 @@ use bgp::config::RouterConfig;
 use bgp::connection::BgpConnectionTcp;
 use bgp::router::Router;
 use bgp::session::{FsmEvent, NeighborInfo, Session, SessionRunner};
-use bgp::state::BgpState;
 use dropshot::{
     endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
     ConfigLoggingLevel, HttpError, HttpResponseUpdatedNoContent,
@@ -14,7 +13,6 @@ use slog::{error, info, warn, Logger};
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::thread::spawn;
 use std::time::Duration;
 use tokio::task::JoinHandle;
@@ -62,8 +60,6 @@ fn run_session(rq: AddNeighborRequest, ctx: &HandlerContext, log: Logger) {
 
     ctx.router.add_session(rq.host.ip(), event_tx.clone());
 
-    let bgp_state = Arc::new(Mutex::new(BgpState::default()));
-
     let neighbor = NeighborInfo {
         name: rq.name,
         host: rq.host,
@@ -78,7 +74,7 @@ fn run_session(rq: AddNeighborRequest, ctx: &HandlerContext, log: Logger) {
         session,
         event_rx,
         event_tx.clone(),
-        bgp_state,
+        ctx.router.bgp_state.clone(),
         neighbor.clone(),
         ctx.config.asn,
         ctx.config.id,

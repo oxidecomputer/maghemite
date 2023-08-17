@@ -52,6 +52,7 @@ fn test_basic_peering() {
         "1.0.0.1:179".parse().unwrap(),
         event_tx,
         event_rx,
+        r1.bgp_state.clone(),
     );
 
     // Router 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -91,6 +92,7 @@ fn test_basic_peering() {
         "2.0.0.1:179".parse().unwrap(),
         event_tx.clone(),
         event_rx,
+        r2.bgp_state.clone(),
     );
 
     std::thread::sleep(Duration::from_secs(1));
@@ -129,9 +131,9 @@ fn new_session(
     bind_addr: SocketAddr,
     event_tx: Sender<FsmEvent>,
     event_rx: Receiver<FsmEvent>,
+    bgp_state: Arc<Mutex<BgpState>>,
 ) -> Arc<SessionRunner> {
     let session = Session::new();
-    let bgp_state = Arc::new(Mutex::new(BgpState::default()));
 
     r.add_session(peer.host.ip(), event_tx.clone());
 
