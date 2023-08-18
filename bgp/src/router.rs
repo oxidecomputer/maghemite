@@ -1,22 +1,22 @@
 use crate::config::RouterConfig;
 use crate::connection::{BgpConnection, BgpListener};
 use crate::session::FsmEvent;
-use crate::state::BgpState;
+use rdb::Db;
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 pub struct Router<Cnx: BgpConnection> {
     pub config: RouterConfig,
     pub listen: String,
     pub addr_to_session: Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>,
-    pub bgp_state: Arc<Mutex<BgpState>>,
     pub log: Logger,
     pub shutdown: AtomicBool,
+    pub db: Db,
 }
 
 impl<Cnx: BgpConnection> Router<Cnx> {
@@ -24,6 +24,7 @@ impl<Cnx: BgpConnection> Router<Cnx> {
         listen: String,
         config: RouterConfig,
         log: Logger,
+        db: Db,
     ) -> Router<Cnx> {
         Self {
             config,
@@ -31,7 +32,7 @@ impl<Cnx: BgpConnection> Router<Cnx> {
             addr_to_session: Mutex::new(BTreeMap::new()),
             log,
             shutdown: AtomicBool::new(false),
-            bgp_state: Arc::new(Mutex::new(BgpState::default())),
+            db,
         }
     }
 

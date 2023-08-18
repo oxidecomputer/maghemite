@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 bgp = { version = "0.1.0", path = "../bgp" }
+rdb = { path = "../rdb" }
 clap.workspace = true
 colored.workspace = true
 dropshot.workspace = true

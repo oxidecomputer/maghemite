@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+rdb = { path = "../rdb" }
 nom.workspace = true
 num_enum.workspace = true
 slog.workspace = true

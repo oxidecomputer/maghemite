@@ -22,9 +22,5 @@ cargo install cargo-nextest
 
 pushd bgp
 
-# XXX remove this once we start actually asserting things in this test, for now
-# just dump the logs in CI
-cargo nextest run bgp_basics
-
 cargo nextest run
 cp *.log /work/

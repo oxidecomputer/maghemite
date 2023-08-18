@@ -74,12 +74,12 @@ fn run_session(rq: AddNeighborRequest, ctx: &HandlerContext, log: Logger) {
         session,
         event_rx,
         event_tx.clone(),
-        ctx.router.bgp_state.clone(),
         neighbor.clone(),
         ctx.config.asn,
         ctx.config.id,
         Duration::from_millis(rq.resolution),
         None,
+        ctx.router.db.clone(),
         log.clone(),
     );
 

@@ -1,8 +1,8 @@
 use crate::clock::Clock;
 use crate::connection::BgpConnection;
-use crate::messages::{Message, OpenMessage};
-use crate::state::BgpState;
+use crate::messages::{Message, OpenMessage, UpdateMessage};
 use crate::{dbg, inf, wrn};
+use rdb::Db;
 use slog::Logger;
 use std::fmt::{self, Display, Formatter};
 use std::net::SocketAddr;
@@ -94,6 +94,9 @@ pub enum FsmEvent<Cnx: BgpConnection> {
     Message(Message),
 
     Connected(Cnx),
+
+    // Instructs peer to announce the update
+    Announce(UpdateMessage),
 
     // from spec follows
     /// Local system administrator manually starts the peer connection.
@@ -202,6 +205,7 @@ impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
             }
             Self::Message(message) => write!(f, "message {message:?}"),
             Self::Connected(_) => write!(f, "connected"),
+            Self::Announce(update) => write!(f, "update {update:?}"),
             Self::ManualStart => write!(f, "manual start"),
             Self::ManualStop => write!(f, "manual stop"),
             Self::AutomaticStart => write!(f, "automatic start"),
@@ -296,6 +300,7 @@ impl Session {
     }
 }
 
+//XXX move to rdb
 #[derive(Debug, Clone, Copy, Hash)]
 pub enum Asn {
     TwoOctet(u16),
@@ -321,7 +326,6 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     session: Arc<Mutex<Session>>,
     event_rx: Receiver<FsmEvent<Cnx>>,
     event_tx: Sender<FsmEvent<Cnx>>,
-    _bgp_state: Arc<Mutex<BgpState>>,
 
     pub state: Arc<Mutex<FsmStateKind>>,
 
@@ -335,6 +339,8 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     clock: Clock,
     bind_addr: Option<SocketAddr>,
     shutdown: AtomicBool,
+
+    db: Db,
 }
 
 unsafe impl<Cnx: BgpConnection> Send for SessionRunner<Cnx> {}
@@ -351,19 +357,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         session: Arc<Mutex<Session>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         event_tx: Sender<FsmEvent<Cnx>>,
-        bgp_state: Arc<Mutex<BgpState>>,
         neighbor: NeighborInfo,
         asn: Asn,
         id: u32,
         resolution: Duration,
         bind_addr: Option<SocketAddr>,
+        db: Db,
         log: Logger,
     ) -> SessionRunner<Cnx> {
         SessionRunner {
             session,
             event_rx,
             event_tx: event_tx.clone(),
-            _bgp_state: bgp_state,
             asn,
             id,
             neighbor,
@@ -380,6 +385,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             bind_addr,
             log,
             shutdown: AtomicBool::new(false),
+            db,
         }
     }
 
@@ -543,6 +549,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         conn.send(msg.into()).unwrap();
     }
 
+    fn send_update(&self, update: UpdateMessage, conn: &Cnx) {
+        // TODO(unwrap)
+        conn.send(update.into()).unwrap();
+    }
+
     fn on_open_confirm(&self, conn: Cnx) -> FsmState<Cnx> {
         //TODO(unwrap)
         match self.event_rx.recv().unwrap() {
@@ -578,41 +589,75 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             FsmEvent::HoldTimerExpires => {
                 wrn!(self; "hold timer expired");
-                self.session.lock().unwrap().connect_retry_counter += 1;
-                self.clock.timers.hold_timer.disable();
-                self.clock.timers.keepalive_timer.disable();
-                FsmState::Connect
-            }
-            FsmEvent::Message(Message::Open(m)) => {
-                wrn!(
-                    self;
-                    "established: expected open message, \
-                    received {:#?}, ignoring",
-                    m
-                );
-                FsmState::Established(conn)
+                self.exit_established()
             }
             FsmEvent::Message(Message::Update(m)) => {
                 self.clock.timers.hold_timer.reset();
                 inf!(self; "update received: {:#?}", m);
 
-                //TODO apply update
+                self.apply_update(m);
 
                 FsmState::Established(conn)
             }
             FsmEvent::Message(Message::Notification(m)) => {
                 wrn!(self; "notification received: {:#?}", m);
-                self.session.lock().unwrap().connect_retry_counter += 1;
-                FsmState::Connect
+                self.exit_established()
             }
             FsmEvent::Message(Message::KeepAlive) => {
                 dbg!(self; "keepalive received");
                 self.clock.timers.hold_timer.reset();
                 FsmState::Established(conn)
             }
+            FsmEvent::Message(m) => {
+                wrn!(
+                    self;
+                    "established: unexpected message {:#?}",
+                    m
+                );
+                FsmState::Established(conn)
+            }
+            FsmEvent::Announce(update) => {
+                self.send_update(update, &conn);
+                FsmState::Established(conn)
+            }
             _ => {
                 todo!()
             }
         }
+    }
+
+    fn exit_established(&self) -> FsmState<Cnx> {
+        self.session.lock().unwrap().connect_retry_counter += 1;
+        self.clock.timers.hold_timer.disable();
+        self.clock.timers.keepalive_timer.disable();
+        FsmState::Connect
+    }
+
+    fn apply_update(&self, update: UpdateMessage) {
+        let nexthop = match update.nexthop4() {
+            Some(nh) => nh,
+            None => {
+                wrn!(self; "update with no nexthop recieved {update:#?}");
+                return;
+            }
+        };
+
+        for w in &update.withdrawn {
+            let k = rdb::Route4Key {
+                prefix: w.into(),
+                nexthop,
+            };
+            self.db.remove_nexthop4(k).unwrap();
+        }
+
+        for n in &update.nlri {
+            let k = rdb::Route4Key {
+                prefix: n.into(),
+                nexthop,
+            };
+            self.db.set_nexthop4(k).unwrap();
+        }
+
+        //TODO iterate through MpReachNlri attributes for IPv6
     }
 }

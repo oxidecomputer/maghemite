@@ -1,0 +1,10 @@
+[package]
+name = "rdb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sled.workspace = true
+serde.workspace = true
+ciborium.workspace = true
+anyhow.workspace = true

@@ -4,7 +4,7 @@ use nom::{
     number::complete::{be_u16, be_u32, u8 as parse_u8},
 };
 use num_enum::TryFromPrimitive;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 
 /// BGP Message types.
 ///
@@ -438,10 +438,23 @@ impl UpdateMessage {
         }
         Ok(result)
     }
+
+    pub fn nexthop4(&self) -> Option<Ipv4Addr> {
+        for a in &self.path_attributes {
+            match a.value {
+                PathAttributeValue::NextHop(IpAddr::V4(addr)) => {
+                    return Some(addr);
+                }
+                _ => continue,
+            }
+        }
+        None
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Prefix {
+    pub length: u8,
     pub value: Vec<u8>,
 }
 
@@ -450,20 +463,73 @@ impl Prefix {
         if self.value.len() > u8::MAX as usize {
             return Err(Error::TooLarge);
         }
-        let mut buf = vec![self.value.len() as u8];
+        let mut buf = vec![self.length];
         buf.extend_from_slice(&self.value);
         Ok(buf)
     }
 
     fn from_wire(input: &[u8]) -> Result<(&[u8], Prefix), Error> {
         let (input, len) = parse_u8(input)?;
-        let (input, value) = take(len)(input)?;
+        let (input, value) = take(len >> 3)(input)?;
         Ok((
             input,
             Prefix {
                 value: value.to_owned(),
+                length: len,
             },
         ))
+    }
+}
+
+impl std::str::FromStr for Prefix {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (addr, len) = match s.split_once('/') {
+            Some(split) => split,
+            None => return Err("invalid prefix".to_owned()),
+        };
+        let addr: IpAddr = match addr.parse() {
+            Ok(addr) => addr,
+            Err(_) => return Err("invalid addr".to_owned()),
+        };
+        let length: u8 = match len.parse() {
+            Ok(len) => len,
+            Err(_) => return Err("invalid length".to_owned()),
+        };
+        let value = match addr {
+            IpAddr::V4(a) => a.octets().to_vec(),
+            IpAddr::V6(a) => a.octets().to_vec(),
+        };
+        Ok(Self { value, length })
+    }
+}
+
+impl From<&Prefix> for rdb::Prefix4 {
+    fn from(p: &Prefix) -> Self {
+        let v = &p.value;
+        match p.length {
+            0 => rdb::Prefix4 {
+                value: Ipv4Addr::UNSPECIFIED,
+                length: 0,
+            },
+            x if x <= 8 => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], 0, 0, 0]),
+                length: x,
+            },
+            x if x <= 16 => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], v[1], 0, 0]),
+                length: x,
+            },
+            x if x <= 24 => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], v[1], v[2], 0]),
+                length: x,
+            },
+            x => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], v[1], v[2], v[3]]),
+                length: x,
+            },
+        }
     }
 }
 
@@ -580,6 +646,7 @@ pub enum PathAttributeValue {
     Aggregator([u8; 6]),
     As4Path(Vec<As4PathSegment>),
     As4Aggregator([u8; 8]),
+    //MpReachNlri(MpReachNlri), //TODO for IPv6
 }
 
 impl PathAttributeValue {
@@ -1395,7 +1462,8 @@ mod tests {
     fn update_round_trip() {
         let um0 = UpdateMessage {
             withdrawn: vec![Prefix {
-                value: vec![0x20, 0x00, 0x17, 0x01, 0xc],
+                value: vec![0x00, 0x17, 0x01, 0xc],
+                length: 32,
             }],
             path_attributes: vec![PathAttribute {
                 typ: PathAttributeType {
@@ -1410,10 +1478,12 @@ mod tests {
             }],
             nlri: vec![
                 Prefix {
-                    value: vec![0x20, 0x00, 0x17, 0x01, 0xd],
+                    value: vec![0x00, 0x17, 0x01, 0xd],
+                    length: 32,
                 },
                 Prefix {
-                    value: vec![0x20, 0x00, 0x17, 0x01, 0xe],
+                    value: vec![0x00, 0x17, 0x01, 0xe],
+                    length: 32,
                 },
             ],
         };

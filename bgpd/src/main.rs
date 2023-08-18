@@ -61,7 +61,13 @@ async fn run(run: Run) {
         id: run.id,
     };
     let log = init_logger();
-    let router = Router::<BgpConnectionTcp>::new(run.listen, cfg, log.clone());
+    let router = Router::<BgpConnectionTcp>::new(
+        run.listen,
+        cfg,
+        log.clone(),
+        //assumes only one router per machine
+        rdb::Db::new("/var/run/rdb").unwrap(),
+    );
     let j = admin::start_server(
         log,
         Ipv6Addr::UNSPECIFIED,
