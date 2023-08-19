@@ -1,14 +1,35 @@
 use crate::config::{PeerConfig, RouterConfig};
 use crate::connection::test::{BgpConnectionChannel, BgpListenerChannel};
-use crate::messages::{PathAttributeValue, UpdateMessage};
+use crate::fanout::Rule4;
 use crate::session::{Asn, FsmStateKind};
+use rdb::{Policy, PolicyAction, Prefix4};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
+use std::thread::sleep;
 use std::thread::spawn;
 use std::time::Duration;
 
 type Router = crate::router::Router<BgpConnectionChannel>;
 type FsmEvent = crate::session::FsmEvent<BgpConnectionChannel>;
+
+macro_rules! wait_for_eq {
+    ($lhs:expr, $rhs:expr, $period:expr, $count:expr) => {
+        let mut ok = false;
+        for _ in 0..$count {
+            if $lhs == $rhs {
+                ok = true;
+                break;
+            }
+            sleep(Duration::from_secs($period));
+        }
+        if !ok {
+            assert_eq!($lhs, $rhs);
+        }
+    };
+    ($lhs:expr, $rhs:expr) => {
+        wait_for_eq!($lhs, $rhs, 1, 10);
+    };
+}
 
 #[test]
 fn test_basic_peering() {
@@ -20,16 +41,14 @@ fn test_basic_peering() {
     // Give peer sessions a few seconds and ensure we have reached the
     // established state on both sides.
 
-    std::thread::sleep(Duration::from_secs(5));
-    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Established);
-    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Established);
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
     // Shut down r2 and ensure that r2's peer session has gone back to idle.
     // Ensure that r1's peer session to r2 has gone back to connect.
     r2.shutdown();
-    std::thread::sleep(Duration::from_secs(10));
-    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Connect);
-    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Idle);
+    wait_for_eq!(r1_session.state(), FsmStateKind::Connect);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Idle);
 
     let rtr = r2.clone();
     spawn(move || {
@@ -37,49 +56,60 @@ fn test_basic_peering() {
     });
     r2.send_event(FsmEvent::ManualStart).unwrap();
 
-    std::thread::sleep(Duration::from_secs(5));
-
-    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Established);
-    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Established);
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 }
 
 #[test]
 fn test_basic_update() {
     let (r1, r2) = two_router_test_setup("basic_update");
 
-    let update = UpdateMessage {
-        withdrawn: vec![],
-        path_attributes: vec![PathAttributeValue::NextHop(
-            "1.2.3.1".parse().unwrap(),
-        )
-        .into()],
-        nlri: vec!["1.2.3.0/24".parse().unwrap()],
+    // set up export policy
+    let allow_default = Rule4 {
+        prefix: "0.0.0.0/0".parse().unwrap(),
+        policy: Policy {
+            action: PolicyAction::Allow,
+            priority: 47,
+        },
     };
+    r1.add_export_policy("2.0.0.1".parse().unwrap(), allow_default);
+    r2.add_export_policy("1.0.0.1".parse().unwrap(), allow_default);
 
-    std::thread::sleep(Duration::from_secs(1));
-    r1.send_event(FsmEvent::Announce(update)).unwrap();
-    std::thread::sleep(Duration::from_secs(1));
+    // originate a prefix
+    r1.originate4(
+        "1.0.0.1".parse().unwrap(),
+        vec!["1.2.3.0/24".parse().unwrap()],
+    )
+    .unwrap();
 
-    let advertised = r2
-        .db
-        .get_nexthop4(rdb::Route4Key {
-            prefix: rdb::Prefix4 {
-                value: "1.2.3.0".parse().unwrap(),
-                length: 24,
-            },
-            nexthop: "1.2.3.1".parse().unwrap(),
-        })
-        .unwrap();
+    // once we reach established the originated routes should have propagated
+    let r1_session = r1.get_session(0).unwrap();
+    let r2_session = r2.get_session(0).unwrap();
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
-    assert!(advertised)
+    let prefix: Prefix4 = "1.2.3.0/24".parse().unwrap();
+
+    wait_for_eq!(r2.db.get_nexthop4(&prefix).is_empty(), false);
+
+    // shut down r1 and ensure that the prefixes are withdrawn from r2 on
+    // session timeout.
+    r1.shutdown();
+    wait_for_eq!(r2_session.state(), FsmStateKind::Connect);
+    wait_for_eq!(r1_session.state(), FsmStateKind::Idle);
+    wait_for_eq!(r2.db.get_nexthop4(&prefix).is_empty(), true);
 }
 
 fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
     let log = crate::log::init_file_logger(&format!("r1.{name}.log"));
 
+    std::fs::create_dir_all("/tmp").unwrap();
+
     // Router 1 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    let db = rdb::Db::new(&format!("/tmp/r1.{name}.db")).unwrap();
+    let db_path = format!("/tmp/r1.{name}.db");
+    let _ = std::fs::remove_dir_all(&db_path);
+    let db = rdb::Db::new(&db_path).unwrap();
 
     let (r1_event_tx, event_rx) = channel();
     let r1 = Arc::new(Router::new(
@@ -118,7 +148,10 @@ fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
     // Router 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     let log = crate::log::init_file_logger(&format!("r2.{name}.log"));
-    let db = rdb::Db::new(&format!("/tmp/r2.{name}.db")).unwrap();
+
+    let db_path = format!("/tmp/r2.{name}.db");
+    let _ = std::fs::remove_dir_all(&db_path);
+    let db = rdb::Db::new(&db_path).unwrap();
 
     let (r2_event_tx, event_rx) = channel();
 

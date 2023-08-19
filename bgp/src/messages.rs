@@ -332,7 +332,7 @@ pub struct Tlv {
 /// ```
 ///
 /// Ref: RFC 4271 §4.3
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct UpdateMessage {
     pub withdrawn: Vec<Prefix>,
     pub path_attributes: Vec<PathAttribute>,
@@ -529,6 +529,15 @@ impl From<&Prefix> for rdb::Prefix4 {
                 value: Ipv4Addr::from([v[0], v[1], v[2], v[3]]),
                 length: x,
             },
+        }
+    }
+}
+
+impl From<rdb::Prefix4> for Prefix {
+    fn from(p: rdb::Prefix4) -> Self {
+        Self {
+            value: p.value.octets().into(),
+            length: p.length,
         }
     }
 }

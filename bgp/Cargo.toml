@@ -13,6 +13,8 @@ slog-async.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 schemars.workspace = true
+sled.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 pretty-hex.workspace = true

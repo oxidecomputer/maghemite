@@ -1,16 +1,26 @@
 use crate::clock::Clock;
 use crate::connection::BgpConnection;
 use crate::error::Error;
-use crate::messages::{Message, OpenMessage, UpdateMessage};
+use crate::fanout::Fanout;
+use crate::messages::{
+    Message, OpenMessage, PathAttributeValue, UpdateMessage,
+};
 use crate::{dbg, inf, wrn};
-use rdb::Db;
+use rdb::{Db, Prefix4, Route4Key};
 use slog::Logger;
+use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
+
+#[derive(Debug)]
+pub struct PeerConnection<Cnx: BgpConnection> {
+    conn: Cnx,
+    id: u32,
+}
 
 #[derive(Debug)]
 pub enum FsmState<Cnx: BgpConnection> {
@@ -39,10 +49,13 @@ pub enum FsmState<Cnx: BgpConnection> {
     OpenSent(Cnx),
 
     /// Waiting for keepaliave or notification from peer.
-    OpenConfirm(Cnx),
+    OpenConfirm(PeerConnection<Cnx>),
+
+    /// Sync up with peers.
+    SessionSetup(PeerConnection<Cnx>),
 
     /// Able to exchange update, notification and keepliave messages with peers.
-    Established(Cnx),
+    Established(PeerConnection<Cnx>),
 }
 
 impl<Cnx: BgpConnection> Display for FsmState<Cnx> {
@@ -60,6 +73,7 @@ pub enum FsmStateKind {
     Active,
     OpenSent,
     OpenConfirm,
+    SessionSetup,
     Established,
 }
 
@@ -71,6 +85,7 @@ impl Display for FsmStateKind {
             FsmStateKind::Active => write!(f, "active"),
             FsmStateKind::OpenSent => write!(f, "open sent"),
             FsmStateKind::OpenConfirm => write!(f, "open confirm"),
+            FsmStateKind::SessionSetup => write!(f, "session setup"),
             FsmStateKind::Established => write!(f, "established"),
         }
     }
@@ -84,6 +99,7 @@ impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKind {
             FsmState::Active(_) => FsmStateKind::Active,
             FsmState::OpenSent(_) => FsmStateKind::OpenSent,
             FsmState::OpenConfirm(_) => FsmStateKind::OpenConfirm,
+            FsmState::SessionSetup(_) => FsmStateKind::SessionSetup,
             FsmState::Established(_) => FsmStateKind::Established,
         }
     }
@@ -329,7 +345,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     event_rx: Receiver<FsmEvent<Cnx>>,
     pub event_tx: Sender<FsmEvent<Cnx>>,
 
-    pub state: Arc<Mutex<FsmStateKind>>,
+    state: Arc<Mutex<FsmStateKind>>,
 
     asn: Asn,
     id: u32,
@@ -341,8 +357,10 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     clock: Clock,
     bind_addr: Option<SocketAddr>,
     shutdown: AtomicBool,
+    running: AtomicBool,
 
     db: Db,
+    fanout: Arc<RwLock<Fanout<Cnx>>>,
 }
 
 unsafe impl<Cnx: BgpConnection> Send for SessionRunner<Cnx> {}
@@ -365,6 +383,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         resolution: Duration,
         bind_addr: Option<SocketAddr>,
         db: Db,
+        fanout: Arc<RwLock<Fanout<Cnx>>>,
         log: Logger,
     ) -> SessionRunner<Cnx> {
         SessionRunner {
@@ -387,6 +406,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             bind_addr,
             log,
             shutdown: AtomicBool::new(false),
+            running: AtomicBool::new(false),
+            fanout,
             db,
         }
     }
@@ -396,6 +417,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     pub fn start(&self) {
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_err()
+        {
+            return; // we are already running
+        };
+
         dbg!(self; "starting peer state machine");
         let mut current = FsmState::<Cnx>::Idle;
         loop {
@@ -403,6 +432,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 inf!(self; "shutting down");
                 *(self.state.lock().unwrap()) = FsmStateKind::Idle;
                 self.shutdown.store(false, Ordering::Release);
+                self.running.store(false, Ordering::Release);
                 return;
             }
             let current_state: FsmStateKind = (&current).into();
@@ -429,6 +459,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 FsmState::OpenConfirm(conn) => {
                     current = self.on_open_confirm(conn);
+                    (&current).into()
+                }
+
+                FsmState::SessionSetup(conn) => {
+                    current = self.session_setup(conn);
                     (&current).into()
                 }
 
@@ -504,11 +539,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Active(conn);
             }
         };
-        if !self.open_is_valid(om) {
+        if !self.open_is_valid(&om) {
             return FsmState::Active(conn);
         }
         self.send_keepalive(&conn);
-        FsmState::OpenConfirm(conn)
+        FsmState::OpenConfirm(PeerConnection { conn, id: om.id })
     }
 
     fn on_open_sent(&self, conn: Cnx) -> FsmState<Cnx> {
@@ -522,14 +557,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Active(conn);
             }
         };
-        if !self.open_is_valid(om) {
+        if !self.open_is_valid(&om) {
             return FsmState::Active(conn);
         }
         self.send_keepalive(&conn);
-        FsmState::OpenConfirm(conn)
+        FsmState::OpenConfirm(PeerConnection { conn, id: om.id })
     }
 
-    fn open_is_valid(&self, _om: OpenMessage) -> bool {
+    fn open_is_valid(&self, _om: &OpenMessage) -> bool {
         //TODO
         true
     }
@@ -562,7 +597,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         conn.send(update.into()).unwrap();
     }
 
-    fn on_open_confirm(&self, conn: Cnx) -> FsmState<Cnx> {
+    fn on_open_confirm(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         //TODO(unwrap)
         match self.event_rx.recv().unwrap() {
             FsmEvent::Message(Message::KeepAlive) => {
@@ -570,7 +605,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.clock.timers.hold_timer.enable();
                 self.clock.timers.keepalive_timer.reset();
                 self.clock.timers.keepalive_timer.enable();
-                FsmState::Established(conn)
+                FsmState::SessionSetup(pc)
             }
             FsmEvent::Message(Message::Notification(m)) => {
                 wrn!(self; "notification received: {:#?}", m);
@@ -584,37 +619,70 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self;
                     "event {:?} not expected in open confirm, ignoring", other
                 );
-                FsmState::OpenConfirm(conn)
+                FsmState::OpenConfirm(pc)
             }
         }
     }
 
-    fn on_established(&self, conn: Cnx) -> FsmState<Cnx> {
+    fn session_setup(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
+        let originated = self.db.get_originated4().unwrap();
+        let mut m = BTreeMap::<Ipv4Addr, Vec<Prefix4>>::new();
+        for o in originated {
+            match m.get_mut(&o.nexthop) {
+                Some(ref mut prefixes) => {
+                    prefixes.push(o.prefix);
+                }
+                None => {
+                    m.insert(o.nexthop, vec![o.prefix]);
+                }
+            }
+        }
+
+        for (nexthop, prefixes) in m {
+            let mut update = UpdateMessage {
+                path_attributes: vec![PathAttributeValue::NextHop(
+                    nexthop.into(),
+                )
+                .into()],
+                ..Default::default()
+            };
+            for p in prefixes {
+                update.nlri.push(p.into());
+                self.db
+                    .add_origin4(Route4Key { prefix: p, nexthop })
+                    .unwrap();
+            }
+            self.fanout.read().unwrap().send_all(&update);
+        }
+        FsmState::Established(pc)
+    }
+
+    fn on_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         match self.event_rx.recv().unwrap() {
             FsmEvent::KeepaliveTimerExpires => {
-                self.send_keepalive(&conn);
-                FsmState::Established(conn)
+                self.send_keepalive(&pc.conn);
+                FsmState::Established(pc)
             }
             FsmEvent::HoldTimerExpires => {
                 wrn!(self; "hold timer expired");
-                self.exit_established()
+                self.exit_established(pc)
             }
             FsmEvent::Message(Message::Update(m)) => {
                 self.clock.timers.hold_timer.reset();
                 inf!(self; "update received: {:#?}", m);
 
-                self.apply_update(m);
+                self.apply_update(m, pc.id);
 
-                FsmState::Established(conn)
+                FsmState::Established(pc)
             }
             FsmEvent::Message(Message::Notification(m)) => {
                 wrn!(self; "notification received: {:#?}", m);
-                self.exit_established()
+                self.exit_established(pc)
             }
             FsmEvent::Message(Message::KeepAlive) => {
                 dbg!(self; "keepalive received");
                 self.clock.timers.hold_timer.reset();
-                FsmState::Established(conn)
+                FsmState::Established(pc)
             }
             FsmEvent::Message(m) => {
                 wrn!(
@@ -622,11 +690,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     "established: unexpected message {:#?}",
                     m
                 );
-                FsmState::Established(conn)
+                FsmState::Established(pc)
             }
             FsmEvent::Announce(update) => {
-                self.send_update(update, &conn);
-                FsmState::Established(conn)
+                self.send_update(update, &pc.conn);
+                FsmState::Established(pc)
             }
             _ => {
                 todo!()
@@ -634,14 +702,63 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
-    fn exit_established(&self) -> FsmState<Cnx> {
+    fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         self.session.lock().unwrap().connect_retry_counter += 1;
         self.clock.timers.hold_timer.disable();
         self.clock.timers.keepalive_timer.disable();
+
+        self.fanout
+            .write()
+            .unwrap()
+            .remove_egress(self.neighbor.host.ip());
+
+        //TODO need to remove from Router::addr_to_session also
+
+        // remove peer prefixes from db
+        let withdraw = self.db.remove_peer_nexthop4(pc.id);
+
+        // propagate a withdraw message through fanout
+        let mut m = BTreeMap::<Ipv4Addr, Vec<Prefix4>>::new();
+        for o in withdraw {
+            match m.get_mut(&o.nexthop) {
+                Some(ref mut prefixes) => {
+                    prefixes.push(o.prefix);
+                }
+                None => {
+                    m.insert(o.nexthop, vec![o.prefix]);
+                }
+            }
+        }
+
+        for (nexthop, prefixes) in m {
+            let mut update = UpdateMessage {
+                path_attributes: vec![PathAttributeValue::NextHop(
+                    nexthop.into(),
+                )
+                .into()],
+                ..Default::default()
+            };
+            for p in prefixes {
+                update.withdrawn.push(p.into());
+                self.db
+                    .add_origin4(Route4Key { prefix: p, nexthop })
+                    .unwrap();
+            }
+            self.fanout.read().unwrap().send_all(&update);
+        }
+
         FsmState::Connect
     }
 
-    fn apply_update(&self, update: UpdateMessage) {
+    // TODO
+    // - apply update atomically
+    // - propagation
+    fn apply_update(&self, update: UpdateMessage, id: u32) {
+        self.add_to_rib(&update, id);
+        self.fanout_update(&update);
+    }
+
+    fn add_to_rib(&self, update: &UpdateMessage, id: u32) {
         let nexthop = match update.nexthop4() {
             Some(nh) => nh,
             None => {
@@ -651,21 +768,32 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         for w in &update.withdrawn {
-            let k = rdb::Route4Key {
+            let k = rdb::Route4ImportKey {
                 prefix: w.into(),
                 nexthop,
+                id,
             };
-            self.db.remove_nexthop4(k).unwrap();
+            self.db.remove_nexthop4(k);
         }
 
         for n in &update.nlri {
-            let k = rdb::Route4Key {
+            let k = rdb::Route4ImportKey {
                 prefix: n.into(),
                 nexthop,
+                id,
             };
-            self.db.set_nexthop4(k).unwrap();
+            self.db.set_nexthop4(k);
         }
 
         //TODO iterate through MpReachNlri attributes for IPv6
+    }
+
+    fn fanout_update(&self, update: &UpdateMessage) {
+        let fanout = self.fanout.read().unwrap();
+        fanout.send(self.neighbor.host.ip(), update);
+    }
+
+    pub fn state(&self) -> FsmStateKind {
+        *self.state.lock().unwrap()
     }
 }

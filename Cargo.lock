@@ -200,6 +200,7 @@ checksum = "604178f6c5c21f02dc555784810edfb88d34ac2c73b2eae109655649ee73ce3d"
 name = "bgp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "lazy_static",
  "nom",
  "num_enum",
@@ -208,6 +209,7 @@ dependencies = [
  "rdb",
  "schemars",
  "serde",
+ "sled",
  "slog",
  "slog-async",
  "slog-bunyan",
