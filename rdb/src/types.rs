@@ -2,16 +2,41 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-#[derive(Serialize, Deserialize)]
 pub struct Route4Key {
     pub prefix: Prefix4,
     pub nexthop: Ipv4Addr,
 }
 
-#[derive(Serialize, Deserialize)]
+impl ToString for Route4Key {
+    fn to_string(&self) -> String {
+        format!(
+            "{}/{}/{}",
+            self.nexthop, self.prefix.value, self.prefix.length,
+        )
+    }
+}
+
+impl Route4Key {
+    pub fn db_key(&self) -> Vec<u8> {
+        self.to_string().as_bytes().into()
+    }
+}
+
 pub struct Route4MetricKey {
     pub route: Route4Key,
     pub metric: String,
+}
+
+impl ToString for Route4MetricKey {
+    fn to_string(&self) -> String {
+        format!("{}/{}", self.route.to_string(), self.metric,)
+    }
+}
+
+impl Route4MetricKey {
+    pub fn db_key(&self) -> Vec<u8> {
+        self.to_string().as_bytes().into()
+    }
 }
 
 #[derive(Serialize, Deserialize)]

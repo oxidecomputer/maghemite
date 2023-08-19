@@ -37,7 +37,7 @@ impl Db {
     pub fn get_nexthop4(&self, route_key: Route4Key) -> Result<bool> {
         let tree = self.0.open_tree("nexthop")?;
 
-        let key = to_buf(&route_key)?;
+        let key = route_key.db_key();
 
         Ok(tree.get(key)?.is_some())
     }
@@ -45,7 +45,7 @@ impl Db {
     pub fn set_nexthop4(&self, route_key: Route4Key) -> Result<()> {
         let tree = self.0.open_tree("nexthop")?;
 
-        let key = to_buf(&route_key)?;
+        let key = route_key.db_key();
         tree.insert(key, "")?;
 
         Ok(())
@@ -54,7 +54,7 @@ impl Db {
     pub fn remove_nexthop4(&self, route_key: Route4Key) -> Result<()> {
         let tree = self.0.open_tree("nexthop")?;
 
-        let key = to_buf(&route_key)?;
+        let key = route_key.db_key();
         tree.remove(key)?;
 
         Ok(())

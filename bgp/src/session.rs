@@ -1,5 +1,6 @@
 use crate::clock::Clock;
 use crate::connection::BgpConnection;
+use crate::error::Error;
 use crate::messages::{Message, OpenMessage, UpdateMessage};
 use crate::{dbg, inf, wrn};
 use rdb::Db;
@@ -52,7 +53,7 @@ impl<Cnx: BgpConnection> Display for FsmState<Cnx> {
 }
 
 //XXX
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum FsmStateKind {
     Idle,
     Connect,
@@ -88,6 +89,7 @@ impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKind {
     }
 }
 
+#[derive(Clone)]
 pub enum FsmEvent<Cnx: BgpConnection> {
     Transition(FsmStateKind, FsmStateKind),
 
@@ -441,6 +443,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 *(self.state.lock().unwrap()) = next_state;
             }
         }
+    }
+
+    pub fn send_event(&self, e: FsmEvent<Cnx>) -> Result<(), Error> {
+        self.event_tx
+            .send(e)
+            .map_err(|e| Error::ChannelSend(e.to_string()))
     }
 
     fn idle(&self) -> FsmState<Cnx> {

@@ -1,6 +1,7 @@
 use crate::config::PeerConfig;
 use crate::config::RouterConfig;
 use crate::connection::{BgpConnection, BgpListener};
+use crate::error::Error;
 use crate::session::{FsmEvent, SessionRunner};
 use crate::session::{NeighborInfo, Session};
 use rdb::Db;
@@ -19,7 +20,7 @@ use std::time::Duration;
 pub struct Router<Cnx: BgpConnection> {
     pub config: RouterConfig,
     pub listen: String,
-    pub addr_to_session: Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>,
+    pub addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
     pub log: Logger,
     pub shutdown: AtomicBool,
     pub db: Db,
@@ -36,7 +37,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Self {
             config,
             listen,
-            addr_to_session: Mutex::new(BTreeMap::new()),
+            addr_to_session: Arc::new(Mutex::new(BTreeMap::new())),
             log,
             shutdown: AtomicBool::new(false),
             db,
@@ -44,22 +45,33 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
     }
 
+    pub fn get_session(&self, index: usize) -> Option<Arc<SessionRunner<Cnx>>> {
+        self.sessions.lock().unwrap().get(index).cloned()
+    }
+
     pub fn shutdown(&self) {
+        for s in self.sessions.lock().unwrap().iter() {
+            s.shutdown();
+        }
         self.shutdown.store(true, Ordering::Release);
     }
 
-    pub fn run<Listener: BgpListener<Cnx>>(
-        &self,
-        event_tx: Sender<FsmEvent<Cnx>>,
-    ) {
+    pub fn run<Listener: BgpListener<Cnx>>(&self) {
+        for s in self.sessions.lock().unwrap().iter() {
+            let session = s.clone();
+            spawn(move || {
+                session.start();
+            });
+        }
         loop {
             if self.shutdown.load(Ordering::Acquire) {
+                self.shutdown.store(false, Ordering::Release);
                 break;
             }
             let listener = Listener::bind(&self.listen).unwrap();
             let conn = match listener.accept(
                 self.log.clone(),
-                event_tx.clone(),
+                self.addr_to_session.clone(),
                 Duration::from_millis(100),
             ) {
                 Ok(c) => c,
@@ -128,5 +140,12 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         self.sessions.lock().unwrap().push(runner.clone());
 
         runner
+    }
+
+    pub fn send_event(&self, e: FsmEvent<Cnx>) -> Result<(), Error> {
+        for s in self.sessions.lock().unwrap().iter() {
+            s.send_event(e.clone())?;
+        }
+        Ok(())
     }
 }

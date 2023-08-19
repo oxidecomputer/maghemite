@@ -2,8 +2,9 @@ use crate::error::Error;
 use crate::messages::{Header, Message, MessageType};
 use crate::session::FsmEvent;
 use slog::{error, Logger};
+use std::collections::BTreeMap;
 use std::io::Write;
-use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
@@ -17,7 +18,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
     fn accept(
         &self,
         log: Logger,
-        event_tx: Sender<FsmEvent<Cnx>>,
+        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
         timeout: Duration,
     ) -> Result<Cnx, Error>;
 }
@@ -40,15 +41,18 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn accept(
         &self,
         log: Logger,
-        _event_tx: Sender<FsmEvent<BgpConnectionTcp>>, //TODO plumb
-        _timeout: Duration,                            //TODO implement
+        //TODO plumb
+        _addr_to_session: Arc<
+            Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionTcp>>>>,
+        >,
+        _timeout: Duration, //TODO implement
     ) -> Result<BgpConnectionTcp, Error> {
         let (conn, sa) = self.listener.accept()?;
         Ok(BgpConnectionTcp::with_conn(self.addr, sa, conn, log))
     }
 }
 
-pub trait BgpConnection: Send {
+pub trait BgpConnection: Send + Clone {
     fn new(source: Option<SocketAddr>, peer: SocketAddr, log: Logger) -> Self
     where
         Self: Sized;
@@ -61,6 +65,7 @@ pub trait BgpConnection: Send {
     fn peer(&self) -> SocketAddr;
 }
 
+#[derive(Clone)]
 pub struct BgpConnectionTcp {
     #[allow(dead_code)]
     source: Option<SocketAddr>,
@@ -236,16 +241,26 @@ pub mod test {
         fn accept(
             &self,
             log: Logger,
-            event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
+            addr_to_session: Arc<
+                Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionChannel>>>>,
+            >,
             timeout: Duration,
         ) -> Result<BgpConnectionChannel, Error> {
             let (peer, endpoint) = self.listener.accept(timeout)?;
-            Ok(BgpConnectionChannel::with_conn(
-                self.addr, peer, endpoint, event_tx, log,
-            ))
+            match addr_to_session.lock().unwrap().get(&peer.ip()) {
+                Some(event_tx) => Ok(BgpConnectionChannel::with_conn(
+                    self.addr,
+                    peer,
+                    endpoint,
+                    event_tx.clone(),
+                    log,
+                )),
+                None => Err(Error::UnknownPeer),
+            }
         }
     }
 
+    #[derive(Clone)]
     pub struct BgpConnectionChannel {
         addr: SocketAddr,
         peer: SocketAddr,

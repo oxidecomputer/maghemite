@@ -539,6 +539,18 @@ pub struct PathAttribute {
     pub value: PathAttributeValue,
 }
 
+impl From<PathAttributeValue> for PathAttribute {
+    fn from(v: PathAttributeValue) -> Self {
+        Self {
+            typ: PathAttributeType {
+                flags: 0,
+                type_code: v.clone().into(),
+            },
+            value: v,
+        }
+    }
+}
+
 impl PathAttribute {
     pub fn to_wire(&self, extended_length: bool) -> Result<Vec<u8>, Error> {
         let mut buf = self.typ.to_wire();
@@ -634,6 +646,29 @@ pub enum PathAttributeTypeCode {
     /// RFC 6793
     As4Path = 17,
     As4Aggregator = 18,
+}
+
+impl From<PathAttributeValue> for PathAttributeTypeCode {
+    fn from(v: PathAttributeValue) -> Self {
+        match v {
+            PathAttributeValue::Origin(_) => PathAttributeTypeCode::Origin,
+            PathAttributeValue::AsPath(_) => PathAttributeTypeCode::AsPath,
+            PathAttributeValue::NextHop(_) => PathAttributeTypeCode::NextHop,
+            PathAttributeValue::MultiExitDisc(_) => {
+                PathAttributeTypeCode::MultiExitDisc
+            }
+            PathAttributeValue::LocalPref(_) => {
+                PathAttributeTypeCode::LocalPref
+            }
+            PathAttributeValue::Aggregator(_) => {
+                PathAttributeTypeCode::Aggregator
+            }
+            PathAttributeValue::As4Path(_) => PathAttributeTypeCode::As4Path,
+            PathAttributeValue::As4Aggregator(_) => {
+                PathAttributeTypeCode::As4Aggregator
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]

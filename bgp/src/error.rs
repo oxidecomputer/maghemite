@@ -88,6 +88,9 @@ pub enum Error {
 
     #[error("Attempt to send a message when not connected")]
     NotConnected,
+
+    #[error("Connection attempt from unknown peer")]
+    UnknownPeer,
 }
 
 impl<'a> From<nom::Err<(&'a [u8], nom::error::ErrorKind)>> for Error {

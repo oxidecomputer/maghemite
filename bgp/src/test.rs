@@ -1,9 +1,6 @@
 use crate::config::{PeerConfig, RouterConfig};
 use crate::connection::test::{BgpConnectionChannel, BgpListenerChannel};
-use crate::messages::{
-    PathAttribute, PathAttributeType, PathAttributeTypeCode,
-    PathAttributeValue, UpdateMessage,
-};
+use crate::messages::{PathAttributeValue, UpdateMessage};
 use crate::session::{Asn, FsmStateKind};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -13,7 +10,70 @@ use std::time::Duration;
 type Router = crate::router::Router<BgpConnectionChannel>;
 type FsmEvent = crate::session::FsmEvent<BgpConnectionChannel>;
 
-#[allow(clippy::type_complexity)]
+#[test]
+fn test_basic_peering() {
+    let (r1, r2) = two_router_test_setup("basic_peering");
+
+    let r1_session = r1.get_session(0).unwrap();
+    let r2_session = r2.get_session(0).unwrap();
+
+    // Give peer sessions a few seconds and ensure we have reached the
+    // established state on both sides.
+
+    std::thread::sleep(Duration::from_secs(5));
+    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Established);
+    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Established);
+
+    // Shut down r2 and ensure that r2's peer session has gone back to idle.
+    // Ensure that r1's peer session to r2 has gone back to connect.
+    r2.shutdown();
+    std::thread::sleep(Duration::from_secs(10));
+    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Connect);
+    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Idle);
+
+    let rtr = r2.clone();
+    spawn(move || {
+        rtr.run::<BgpListenerChannel>();
+    });
+    r2.send_event(FsmEvent::ManualStart).unwrap();
+
+    std::thread::sleep(Duration::from_secs(5));
+
+    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Established);
+    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Established);
+}
+
+#[test]
+fn test_basic_update() {
+    let (r1, r2) = two_router_test_setup("basic_update");
+
+    let update = UpdateMessage {
+        withdrawn: vec![],
+        path_attributes: vec![PathAttributeValue::NextHop(
+            "1.2.3.1".parse().unwrap(),
+        )
+        .into()],
+        nlri: vec!["1.2.3.0/24".parse().unwrap()],
+    };
+
+    std::thread::sleep(Duration::from_secs(1));
+    r1.send_event(FsmEvent::Announce(update)).unwrap();
+    std::thread::sleep(Duration::from_secs(1));
+
+    let advertised = r2
+        .db
+        .get_nexthop4(rdb::Route4Key {
+            prefix: rdb::Prefix4 {
+                value: "1.2.3.0".parse().unwrap(),
+                length: 24,
+            },
+            nexthop: "1.2.3.1".parse().unwrap(),
+        })
+        .unwrap();
+
+    assert!(advertised)
+}
+
 fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
     let log = crate::log::init_file_logger(&format!("r1.{name}.log"));
 
@@ -33,9 +93,8 @@ fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
     ));
 
     let rtr = r1.clone();
-    let tx = r1_event_tx.clone();
     spawn(move || {
-        rtr.run::<BgpListenerChannel>(tx);
+        rtr.run::<BgpListenerChannel>();
     });
 
     r1.new_session(
@@ -74,9 +133,8 @@ fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
     ));
 
     let rtr = r2.clone();
-    let tx = r2_event_tx.clone();
     spawn(move || {
-        rtr.run::<BgpListenerChannel>(tx);
+        rtr.run::<BgpListenerChannel>();
     });
 
     r2.new_session(
@@ -98,80 +156,4 @@ fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
     r2_event_tx.send(FsmEvent::ManualStart).unwrap();
 
     (r1, r2)
-}
-
-#[test]
-fn test_basic_peering() {
-    let (r1, r2) = two_router_test_setup("basic_peering");
-
-    let r1_session = &r1.sessions.lock().unwrap()[0];
-    let r2_session = &r2.sessions.lock().unwrap()[0];
-    let r2_event_tx = r2_session.event_tx.clone();
-
-    std::thread::sleep(Duration::from_secs(1));
-
-    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Established);
-    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Established);
-
-    r2.shutdown();
-    r2_session.shutdown();
-
-    std::thread::sleep(Duration::from_secs(10));
-    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Connect);
-    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Idle);
-
-    let rtr = r2.clone();
-    let tx = r2_event_tx.clone();
-    spawn(move || {
-        rtr.run::<BgpListenerChannel>(tx);
-    });
-    let r = r2_session.clone();
-    spawn(move || {
-        r.start();
-    });
-    r2_event_tx.send(FsmEvent::ManualStart).unwrap();
-
-    std::thread::sleep(Duration::from_secs(5));
-
-    assert_eq!(*r1_session.state.lock().unwrap(), FsmStateKind::Established);
-    assert_eq!(*r2_session.state.lock().unwrap(), FsmStateKind::Established);
-}
-
-#[test]
-fn test_basic_update() {
-    let (r1, r2) = two_router_test_setup("basic_update");
-
-    let r1_session = &r1.sessions.lock().unwrap()[0];
-    let r1_event_tx = r1_session.event_tx.clone();
-
-    let update = UpdateMessage {
-        withdrawn: vec![],
-        path_attributes: vec![PathAttribute {
-            typ: PathAttributeType {
-                flags: 0,
-                type_code: PathAttributeTypeCode::NextHop,
-            },
-            value: PathAttributeValue::NextHop("1.2.3.1".parse().unwrap()),
-        }],
-        nlri: vec!["1.2.3.0/24".parse().unwrap()],
-    };
-
-    std::thread::sleep(Duration::from_secs(1));
-
-    r1_event_tx.send(FsmEvent::Announce(update)).unwrap();
-
-    std::thread::sleep(Duration::from_secs(1));
-
-    let advertised = r2
-        .db
-        .get_nexthop4(rdb::Route4Key {
-            prefix: rdb::Prefix4 {
-                value: "1.2.3.0".parse().unwrap(),
-                length: 24,
-            },
-            nexthop: "1.2.3.1".parse().unwrap(),
-        })
-        .unwrap();
-
-    assert!(advertised)
 }

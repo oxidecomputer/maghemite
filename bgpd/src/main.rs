@@ -1,6 +1,7 @@
 use crate::admin::api_description;
 use bgp::config::RouterConfig;
 use bgp::connection::BgpConnectionTcp;
+use bgp::connection::BgpListenerTcp;
 use bgp::log::init_logger;
 use bgp::router::Router;
 use bgp::session::Asn;
@@ -8,6 +9,7 @@ use clap::{Args, Parser, Subcommand};
 use std::fs::File;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
+use std::thread::spawn;
 
 mod admin;
 
@@ -61,20 +63,24 @@ async fn run(run: Run) {
         id: run.id,
     };
     let log = init_logger();
-    let router = Router::<BgpConnectionTcp>::new(
+    let router = Arc::new(Router::<BgpConnectionTcp>::new(
         run.listen,
         cfg,
         log.clone(),
         //assumes only one router per machine
         rdb::Db::new("/var/run/rdb").unwrap(),
-    );
+    ));
     let j = admin::start_server(
         log,
         Ipv6Addr::UNSPECIFIED,
         8000,
         cfg,
-        Arc::new(router),
+        router.clone(),
     );
+
+    spawn(move || {
+        router.run::<BgpListenerTcp>();
+    });
 
     j.unwrap().await.unwrap();
 }
