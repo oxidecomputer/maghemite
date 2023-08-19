@@ -325,7 +325,7 @@ pub struct NeighborInfo {
 pub struct SessionRunner<Cnx: BgpConnection> {
     session: Arc<Mutex<Session>>,
     event_rx: Receiver<FsmEvent<Cnx>>,
-    event_tx: Sender<FsmEvent<Cnx>>,
+    pub event_tx: Sender<FsmEvent<Cnx>>,
 
     pub state: Arc<Mutex<FsmStateKind>>,
 

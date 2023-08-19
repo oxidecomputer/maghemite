@@ -1,7 +1,7 @@
-use bgp::config::RouterConfig;
+use bgp::config::{PeerConfig, RouterConfig};
 use bgp::connection::BgpConnectionTcp;
 use bgp::router::Router;
-use bgp::session::{FsmEvent, NeighborInfo, Session, SessionRunner};
+use bgp::session::FsmEvent;
 use dropshot::{
     endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
     ConfigLoggingLevel, HttpError, HttpResponseUpdatedNoContent,
@@ -13,11 +13,10 @@ use slog::{error, info, warn, Logger};
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
-use std::thread::spawn;
-use std::time::Duration;
 use tokio::task::JoinHandle;
 
 pub struct HandlerContext {
+    #[allow(dead_code)]
     config: RouterConfig,
     router: Arc<Router<BgpConnectionTcp>>,
     log: Logger,
@@ -43,53 +42,31 @@ async fn add_neighbor(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let log = ctx.context().log.clone();
     let rq = request.into_inner();
+    let db = rdb::Db::new("/var/run/rdb").unwrap();
 
     info!(log, "add neighbor: {:#?}", rq);
 
-    spawn(move || {
-        run_session(rq, ctx.context(), log);
-    });
-
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-fn run_session(rq: AddNeighborRequest, ctx: &HandlerContext, log: Logger) {
-    let session = Session::new();
-
     let (event_tx, event_rx) = channel();
 
-    ctx.router.add_session(rq.host.ip(), event_tx.clone());
-
-    let neighbor = NeighborInfo {
-        name: rq.name,
-        host: rq.host,
-    };
-
-    let runner = SessionRunner::new(
-        Duration::from_secs(rq.connect_retry),
-        Duration::from_secs(rq.keepalive),
-        Duration::from_secs(rq.hold_time),
-        Duration::from_secs(rq.idle_hold_time),
-        Duration::from_secs(rq.delay_open),
-        session,
-        event_rx,
+    ctx.context().router.new_session(
+        PeerConfig {
+            name: rq.name.clone(),
+            host: rq.host,
+            hold_time: rq.hold_time,
+            idle_hold_time: rq.idle_hold_time,
+            delay_open: rq.delay_open,
+            connect_retry: rq.connect_retry,
+            keepalive: rq.keepalive,
+            resolution: rq.resolution,
+        },
+        "0.0.0.0".parse().unwrap(),
         event_tx.clone(),
-        neighbor.clone(),
-        ctx.config.asn,
-        ctx.config.id,
-        Duration::from_millis(rq.resolution),
-        None,
-        ctx.router.db.clone(),
-        log.clone(),
+        event_rx,
+        db,
     );
-
-    spawn(move || {
-        runner.start();
-    });
-
     event_tx.send(FsmEvent::ManualStart).unwrap();
 
-    std::thread::park();
+    Ok(HttpResponseUpdatedNoContent())
 }
 
 pub fn start_server(

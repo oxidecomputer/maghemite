@@ -4,31 +4,17 @@ use crate::messages::{
     PathAttribute, PathAttributeType, PathAttributeTypeCode,
     PathAttributeValue, UpdateMessage,
 };
-use crate::session::{Asn, FsmStateKind, NeighborInfo, Session};
-use rdb::Db;
-use slog::Logger;
-use std::net::SocketAddr;
+use crate::session::{Asn, FsmStateKind};
 use std::sync::mpsc::channel;
-use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread::spawn;
 use std::time::Duration;
 
 type Router = crate::router::Router<BgpConnectionChannel>;
 type FsmEvent = crate::session::FsmEvent<BgpConnectionChannel>;
-type SessionRunner = crate::session::SessionRunner<BgpConnectionChannel>;
 
 #[allow(clippy::type_complexity)]
-fn two_router_test_setup(
-    name: &str,
-) -> (
-    Arc<Router>,
-    Arc<SessionRunner>,
-    Sender<FsmEvent>,
-    Arc<Router>,
-    Arc<SessionRunner>,
-    Sender<FsmEvent>,
-) {
+fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
     let log = crate::log::init_file_logger(&format!("r1.{name}.log"));
 
     // Router 1 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -52,8 +38,7 @@ fn two_router_test_setup(
         rtr.run::<BgpListenerChannel>(tx);
     });
 
-    let r1_session = new_session(
-        log.clone(),
+    r1.new_session(
         PeerConfig {
             name: "r2".into(),
             host: "2.0.0.1:179".parse().unwrap(),
@@ -64,12 +49,12 @@ fn two_router_test_setup(
             keepalive: 3,
             resolution: 100,
         },
-        r1.clone(),
         "1.0.0.1:179".parse().unwrap(),
         r1_event_tx.clone(),
         event_rx,
         db.clone(),
     );
+    r1_event_tx.send(FsmEvent::ManualStart).unwrap();
 
     // Router 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -94,8 +79,7 @@ fn two_router_test_setup(
         rtr.run::<BgpListenerChannel>(tx);
     });
 
-    let r2_session = new_session(
-        log.clone(),
+    r2.new_session(
         PeerConfig {
             name: "r1".into(),
             host: "1.0.0.1:179".parse().unwrap(),
@@ -106,20 +90,23 @@ fn two_router_test_setup(
             keepalive: 3,
             resolution: 100,
         },
-        r2.clone(),
         "2.0.0.1:179".parse().unwrap(),
         r2_event_tx.clone(),
         event_rx,
         db.clone(),
     );
+    r2_event_tx.send(FsmEvent::ManualStart).unwrap();
 
-    (r1, r1_session, r1_event_tx, r2, r2_session, r2_event_tx)
+    (r1, r2)
 }
 
 #[test]
 fn test_basic_peering() {
-    let (_r1, r1_session, _r1_event_tx, r2, r2_session, r2_event_tx) =
-        two_router_test_setup("basic_peering");
+    let (r1, r2) = two_router_test_setup("basic_peering");
+
+    let r1_session = &r1.sessions.lock().unwrap()[0];
+    let r2_session = &r2.sessions.lock().unwrap()[0];
+    let r2_event_tx = r2_session.event_tx.clone();
 
     std::thread::sleep(Duration::from_secs(1));
 
@@ -152,8 +139,10 @@ fn test_basic_peering() {
 
 #[test]
 fn test_basic_update() {
-    let (_r1, _r1_session, r1_event_tx, r2, _r2_session, _r2_event_tx) =
-        two_router_test_setup("basic_update");
+    let (r1, r2) = two_router_test_setup("basic_update");
+
+    let r1_session = &r1.sessions.lock().unwrap()[0];
+    let r1_event_tx = r1_session.event_tx.clone();
 
     let update = UpdateMessage {
         withdrawn: vec![],
@@ -185,50 +174,4 @@ fn test_basic_update() {
         .unwrap();
 
     assert!(advertised)
-}
-
-fn new_session(
-    log: Logger,
-    peer: PeerConfig,
-    r: Arc<Router>,
-    bind_addr: SocketAddr,
-    event_tx: Sender<FsmEvent>,
-    event_rx: Receiver<FsmEvent>,
-    db: Db,
-) -> Arc<SessionRunner> {
-    let session = Session::new();
-
-    r.add_session(peer.host.ip(), event_tx.clone());
-
-    let neighbor = NeighborInfo {
-        name: peer.name.clone(),
-        host: peer.host,
-    };
-
-    let runner = Arc::new(SessionRunner::new(
-        Duration::from_secs(peer.connect_retry),
-        Duration::from_secs(peer.keepalive),
-        Duration::from_secs(peer.hold_time),
-        Duration::from_secs(peer.idle_hold_time),
-        Duration::from_secs(peer.delay_open),
-        session,
-        event_rx,
-        event_tx.clone(),
-        neighbor.clone(),
-        r.config.asn,
-        r.config.id,
-        Duration::from_millis(peer.resolution),
-        Some(bind_addr),
-        db,
-        log.clone(),
-    ));
-
-    let r = runner.clone();
-    spawn(move || {
-        r.start();
-    });
-
-    event_tx.send(FsmEvent::ManualStart).unwrap();
-
-    runner
 }
