@@ -1231,6 +1231,8 @@ impl Capability {
             return Err(Error::Eom);
         }
 
+        //TODO all the todo!() below must go as they will cause a router crash
+        //on an unsupported option which is clearly unacceptable
         match code {
             CapabilityCode::MultiprotocolExtensions => {
                 //TODO
@@ -1261,7 +1263,10 @@ impl Capability {
                 //TODO
                 Ok((&input[len..], Capability::AddPath {}))
             }
-            CapabilityCode::EnhancedRouteRefresh => todo!(),
+            CapabilityCode::EnhancedRouteRefresh => {
+                //TODO
+                Ok((&input[len..], Capability::EnhancedRouteRefresh {}))
+            }
             CapabilityCode::LongLivedGracefulRestart => todo!(),
             CapabilityCode::RoutingPolicyDistribution => todo!(),
             CapabilityCode::Fqdn => todo!(),

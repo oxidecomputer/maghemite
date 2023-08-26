@@ -9,6 +9,10 @@ default-members = [
     "mg-ddm-verify",
     "tests",
     "rdb",
+    "bgp",
+    "bgpd",
+    "bgp-admin-client",
+    "bgpadm",
 ]
 
 members = [

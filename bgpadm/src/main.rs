@@ -38,12 +38,16 @@ struct Neighbor {
     port: u16,
     #[arg(default_value_t = 30)]
     hold_time: u64,
+    #[arg(default_value_t = 30)]
+    idle_hold_time: u64,
     #[arg(default_value_t = 5)]
     connect_retry_time: u64,
     #[arg(default_value_t = 20)]
     keepalive_time: u64,
     #[arg(default_value_t = 10)]
     delay_open_time: u64,
+    #[arg(default_value_t = 100)]
+    resolution: u64,
 }
 
 impl From<Neighbor> for types::AddNeighborRequest {
@@ -52,9 +56,11 @@ impl From<Neighbor> for types::AddNeighborRequest {
             name: n.name,
             host: SocketAddr::new(n.addr, n.port).to_string(),
             hold_time: n.hold_time,
+            idle_hold_time: n.idle_hold_time,
             connect_retry: n.connect_retry_time,
             keepalive: n.keepalive_time,
             delay_open: n.delay_open_time,
+            resolution: n.resolution,
         }
     }
 }

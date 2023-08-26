@@ -1,8 +1,12 @@
 use crate::error::Error;
-use crate::messages::{Header, Message, MessageType};
+use crate::messages::{
+    Header, Message, MessageType, NotificationMessage, OpenMessage,
+    UpdateMessage,
+};
 use crate::session::FsmEvent;
-use slog::{error, Logger};
+use slog::{debug, error, Logger};
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::mpsc::Sender;
@@ -41,14 +45,22 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn accept(
         &self,
         log: Logger,
-        //TODO plumb
-        _addr_to_session: Arc<
+        addr_to_session: Arc<
             Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionTcp>>>>,
         >,
         _timeout: Duration, //TODO implement
     ) -> Result<BgpConnectionTcp, Error> {
-        let (conn, sa) = self.listener.accept()?;
-        Ok(BgpConnectionTcp::with_conn(self.addr, sa, conn, log))
+        let (conn, peer) = self.listener.accept()?;
+        match addr_to_session.lock().unwrap().get(&peer.ip()) {
+            Some(event_tx) => Ok(BgpConnectionTcp::with_conn(
+                self.addr,
+                peer,
+                conn,
+                event_tx.clone(),
+                log,
+            )),
+            None => Err(Error::UnknownPeer),
+        }
     }
 }
 
@@ -70,7 +82,7 @@ pub struct BgpConnectionTcp {
     #[allow(dead_code)]
     source: Option<SocketAddr>,
     peer: SocketAddr,
-    conn: Arc<Mutex<Option<TcpStream>>>,
+    conn: Arc<Mutex<Option<TcpStream>>>, //TODO split into tx/rx?
     log: Logger,
 }
 
@@ -93,8 +105,14 @@ impl BgpConnection for BgpConnectionTcp {
         let log = self.log.clone();
         spawn(move || match TcpStream::connect_timeout(&peer, timeout) {
             Ok(new_conn) => {
-                conn.lock().unwrap().replace(new_conn);
-                Self::recv(event_tx.clone(), timeout, log.clone());
+                conn.lock().unwrap().replace(new_conn.try_clone().unwrap());
+                Self::recv(
+                    peer,
+                    event_tx.clone(),
+                    new_conn,
+                    timeout,
+                    log.clone(),
+                );
                 event_tx.send(FsmEvent::TcpConnectionConfirmed).unwrap();
             }
             Err(e) => {
@@ -133,8 +151,17 @@ impl BgpConnectionTcp {
         source: SocketAddr,
         peer: SocketAddr,
         conn: TcpStream,
+        event_tx: Sender<FsmEvent<Self>>,
         log: Logger,
     ) -> Self {
+        //TODO timeout as param
+        Self::recv(
+            peer,
+            event_tx,
+            conn.try_clone().unwrap(),
+            Duration::from_millis(100),
+            log.clone(),
+        );
         Self {
             source: Some(source),
             peer,
@@ -144,11 +171,75 @@ impl BgpConnectionTcp {
     }
 
     fn recv(
-        _event_tx: Sender<FsmEvent<Self>>,
-        _timeout: Duration,
-        _log: Logger,
+        peer: SocketAddr,
+        event_tx: Sender<FsmEvent<Self>>,
+        mut conn: TcpStream,
+        _timeout: Duration, //TODO plumb
+        log: Logger,
     ) {
-        todo!();
+        spawn(move || loop {
+            match Self::recv_msg(&mut conn) {
+                Ok(msg) => {
+                    debug!(log, "[{peer}] recv: {msg:#?}");
+                    event_tx.send(FsmEvent::Message(msg)).unwrap();
+                }
+                Err(_e) => {
+                    //TODO log?
+                }
+            }
+        });
+    }
+
+    fn recv_header(stream: &mut TcpStream) -> std::io::Result<Header> {
+        let mut buf = [0u8; 19];
+        let mut i = 0;
+        loop {
+            let n = stream.read(&mut buf[i..])?;
+            i += n;
+            if i < 19 {
+                if i > 0 {
+                    println!("i={}", i);
+                }
+                continue;
+            }
+            match Header::from_wire(&buf) {
+                Ok(h) => return Ok(h),
+                Err(_) => continue,
+            };
+        }
+    }
+
+    fn recv_msg(stream: &mut TcpStream) -> std::io::Result<Message> {
+        loop {
+            let hdr = Self::recv_header(stream)?;
+            println!("HDR: {:#?}", hdr);
+
+            let mut msgbuf = vec![0u8; (hdr.length - 19) as usize];
+            stream.read_exact(&mut msgbuf).unwrap();
+
+            let msg = match hdr.typ {
+                MessageType::Open => match OpenMessage::from_wire(&msgbuf) {
+                    Ok(m) => m.into(),
+                    Err(_) => continue,
+                },
+                MessageType::Update => {
+                    match UpdateMessage::from_wire(&msgbuf) {
+                        Ok(m) => m.into(),
+                        Err(_) => continue,
+                    }
+                }
+                MessageType::Notification => {
+                    match NotificationMessage::from_wire(&msgbuf) {
+                        Ok(m) => m.into(),
+                        Err(_) => continue,
+                    }
+                }
+                MessageType::KeepAlive => return Ok(Message::KeepAlive),
+            };
+
+            println!("MSG: {:#?}", msg);
+            return Ok(msg);
+        }
     }
 }
 

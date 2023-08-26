@@ -59,7 +59,7 @@ async fn add_neighbor(
             keepalive: rq.keepalive,
             resolution: rq.resolution,
         },
-        "0.0.0.0".parse().unwrap(),
+        "0.0.0.0:179".parse().unwrap(),
         event_tx.clone(),
         event_rx,
         db,

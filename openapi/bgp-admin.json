@@ -67,6 +67,11 @@
           "host": {
             "type": "string"
           },
+          "idle_hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "keepalive": {
             "type": "integer",
             "format": "uint64",
@@ -74,6 +79,11 @@
           },
           "name": {
             "type": "string"
+          },
+          "resolution": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
           }
         },
         "required": [
@@ -81,8 +91,10 @@
           "delay_open",
           "hold_time",
           "host",
+          "idle_hold_time",
           "keepalive",
-          "name"
+          "name",
+          "resolution"
         ]
       },
       "Error": {
