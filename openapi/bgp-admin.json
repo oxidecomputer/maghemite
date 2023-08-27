@@ -5,6 +5,32 @@
     "version": "v0.1.0"
   },
   "paths": {
+    "/export-policy": {
+      "post": {
+        "operationId": "add_export_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddExportPolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/neighbor": {
       "post": {
         "operationId": "add_neighbor",
@@ -13,6 +39,32 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AddNeighborRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/originate4": {
+      "post": {
+        "operationId": "originate4",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Originate4Request"
               }
             }
           },
@@ -46,6 +98,44 @@
       }
     },
     "schemas": {
+      "AddExportPolicyRequest": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "description": "The policy action to apply.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PolicyAction"
+              }
+            ]
+          },
+          "addr": {
+            "description": "Address of the peer to apply this policy to.",
+            "type": "string",
+            "format": "ip"
+          },
+          "prefix": {
+            "description": "Prefix this policy applies to",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Prefix4"
+              }
+            ]
+          },
+          "priority": {
+            "description": "Priority of the policy, higher value is higher priority.",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "action",
+          "addr",
+          "prefix",
+          "priority"
+        ]
+      },
       "AddNeighborRequest": {
         "type": "object",
         "properties": {
@@ -114,6 +204,52 @@
         "required": [
           "message",
           "request_id"
+        ]
+      },
+      "Originate4Request": {
+        "type": "object",
+        "properties": {
+          "nexthop": {
+            "description": "Nexthop to originate.",
+            "type": "string",
+            "format": "ipv4"
+          },
+          "prefixes": {
+            "description": "Set of prefixes to originate.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prefix4"
+            }
+          }
+        },
+        "required": [
+          "nexthop",
+          "prefixes"
+        ]
+      },
+      "PolicyAction": {
+        "type": "string",
+        "enum": [
+          "Allow",
+          "Deny"
+        ]
+      },
+      "Prefix4": {
+        "type": "object",
+        "properties": {
+          "length": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "value": {
+            "type": "string",
+            "format": "ipv4"
+          }
+        },
+        "required": [
+          "length",
+          "value"
         ]
       }
     }

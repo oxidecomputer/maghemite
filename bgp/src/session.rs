@@ -3,7 +3,7 @@ use crate::connection::BgpConnection;
 use crate::error::Error;
 use crate::fanout::Fanout;
 use crate::messages::{
-    Message, OpenMessage, PathAttributeValue, UpdateMessage,
+    Capability, Message, OpenMessage, PathAttributeValue, UpdateMessage,
 };
 use crate::{dbg, inf, wrn};
 use rdb::{Db, Prefix4, Route4Key};
@@ -576,7 +576,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn send_open(&self, conn: &Cnx) {
-        let msg = match self.asn {
+        let mut msg = match self.asn {
             Asn::FourOctet(asn) => OpenMessage::new4(
                 asn,
                 self.clock.timers.hold_timer.interval.as_secs() as u16,
@@ -588,6 +588,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.id,
             ),
         };
+        // TODO negotiate capabilities
+        msg.add_capabilities(&[
+            //Capability::RouteRefresh{},
+            //Capability::EnhancedRouteRefresh{},
+            Capability::MultiprotocolExtensions {
+                afi: 1,  //IP
+                safi: 1, //NLRI for unicast
+            },
+            //Capability::GracefulRestart{},
+            Capability::AddPath {
+                afi: 1,          //IP
+                safi: 1,         //NLRI for unicast
+                send_receive: 1, //receive
+            },
+        ]);
         // TODO(unwrap)
         conn.send(msg.into()).unwrap();
     }

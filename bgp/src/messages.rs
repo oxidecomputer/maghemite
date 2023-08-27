@@ -1,7 +1,7 @@
 use crate::error::Error;
 use nom::{
     bytes::complete::{tag, take},
-    number::complete::{be_u16, be_u32, u8 as parse_u8},
+    number::complete::{be_u16, be_u32, be_u8, u8 as parse_u8},
 };
 use num_enum::TryFromPrimitive;
 use std::net::{IpAddr, Ipv4Addr};
@@ -224,6 +224,20 @@ impl OpenMessage {
         }
     }
 
+    pub fn add_capabilities(&mut self, capabilities: &[Capability]) {
+        if capabilities.is_empty() {
+            return;
+        }
+        for p in &mut self.parameters {
+            if let OptionalParameter::Capabilities(cs) = p {
+                cs.extend_from_slice(capabilities);
+                return;
+            }
+        }
+        self.parameters
+            .push(OptionalParameter::Capabilities(capabilities.into()));
+    }
+
     /// Serilize an open message to wire format.
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
@@ -388,6 +402,8 @@ impl UpdateMessage {
     fn nlri_to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
         for n in &self.nlri {
+            // TODO hacked in ADD_PATH
+            //buf.extend_from_slice(&0u32.to_be_bytes());
             buf.extend_from_slice(&n.to_wire()?);
         }
         Ok(buf)
@@ -464,7 +480,8 @@ impl Prefix {
             return Err(Error::TooLarge);
         }
         let mut buf = vec![self.length];
-        buf.extend_from_slice(&self.value);
+        let n = (self.length as usize) >> 3;
+        buf.extend_from_slice(&self.value[..n]);
         Ok(buf)
     }
 
@@ -550,9 +567,16 @@ pub struct PathAttribute {
 
 impl From<PathAttributeValue> for PathAttribute {
     fn from(v: PathAttributeValue) -> Self {
+        let flags = match v {
+            PathAttributeValue::Origin(_) => PathAttributeFlags::Transitive,
+            PathAttributeValue::AsPath(_) => PathAttributeFlags::Transitive,
+            PathAttributeValue::As4Path(_) => PathAttributeFlags::Transitive,
+            PathAttributeValue::NextHop(_) => PathAttributeFlags::Transitive,
+            _ => PathAttributeFlags::Optional,
+        } as u8;
         Self {
             typ: PathAttributeType {
-                flags: 0,
+                flags,
                 type_code: v.clone().into(),
             },
             value: v,
@@ -672,7 +696,12 @@ impl From<PathAttributeValue> for PathAttributeTypeCode {
             PathAttributeValue::Aggregator(_) => {
                 PathAttributeTypeCode::Aggregator
             }
-            PathAttributeValue::As4Path(_) => PathAttributeTypeCode::As4Path,
+            /* TODO according to RFC 4893 we do not have this as an explicit
+             * attribute type when 4-byte ASNs have been negotiated - but are
+             * there some circumstances when we'll need transitional mode?
+             */
+            //PathAttributeValue::As4Path(_) => PathAttributeTypeCode::As4Path,
+            PathAttributeValue::As4Path(_) => PathAttributeTypeCode::AsPath,
             PathAttributeValue::As4Aggregator(_) => {
                 PathAttributeTypeCode::As4Aggregator
             }
@@ -696,9 +725,22 @@ pub enum PathAttributeValue {
 impl PathAttributeValue {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         match self {
-            Self::Origin(_) => todo!(),
-            Self::AsPath(_) => todo!(),
-            Self::NextHop(_) => todo!(),
+            Self::Origin(x) => Ok(vec![*x as u8]),
+            Self::AsPath(segments) => {
+                let mut buf = Vec::new();
+                for s in segments {
+                    buf.push(s.typ as u8);
+                    buf.push(s.value.len() as u8);
+                    for v in &s.value {
+                        buf.extend_from_slice(&v.to_be_bytes());
+                    }
+                }
+                Ok(buf)
+            }
+            Self::NextHop(addr) => match addr {
+                IpAddr::V4(a) => Ok(a.octets().into()),
+                IpAddr::V6(a) => Ok(a.octets().into()),
+            },
             Self::MultiExitDisc(_) => todo!(),
             Self::LocalPref(_) => todo!(),
             Self::Aggregator(_) => todo!(),
@@ -1044,14 +1086,6 @@ pub enum OptionalParameterCode {
     ExtendedLength = 255,
 }
 
-/* XXX
-impl From<Capability> for OptionalParameter {
-    fn from(c: Capability) -> OptionalParameter {
-        OptionalParameter::Capability(c)
-    }
-}
-*/
-
 impl OptionalParameter {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         match self {
@@ -1060,11 +1094,13 @@ impl OptionalParameter {
             Self::Authentication => todo!(),
             Self::Capabilities(cs) => {
                 let mut buf = vec![OptionalParameterCode::Capabilities as u8];
+                let mut csbuf = Vec::new();
                 for c in cs {
                     let cbuf = c.to_wire()?;
-                    buf.push(cbuf.len() as u8);
-                    buf.extend_from_slice(&cbuf);
+                    csbuf.extend_from_slice(&cbuf);
                 }
+                buf.push(csbuf.len() as u8);
+                buf.extend_from_slice(&csbuf);
                 Ok(buf)
             }
             Self::ExtendedLength => todo!(),
@@ -1099,7 +1135,10 @@ impl OptionalParameter {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Capability {
     /// RFC 2858 TODO
-    MultiprotocolExtensions {},
+    MultiprotocolExtensions {
+        afi: u16,
+        safi: u8,
+    },
 
     /// RFC 2918 TODO
     RouteRefresh {},
@@ -1140,7 +1179,11 @@ pub enum Capability {
     MultisessionBgp {},
 
     /// RFC 7911 TODO
-    AddPath {},
+    AddPath {
+        afi: u16,
+        safi: u8,
+        send_receive: u8,
+    },
 
     /// RFC 7313 TODO
     EnhancedRouteRefresh {},
@@ -1188,8 +1231,19 @@ pub enum Capability {
 impl Capability {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         match self {
-            Self::MultiprotocolExtensions {} => todo!(),
-            Self::RouteRefresh {} => todo!(),
+            Self::MultiprotocolExtensions { afi, safi } => {
+                let mut buf =
+                    vec![CapabilityCode::MultiprotocolExtensions as u8, 4];
+                buf.extend_from_slice(&afi.to_be_bytes());
+                buf.push(0);
+                buf.push(*safi);
+                Ok(buf)
+            }
+            Self::RouteRefresh {} => {
+                //TODO audit
+                let buf = vec![CapabilityCode::RouteRefresh as u8, 0];
+                Ok(buf)
+            }
             Self::OutboundRouteFiltering {} => todo!(),
             Self::MultipleRoutesToDestination {} => todo!(),
             Self::ExtendedNextHopEncoding {} => todo!(),
@@ -1197,7 +1251,11 @@ impl Capability {
             Self::BgpSec {} => todo!(),
             Self::MultipleLabels {} => todo!(),
             Self::BgpRole {} => todo!(),
-            Self::GracefulRestart {} => todo!(),
+            Self::GracefulRestart {} => {
+                //TODO audit
+                let buf = vec![CapabilityCode::GracefulRestart as u8, 0];
+                Ok(buf)
+            }
             Self::FourOctetAs { asn } => {
                 let mut buf = vec![CapabilityCode::FourOctetAs as u8, 4];
                 buf.extend_from_slice(&asn.to_be_bytes());
@@ -1205,8 +1263,22 @@ impl Capability {
             }
             Self::DynamicCapability {} => todo!(),
             Self::MultisessionBgp {} => todo!(),
-            Self::AddPath {} => todo!(),
-            Self::EnhancedRouteRefresh {} => todo!(),
+            Self::AddPath {
+                afi,
+                safi,
+                send_receive,
+            } => {
+                let mut buf = vec![CapabilityCode::AddPath as u8, 4];
+                buf.extend_from_slice(&afi.to_be_bytes());
+                buf.push(*safi);
+                buf.push(*send_receive);
+                Ok(buf)
+            }
+            Self::EnhancedRouteRefresh {} => {
+                //TODO audit
+                let buf = vec![CapabilityCode::EnhancedRouteRefresh as u8, 0];
+                Ok(buf)
+            }
             Self::LongLivedGracefulRestart {} => todo!(),
             Self::RoutingPolicyDistribution {} => todo!(),
             Self::Fqdn {} => todo!(),
@@ -1235,8 +1307,10 @@ impl Capability {
         //on an unsupported option which is clearly unacceptable
         match code {
             CapabilityCode::MultiprotocolExtensions => {
-                //TODO
-                Ok((&input[len..], Capability::MultiprotocolExtensions {}))
+                let (input, afi) = be_u16(input)?;
+                let (input, _) = be_u8(input)?;
+                let (input, safi) = be_u8(input)?;
+                Ok((input, Capability::MultiprotocolExtensions { afi, safi }))
             }
             CapabilityCode::RouteRefresh => {
                 //TODO
@@ -1260,8 +1334,18 @@ impl Capability {
             CapabilityCode::DynamicCapability => todo!(),
             CapabilityCode::MultisessionBgp => todo!(),
             CapabilityCode::AddPath => {
+                let (input, afi) = be_u16(input)?;
+                let (input, safi) = be_u8(input)?;
+                let (input, send_receive) = be_u8(input)?;
                 //TODO
-                Ok((&input[len..], Capability::AddPath {}))
+                Ok((
+                    input,
+                    Capability::AddPath {
+                        afi,
+                        safi,
+                        send_receive,
+                    },
+                ))
             }
             CapabilityCode::EnhancedRouteRefresh => {
                 //TODO

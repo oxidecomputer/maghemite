@@ -12,4 +12,5 @@ slog-term = "2.7"
 slog-async = "2.7"
 slog-envlogger = "2.2"
 bgp = { path = "../bgp" }
+rdb = { path = "../rdb" }
 bgp-admin-client = { path = "../bgp-admin-client" }

@@ -8,3 +8,4 @@ sled.workspace = true
 serde.workspace = true
 ciborium.workspace = true
 anyhow.workspace = true
+schemars.workspace = true

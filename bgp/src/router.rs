@@ -4,9 +4,11 @@ use crate::connection::{BgpConnection, BgpListener};
 use crate::error::Error;
 use crate::fanout::Rule4;
 use crate::fanout::{Egress, Fanout};
-use crate::messages::{PathAttributeValue, Prefix, UpdateMessage};
-use crate::session::{FsmEvent, SessionRunner};
-use crate::session::{NeighborInfo, Session};
+use crate::messages::{
+    As4PathSegment, AsPathSegment, AsPathType, PathAttributeValue, PathOrigin,
+    Prefix, UpdateMessage,
+};
+use crate::session::{Asn, FsmEvent, NeighborInfo, Session, SessionRunner};
 use rdb::{Db, Route4Key};
 use slog::Logger;
 use std::collections::BTreeMap;
@@ -180,10 +182,43 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     ) -> Result<(), Error> {
         let mut update = UpdateMessage {
             path_attributes: vec![
-                PathAttributeValue::NextHop(nexthop.into()).into()
+                //TODO hardcode
+                PathAttributeValue::Origin(PathOrigin::Egp).into(),
+                PathAttributeValue::NextHop(nexthop.into()).into(),
             ],
             ..Default::default()
         };
+        match self.config.asn {
+            Asn::TwoOctet(asn) => {
+                update.path_attributes.extend_from_slice(&[
+                    PathAttributeValue::AsPath(vec![AsPathSegment {
+                        typ: AsPathType::AsSequence,
+                        value: vec![asn],
+                    }])
+                    .into(),
+                ]);
+            }
+            Asn::FourOctet(asn) => {
+                update.path_attributes.extend_from_slice(&[
+                    /* TODO according to RFC 4893 we do not have this as an
+                     * explicit attribute type when 4-byte ASNs have been
+                     * negotiated - but are there some circumstances when we'll
+                     * need transitional mode?
+                    PathAttributeValue::AsPath(vec![
+                        AsPathSegment{
+                            typ: AsPathType::AsSequence,
+                            value: vec![AS_TRANS],
+                        }
+                    ]).into(),
+                    */
+                    PathAttributeValue::As4Path(vec![As4PathSegment {
+                        typ: AsPathType::AsSequence,
+                        value: vec![asn],
+                    }])
+                    .into(),
+                ]);
+            }
+        }
         for p in &prefixes {
             update.nlri.push(p.clone());
             self.db

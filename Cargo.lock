@@ -221,8 +221,10 @@ name = "bgp-admin-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bgp",
  "percent-encoding",
  "progenitor",
+ "rdb",
  "reqwest",
  "serde",
  "serde_json",
@@ -237,6 +239,7 @@ dependencies = [
  "bgp",
  "bgp-admin-client",
  "clap",
+ "rdb",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -2161,6 +2164,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ciborium",
+ "schemars",
  "serde",
  "sled",
 ]

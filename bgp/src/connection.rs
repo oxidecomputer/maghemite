@@ -122,6 +122,7 @@ impl BgpConnection for BgpConnectionTcp {
     }
 
     fn send(&self, msg: Message) -> Result<(), Error> {
+        debug!(self.log, "sending {:#?}", msg);
         let msg_buf = msg.to_wire()?;
         let header = Header {
             length: msg_buf.len() as u16 + 19,
@@ -130,6 +131,7 @@ impl BgpConnection for BgpConnectionTcp {
         let mut buf = header.to_wire().to_vec();
         buf.extend_from_slice(&msg_buf);
         let mut guard = self.conn.lock().unwrap();
+        debug!(self.log, "sending {:x?}", buf);
         match *guard {
             Some(ref mut ch) => {
                 ch.write_all(&buf)?;

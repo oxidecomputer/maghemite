@@ -1,4 +1,5 @@
 use anyhow::Result;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -80,7 +81,9 @@ impl Policy4Key {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
+#[derive(
+    Debug, Copy, Clone, Serialize, Deserialize, Hash, Eq, PartialEq, JsonSchema,
+)]
 pub struct Prefix4 {
     pub value: Ipv4Addr,
     pub length: u8,
@@ -160,10 +163,22 @@ pub fn to_buf<T: ?Sized + Serialize>(value: &T) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone)]
+#[derive(Debug, Serialize, Deserialize, Copy, Clone, JsonSchema)]
 pub enum PolicyAction {
     Allow,
     Deny,
+}
+
+impl FromStr for PolicyAction {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "allow" | "Allow" => Ok(Self::Allow),
+            "deny" | "Deny" => Ok(Self::Allow),
+            _ => Err("Unknown policy action, must be allow or deny".into()),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone)]

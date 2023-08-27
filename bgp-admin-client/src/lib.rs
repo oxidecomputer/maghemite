@@ -1,3 +1,5 @@
+pub use rdb::{PolicyAction, Prefix4};
+
 progenitor::generate_api!(
     spec = "../openapi/bgp-admin.json",
     inner_type = slog::Logger,
@@ -11,4 +13,8 @@ progenitor::generate_api!(
     post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
         slog::debug!(log, "client response"; "result" => ?result);
     }),
+    replace = {
+        Prefix4 = rdb::Prefix4,
+        PolicyAction = rdb::PolicyAction,
+    }
 );

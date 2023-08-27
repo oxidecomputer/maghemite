@@ -2,10 +2,10 @@ use anyhow::Result;
 use bgp_admin_client::types;
 use bgp_admin_client::Client;
 use clap::{Args, Parser, Subcommand};
+use rdb::types::{PolicyAction, Prefix4};
 use slog::Drain;
 use slog::Logger;
-use std::net::IpAddr;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -25,6 +25,32 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     AddNeighbor(Neighbor),
+    AddExportPolicy(ExportPolicy),
+    Originate4(Originate4),
+}
+
+#[derive(Args, Debug)]
+struct ExportPolicy {
+    /// Address of the peer to apply this policy to.
+    pub addr: IpAddr,
+
+    /// Prefix this policy applies to
+    pub prefix: Prefix4,
+
+    /// Priority of the policy, higher value is higher priority.
+    pub priority: u16,
+
+    /// The policy action to apply.
+    pub action: PolicyAction,
+}
+
+#[derive(Args, Debug)]
+struct Originate4 {
+    /// Nexthop to originate.
+    pub nexthop: Ipv4Addr,
+
+    /// Set of prefixes to originate.
+    pub prefixes: Vec<Prefix4>,
 }
 
 #[derive(Args, Debug)]
@@ -77,13 +103,36 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::AddNeighbor(nbr) => add_neighbor(nbr, client).await,
+        Commands::AddExportPolicy(policy) => {
+            add_export_policy(policy, client).await
+        }
+        Commands::Originate4(originate) => originate4(originate, client).await,
     }
     Ok(())
 }
 
 async fn add_neighbor(nbr: Neighbor, c: Client) {
-    let r = c.add_neighbor(&nbr.into()).await.unwrap();
-    println!("{:#?}", r);
+    c.add_neighbor(&nbr.into()).await.unwrap();
+}
+
+async fn add_export_policy(policy: ExportPolicy, c: Client) {
+    c.add_export_policy(&types::AddExportPolicyRequest {
+        addr: policy.addr,
+        prefix: policy.prefix,
+        priority: policy.priority,
+        action: policy.action,
+    })
+    .await
+    .unwrap();
+}
+
+async fn originate4(originate: Originate4, c: Client) {
+    c.originate4(&types::Originate4Request {
+        nexthop: originate.nexthop,
+        prefixes: originate.prefixes.clone(),
+    })
+    .await
+    .unwrap();
 }
 
 fn init_logger() -> Logger {

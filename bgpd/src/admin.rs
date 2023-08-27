@@ -1,5 +1,6 @@
 use bgp::config::{PeerConfig, RouterConfig};
 use bgp::connection::BgpConnectionTcp;
+use bgp::fanout::Rule4;
 use bgp::router::Router;
 use bgp::session::FsmEvent;
 use dropshot::{
@@ -7,10 +8,11 @@ use dropshot::{
     ConfigLoggingLevel, HttpError, HttpResponseUpdatedNoContent,
     HttpServerStarter, RequestContext, TypedBody,
 };
+use rdb::{Policy, PolicyAction, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{error, info, warn, Logger};
-use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -33,6 +35,30 @@ pub struct AddNeighborRequest {
     pub connect_retry: u64,
     pub keepalive: u64,
     pub resolution: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AddExportPolicyRequest {
+    /// Address of the peer to apply this policy to.
+    pub addr: IpAddr,
+
+    /// Prefix this policy applies to
+    pub prefix: Prefix4,
+
+    /// Priority of the policy, higher value is higher priority.
+    pub priority: u16,
+
+    /// The policy action to apply.
+    pub action: PolicyAction,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Originate4Request {
+    /// Nexthop to originate.
+    pub nexthop: Ipv4Addr,
+
+    /// Set of prefixes to originate.
+    pub prefixes: Vec<Prefix4>,
 }
 
 #[endpoint { method = POST, path = "/neighbor" }]
@@ -65,6 +91,43 @@ async fn add_neighbor(
         db,
     );
     event_tx.send(FsmEvent::ManualStart).unwrap();
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = POST, path = "/export-policy" }]
+pub async fn add_export_policy(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<AddExportPolicyRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+
+    ctx.context().router.add_export_policy(
+        rq.addr,
+        Rule4 {
+            prefix: rq.prefix,
+            policy: Policy {
+                action: rq.action,
+                priority: rq.priority,
+            },
+        },
+    );
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = POST, path = "/originate4" }]
+pub async fn originate4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<Originate4Request>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
+
+    ctx.context()
+        .router
+        .originate4(rq.nexthop, prefixes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -114,5 +177,7 @@ pub fn start_server(
 pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     let mut api = ApiDescription::new();
     api.register(add_neighbor).unwrap();
+    api.register(add_export_policy).unwrap();
+    api.register(originate4).unwrap();
     api
 }
