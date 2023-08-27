@@ -82,6 +82,10 @@ impl Db {
             .collect()
     }
 
+    pub fn get_imported4(&self) -> Vec<Route4ImportKey> {
+        self.imported.lock().unwrap().clone().into_iter().collect()
+    }
+
     pub fn set_nexthop4(&self, route_key: Route4ImportKey) {
         self.imported.lock().unwrap().insert(route_key);
     }

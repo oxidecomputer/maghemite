@@ -767,7 +767,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     // TODO
     // - apply update atomically
-    // - propagation
     fn apply_update(&self, update: UpdateMessage, id: u32) {
         self.add_to_rib(&update, id);
         self.fanout_update(&update);

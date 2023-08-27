@@ -5,8 +5,8 @@ use crate::error::Error;
 use crate::fanout::Rule4;
 use crate::fanout::{Egress, Fanout};
 use crate::messages::{
-    As4PathSegment, AsPathSegment, AsPathType, PathAttributeValue, PathOrigin,
-    Prefix, UpdateMessage,
+    As4PathSegment, AsPathType, PathAttributeValue, PathOrigin, Prefix,
+    UpdateMessage,
 };
 use crate::session::{Asn, FsmEvent, NeighborInfo, Session, SessionRunner};
 use rdb::{Db, Route4Key};
@@ -124,7 +124,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         bind_addr: SocketAddr,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
-        db: Db,
     ) -> Arc<SessionRunner<Cnx>> {
         let session = Session::new();
 
@@ -152,7 +151,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             self.config.id,
             Duration::from_millis(peer.resolution),
             Some(bind_addr),
-            db,
+            self.db.clone(),
             self.fanout.clone(),
             self.log.clone(),
         ));
@@ -191,9 +190,9 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         match self.config.asn {
             Asn::TwoOctet(asn) => {
                 update.path_attributes.extend_from_slice(&[
-                    PathAttributeValue::AsPath(vec![AsPathSegment {
+                    PathAttributeValue::AsPath(vec![As4PathSegment {
                         typ: AsPathType::AsSequence,
-                        value: vec![asn],
+                        value: vec![asn as u32],
                     }])
                     .into(),
                 ]);

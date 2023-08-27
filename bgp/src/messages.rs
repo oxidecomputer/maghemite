@@ -712,7 +712,11 @@ impl From<PathAttributeValue> for PathAttributeTypeCode {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PathAttributeValue {
     Origin(PathOrigin),
-    AsPath(Vec<AsPathSegment>),
+    /* TODO according to RFC 4893 we do not have this as an explicit attribute
+     * type when 4-byte ASNs have been negotiated - but are there some
+     * circumstances when we'll need transitional mode?
+     */
+    AsPath(Vec<As4PathSegment>),
     NextHop(IpAddr),
     MultiExitDisc(u32),
     LocalPref(u32),
@@ -760,9 +764,28 @@ impl PathAttributeValue {
         type_code: PathAttributeTypeCode,
     ) -> Result<PathAttributeValue, Error> {
         match type_code {
-            PathAttributeTypeCode::Origin => todo!(),
-            PathAttributeTypeCode::AsPath => todo!(),
-            PathAttributeTypeCode::NextHop => todo!(),
+            PathAttributeTypeCode::Origin => {
+                let (_input, origin) = be_u8(input)?;
+                Ok(PathAttributeValue::Origin(PathOrigin::try_from(origin)?))
+            }
+            PathAttributeTypeCode::AsPath => {
+                let mut segments = Vec::new();
+                loop {
+                    if input.is_empty() {
+                        break;
+                    }
+                    let (out, seg) = As4PathSegment::from_wire(input)?;
+                    segments.push(seg);
+                    input = out;
+                }
+                Ok(PathAttributeValue::As4Path(segments))
+            }
+            PathAttributeTypeCode::NextHop => {
+                let (_input, b) = take(4usize)(input)?;
+                Ok(PathAttributeValue::NextHop(
+                    Ipv4Addr::new(b[0], b[1], b[2], b[3]).into(),
+                ))
+            }
             PathAttributeTypeCode::MultiExitDisc => todo!(),
             PathAttributeTypeCode::LocalPref => todo!(),
             PathAttributeTypeCode::AtomicAggregate => todo!(),
@@ -784,7 +807,8 @@ impl PathAttributeValue {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+#[repr(u8)]
 pub enum PathOrigin {
     Igp = 0,
     Egp = 1,

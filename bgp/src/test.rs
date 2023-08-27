@@ -141,7 +141,6 @@ fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
         "1.0.0.1:179".parse().unwrap(),
         r1_event_tx.clone(),
         event_rx,
-        db.clone(),
     );
     r1_event_tx.send(FsmEvent::ManualStart).unwrap();
 
@@ -184,7 +183,6 @@ fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
         "2.0.0.1:179".parse().unwrap(),
         r2_event_tx.clone(),
         event_rx,
-        db.clone(),
     );
     r2_event_tx.send(FsmEvent::ManualStart).unwrap();
 

@@ -80,6 +80,9 @@ pub enum Error {
         #[from] TryFromPrimitiveError<crate::messages::UpdateErrorSubcode>,
     ),
 
+    #[error("Path origin error")]
+    PathOrigin(#[from] TryFromPrimitiveError<crate::messages::PathOrigin>),
+
     #[error("message parse error")]
     Parse(nom::Err<(Vec<u8>, nom::error::ErrorKind)>),
 

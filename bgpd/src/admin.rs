@@ -5,10 +5,10 @@ use bgp::router::Router;
 use bgp::session::FsmEvent;
 use dropshot::{
     endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
-    ConfigLoggingLevel, HttpError, HttpResponseUpdatedNoContent,
-    HttpServerStarter, RequestContext, TypedBody,
+    ConfigLoggingLevel, HttpError, HttpResponseOk,
+    HttpResponseUpdatedNoContent, HttpServerStarter, RequestContext, TypedBody,
 };
-use rdb::{Policy, PolicyAction, Prefix4};
+use rdb::{Policy, PolicyAction, Prefix4, Route4ImportKey, Route4Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{error, info, warn, Logger};
@@ -68,7 +68,6 @@ async fn add_neighbor(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let log = ctx.context().log.clone();
     let rq = request.into_inner();
-    let db = rdb::Db::new("/var/run/rdb").unwrap();
 
     info!(log, "add neighbor: {:#?}", rq);
 
@@ -88,7 +87,6 @@ async fn add_neighbor(
         "0.0.0.0:179".parse().unwrap(),
         event_tx.clone(),
         event_rx,
-        db,
     );
     event_tx.send(FsmEvent::ManualStart).unwrap();
 
@@ -130,6 +128,27 @@ pub async fn originate4(
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = GET, path = "/originate4" }]
+async fn get_originated4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+) -> Result<HttpResponseOk<Vec<Route4Key>>, HttpError> {
+    let originated = ctx
+        .context()
+        .router
+        .db
+        .get_originated4()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    Ok(HttpResponseOk(originated))
+}
+
+#[endpoint { method = GET, path = "/imported4" }]
+async fn get_imported4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+) -> Result<HttpResponseOk<Vec<Route4ImportKey>>, HttpError> {
+    let imported = ctx.context().router.db.get_imported4();
+    Ok(HttpResponseOk(imported))
 }
 
 pub fn start_server(
@@ -179,5 +198,7 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     api.register(add_neighbor).unwrap();
     api.register(add_export_policy).unwrap();
     api.register(originate4).unwrap();
+    api.register(get_originated4).unwrap();
+    api.register(get_imported4).unwrap();
     api
 }

@@ -27,6 +27,8 @@ enum Commands {
     AddNeighbor(Neighbor),
     AddExportPolicy(ExportPolicy),
     Originate4(Originate4),
+    GetImported,
+    GetOriginated,
 }
 
 #[derive(Args, Debug)]
@@ -107,8 +109,20 @@ async fn main() -> Result<()> {
             add_export_policy(policy, client).await
         }
         Commands::Originate4(originate) => originate4(originate, client).await,
+        Commands::GetImported => get_imported(client).await,
+        Commands::GetOriginated => get_originated(client).await,
     }
     Ok(())
+}
+
+async fn get_imported(c: Client) {
+    let imported = c.get_imported4().await.unwrap();
+    println!("{:#?}", imported);
+}
+
+async fn get_originated(c: Client) {
+    let originated = c.get_originated4().await.unwrap();
+    println!("{:#?}", originated);
 }
 
 async fn add_neighbor(nbr: Neighbor, c: Client) {

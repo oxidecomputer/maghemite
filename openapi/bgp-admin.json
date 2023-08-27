@@ -31,6 +31,33 @@
         }
       }
     },
+    "/imported4": {
+      "get": {
+        "operationId": "get_imported4",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_Route4ImportKey",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Route4ImportKey"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/neighbor": {
       "post": {
         "operationId": "add_neighbor",
@@ -58,6 +85,31 @@
       }
     },
     "/originate4": {
+      "get": {
+        "operationId": "get_originated4",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_Route4Key",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Route4Key"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
       "post": {
         "operationId": "originate4",
         "requestBody": {
@@ -250,6 +302,44 @@
         "required": [
           "length",
           "value"
+        ]
+      },
+      "Route4ImportKey": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "nexthop": {
+            "type": "string",
+            "format": "ipv4"
+          },
+          "prefix": {
+            "$ref": "#/components/schemas/Prefix4"
+          }
+        },
+        "required": [
+          "id",
+          "nexthop",
+          "prefix"
+        ]
+      },
+      "Route4Key": {
+        "type": "object",
+        "properties": {
+          "nexthop": {
+            "type": "string",
+            "format": "ipv4"
+          },
+          "prefix": {
+            "$ref": "#/components/schemas/Prefix4"
+          }
+        },
+        "required": [
+          "nexthop",
+          "prefix"
         ]
       }
     }

@@ -5,14 +5,18 @@ use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
-#[derive(Copy, Clone, Hash, Eq, PartialEq)]
+#[derive(
+    Copy, Clone, Hash, Eq, PartialEq, Serialize, Deserialize, JsonSchema,
+)]
 pub struct Route4ImportKey {
     pub prefix: Prefix4,
     pub nexthop: Ipv4Addr,
     pub id: u32,
 }
 
-#[derive(Copy, Clone, Hash, Eq, PartialEq)]
+#[derive(
+    Copy, Clone, Hash, Eq, PartialEq, Serialize, Deserialize, JsonSchema,
+)]
 pub struct Route4Key {
     pub prefix: Prefix4,
     pub nexthop: Ipv4Addr,
