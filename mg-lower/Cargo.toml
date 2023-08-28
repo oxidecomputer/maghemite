@@ -1,0 +1,13 @@
+[package]
+name = "mg-lower"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rdb = { path = "../rdb" }
+anyhow.workspace = true
+dpd-client.workspace = true
+dendrite-common.workspace = true
+slog.workspace = true
+futures-executor.workspace = true
+libnet.workspace = true

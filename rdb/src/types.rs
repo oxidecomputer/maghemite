@@ -1,12 +1,13 @@
 use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 #[derive(
-    Copy, Clone, Hash, Eq, PartialEq, Serialize, Deserialize, JsonSchema,
+    Copy, Clone, Hash, Eq, PartialEq, Serialize, Deserialize, JsonSchema, Debug,
 )]
 pub struct Route4ImportKey {
     pub prefix: Prefix4,
@@ -189,4 +190,71 @@ impl FromStr for PolicyAction {
 pub struct Policy {
     pub action: PolicyAction,
     pub priority: u16,
+}
+
+#[derive(Clone, Default)]
+pub struct ImportChangeSet {
+    pub added: HashSet<Route4ImportKey>,
+    pub removed: HashSet<Route4ImportKey>,
+}
+
+impl ImportChangeSet {
+    pub fn added<V: Into<HashSet<Route4ImportKey>>>(v: V) -> Self {
+        Self {
+            added: v.into(),
+            ..Default::default()
+        }
+    }
+    pub fn removed<V: Into<HashSet<Route4ImportKey>>>(v: V) -> Self {
+        Self {
+            removed: v.into(),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct OriginChangeSet {
+    pub added: HashSet<Route4Key>,
+    pub removed: HashSet<Route4Key>,
+}
+
+impl OriginChangeSet {
+    pub fn added<V: Into<HashSet<Route4Key>>>(v: V) -> Self {
+        Self {
+            added: v.into(),
+            ..Default::default()
+        }
+    }
+    pub fn removed<V: Into<HashSet<Route4Key>>>(v: V) -> Self {
+        Self {
+            removed: v.into(),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct ChangeSet {
+    pub generation: u64,
+    pub import: ImportChangeSet,
+    pub origin: OriginChangeSet,
+}
+
+impl ChangeSet {
+    pub fn from_origin(origin: OriginChangeSet, generation: u64) -> Self {
+        Self {
+            generation,
+            origin,
+            ..Default::default()
+        }
+    }
+
+    pub fn from_import(import: ImportChangeSet, generation: u64) -> Self {
+        Self {
+            generation,
+            import,
+            ..Default::default()
+        }
+    }
 }
