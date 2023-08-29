@@ -240,56 +240,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bgp-admin-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bgp",
- "percent-encoding",
- "progenitor",
- "rdb",
- "reqwest",
- "serde",
- "serde_json",
- "slog",
-]
-
-[[package]]
-name = "bgpadm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bgp",
- "bgp-admin-client",
- "clap",
- "rdb",
- "slog",
- "slog-async",
- "slog-envlogger",
- "slog-term",
- "tokio",
-]
-
-[[package]]
-name = "bgpd"
-version = "0.1.0"
-dependencies = [
- "bgp",
- "clap",
- "colored",
- "dropshot",
- "mg-lower",
- "rdb",
- "schemars",
- "serde",
- "slog",
- "slog-async",
- "slog-envlogger",
- "slog-term",
- "tokio",
-]
-
-[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -701,6 +651,7 @@ dependencies = [
  "colored",
  "ddm",
  "ddm-admin-client",
+ "mg-common",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -1694,6 +1645,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "mg-admin-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bgp",
+ "percent-encoding",
+ "progenitor",
+ "rdb",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "slog",
+]
+
+[[package]]
+name = "mg-common"
+version = "0.1.0"
+dependencies = [
+ "anstyle",
+ "clap",
+]
+
+[[package]]
 name = "mg-console"
 version = "0.1.0"
 dependencies = [
@@ -1748,6 +1722,42 @@ dependencies = [
  "tokio",
  "zone 0.3.0",
  "ztest",
+]
+
+[[package]]
+name = "mgadm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bgp",
+ "clap",
+ "mg-admin-client",
+ "mg-common",
+ "rdb",
+ "slog",
+ "slog-async",
+ "slog-envlogger",
+ "slog-term",
+ "tokio",
+]
+
+[[package]]
+name = "mgd"
+version = "0.1.0"
+dependencies = [
+ "bgp",
+ "clap",
+ "colored",
+ "dropshot",
+ "mg-lower",
+ "rdb",
+ "schemars",
+ "serde",
+ "slog",
+ "slog-async",
+ "slog-envlogger",
+ "slog-term",
+ "tokio",
 ]
 
 [[package]]

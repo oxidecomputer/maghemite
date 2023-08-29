@@ -11,10 +11,11 @@ default-members = [
     "tests",
     "rdb",
     "bgp",
-    "bgpd",
-    "bgp-admin-client",
-    "bgpadm",
+    "mg-admin-client",
+    "mgadm",
+    "mgd",
     "mg-lower",
+    "mg-common",
 ]
 
 members = [
@@ -29,11 +30,12 @@ members = [
     "mg-ddm-verify",
     "tests",
     "bgp",
-    "bgpd",
-    "bgp-admin-client",
-    "bgpadm",
+    "mg-admin-client",
+    "mgadm",
     "rdb",
+    "mgd",
     "mg-lower",
+    "mg-common",
 ]
 
 [workspace.dependencies]

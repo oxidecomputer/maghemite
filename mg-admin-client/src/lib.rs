@@ -1,7 +1,7 @@
 pub use rdb::{PolicyAction, Prefix4};
 
 progenitor::generate_api!(
-    spec = "../openapi/bgp-admin.json",
+    spec = "../openapi/mg-admin.json",
     inner_type = slog::Logger,
     pre_hook = (|log: &slog::Logger, request: &reqwest::Request| {
         slog::debug!(log, "client request";

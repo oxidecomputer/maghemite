@@ -1,0 +1,17 @@
+[package]
+name = "mgadm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bgp = { path = "../bgp" }
+rdb = { path = "../rdb" }
+mg-common = { path = "../mg-common" }
+mg-admin-client = { path = "../mg-admin-client" }
+tokio.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+slog.workspace = true
+slog-term.workspace = true
+slog-async.workspace = true
+slog-envlogger.workspace = true

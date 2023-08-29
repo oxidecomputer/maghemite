@@ -1,29 +1,13 @@
 use anyhow::Result;
-use bgp_admin_client::types;
-use bgp_admin_client::Client;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Subcommand};
+use mg_admin_client::types;
+use mg_admin_client::Client;
 use rdb::types::{PolicyAction, Prefix4};
-use slog::Drain;
-use slog::Logger;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-
-    /// Address of admin interface
-    #[arg(short, long, default_value = "::1")]
-    address: IpAddr,
-
-    /// TCP port for admin interface
-    #[arg(short, long, default_value_t = 8000)]
-    port: u16,
-}
-
 #[derive(Subcommand, Debug)]
-enum Commands {
+pub enum Commands {
+    RouterInit(RouterConfig),
     AddNeighbor(Neighbor),
     AddExportPolicy(ExportPolicy),
     Originate4(Originate4),
@@ -32,7 +16,19 @@ enum Commands {
 }
 
 #[derive(Args, Debug)]
-struct ExportPolicy {
+pub struct RouterConfig {
+    /// Autonomous system number for this router
+    pub asn: u32,
+
+    /// Id for this router
+    pub id: u32,
+
+    /// Listening address <addr>:<port>
+    pub listen: String,
+}
+
+#[derive(Args, Debug)]
+pub struct ExportPolicy {
     /// Address of the peer to apply this policy to.
     pub addr: IpAddr,
 
@@ -47,7 +43,7 @@ struct ExportPolicy {
 }
 
 #[derive(Args, Debug)]
-struct Originate4 {
+pub struct Originate4 {
     /// Nexthop to originate.
     pub nexthop: Ipv4Addr,
 
@@ -56,7 +52,7 @@ struct Originate4 {
 }
 
 #[derive(Args, Debug)]
-struct Neighbor {
+pub struct Neighbor {
     /// Name for this neighbor
     name: String,
     /// Neighbor address
@@ -93,17 +89,9 @@ impl From<Neighbor> for types::AddNeighborRequest {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let log = init_logger();
-
-    let endpoint =
-        format!("http://{}", SocketAddr::new(cli.address, cli.port),);
-
-    let client = Client::new(&endpoint, log.clone());
-
-    match cli.command {
+pub async fn commands(command: Commands, client: Client) -> Result<()> {
+    match command {
+        Commands::RouterInit(cfg) => init_router(cfg, client).await,
         Commands::AddNeighbor(nbr) => add_neighbor(nbr, client).await,
         Commands::AddExportPolicy(policy) => {
             add_export_policy(policy, client).await
@@ -113,6 +101,16 @@ async fn main() -> Result<()> {
         Commands::GetOriginated => get_originated(client).await,
     }
     Ok(())
+}
+
+async fn init_router(cfg: RouterConfig, c: Client) {
+    c.new_router(&types::NewRouterRequest {
+        asn: cfg.asn,
+        id: cfg.id,
+        listen: cfg.listen,
+    })
+    .await
+    .unwrap();
 }
 
 async fn get_imported(c: Client) {
@@ -147,15 +145,4 @@ async fn originate4(originate: Originate4, c: Client) {
     })
     .await
     .unwrap();
-}
-
-fn init_logger() -> Logger {
-    let decorator = slog_term::TermDecorator::new().build();
-    let drain = slog_term::FullFormat::new(decorator).build().fuse();
-    let drain = slog_envlogger::new(drain).fuse();
-    let drain = slog_async::Async::new(drain)
-        .chan_size(0x2000)
-        .build()
-        .fuse();
-    slog::Logger::root(drain, slog::o!())
 }

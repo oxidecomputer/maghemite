@@ -1,5 +1,5 @@
 [package]
-name = "bgp-admin-client"
+name = "mg-admin-client"
 version = "0.1.0"
 edition = "2021"
 

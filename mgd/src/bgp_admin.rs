@@ -1,27 +1,46 @@
+use crate::admin::HandlerContext;
 use bgp::config::{PeerConfig, RouterConfig};
 use bgp::connection::BgpConnectionTcp;
+use bgp::connection::BgpListenerTcp;
 use bgp::fanout::Rule4;
 use bgp::router::Router;
+use bgp::session::Asn;
 use bgp::session::FsmEvent;
 use dropshot::{
-    endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
-    ConfigLoggingLevel, HttpError, HttpResponseOk,
-    HttpResponseUpdatedNoContent, HttpServerStarter, RequestContext, TypedBody,
+    endpoint, HttpError, HttpResponseOk, HttpResponseUpdatedNoContent,
+    RequestContext, TypedBody,
 };
 use rdb::{Policy, PolicyAction, Prefix4, Route4ImportKey, Route4Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use slog::{error, info, warn, Logger};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
+use slog::info;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::channel;
-use std::sync::Arc;
-use tokio::task::JoinHandle;
+use std::sync::{Arc, Mutex};
+use std::thread::spawn;
 
-pub struct HandlerContext {
-    #[allow(dead_code)]
-    config: RouterConfig,
-    router: Arc<Router<BgpConnectionTcp>>,
-    log: Logger,
+pub struct BgpContext {
+    router: Mutex<Option<Arc<Router<BgpConnectionTcp>>>>,
+}
+
+impl Default for BgpContext {
+    fn default() -> Self {
+        Self {
+            router: Mutex::new(None),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct NewRouterRequest {
+    /// Autonomous system number for this router
+    pub asn: u32,
+
+    /// Id for this router
+    pub id: u32,
+
+    /// Listening address <addr>:<port>
+    pub listen: String,
 }
 
 //TODO use bgp::config::PeerConfig instead
@@ -61,8 +80,62 @@ pub struct Originate4Request {
     pub prefixes: Vec<Prefix4>,
 }
 
-#[endpoint { method = POST, path = "/neighbor" }]
-async fn add_neighbor(
+#[endpoint { method = POST, path = "/bgp/router" }]
+pub async fn new_router(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<NewRouterRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let mut guard = ctx.context().bgp.router.lock().unwrap();
+    if guard.is_some() {
+        return Err(HttpError::for_bad_request(
+            None,
+            "bgp router already configured".into(),
+        ));
+    }
+
+    let rq = request.into_inner();
+
+    let cfg = RouterConfig {
+        asn: Asn::FourOctet(rq.asn),
+        id: rq.id,
+    };
+
+    //assumes only one router per machine
+    let db = rdb::Db::new("/var/run/rdb").unwrap();
+
+    let router = Arc::new(Router::<BgpConnectionTcp>::new(
+        rq.listen,
+        cfg,
+        ctx.context().log.clone(),
+        db.clone(),
+    ));
+
+    let rtr = router.clone();
+    spawn(move || {
+        rtr.run::<BgpListenerTcp>();
+    });
+
+    let rt = Arc::new(tokio::runtime::Handle::current());
+    let log = ctx.log.clone();
+    spawn(move || {
+        mg_lower::run(db, log, rt);
+    });
+
+    *guard = Some(router);
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+macro_rules! get_router {
+    ($ctx:expr) => {
+        $ctx.context().bgp.router.lock().unwrap().as_deref().ok_or(
+            HttpError::for_not_found(None, "no bgp router configured".into()),
+        )?
+    };
+}
+
+#[endpoint { method = POST, path = "/bgp/neighbor" }]
+pub async fn add_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddNeighborRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -73,7 +146,7 @@ async fn add_neighbor(
 
     let (event_tx, event_rx) = channel();
 
-    ctx.context().router.new_session(
+    get_router!(&ctx).new_session(
         PeerConfig {
             name: rq.name.clone(),
             host: rq.host,
@@ -93,14 +166,14 @@ async fn add_neighbor(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-#[endpoint { method = POST, path = "/export-policy" }]
+#[endpoint { method = POST, path = "/bgp/export-policy" }]
 pub async fn add_export_policy(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddExportPolicyRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
 
-    ctx.context().router.add_export_policy(
+    get_router!(&ctx).add_export_policy(
         rq.addr,
         Rule4 {
             prefix: rq.prefix,
@@ -114,7 +187,7 @@ pub async fn add_export_policy(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-#[endpoint { method = POST, path = "/originate4" }]
+#[endpoint { method = POST, path = "/bgp/originate4" }]
 pub async fn originate4(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<Originate4Request>,
@@ -122,83 +195,28 @@ pub async fn originate4(
     let rq = request.into_inner();
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
 
-    ctx.context()
-        .router
+    get_router!(&ctx)
         .originate4(rq.nexthop, prefixes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
 }
 
-#[endpoint { method = GET, path = "/originate4" }]
-async fn get_originated4(
+#[endpoint { method = GET, path = "/bgp/originate4" }]
+pub async fn get_originated4(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<Vec<Route4Key>>, HttpError> {
-    let originated = ctx
-        .context()
-        .router
+    let originated = get_router!(&ctx)
         .db
         .get_originated4()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     Ok(HttpResponseOk(originated))
 }
 
-#[endpoint { method = GET, path = "/imported4" }]
-async fn get_imported4(
+#[endpoint { method = GET, path = "/bgp/imported4" }]
+pub async fn get_imported4(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<Vec<Route4ImportKey>>, HttpError> {
-    let imported = ctx.context().router.db.get_imported4();
+    let imported = get_router!(&ctx).db.get_imported4();
     Ok(HttpResponseOk(imported))
-}
-
-pub fn start_server(
-    log: Logger,
-    addr: Ipv6Addr,
-    port: u16,
-    config: RouterConfig,
-    router: Arc<Router<BgpConnectionTcp>>,
-) -> Result<JoinHandle<()>, String> {
-    let sa = SocketAddrV6::new(addr, port, 0, 0);
-
-    let ds_config = ConfigDropshot {
-        bind_address: sa.into(),
-        ..Default::default()
-    };
-
-    let ds_log = ConfigLogging::StderrTerminal {
-        level: ConfigLoggingLevel::Error,
-    }
-    .to_logger("admin")
-    .map_err(|e| e.to_string())?;
-
-    let api = api_description();
-
-    let context = Arc::new(HandlerContext {
-        config,
-        router,
-        log: log.clone(),
-    });
-
-    let server = HttpServerStarter::new(&ds_config, api, context, &ds_log)
-        .map_err(|e| format!("new admin dropshot: {}", e))?;
-
-    info!(log, "admin: listening on {}", sa);
-
-    let log = log.clone();
-    Ok(tokio::spawn(async move {
-        match server.start().await {
-            Ok(_) => warn!(log, "admin: unexpected server exit"),
-            Err(e) => error!(log, "admin: server start error {:?}", e),
-        }
-    }))
-}
-
-pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
-    let mut api = ApiDescription::new();
-    api.register(add_neighbor).unwrap();
-    api.register(add_export_policy).unwrap();
-    api.register(originate4).unwrap();
-    api.register(get_originated4).unwrap();
-    api.register(get_imported4).unwrap();
-    api
 }

@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ddm = { path = "../ddm" }
+mg-common = { path = "../mg-common" }
 ddm-admin-client = { path = "../ddm-admin-client" }
 clap.workspace = true
 slog.workspace = true
