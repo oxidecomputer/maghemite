@@ -137,10 +137,4 @@ impl Db {
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
     }
-
-    //XXX
-    pub fn watch_nexthop(&self) -> Result<sled::Subscriber> {
-        let tree = self.persistent.open_tree("nexthop")?;
-        Ok(tree.watch_prefix(vec![]))
-    }
 }
