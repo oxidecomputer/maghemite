@@ -1,4 +1,4 @@
-[package.maghemite]
+[package.mg-ddm-gz]
 service_name = "mg-ddm"
 source.type = "local"
 source.rust.binary_names = ["ddmd", "ddmadm"]
@@ -19,3 +19,13 @@ source.paths = [
 ]
 output.type = "zone"
 
+[package.mgd]
+service_name = "mgd"
+source.type = "local"
+source.rust.binary_names = ["mgd", "mgadm"]
+source.rust.release = true
+source.paths = [
+  { from = "smf/mgd_method_script.sh", to = "/opt/oxide/mgd/pkg/mgd_method_script.sh" },
+  { from = "smf/mgd/manifest.xml", to = "/var/svc/manifest/site/mgd/manifest.xml" }
+]
+output.type = "zone"

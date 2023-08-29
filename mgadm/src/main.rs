@@ -19,7 +19,7 @@ struct Cli {
     address: IpAddr,
 
     /// TCP port for admin interface
-    #[arg(short, long, default_value_t = 8000)]
+    #[arg(short, long, default_value_t = 4676)]
     port: u16,
 }
 

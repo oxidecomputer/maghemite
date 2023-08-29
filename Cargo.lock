@@ -1749,6 +1749,7 @@ dependencies = [
  "clap",
  "colored",
  "dropshot",
+ "mg-common",
  "mg-lower",
  "rdb",
  "schemars",

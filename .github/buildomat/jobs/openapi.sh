@@ -16,10 +16,16 @@
 #: series = "openapi"
 #: name = "ddm-admin.json.sha256.txt"
 #: from_output = "/out/ddm-admin.json.sha256.txt"
+#:
 #: [[publish]]
 #: series = "openapi"
-#: name = "bgp-admin.json"
-#: from_output = "/out/bgp-admin.json"
+#: name = "mg-admin.json"
+#: from_output = "/out/mg-admin.json"
+#:
+#: [[publish]]
+#: series = "openapi"
+#: name = "mg-admin.json.sha256.txt"
+#: from_output = "/out/mg-admin.json.sha256.txt"
 #:
 
 set -o errexit
@@ -33,5 +39,5 @@ pfexec chown "$UID" /out
 cp openapi/ddm-admin.json /out/ddm-admin.json
 digest -a sha256 /out/ddm-admin.json > /out/ddm-admin.json.sha256.txt
 
-cp openapi/bgp-admin.json /out/bgp-admin.json
-digest -a sha256 /out/bgp-admin.json > /out/bgp-admin.json.sha256.txt
+cp openapi/mg-admin.json /out/mg-admin.json
+digest -a sha256 /out/mg-admin.json > /out/mg-admin.json.sha256.txt

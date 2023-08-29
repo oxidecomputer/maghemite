@@ -6,7 +6,7 @@ use dropshot::{
 };
 use slog::{error, info, warn, Logger};
 use std::fs::File;
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
@@ -17,13 +17,13 @@ pub struct HandlerContext {
 
 pub fn start_server(
     log: Logger,
-    addr: Ipv6Addr,
+    addr: IpAddr,
     port: u16,
 ) -> Result<JoinHandle<()>, String> {
-    let sa = SocketAddrV6::new(addr, port, 0, 0);
+    let sa = SocketAddr::new(addr, port);
 
     let ds_config = ConfigDropshot {
-        bind_address: sa.into(),
+        bind_address: sa,
         ..Default::default()
     };
 
