@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+mg-lower = { path = "../mg-lower" }
 bgp = { version = "0.1.0", path = "../bgp" }
 rdb = { path = "../rdb" }
 clap.workspace = true

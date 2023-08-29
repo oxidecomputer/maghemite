@@ -1,6 +1,5 @@
 use dpd_client::types::PortId;
 use dpd_client::Client as DpdClient;
-use futures_executor::block_on;
 use libnet::{get_route, IpPrefix, Ipv4Prefix};
 use rdb::{ChangeSet, Db, Route4ImportKey};
 use slog::{error, Logger};
@@ -8,10 +7,11 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use std::sync::mpsc::channel;
+use std::sync::Arc;
 
 const MG_LOWER_DPD_TAG: &str = "mg-lower";
 
-pub fn run(db: Db, log: Logger) {
+pub fn run(db: Db, log: Logger, rt: Arc<tokio::runtime::Handle>) {
     let (tx, rx) = channel();
 
     // start the db watcher first so we catch any changes that may occur while
@@ -20,16 +20,23 @@ pub fn run(db: Db, log: Logger) {
 
     // initialize the underlying router with the current state
     let dpd = new_dpd_client(&log);
-    let mut generation = initialize(&db, &log, &dpd);
+    let mut generation = initialize(&db, &log, &dpd, rt.clone());
 
     // handle any changes that occur
     loop {
         match rx.recv() {
             Ok(change) => {
-                generation = handle_change(&db, change, &log, &dpd, generation);
+                generation = handle_change(
+                    &db,
+                    change,
+                    &log,
+                    &dpd,
+                    generation,
+                    rt.clone(),
+                );
             }
-            Err(_e) => {
-                //TODO log
+            Err(e) => {
+                error!(log, "mg-lower watch rx: {e}");
             }
         }
     }
@@ -52,7 +59,12 @@ impl PartialEq for RouteHash {
 
 impl Eq for RouteHash {}
 
-fn initialize(db: &Db, log: &Logger, dpd: &DpdClient) -> u64 {
+fn initialize(
+    db: &Db,
+    log: &Logger,
+    dpd: &DpdClient,
+    rt: Arc<tokio::runtime::Handle>,
+) -> u64 {
     let generation = db.generation();
 
     // get all imported routes from db
@@ -63,30 +75,36 @@ fn initialize(db: &Db, log: &Logger, dpd: &DpdClient) -> u64 {
             .collect();
 
     // get all routes created by mg-lower from dendrite
-    let active: HashSet<RouteHash> =
-        block_on(async { dpd.route_ipv4_list(None, None).await })
-            .unwrap()
-            .items
-            .iter()
-            .filter(|x| x.tag == MG_LOWER_DPD_TAG)
-            .map(|x| RouteHash(x.clone()))
-            .collect();
+    let active: HashSet<RouteHash> = rt
+        .block_on(async { dpd.route_ipv4_list(None, None).await })
+        .unwrap()
+        .items
+        .iter()
+        .filter(|x| x.tag == MG_LOWER_DPD_TAG)
+        .map(|x| RouteHash(x.clone()))
+        .collect();
 
     // determine what routes need to be added and deleted
     let to_add = imported.difference(&active);
     let to_del = active.difference(&imported);
 
-    update_dendrite(to_add, to_del, dpd, log);
+    update_dendrite(to_add, to_del, dpd, rt, log);
 
     generation
 }
 
-fn update_dendrite<'a, I>(to_add: I, to_del: I, dpd: &DpdClient, log: &Logger)
-where
+fn update_dendrite<'a, I>(
+    to_add: I,
+    to_del: I,
+    dpd: &DpdClient,
+    rt: Arc<tokio::runtime::Handle>,
+    log: &Logger,
+) where
     I: Iterator<Item = &'a RouteHash>,
 {
     for r in to_add {
-        if let Err(e) = block_on(async { dpd.route_ipv4_create(&r.0).await }) {
+        if let Err(e) = rt.block_on(async { dpd.route_ipv4_create(&r.0).await })
+        {
             error!(log, "failed to create route {:?}: {}", r.0, e);
         }
     }
@@ -95,7 +113,9 @@ where
             dpd_client::Cidr::V4(cidr) => cidr,
             _ => continue,
         };
-        if let Err(e) = block_on(async { dpd.route_ipv4_delete(&cidr).await }) {
+        if let Err(e) =
+            rt.block_on(async { dpd.route_ipv4_delete(&cidr).await })
+        {
             error!(log, "failed to create route {:?}: {}", r.0, e);
         }
     }
@@ -179,9 +199,10 @@ fn handle_change(
     log: &Logger,
     dpd: &DpdClient,
     generation: u64,
+    rt: Arc<tokio::runtime::Handle>,
 ) -> u64 {
     if change.generation > generation + 1 {
-        return initialize(db, log, dpd);
+        return initialize(db, log, dpd, rt.clone());
     }
     //TODO avoid this translation
     let to_add = change.import.added.clone().into_iter().collect();
@@ -199,7 +220,7 @@ fn handle_change(
             .map(|x| RouteHash(x.clone()))
             .collect();
 
-    update_dendrite(to_add.iter(), to_del.iter(), dpd, log);
+    update_dendrite(to_add.iter(), to_del.iter(), dpd, rt.clone(), log);
 
     change.generation
 }

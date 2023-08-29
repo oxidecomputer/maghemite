@@ -278,6 +278,7 @@ dependencies = [
  "clap",
  "colored",
  "dropshot",
+ "mg-lower",
  "rdb",
  "schemars",
  "serde",
@@ -1718,10 +1719,10 @@ dependencies = [
  "anyhow",
  "common",
  "dpd-client",
- "futures-executor",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=get-route)",
  "rdb",
  "slog",
+ "tokio",
 ]
 
 [[package]]

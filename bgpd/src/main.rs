@@ -63,15 +63,19 @@ async fn run(run: Run) {
         id: run.id,
     };
     let log = init_logger();
+
+    //assumes only one router per machine
+    let db = rdb::Db::new("/var/run/rdb").unwrap();
+
     let router = Arc::new(Router::<BgpConnectionTcp>::new(
         run.listen,
         cfg,
         log.clone(),
-        //assumes only one router per machine
-        rdb::Db::new("/var/run/rdb").unwrap(),
+        db.clone(),
     ));
+
     let j = admin::start_server(
-        log,
+        log.clone(),
         Ipv6Addr::UNSPECIFIED,
         8000,
         cfg,
@@ -80,6 +84,11 @@ async fn run(run: Run) {
 
     spawn(move || {
         router.run::<BgpListenerTcp>();
+    });
+
+    let rt = Arc::new(tokio::runtime::Handle::current());
+    spawn(move || {
+        mg_lower::run(db, log, rt);
     });
 
     j.unwrap().await.unwrap();
