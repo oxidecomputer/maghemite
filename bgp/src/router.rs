@@ -1,6 +1,6 @@
 use crate::config::PeerConfig;
 use crate::config::RouterConfig;
-use crate::connection::{BgpConnection, BgpListener};
+use crate::connection::BgpConnection;
 use crate::error::Error;
 use crate::fanout::Rule4;
 use crate::fanout::{Egress, Fanout};
@@ -23,12 +23,11 @@ use std::time::Duration;
 
 pub struct Router<Cnx: BgpConnection> {
     pub db: Db,
+    pub config: RouterConfig,
+    pub sessions: Mutex<Vec<Arc<SessionRunner<Cnx>>>>,
 
-    config: RouterConfig,
-    listen: String,
     log: Logger,
     shutdown: AtomicBool,
-    sessions: Mutex<Vec<Arc<SessionRunner<Cnx>>>>,
     addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
     fanout: Arc<RwLock<Fanout<Cnx>>>,
 }
@@ -38,15 +37,14 @@ unsafe impl<Cnx: BgpConnection> Sync for Router<Cnx> {}
 
 impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     pub fn new(
-        listen: String,
         config: RouterConfig,
         log: Logger,
         db: Db,
+        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
     ) -> Router<Cnx> {
         Self {
             config,
-            listen,
-            addr_to_session: Arc::new(Mutex::new(BTreeMap::new())),
+            addr_to_session,
             log,
             shutdown: AtomicBool::new(false),
             db,
@@ -66,40 +64,12 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         self.shutdown.store(true, Ordering::Release);
     }
 
-    pub fn run<Listener: BgpListener<Cnx>>(&self) {
+    pub fn run(&self) {
         for s in self.sessions.lock().unwrap().iter() {
             let session = s.clone();
             spawn(move || {
                 session.start();
             });
-        }
-        loop {
-            if self.shutdown.load(Ordering::Acquire) {
-                self.shutdown.store(false, Ordering::Release);
-                break;
-            }
-            let listener = Listener::bind(&self.listen).unwrap();
-            let conn = match listener.accept(
-                self.log.clone(),
-                self.addr_to_session.clone(),
-                Duration::from_millis(100),
-            ) {
-                Ok(c) => c,
-                Err(crate::error::Error::Timeout) => {
-                    continue;
-                }
-                Err(_e) => {
-                    //TODO log
-                    continue;
-                }
-            };
-            let addr = conn.peer().ip();
-            match self.addr_to_session.lock().unwrap().get(&addr) {
-                Some(tx) => {
-                    tx.send(FsmEvent::Connected(conn)).unwrap();
-                }
-                None => continue,
-            }
         }
     }
 

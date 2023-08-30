@@ -7,12 +7,13 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    GetRouters,
     RouterInit(RouterConfig),
     AddNeighbor(Neighbor),
     AddExportPolicy(ExportPolicy),
     Originate4(Originate4),
-    GetImported,
-    GetOriginated,
+    GetImported { asn: u32 },
+    GetOriginated { asn: u32 },
 }
 
 #[derive(Args, Debug)]
@@ -23,12 +24,15 @@ pub struct RouterConfig {
     /// Id for this router
     pub id: u32,
 
-    /// Listening address <addr>:<port>
+    /// Listening address `<addr>:<port>`
     pub listen: String,
 }
 
 #[derive(Args, Debug)]
 pub struct ExportPolicy {
+    /// Autonomous system number for the router to add the export policy to.
+    pub asn: u32,
+
     /// Address of the peer to apply this policy to.
     pub addr: IpAddr,
 
@@ -44,6 +48,9 @@ pub struct ExportPolicy {
 
 #[derive(Args, Debug)]
 pub struct Originate4 {
+    /// Autonomous system number for the router to originated the prefixes from.
+    pub asn: u32,
+
     /// Nexthop to originate.
     pub nexthop: Ipv4Addr,
 
@@ -53,6 +60,9 @@ pub struct Originate4 {
 
 #[derive(Args, Debug)]
 pub struct Neighbor {
+    /// Autonomous system number for the router to add the neighbor to.
+    pub asn: u32,
+
     /// Name for this neighbor
     name: String,
     /// Neighbor address
@@ -77,6 +87,7 @@ pub struct Neighbor {
 impl From<Neighbor> for types::AddNeighborRequest {
     fn from(n: Neighbor) -> types::AddNeighborRequest {
         types::AddNeighborRequest {
+            asn: n.asn,
             name: n.name,
             host: SocketAddr::new(n.addr, n.port).to_string(),
             hold_time: n.hold_time,
@@ -91,16 +102,22 @@ impl From<Neighbor> for types::AddNeighborRequest {
 
 pub async fn commands(command: Commands, client: Client) -> Result<()> {
     match command {
+        Commands::GetRouters => get_routers(client).await,
         Commands::RouterInit(cfg) => init_router(cfg, client).await,
         Commands::AddNeighbor(nbr) => add_neighbor(nbr, client).await,
         Commands::AddExportPolicy(policy) => {
             add_export_policy(policy, client).await
         }
         Commands::Originate4(originate) => originate4(originate, client).await,
-        Commands::GetImported => get_imported(client).await,
-        Commands::GetOriginated => get_originated(client).await,
+        Commands::GetImported { asn } => get_imported(client, asn).await,
+        Commands::GetOriginated { asn } => get_originated(client, asn).await,
     }
     Ok(())
+}
+
+async fn get_routers(c: Client) {
+    let routers = c.get_routers().await.unwrap();
+    println!("{:#?}", routers);
 }
 
 async fn init_router(cfg: RouterConfig, c: Client) {
@@ -113,13 +130,19 @@ async fn init_router(cfg: RouterConfig, c: Client) {
     .unwrap();
 }
 
-async fn get_imported(c: Client) {
-    let imported = c.get_imported4().await.unwrap();
+async fn get_imported(c: Client, asn: u32) {
+    let imported = c
+        .get_imported4(&types::GetImported4Request { asn })
+        .await
+        .unwrap();
     println!("{:#?}", imported);
 }
 
-async fn get_originated(c: Client) {
-    let originated = c.get_originated4().await.unwrap();
+async fn get_originated(c: Client, asn: u32) {
+    let originated = c
+        .get_originated4(&types::GetOriginated4Request { asn })
+        .await
+        .unwrap();
     println!("{:#?}", originated);
 }
 
@@ -129,6 +152,7 @@ async fn add_neighbor(nbr: Neighbor, c: Client) {
 
 async fn add_export_policy(policy: ExportPolicy, c: Client) {
     c.add_export_policy(&types::AddExportPolicyRequest {
+        asn: policy.asn,
         addr: policy.addr,
         prefix: policy.prefix,
         priority: policy.priority,
@@ -140,6 +164,7 @@ async fn add_export_policy(policy: ExportPolicy, c: Client) {
 
 async fn originate4(originate: Originate4, c: Client) {
     c.originate4(&types::Originate4Request {
+        asn: originate.asn,
         nexthop: originate.nexthop,
         prefixes: originate.prefixes.clone(),
     })

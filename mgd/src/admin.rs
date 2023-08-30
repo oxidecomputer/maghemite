@@ -19,6 +19,7 @@ pub fn start_server(
     log: Logger,
     addr: IpAddr,
     port: u16,
+    context: Arc<HandlerContext>,
 ) -> Result<JoinHandle<()>, String> {
     let sa = SocketAddr::new(addr, port);
 
@@ -35,11 +36,6 @@ pub fn start_server(
 
     let api = api_description();
 
-    let context = Arc::new(HandlerContext {
-        log: log.clone(),
-        bgp: BgpContext::default(),
-    });
-
     let server = HttpServerStarter::new(&ds_config, api, context, &ds_log)
         .map_err(|e| format!("new admin dropshot: {}", e))?;
 
@@ -55,6 +51,7 @@ pub fn start_server(
 
 pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     let mut api = ApiDescription::new();
+    api.register(bgp_admin::get_routers).unwrap();
     api.register(bgp_admin::new_router).unwrap();
     api.register(bgp_admin::add_neighbor).unwrap();
     api.register(bgp_admin::add_export_policy).unwrap();

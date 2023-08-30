@@ -3,13 +3,15 @@ use crate::connection::test::{BgpConnectionChannel, BgpListenerChannel};
 use crate::fanout::Rule4;
 use crate::session::{Asn, FsmStateKind};
 use rdb::{Policy, PolicyAction, Prefix4};
+use std::collections::BTreeMap;
 use std::sync::mpsc::channel;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::thread::spawn;
 use std::time::Duration;
 
 type Router = crate::router::Router<BgpConnectionChannel>;
+type Dispatcher = crate::dispatcher::Dispatcher<BgpConnectionChannel>;
 type FsmEvent = crate::session::FsmEvent<BgpConnectionChannel>;
 
 macro_rules! wait_for_eq {
@@ -33,7 +35,7 @@ macro_rules! wait_for_eq {
 
 #[test]
 fn test_basic_peering() {
-    let (r1, r2) = two_router_test_setup("basic_peering");
+    let (r1, _d1, r2, d2) = two_router_test_setup("basic_peering");
 
     let r1_session = r1.get_session(0).unwrap();
     let r2_session = r2.get_session(0).unwrap();
@@ -47,12 +49,13 @@ fn test_basic_peering() {
     // Shut down r2 and ensure that r2's peer session has gone back to idle.
     // Ensure that r1's peer session to r2 has gone back to connect.
     r2.shutdown();
+    d2.shutdown();
     wait_for_eq!(r1_session.state(), FsmStateKind::Connect);
     wait_for_eq!(r2_session.state(), FsmStateKind::Idle);
 
-    let rtr = r2.clone();
+    r2.run();
     spawn(move || {
-        rtr.run::<BgpListenerChannel>();
+        d2.run::<BgpListenerChannel>();
     });
     r2.send_event(FsmEvent::ManualStart).unwrap();
 
@@ -62,7 +65,7 @@ fn test_basic_peering() {
 
 #[test]
 fn test_basic_update() {
-    let (r1, r2) = two_router_test_setup("basic_update");
+    let (r1, d1, r2, _d2) = two_router_test_setup("basic_update");
 
     // set up export policy
     let allow_default = Rule4 {
@@ -95,12 +98,15 @@ fn test_basic_update() {
     // shut down r1 and ensure that the prefixes are withdrawn from r2 on
     // session timeout.
     r1.shutdown();
+    d1.shutdown();
     wait_for_eq!(r2_session.state(), FsmStateKind::Connect);
     wait_for_eq!(r1_session.state(), FsmStateKind::Idle);
     wait_for_eq!(r2.db.get_nexthop4(&prefix).is_empty(), true);
 }
 
-fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
+fn two_router_test_setup(
+    name: &str,
+) -> (Arc<Router>, Arc<Dispatcher>, Arc<Router>, Arc<Dispatcher>) {
     let log = crate::log::init_file_logger(&format!("r1.{name}.log"));
 
     std::fs::create_dir_all("/tmp").unwrap();
@@ -111,20 +117,29 @@ fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
     let _ = std::fs::remove_dir_all(&db_path);
     let db = rdb::Db::new(&db_path).unwrap();
 
+    let a2s1 = Arc::new(Mutex::new(BTreeMap::new()));
+    let d1 =
+        Arc::new(crate::dispatcher::Dispatcher::<BgpConnectionChannel>::new(
+            a2s1.clone(),
+            "1.0.0.1:179".into(),
+            log.clone(),
+        ));
+
     let (r1_event_tx, event_rx) = channel();
     let r1 = Arc::new(Router::new(
-        "1.0.0.1:179".into(),
         RouterConfig {
             asn: Asn::FourOctet(4200000001),
             id: 1,
         },
         log.clone(),
         db.clone(),
+        a2s1.clone(),
     ));
 
-    let rtr = r1.clone();
+    r1.run();
+    let d = d1.clone();
     spawn(move || {
-        rtr.run::<BgpListenerChannel>();
+        d.run::<BgpListenerChannel>();
     });
 
     r1.new_session(
@@ -152,21 +167,30 @@ fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
     let _ = std::fs::remove_dir_all(&db_path);
     let db = rdb::Db::new(&db_path).unwrap();
 
+    let a2s2 = Arc::new(Mutex::new(BTreeMap::new()));
+    let d2 =
+        Arc::new(crate::dispatcher::Dispatcher::<BgpConnectionChannel>::new(
+            a2s2.clone(),
+            "2.0.0.1:179".into(),
+            log.clone(),
+        ));
+
     let (r2_event_tx, event_rx) = channel();
 
     let r2 = Arc::new(Router::new(
-        "2.0.0.1:179".into(),
         RouterConfig {
             asn: Asn::FourOctet(4200000002),
             id: 2,
         },
         log.clone(),
         db.clone(),
+        a2s1.clone(),
     ));
 
-    let rtr = r2.clone();
+    r2.run();
+    let d = d2.clone();
     spawn(move || {
-        rtr.run::<BgpListenerChannel>();
+        d.run::<BgpListenerChannel>();
     });
 
     r2.new_session(
@@ -186,5 +210,5 @@ fn two_router_test_setup(name: &str) -> (Arc<Router>, Arc<Router>) {
     );
     r2_event_tx.send(FsmEvent::ManualStart).unwrap();
 
-    (r1, r2)
+    (r1, d1, r2, d2)
 }

@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 mg-lower = { path = "../mg-lower" }
 mg-common = { path = "../mg-common" }
-bgp = { version = "0.1.0", path = "../bgp" }
+bgp = { path = "../bgp" }
 rdb = { path = "../rdb" }
 clap.workspace = true
 colored.workspace = true

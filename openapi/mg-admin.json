@@ -34,6 +34,16 @@
     "/bgp/imported4": {
       "get": {
         "operationId": "get_imported4",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetImported4Request"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "successful operation",
@@ -87,6 +97,16 @@
     "/bgp/originate4": {
       "get": {
         "operationId": "get_originated4",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetOriginated4Request"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "successful operation",
@@ -160,6 +180,33 @@
           }
         }
       }
+    },
+    "/bgp/routers": {
+      "get": {
+        "operationId": "get_routers",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_RouterInfo",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RouterInfo"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -192,6 +239,12 @@
             "type": "string",
             "format": "ip"
           },
+          "asn": {
+            "description": "ASN of the router to apply the export policy to.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "prefix": {
             "description": "Prefix this policy applies to",
             "allOf": [
@@ -210,6 +263,7 @@
         "required": [
           "action",
           "addr",
+          "asn",
           "prefix",
           "priority"
         ]
@@ -217,6 +271,11 @@
       "AddNeighborRequest": {
         "type": "object",
         "properties": {
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "connect_retry": {
             "type": "integer",
             "format": "uint64",
@@ -255,6 +314,7 @@
           }
         },
         "required": [
+          "asn",
           "connect_retry",
           "delay_open",
           "hold_time",
@@ -282,6 +342,46 @@
         "required": [
           "message",
           "request_id"
+        ]
+      },
+      "FsmStateKind": {
+        "type": "string",
+        "enum": [
+          "Idle",
+          "Connect",
+          "Active",
+          "OpenSent",
+          "OpenConfirm",
+          "SessionSetup",
+          "Established"
+        ]
+      },
+      "GetImported4Request": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "ASN of the router to get imported prefixes from",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "asn"
+        ]
+      },
+      "GetOriginated4Request": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "ASN of the router to get originated prefixes from",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "asn"
         ]
       },
       "NewRouterRequest": {
@@ -313,6 +413,12 @@
       "Originate4Request": {
         "type": "object",
         "properties": {
+          "asn": {
+            "description": "ASN of the router to originate from.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "nexthop": {
             "description": "Nexthop to originate.",
             "type": "string",
@@ -327,8 +433,20 @@
           }
         },
         "required": [
+          "asn",
           "nexthop",
           "prefixes"
+        ]
+      },
+      "PeerInfo": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/FsmStateKind"
+          }
+        },
+        "required": [
+          "state"
         ]
       },
       "PolicyAction": {
@@ -392,6 +510,26 @@
         "required": [
           "nexthop",
           "prefix"
+        ]
+      },
+      "RouterInfo": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "peers": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PeerInfo"
+            }
+          }
+        },
+        "required": [
+          "asn",
+          "peers"
         ]
       }
     }

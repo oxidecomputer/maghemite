@@ -7,6 +7,8 @@ use crate::messages::{
 };
 use crate::{dbg, inf, wrn};
 use rdb::{Db, Prefix4, Route4Key};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
@@ -66,7 +68,9 @@ impl<Cnx: BgpConnection> Display for FsmState<Cnx> {
 }
 
 //XXX
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
+)]
 pub enum FsmStateKind {
     Idle,
     Connect,
@@ -319,7 +323,7 @@ impl Session {
 }
 
 //XXX move to rdb
-#[derive(Debug, Clone, Copy, Hash)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum Asn {
     TwoOctet(u16),
     FourOctet(u32),
@@ -334,6 +338,18 @@ impl std::fmt::Display for Asn {
     }
 }
 
+impl From<u32> for Asn {
+    fn from(value: u32) -> Asn {
+        Asn::FourOctet(value)
+    }
+}
+
+impl From<u16> for Asn {
+    fn from(value: u16) -> Asn {
+        Asn::TwoOctet(value)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NeighborInfo {
     pub name: String,
@@ -341,16 +357,16 @@ pub struct NeighborInfo {
 }
 
 pub struct SessionRunner<Cnx: BgpConnection> {
+    pub event_tx: Sender<FsmEvent<Cnx>>,
+    pub neighbor: NeighborInfo,
+
     session: Arc<Mutex<Session>>,
     event_rx: Receiver<FsmEvent<Cnx>>,
-    pub event_tx: Sender<FsmEvent<Cnx>>,
 
     state: Arc<Mutex<FsmStateKind>>,
 
     asn: Asn,
     id: u32,
-
-    neighbor: NeighborInfo,
 
     log: Logger,
 

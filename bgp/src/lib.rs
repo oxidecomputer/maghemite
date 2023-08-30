@@ -1,6 +1,7 @@
 pub mod clock;
 pub mod config;
 pub mod connection;
+pub mod dispatcher;
 pub mod error;
 pub mod fanout;
 pub mod log;
