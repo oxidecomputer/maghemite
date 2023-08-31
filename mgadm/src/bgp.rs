@@ -8,8 +8,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     GetRouters,
-    RouterInit(RouterConfig),
+    AddRouter(RouterConfig),
+    DeleteRouter { asn: u32 },
     AddNeighbor(Neighbor),
+    DeleteNeighbor { asn: u32, addr: IpAddr },
     AddExportPolicy(ExportPolicy),
     Originate4(Originate4),
     GetImported { asn: u32 },
@@ -103,8 +105,12 @@ impl From<Neighbor> for types::AddNeighborRequest {
 pub async fn commands(command: Commands, client: Client) -> Result<()> {
     match command {
         Commands::GetRouters => get_routers(client).await,
-        Commands::RouterInit(cfg) => init_router(cfg, client).await,
+        Commands::AddRouter(cfg) => add_router(cfg, client).await,
+        Commands::DeleteRouter { asn } => delete_router(asn, client).await,
         Commands::AddNeighbor(nbr) => add_neighbor(nbr, client).await,
+        Commands::DeleteNeighbor { asn, addr } => {
+            delete_neighbor(asn, addr, client).await
+        }
         Commands::AddExportPolicy(policy) => {
             add_export_policy(policy, client).await
         }
@@ -120,7 +126,7 @@ async fn get_routers(c: Client) {
     println!("{:#?}", routers);
 }
 
-async fn init_router(cfg: RouterConfig, c: Client) {
+async fn add_router(cfg: RouterConfig, c: Client) {
     c.new_router(&types::NewRouterRequest {
         asn: cfg.asn,
         id: cfg.id,
@@ -128,6 +134,12 @@ async fn init_router(cfg: RouterConfig, c: Client) {
     })
     .await
     .unwrap();
+}
+
+async fn delete_router(asn: u32, c: Client) {
+    c.delete_router(&types::DeleteRouterRequest { asn })
+        .await
+        .unwrap();
 }
 
 async fn get_imported(c: Client, asn: u32) {
@@ -148,6 +160,12 @@ async fn get_originated(c: Client, asn: u32) {
 
 async fn add_neighbor(nbr: Neighbor, c: Client) {
     c.add_neighbor(&nbr.into()).await.unwrap();
+}
+
+async fn delete_neighbor(asn: u32, addr: IpAddr, c: Client) {
+    c.delete_neighbor(&types::DeleteNeighborRequest { asn, addr })
+        .await
+        .unwrap();
 }
 
 async fn add_export_policy(policy: ExportPolicy, c: Client) {

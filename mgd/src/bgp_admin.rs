@@ -8,6 +8,7 @@ use dropshot::{
     endpoint, HttpError, HttpResponseOk, HttpResponseUpdatedNoContent,
     RequestContext, TypedBody,
 };
+use http::status::StatusCode;
 use rdb::{Policy, PolicyAction, Prefix4, Route4ImportKey, Route4Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -20,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 
 pub struct BgpContext {
-    router: Mutex<Vec<Arc<Router<BgpConnectionTcp>>>>,
+    router: Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>,
     addr_to_session:
         Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionTcp>>>>>,
 }
@@ -32,7 +33,7 @@ impl BgpContext {
         >,
     ) -> Self {
         Self {
-            router: Mutex::new(Vec::new()),
+            router: Mutex::new(BTreeMap::new()),
             addr_to_session,
         }
     }
@@ -50,6 +51,12 @@ pub struct NewRouterRequest {
     pub listen: String,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DeleteRouterRequest {
+    /// Autonomous system number for the router to remove
+    pub asn: u32,
+}
+
 //TODO use bgp::config::PeerConfig instead
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct AddNeighborRequest {
@@ -63,6 +70,27 @@ pub struct AddNeighborRequest {
     pub connect_retry: u64,
     pub keepalive: u64,
     pub resolution: u64,
+}
+
+impl From<AddNeighborRequest> for PeerConfig {
+    fn from(rq: AddNeighborRequest) -> Self {
+        Self {
+            name: rq.name.clone(),
+            host: rq.host,
+            hold_time: rq.hold_time,
+            idle_hold_time: rq.idle_hold_time,
+            delay_open: rq.delay_open,
+            connect_retry: rq.connect_retry,
+            keepalive: rq.keepalive,
+            resolution: rq.resolution,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DeleteNeighborRequest {
+    pub asn: u32,
+    pub addr: IpAddr,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -133,9 +161,9 @@ pub async fn get_routers(
     let rs = ctx.context().bgp.router.lock().unwrap();
     let mut result = Vec::new();
 
-    for r in rs.iter() {
+    for r in rs.values() {
         let mut peers = BTreeMap::new();
-        for s in r.sessions.lock().unwrap().iter() {
+        for s in r.sessions.lock().unwrap().values() {
             peers.insert(s.neighbor.host.ip(), PeerInfo { state: s.state() });
         }
         result.push(RouterInfo {
@@ -150,21 +178,46 @@ pub async fn get_routers(
     Ok(HttpResponseOk(result))
 }
 
+#[endpoint { method = PUT, path = "/bgp/router" }]
+pub async fn ensure_router(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<NewRouterRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context();
+    let rq = request.into_inner();
+
+    let mut guard = ctx.bgp.router.lock().unwrap();
+    if guard.get(&rq.asn).is_some() {
+        return Ok(HttpResponseUpdatedNoContent());
+    }
+
+    add_router(ctx.clone(), rq, &mut guard)
+}
+
 #[endpoint { method = POST, path = "/bgp/router" }]
 pub async fn new_router(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<NewRouterRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context();
     let rq = request.into_inner();
 
-    let mut guard = ctx.context().bgp.router.lock().unwrap();
-    if guard.iter().any(|x| x.config.asn == rq.asn.into()) {
-        return Err(HttpError::for_bad_request(
-            None,
-            "bgp router with specified ASN exists".into(),
+    let mut guard = ctx.bgp.router.lock().unwrap();
+    if guard.get(&rq.asn).is_some() {
+        return Err(HttpError::for_status(
+            Some("bgp router with specified ASN exists".into()),
+            StatusCode::CONFLICT,
         ));
     }
 
+    add_router(ctx.clone(), rq, &mut guard)
+}
+
+fn add_router(
+    ctx: Arc<HandlerContext>,
+    rq: NewRouterRequest,
+    routers: &mut BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let cfg = RouterConfig {
         asn: Asn::FourOctet(rq.asn),
         id: rq.id,
@@ -174,9 +227,9 @@ pub async fn new_router(
 
     let router = Arc::new(Router::<BgpConnectionTcp>::new(
         cfg,
-        ctx.context().log.clone(),
+        ctx.log.clone(),
         db.clone(),
-        ctx.context().bgp.addr_to_session.clone(),
+        ctx.bgp.addr_to_session.clone(),
     ));
 
     router.run();
@@ -187,24 +240,30 @@ pub async fn new_router(
         mg_lower::run(db, log, rt);
     });
 
-    guard.push(router);
+    routers.insert(rq.asn, router);
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = DELETE, path = "/bgp/router" }]
+pub async fn delete_router(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<DeleteRouterRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let mut routers = ctx.context().bgp.router.lock().unwrap();
+    if let Some(r) = routers.remove(&rq.asn) {
+        r.shutdown()
+    };
 
     Ok(HttpResponseUpdatedNoContent())
 }
 
 macro_rules! get_router {
     ($ctx:expr, $asn:expr) => {
-        $ctx.context()
-            .bgp
-            .router
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|x| x.config.asn == $asn.into())
-            .ok_or(HttpError::for_not_found(
-                None,
-                "no bgp router configured".into(),
-            ))?
+        $ctx.context().bgp.router.lock().unwrap().get(&$asn).ok_or(
+            HttpError::for_not_found(None, "no bgp router configured".into()),
+        )
     };
 }
 
@@ -220,21 +279,64 @@ pub async fn add_neighbor(
 
     let (event_tx, event_rx) = channel();
 
-    get_router!(&ctx, rq.asn).new_session(
-        PeerConfig {
-            name: rq.name.clone(),
-            host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
-        },
+    match get_router!(&ctx, rq.asn)?.new_session(
+        rq.into(),
         "0.0.0.0:179".parse().unwrap(),
         event_tx.clone(),
         event_rx,
-    );
+    ) {
+        Ok(_) => {}
+        Err(bgp::error::Error::PeerExists) => {
+            return Err(HttpError::for_status(
+                Some("bgp peer with specified address exists".into()),
+                StatusCode::CONFLICT,
+            ));
+        }
+        Err(e) => {
+            return Err(HttpError::for_internal_error(format!("{:?}", e)))
+        }
+    }
+    event_tx.send(FsmEvent::ManualStart).unwrap();
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = DELETE, path = "/bgp/neighbor" }]
+pub async fn delete_neighbor(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<DeleteNeighborRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    get_router!(ctx, rq.asn)?.delete_session(rq.addr);
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = PUT, path = "/bgp/neighbor" }]
+pub async fn ensure_neighbor(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<AddNeighborRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let log = ctx.context().log.clone();
+    let rq = request.into_inner();
+
+    info!(log, "add neighbor: {:#?}", rq);
+
+    let (event_tx, event_rx) = channel();
+
+    match get_router!(&ctx, rq.asn)?.new_session(
+        rq.into(),
+        "0.0.0.0:179".parse().unwrap(),
+        event_tx.clone(),
+        event_rx,
+    ) {
+        Ok(_) => {}
+        Err(bgp::error::Error::PeerExists) => {
+            return Ok(HttpResponseUpdatedNoContent());
+        }
+        Err(e) => {
+            return Err(HttpError::for_internal_error(format!("{:?}", e)));
+        }
+    }
     event_tx.send(FsmEvent::ManualStart).unwrap();
 
     Ok(HttpResponseUpdatedNoContent())
@@ -247,7 +349,7 @@ pub async fn add_export_policy(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
 
-    get_router!(&ctx, rq.asn).add_export_policy(
+    get_router!(&ctx, rq.asn)?.add_export_policy(
         rq.addr,
         Rule4 {
             prefix: rq.prefix,
@@ -269,7 +371,7 @@ pub async fn originate4(
     let rq = request.into_inner();
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
 
-    get_router!(&ctx, rq.asn)
+    get_router!(&ctx, rq.asn)?
         .originate4(rq.nexthop, prefixes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
@@ -282,7 +384,7 @@ pub async fn get_originated4(
     request: TypedBody<GetOriginated4Request>,
 ) -> Result<HttpResponseOk<Vec<Route4Key>>, HttpError> {
     let rq = request.into_inner();
-    let originated = get_router!(&ctx, rq.asn)
+    let originated = get_router!(&ctx, rq.asn)?
         .db
         .get_originated4()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
@@ -295,6 +397,6 @@ pub async fn get_imported4(
     request: TypedBody<GetImported4Request>,
 ) -> Result<HttpResponseOk<Vec<Route4ImportKey>>, HttpError> {
     let rq = request.into_inner();
-    let imported = get_router!(&ctx, rq.asn).db.get_imported4();
+    let imported = get_router!(&ctx, rq.asn)?.db.get_imported4();
     Ok(HttpResponseOk(imported))
 }

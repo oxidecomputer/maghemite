@@ -37,8 +37,8 @@ macro_rules! wait_for_eq {
 fn test_basic_peering() {
     let (r1, _d1, r2, d2) = two_router_test_setup("basic_peering");
 
-    let r1_session = r1.get_session(0).unwrap();
-    let r2_session = r2.get_session(0).unwrap();
+    let r1_session = r1.get_session("2.0.0.1".parse().unwrap()).unwrap();
+    let r2_session = r2.get_session("1.0.0.1".parse().unwrap()).unwrap();
 
     // Give peer sessions a few seconds and ensure we have reached the
     // established state on both sides.
@@ -86,8 +86,8 @@ fn test_basic_update() {
     .unwrap();
 
     // once we reach established the originated routes should have propagated
-    let r1_session = r1.get_session(0).unwrap();
-    let r2_session = r2.get_session(0).unwrap();
+    let r1_session = r1.get_session("2.0.0.1".parse().unwrap()).unwrap();
+    let r2_session = r2.get_session("1.0.0.1".parse().unwrap()).unwrap();
     wait_for_eq!(r1_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
@@ -156,7 +156,8 @@ fn two_router_test_setup(
         "1.0.0.1:179".parse().unwrap(),
         r1_event_tx.clone(),
         event_rx,
-    );
+    )
+    .unwrap();
     r1_event_tx.send(FsmEvent::ManualStart).unwrap();
 
     // Router 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -207,7 +208,8 @@ fn two_router_test_setup(
         "2.0.0.1:179".parse().unwrap(),
         r2_event_tx.clone(),
         event_rx,
-    );
+    )
+    .unwrap();
     r2_event_tx.send(FsmEvent::ManualStart).unwrap();
 
     (r1, d1, r2, d2)

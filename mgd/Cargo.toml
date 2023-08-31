@@ -18,3 +18,4 @@ slog-async.workspace = true
 slog-envlogger.workspace = true
 slog-term.workspace = true
 tokio.workspace = true
+http.workspace = true

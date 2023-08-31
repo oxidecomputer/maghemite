@@ -1749,6 +1749,7 @@ dependencies = [
  "clap",
  "colored",
  "dropshot",
+ "http",
  "mg-common",
  "mg-lower",
  "rdb",

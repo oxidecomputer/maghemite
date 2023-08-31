@@ -61,51 +61,64 @@ impl Clock {
         s: Sender<FsmEvent<Cnx>>,
     ) -> JoinHandle<()> {
         spawn(move || loop {
-            Self::step(
-                resolution,
-                &timers.connect_retry_timer,
-                FsmEvent::ConnectRetryTimerExpires,
-                s.clone(),
-            );
-            Self::step(
-                resolution,
-                &timers.keepalive_timer,
-                FsmEvent::KeepaliveTimerExpires,
-                s.clone(),
-            );
-            Self::step(
-                resolution,
-                &timers.hold_timer,
-                FsmEvent::HoldTimerExpires,
-                s.clone(),
-            );
-            Self::step(
-                resolution,
-                &timers.idle_hold_timer,
-                FsmEvent::IdleHoldTimerExpires,
-                s.clone(),
-            );
-            Self::step(
-                resolution,
-                &timers.delay_open_timer,
-                FsmEvent::DelayOpenTimerExpires,
-                s.clone(),
-            );
-            sleep(resolution);
+            if Self::step_all(resolution, timers.clone(), s.clone()).is_err() {
+                //TODO log
+                break;
+            }
         })
     }
 
-    fn step<Cnx: BgpConnection>(
+    fn step_all<Cnx: BgpConnection + 'static>(
+        resolution: Duration,
+        timers: Arc<ClockTimers>,
+        s: Sender<FsmEvent<Cnx>>,
+    ) -> anyhow::Result<()> {
+        Self::step(
+            resolution,
+            &timers.connect_retry_timer,
+            FsmEvent::ConnectRetryTimerExpires,
+            s.clone(),
+        )?;
+        Self::step(
+            resolution,
+            &timers.keepalive_timer,
+            FsmEvent::KeepaliveTimerExpires,
+            s.clone(),
+        )?;
+        Self::step(
+            resolution,
+            &timers.hold_timer,
+            FsmEvent::HoldTimerExpires,
+            s.clone(),
+        )?;
+        Self::step(
+            resolution,
+            &timers.idle_hold_timer,
+            FsmEvent::IdleHoldTimerExpires,
+            s.clone(),
+        )?;
+        Self::step(
+            resolution,
+            &timers.delay_open_timer,
+            FsmEvent::DelayOpenTimerExpires,
+            s.clone(),
+        )?;
+        sleep(resolution);
+        Ok(())
+    }
+
+    fn step<Cnx: BgpConnection + 'static>(
         resolution: Duration,
         t: &Timer,
         e: FsmEvent<Cnx>,
         s: Sender<FsmEvent<Cnx>>,
-    ) {
+    ) -> anyhow::Result<()> {
         t.tick(resolution);
         if t.expired() {
-            s.send(e).unwrap();
+            s.send(e).map_err(|_| anyhow::anyhow!("timer send"))?;
             t.reset();
         }
+        Ok(())
     }
 }
 

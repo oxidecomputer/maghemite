@@ -4,7 +4,7 @@ use crate::messages::{
     UpdateMessage,
 };
 use crate::session::FsmEvent;
-use slog::{debug, error, Logger};
+use slog::{debug, error, warn, Logger};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
@@ -183,7 +183,13 @@ impl BgpConnectionTcp {
             match Self::recv_msg(&mut conn) {
                 Ok(msg) => {
                     debug!(log, "[{peer}] recv: {msg:#?}");
-                    event_tx.send(FsmEvent::Message(msg)).unwrap();
+                    if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
+                        warn!(
+                            log,
+                            "[{peer}] connection: error sending event {e}"
+                        );
+                        break;
+                    }
                 }
                 Err(_e) => {
                     //TODO log?

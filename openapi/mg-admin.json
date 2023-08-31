@@ -69,6 +69,30 @@
       }
     },
     "/bgp/neighbor": {
+      "put": {
+        "operationId": "ensure_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddNeighborRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
       "post": {
         "operationId": "add_neighbor",
         "requestBody": {
@@ -76,6 +100,30 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AddNeighborRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteNeighborRequest"
               }
             }
           },
@@ -156,6 +204,30 @@
       }
     },
     "/bgp/router": {
+      "put": {
+        "operationId": "ensure_router",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRouterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
       "post": {
         "operationId": "new_router",
         "requestBody": {
@@ -163,6 +235,30 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/NewRouterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_router",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteRouterRequest"
               }
             }
           },
@@ -323,6 +419,38 @@
           "keepalive",
           "name",
           "resolution"
+        ]
+      },
+      "DeleteNeighborRequest": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ip"
+          },
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "addr",
+          "asn"
+        ]
+      },
+      "DeleteRouterRequest": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "Autonomous system number for the router to remove",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "asn"
         ]
       },
       "Error": {

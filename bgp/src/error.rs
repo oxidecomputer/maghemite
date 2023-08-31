@@ -94,6 +94,9 @@ pub enum Error {
 
     #[error("Connection attempt from unknown peer")]
     UnknownPeer,
+
+    #[error("Session for peer already exists")]
+    PeerExists,
 }
 
 impl<'a> From<nom::Err<(&'a [u8], nom::error::ErrorKind)>> for Error {
