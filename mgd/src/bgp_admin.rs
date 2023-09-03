@@ -152,6 +152,8 @@ pub struct RouterInfo {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PeerInfo {
     pub state: FsmStateKind,
+    pub asn: Option<u32>,
+    pub duration_millis: u64,
 }
 
 #[endpoint { method = GET, path = "/bgp/routers" }]
@@ -164,7 +166,15 @@ pub async fn get_routers(
     for r in rs.values() {
         let mut peers = BTreeMap::new();
         for s in r.sessions.lock().unwrap().values() {
-            peers.insert(s.neighbor.host.ip(), PeerInfo { state: s.state() });
+            let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
+            peers.insert(
+                s.neighbor.host.ip(),
+                PeerInfo {
+                    state: s.state(),
+                    asn: s.remote_asn(),
+                    duration_millis: dur as u64,
+                },
+            );
         }
         result.push(RouterInfo {
             asn: match r.config.asn {

@@ -569,11 +569,23 @@
       "PeerInfo": {
         "type": "object",
         "properties": {
+          "asn": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "duration_millis": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "state": {
             "$ref": "#/components/schemas/FsmStateKind"
           }
         },
         "required": [
+          "duration_millis",
           "state"
         ]
       },

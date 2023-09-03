@@ -3,7 +3,8 @@ use crate::connection::BgpConnection;
 use crate::error::Error;
 use crate::fanout::Fanout;
 use crate::messages::{
-    Capability, Message, OpenMessage, PathAttributeValue, UpdateMessage,
+    Capability, Message, OpenMessage, OptionalParameter, PathAttributeValue,
+    UpdateMessage,
 };
 use crate::{dbg, inf, wrn};
 use rdb::{Db, Prefix4, Route4Key};
@@ -16,7 +17,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub struct PeerConnection<Cnx: BgpConnection> {
@@ -303,6 +304,9 @@ pub struct Session {
 
     /// Enable fine-grained tracking and logging of TCP connection state.
     pub track_tcp_state: bool,
+
+    /// The ASN of the remote peer.
+    pub remote_asn: Option<u32>,
 }
 
 impl Session {
@@ -318,6 +322,7 @@ impl Session {
             passive_tcp_establishment: false,
             send_notification_without_open: false,
             track_tcp_state: false,
+            remote_asn: None,
         }))
     }
 }
@@ -364,6 +369,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     event_rx: Receiver<FsmEvent<Cnx>>,
 
     state: Arc<Mutex<FsmStateKind>>,
+    last_state_change: Mutex<Instant>,
 
     asn: Asn,
     id: u32,
@@ -410,6 +416,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             id,
             neighbor,
             state: Arc::new(Mutex::new(FsmStateKind::Idle)),
+            last_state_change: Mutex::new(Instant::now()),
             clock: Clock::new(
                 resolution,
                 connect_retry_time,
@@ -492,6 +499,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             if current_state != next_state {
                 inf!(self; "{} -> {}", current_state, next_state);
                 *(self.state.lock().unwrap()) = next_state;
+                *(self.last_state_change.lock().unwrap()) = Instant::now();
             }
         }
     }
@@ -580,8 +588,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         FsmState::OpenConfirm(PeerConnection { conn, id: om.id })
     }
 
-    fn open_is_valid(&self, _om: &OpenMessage) -> bool {
+    fn open_is_valid(&self, om: &OpenMessage) -> bool {
         //TODO
+
+        let mut remote_asn = om.asn as u32;
+        for p in &om.parameters {
+            if let OptionalParameter::Capabilities(caps) = p {
+                for c in caps {
+                    if let Capability::FourOctetAs { asn } = c {
+                        remote_asn = *asn;
+                    }
+                }
+            }
+        }
+        self.session.lock().unwrap().remote_asn = Some(remote_asn);
         true
     }
 
@@ -825,5 +845,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     pub fn state(&self) -> FsmStateKind {
         *self.state.lock().unwrap()
+    }
+
+    pub fn remote_asn(&self) -> Option<u32> {
+        self.session.lock().unwrap().remote_asn
+    }
+
+    pub fn current_state_duration(&self) -> Duration {
+        self.last_state_change.lock().unwrap().elapsed()
     }
 }
