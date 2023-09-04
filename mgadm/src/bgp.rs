@@ -1,9 +1,13 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use colored::*;
 use mg_admin_client::types;
 use mg_admin_client::Client;
 use rdb::types::{PolicyAction, Prefix4};
+use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::Duration;
+use tabwriter::TabWriter;
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -122,8 +126,36 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
 }
 
 async fn get_routers(c: Client) {
-    let routers = c.get_routers().await.unwrap();
-    println!("{:#?}", routers);
+    let routers = c.get_routers().await.unwrap().into_inner();
+    for r in &routers {
+        println!("{}: {}", "ASN".dimmed(), r.asn);
+        let mut tw = TabWriter::new(stdout());
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}\t{}",
+            "Peer Address".dimmed(),
+            "Peer ASN".dimmed(),
+            "State".dimmed(),
+            "State Duration".dimmed(),
+        )
+        .unwrap();
+
+        for (addr, info) in &r.peers {
+            writeln!(
+                &mut tw,
+                "{}\t{:?}\t{:?}\t{:}",
+                addr,
+                info.asn,
+                info.state,
+                humantime::Duration::from(Duration::from_millis(
+                    info.duration_millis
+                ),),
+            )
+            .unwrap();
+        }
+        tw.flush().unwrap();
+        println!();
+    }
 }
 
 async fn add_router(cfg: RouterConfig, c: Client) {

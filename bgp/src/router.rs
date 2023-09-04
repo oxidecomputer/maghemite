@@ -91,6 +91,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn add_export_policy(&self, addr: IpAddr, rule: Rule4) {
+        // TODO need to fan out entries that match the policy retroactively
         self.fanout.write().unwrap().add_rule(addr, rule).unwrap();
     }
 
