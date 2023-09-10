@@ -1,9 +1,7 @@
 use crate::bgp_admin;
 use bgp_admin::BgpContext;
-use dropshot::{
-    ApiDescription, ConfigDropshot, ConfigLogging, ConfigLoggingLevel,
-    HttpServerStarter,
-};
+use dropshot::{ApiDescription, ConfigDropshot, HttpServerStarter};
+use slog::o;
 use slog::{error, info, warn, Logger};
 use std::fs::File;
 use std::net::{IpAddr, SocketAddr};
@@ -28,11 +26,7 @@ pub fn start_server(
         ..Default::default()
     };
 
-    let ds_log = ConfigLogging::StderrTerminal {
-        level: ConfigLoggingLevel::Info,
-    }
-    .to_logger("admin")
-    .map_err(|e| e.to_string())?;
+    let ds_log = log.new(o!("unit" => "api-server"));
 
     let api = api_description();
 

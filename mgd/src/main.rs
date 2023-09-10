@@ -36,6 +36,10 @@ struct RunArgs {
     /// Port to listen on for the admin API.
     #[arg(long, default_value_t = 4676)]
     admin_port: u16,
+
+    /// Do not run a BGP connection dispatcher.
+    #[arg(long, default_value_t = false)]
+    no_bgp_dispatcher: bool,
 }
 
 #[tokio::main]
@@ -51,13 +55,16 @@ async fn run(args: RunArgs) {
     let log = init_logger();
 
     let addr_to_session = Arc::new(Mutex::new(BTreeMap::new()));
-    let bgp_dispatcher = bgp::dispatcher::Dispatcher::<BgpConnectionTcp>::new(
-        addr_to_session.clone(),
-        "[::]:179".into(),
-        log.clone(),
-    );
+    if !args.no_bgp_dispatcher {
+        let bgp_dispatcher =
+            bgp::dispatcher::Dispatcher::<BgpConnectionTcp>::new(
+                addr_to_session.clone(),
+                "[::]:179".into(),
+                log.clone(),
+            );
 
-    spawn(move || bgp_dispatcher.run::<BgpListenerTcp>());
+        spawn(move || bgp_dispatcher.run::<BgpListenerTcp>());
+    }
 
     let context = Arc::new(HandlerContext {
         log: log.clone(),
