@@ -29,7 +29,7 @@ pub fn start_server(
     };
 
     let ds_log = ConfigLogging::StderrTerminal {
-        level: ConfigLoggingLevel::Error,
+        level: ConfigLoggingLevel::Info,
     }
     .to_logger("admin")
     .map_err(|e| e.to_string())?;
