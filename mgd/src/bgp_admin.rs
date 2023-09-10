@@ -18,7 +18,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::thread::spawn;
 
 pub struct BgpContext {
     router: Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>,
@@ -244,11 +243,14 @@ fn add_router(
 
     router.run();
 
-    let rt = Arc::new(tokio::runtime::Handle::current());
-    let log = ctx.log.clone();
-    spawn(move || {
-        mg_lower::run(db, log, rt);
-    });
+    #[cfg(feature = "default")]
+    {
+        let rt = Arc::new(tokio::runtime::Handle::current());
+        let log = ctx.log.clone();
+        std::thread::spawn(move || {
+            mg_lower::run(db, log, rt);
+        });
+    }
 
     routers.insert(rq.asn, router);
 

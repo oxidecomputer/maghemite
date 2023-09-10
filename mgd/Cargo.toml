@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-mg-lower = { path = "../mg-lower" }
+mg-lower = { path = "../mg-lower", optional = true }
 mg-common = { path = "../mg-common" }
 bgp = { path = "../bgp" }
 rdb = { path = "../rdb" }
@@ -19,3 +19,6 @@ slog-envlogger.workspace = true
 slog-term.workspace = true
 tokio.workspace = true
 http.workspace = true
+
+[features]
+default = ["mg-lower"]
