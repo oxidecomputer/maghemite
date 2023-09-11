@@ -40,6 +40,10 @@ struct RunArgs {
     /// Do not run a BGP connection dispatcher.
     #[arg(long, default_value_t = false)]
     no_bgp_dispatcher: bool,
+
+    /// Where to store the local database
+    #[arg(long, default_value = "/var/run")]
+    data_dir: String,
 }
 
 #[tokio::main]
@@ -69,6 +73,7 @@ async fn run(args: RunArgs) {
     let context = Arc::new(HandlerContext {
         log: log.clone(),
         bgp: BgpContext::new(addr_to_session),
+        data_dir: args.data_dir.clone(),
     });
 
     let j = admin::start_server(

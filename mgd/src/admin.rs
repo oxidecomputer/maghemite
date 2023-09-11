@@ -11,6 +11,7 @@ use tokio::task::JoinHandle;
 pub struct HandlerContext {
     pub bgp: BgpContext,
     pub log: Logger,
+    pub data_dir: String,
 }
 
 pub fn start_server(

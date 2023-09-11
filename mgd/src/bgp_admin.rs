@@ -232,7 +232,7 @@ fn add_router(
         id: rq.id,
     };
 
-    let db = rdb::Db::new(&format!("/var/run/rdb{}", rq.asn)).unwrap();
+    let db = rdb::Db::new(&format!("{}/rdb{}", ctx.data_dir, rq.asn)).unwrap();
 
     let router = Arc::new(Router::<BgpConnectionTcp>::new(
         cfg,
