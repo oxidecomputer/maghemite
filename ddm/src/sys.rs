@@ -210,7 +210,7 @@ pub fn add_routes_dendrite(
             cidr: cidr.into(),
             switch_port,
             link,
-            nexthop: Some(gw.into()),
+            nexthop: gw.into(),
             vid: None,
         };
 
@@ -317,7 +317,7 @@ pub fn get_routes_dendrite(
 
     for r in routes {
         let gw = match r.nexthop {
-            Some(IpAddr::V6(addr)) => addr.into(),
+            IpAddr::V6(addr) => addr.into(),
             _ => Ipv6Addr::UNSPECIFIED.into(),
         };
         let (dest, prefix_len) = match r.cidr {
