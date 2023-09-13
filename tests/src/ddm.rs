@@ -184,17 +184,6 @@ impl<'a> RouterZone<'a> {
             ))?;
 
             self.zone.zexec("ipadm")?;
-
-            for i in 0..self.ifx[1..].len() {
-                let addr = self.zone.zexec(&format!(
-                    "ipadm show-addr tfportrear{i}_0/v6 -p -o addr | {}",
-                    "sed 's/[%/].*//g'",
-                ))?;
-                self.zone.zexec(&format!(
-                    "/opt/oxide/dendrite/bin/swadm addr add rear{i}/0 {}",
-                    addr,
-                ))?;
-            }
         } else {
             self.zone.zexec(&format!(
                 "{} /opt/ddmd --kind server {} &> /opt/ddmd.log &",
