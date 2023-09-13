@@ -1117,7 +1117,7 @@ pub enum OptionalParameterCode {
 impl OptionalParameter {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         match self {
-            Self::Reserved => Err(Error::Reserved),
+            Self::Reserved => Err(Error::ReservedOptionalParameter),
             Self::Unassigned => Err(Error::Unassigned(0)),
             Self::Authentication => todo!(),
             Self::Capabilities(cs) => {
@@ -1144,7 +1144,9 @@ impl OptionalParameter {
         let (input, mut cap_input) = take(len)(input)?;
 
         match code {
-            OptionalParameterCode::Reserved => Err(Error::Reserved),
+            OptionalParameterCode::Reserved => {
+                Err(Error::ReservedOptionalParameter)
+            }
             OptionalParameterCode::Authentication => todo!(),
             OptionalParameterCode::Capabilities => {
                 let mut result = Vec::new();
@@ -1158,6 +1160,13 @@ impl OptionalParameter {
             OptionalParameterCode::ExtendedLength => todo!(),
         }
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct AddPathElement {
+    pub afi: u16,
+    pub safi: u8,
+    pub send_receive: u8,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -1206,11 +1215,9 @@ pub enum Capability {
     /// draft-ietf-idr-bgp-multisession TODO
     MultisessionBgp {},
 
-    /// RFC 7911 TODO
+    /// RFC 7911
     AddPath {
-        afi: u16,
-        safi: u8,
-        send_receive: u8,
+        elements: Vec<AddPathElement>,
     },
 
     /// RFC 7313 TODO
@@ -1291,15 +1298,16 @@ impl Capability {
             }
             Self::DynamicCapability {} => todo!(),
             Self::MultisessionBgp {} => todo!(),
-            Self::AddPath {
-                afi,
-                safi,
-                send_receive,
-            } => {
-                let mut buf = vec![CapabilityCode::AddPath as u8, 4];
-                buf.extend_from_slice(&afi.to_be_bytes());
-                buf.push(*safi);
-                buf.push(*send_receive);
+            Self::AddPath { elements } => {
+                let mut buf = vec![
+                    CapabilityCode::AddPath as u8,
+                    (elements.len() * 4) as u8,
+                ];
+                for e in elements {
+                    buf.extend_from_slice(&e.afi.to_be_bytes());
+                    buf.push(e.safi);
+                    buf.push(e.send_receive);
+                }
                 Ok(buf)
             }
             Self::EnhancedRouteRefresh {} => {
@@ -1318,7 +1326,7 @@ impl Capability {
             Self::PrestandardOpereationalMessage {} => todo!(),
             Self::Experimental { code: _ } => Err(Error::Experimental),
             Self::Unassigned { code } => Err(Error::Unassigned(*code)),
-            Self::Reserved { code: _ } => Err(Error::Reserved),
+            Self::Reserved { code: _ } => Err(Error::ReservedCapability),
         }
     }
 
@@ -1330,6 +1338,9 @@ impl Capability {
         if input.len() < len {
             return Err(Error::Eom);
         }
+        let mut input = input;
+
+        println!("found cc: {code:?}");
 
         match code {
             CapabilityCode::MultiprotocolExtensions => {
@@ -1378,17 +1389,20 @@ impl Capability {
             CapabilityCode::DynamicCapability => todo!(),
             CapabilityCode::MultisessionBgp => todo!(),
             CapabilityCode::AddPath => {
-                let (input, afi) = be_u16(input)?;
-                let (input, safi) = be_u8(input)?;
-                let (input, send_receive) = be_u8(input)?;
-                Ok((
-                    input,
-                    Capability::AddPath {
+                let mut elements = Vec::new();
+                while !input.is_empty() {
+                    let (remaining, afi) = be_u16(input)?;
+                    let (remaining, safi) = be_u8(remaining)?;
+                    let (remaining, send_receive) = be_u8(remaining)?;
+                    elements.push(AddPathElement {
                         afi,
                         safi,
                         send_receive,
-                    },
-                ))
+                    });
+                    input = remaining;
+                    println!("to go {}", remaining.len());
+                }
+                Ok((input, Capability::AddPath { elements }))
             }
             CapabilityCode::EnhancedRouteRefresh => {
                 //TODO handle for real
@@ -1485,7 +1499,7 @@ impl Capability {
             CapabilityCode::Experimental49 => Err(Error::Experimental),
             CapabilityCode::Experimental50 => Err(Error::Experimental),
             CapabilityCode::Experimental51 => Err(Error::Experimental),
-            CapabilityCode::Reserved => Err(Error::Reserved),
+            CapabilityCode::Reserved => Err(Error::ReservedCapabilityCode),
         }
     }
 }

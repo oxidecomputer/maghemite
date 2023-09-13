@@ -80,6 +80,10 @@ impl<Cnx: BgpConnection> Fanout<Cnx> {
             .push(rule);
         Ok(())
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.egress.is_empty()
+    }
 }
 
 impl<Cnx: BgpConnection> Egress<Cnx> {

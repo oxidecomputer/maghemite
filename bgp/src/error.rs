@@ -12,8 +12,12 @@ pub enum Error {
     InvalidMessageType(u8),
     #[error("bad version")]
     BadVersion,
-    #[error("reserved")]
-    Reserved,
+    #[error("reserved capability")]
+    ReservedCapability,
+    #[error("reserved capability code")]
+    ReservedCapabilityCode,
+    #[error("reserved optional parameter")]
+    ReservedOptionalParameter,
     #[error("unassigned")]
     Unassigned(u8),
     #[error("experimental")]

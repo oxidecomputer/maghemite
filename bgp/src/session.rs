@@ -3,8 +3,8 @@ use crate::connection::BgpConnection;
 use crate::error::Error;
 use crate::fanout::Fanout;
 use crate::messages::{
-    Capability, Message, OpenMessage, OptionalParameter, PathAttributeValue,
-    UpdateMessage,
+    AddPathElement, Capability, Message, OpenMessage, OptionalParameter,
+    PathAttributeValue, UpdateMessage,
 };
 use crate::{dbg, inf, wrn};
 use rdb::{Db, Prefix4, Route4Key};
@@ -634,9 +634,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             },
             //Capability::GracefulRestart{},
             Capability::AddPath {
-                afi: 1,          //IP
-                safi: 1,         //NLRI for unicast
-                send_receive: 1, //receive
+                elements: vec![AddPathElement {
+                    afi: 1,          //IP
+                    safi: 1,         //NLRI for unicast
+                    send_receive: 1, //receive
+                }],
             },
         ]);
         // TODO(unwrap)
@@ -688,6 +690,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             }
         }
+
+        let mut fanout = self.fanout.write().unwrap();
+        if fanout.is_empty() {
+            fanout.add_egress(
+                self.neighbor.host.ip(),
+                crate::fanout::Egress {
+                    rules: Vec::new(),
+                    event_tx: self.event_tx.clone(),
+                },
+            );
+        }
+        drop(fanout);
 
         for (nexthop, prefixes) in m {
             let mut update = UpdateMessage {
