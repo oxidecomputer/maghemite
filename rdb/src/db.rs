@@ -65,6 +65,7 @@ impl Db {
         }
     }
 
+    // TODO return previous value if this is an update.
     pub fn add_origin4(&self, r: Route4Key) -> Result<()> {
         let tree = self.persistent.open_tree(ORIGIN)?;
         tree.insert(r.db_key(), "")?;

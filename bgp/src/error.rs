@@ -97,6 +97,9 @@ pub enum Error {
 
     #[error("Session for peer already exists")]
     PeerExists,
+
+    #[error("Capability not supported {0:?}")]
+    UnsupportedCapability(crate::messages::CapabilityCode),
 }
 
 impl<'a> From<nom::Err<(&'a [u8], nom::error::ErrorKind)>> for Error {

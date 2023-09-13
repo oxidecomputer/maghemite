@@ -74,19 +74,19 @@ pub struct Neighbor {
     /// Neighbor address
     addr: IpAddr,
     /// Neighbor BGP TCP port.
-    #[arg(default_value_t = 179)]
+    #[arg(long, default_value_t = 179)]
     port: u16,
-    #[arg(default_value_t = 30)]
+    #[arg(long, default_value_t = 30)]
     hold_time: u64,
-    #[arg(default_value_t = 30)]
+    #[arg(long, default_value_t = 30)]
     idle_hold_time: u64,
-    #[arg(default_value_t = 5)]
+    #[arg(long, default_value_t = 5)]
     connect_retry_time: u64,
-    #[arg(default_value_t = 20)]
+    #[arg(long, default_value_t = 20)]
     keepalive_time: u64,
-    #[arg(default_value_t = 10)]
+    #[arg(long, default_value_t = 10)]
     delay_open_time: u64,
-    #[arg(default_value_t = 100)]
+    #[arg(long, default_value_t = 100)]
     resolution: u64,
 }
 

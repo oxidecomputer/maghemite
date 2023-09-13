@@ -122,25 +122,11 @@ impl BgpConnection for BgpConnectionTcp {
     }
 
     fn send(&self, msg: Message) -> Result<(), Error> {
-        debug!(self.log, "sending {:#?}", msg);
-        let msg_buf = msg.to_wire()?;
-        let header = Header {
-            length: msg_buf.len() as u16 + 19,
-            typ: MessageType::from(&msg),
-        };
-        let mut buf = header.to_wire().to_vec();
-        buf.extend_from_slice(&msg_buf);
         let mut guard = self.conn.lock().unwrap();
-        debug!(self.log, "sending {:x?}", buf);
         match *guard {
-            Some(ref mut ch) => {
-                ch.write_all(&buf)?;
-            }
-            None => {
-                return Err(Error::NotConnected);
-            }
+            Some(ref mut ch) => Self::send_msg(ch, &self.log, msg),
+            None => Err(Error::NotConnected),
         }
-        Ok(())
     }
 
     fn peer(&self) -> SocketAddr {
@@ -180,7 +166,7 @@ impl BgpConnectionTcp {
         log: Logger,
     ) {
         spawn(move || loop {
-            match Self::recv_msg(&mut conn) {
+            match Self::recv_msg(&mut conn, &log) {
                 Ok(msg) => {
                     debug!(log, "[{peer}] recv: {msg:#?}");
                     if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
@@ -217,7 +203,11 @@ impl BgpConnectionTcp {
         }
     }
 
-    fn recv_msg(stream: &mut TcpStream) -> std::io::Result<Message> {
+    fn recv_msg(
+        stream: &mut TcpStream,
+        log: &Logger,
+    ) -> std::io::Result<Message> {
+        use crate::messages::{ErrorCode, ErrorSubcode, OpenErrorSubcode};
         loop {
             let hdr = Self::recv_header(stream)?;
             println!("HDR: {:#?}", hdr);
@@ -228,7 +218,47 @@ impl BgpConnectionTcp {
             let msg = match hdr.typ {
                 MessageType::Open => match OpenMessage::from_wire(&msgbuf) {
                     Ok(m) => m.into(),
-                    Err(_) => continue,
+                    Err(e) => {
+                        error!(log, "open message error: {e}");
+
+                        // NOTE: there will be more
+                        #[allow(clippy::single_match)]
+                        match e {
+                            Error::UnsupportedCapability(_) => {
+                                let msg = Message::Notification(
+                                    NotificationMessage{
+                                        error_code: ErrorCode::Open,
+                                        error_subcode: ErrorSubcode::Open(
+                                            OpenErrorSubcode::UnsupportedCapability,
+                                        ),
+                                        data: Vec::new(),
+                                    }
+                                );
+                                if let Err(e) = Self::send_msg(stream, log, msg)
+                                {
+                                    error!(log, "send notification: {e}");
+                                }
+                            }
+                            _ => {
+                                let msg = Message::Notification(
+                                    NotificationMessage {
+                                        error_code: ErrorCode::Open,
+                                        error_subcode: ErrorSubcode::Open(
+                                            OpenErrorSubcode::Unspecific,
+                                        ),
+                                        //TODO put error info here as Unspecific
+                                        //is not super helpful?
+                                        data: Vec::new(),
+                                    },
+                                );
+                                if let Err(e) = Self::send_msg(stream, log, msg)
+                                {
+                                    error!(log, "send notification: {e}");
+                                }
+                            }
+                        }
+                        continue;
+                    }
                 },
                 MessageType::Update => {
                     match UpdateMessage::from_wire(&msgbuf) {
@@ -248,6 +278,24 @@ impl BgpConnectionTcp {
             println!("MSG: {:#?}", msg);
             return Ok(msg);
         }
+    }
+
+    fn send_msg(
+        stream: &mut TcpStream,
+        log: &Logger,
+        msg: Message,
+    ) -> Result<(), Error> {
+        debug!(log, "sending {:#?}", msg);
+        let msg_buf = msg.to_wire()?;
+        let header = Header {
+            length: msg_buf.len() as u16 + 19,
+            typ: MessageType::from(&msg),
+        };
+        let mut buf = header.to_wire().to_vec();
+        buf.extend_from_slice(&msg_buf);
+        debug!(log, "sending {:x?}", buf);
+        stream.write_all(&buf)?;
+        Ok(())
     }
 }
 

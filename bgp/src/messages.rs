@@ -1051,7 +1051,8 @@ impl ErrorSubcode {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
 #[repr(u8)]
 pub enum HeaderErrorSubcode {
-    ConnectionNotSynchronized = 1,
+    Unspecific = 0,
+    ConnectionNotSynchronized,
     BadMessageLength,
     BadMessageType,
 }
@@ -1059,18 +1060,21 @@ pub enum HeaderErrorSubcode {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
 #[repr(u8)]
 pub enum OpenErrorSubcode {
-    UnsupportedVersionNumber = 1,
+    Unspecific = 0,
+    UnsupportedVersionNumber,
     BadPeerAS,
     BadBgpIdentifier,
     UnsupportedOptionalParameter,
     Deprecated,
     UnacceptableHoldTime,
+    UnsupportedCapability,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
 #[repr(u8)]
 pub enum UpdateErrorSubcode {
-    MalformedAttributeList = 1,
+    Unspecific = 0,
+    MalformedAttributeList,
     UnrecognizedWellKnownAttribute,
     MissingWellKnownAttribute,
     AttributeFlags,
@@ -1327,8 +1331,6 @@ impl Capability {
             return Err(Error::Eom);
         }
 
-        //TODO all the todo!() below must go as they will cause a router crash
-        //on an unsupported option which is clearly unacceptable
         match code {
             CapabilityCode::MultiprotocolExtensions => {
                 let (input, afi) = be_u16(input)?;
@@ -1337,18 +1339,36 @@ impl Capability {
                 Ok((input, Capability::MultiprotocolExtensions { afi, safi }))
             }
             CapabilityCode::RouteRefresh => {
-                //TODO
+                //TODO handle for real, needed for arista
                 Ok((&input[len..], Capability::RouteRefresh {}))
             }
-            CapabilityCode::OutboundRouteFiltering => todo!(),
-            CapabilityCode::MultipleRoutesToDestination => todo!(),
-            CapabilityCode::ExtendedNextHopEncoding => todo!(),
-            CapabilityCode::BGPExtendedMessage => todo!(),
-            CapabilityCode::BgpSec => todo!(),
-            CapabilityCode::MultipleLabels => todo!(),
-            CapabilityCode::BgpRole => todo!(),
+
+            c @ CapabilityCode::OutboundRouteFiltering => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
+            c @ CapabilityCode::MultipleRoutesToDestination => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
+            c @ CapabilityCode::ExtendedNextHopEncoding => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
+            c @ CapabilityCode::BGPExtendedMessage => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
+            c @ CapabilityCode::BgpSec => Err(Error::UnsupportedCapability(c)),
+
+            c @ CapabilityCode::MultipleLabels => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
+            c @ CapabilityCode::BgpRole => Err(Error::UnsupportedCapability(c)),
+
             CapabilityCode::GracefulRestart => {
-                //TODO
+                //TODO handle for real
                 Ok((&input[len..], Capability::GracefulRestart {}))
             }
             CapabilityCode::FourOctetAs => {
@@ -1361,7 +1381,6 @@ impl Capability {
                 let (input, afi) = be_u16(input)?;
                 let (input, safi) = be_u8(input)?;
                 let (input, send_receive) = be_u8(input)?;
-                //TODO
                 Ok((
                     input,
                     Capability::AddPath {
@@ -1372,18 +1391,48 @@ impl Capability {
                 ))
             }
             CapabilityCode::EnhancedRouteRefresh => {
-                //TODO
+                //TODO handle for real
                 Ok((&input[len..], Capability::EnhancedRouteRefresh {}))
             }
-            CapabilityCode::LongLivedGracefulRestart => todo!(),
-            CapabilityCode::RoutingPolicyDistribution => todo!(),
-            CapabilityCode::Fqdn => todo!(),
-            CapabilityCode::PrestandardRouteRefresh => todo!(),
-            CapabilityCode::PrestandardOrfAndPd => todo!(),
-            CapabilityCode::PrestandardOutboundRouteFiltering => todo!(),
-            CapabilityCode::PrestandardMultisession => todo!(),
-            CapabilityCode::PrestandardFqdn => todo!(),
-            CapabilityCode::PrestandardOpereationalMessage => todo!(),
+
+            c @ CapabilityCode::LongLivedGracefulRestart => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
+            c @ CapabilityCode::RoutingPolicyDistribution => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
+            CapabilityCode::Fqdn => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::Fqdn {}))
+            }
+
+            CapabilityCode::PrestandardRouteRefresh => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::PrestandardRouteRefresh {}))
+            }
+
+            c @ CapabilityCode::PrestandardOrfAndPd => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
+            c @ CapabilityCode::PrestandardOutboundRouteFiltering => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
+            c @ CapabilityCode::PrestandardMultisession => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
+            c @ CapabilityCode::PrestandardFqdn => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
+            c @ CapabilityCode::PrestandardOpereationalMessage => {
+                Err(Error::UnsupportedCapability(c))
+            }
+
             CapabilityCode::Experimental0 => Err(Error::Experimental),
             CapabilityCode::Experimental1 => Err(Error::Experimental),
             CapabilityCode::Experimental2 => Err(Error::Experimental),
