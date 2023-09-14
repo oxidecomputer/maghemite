@@ -2,7 +2,6 @@ use crate::config::PeerConfig;
 use crate::config::RouterConfig;
 use crate::connection::BgpConnection;
 use crate::error::Error;
-use crate::fanout::Rule4;
 use crate::fanout::{Egress, Fanout};
 use crate::messages::{
     As4PathSegment, AsPathType, PathAttributeValue, PathOrigin, Prefix,
@@ -79,8 +78,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         fanout.add_egress(
             peer,
             Egress {
-                rules: Vec::new(), //TODO
-                event_tx: event_tx.clone(),
+                event_tx: Some(event_tx.clone()),
             },
         )
     }
@@ -88,11 +86,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     pub fn remove_fanout(&self, peer: IpAddr) {
         let mut fanout = self.fanout.write().unwrap();
         fanout.remove_egress(peer);
-    }
-
-    pub fn add_export_policy(&self, addr: IpAddr, rule: Rule4) {
-        // TODO need to fan out entries that match the policy retroactively
-        self.fanout.write().unwrap().add_rule(addr, rule).unwrap();
     }
 
     pub fn new_session(

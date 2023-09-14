@@ -1,7 +1,6 @@
 use crate::admin::HandlerContext;
 use bgp::config::{PeerConfig, RouterConfig};
 use bgp::connection::BgpConnectionTcp;
-use bgp::fanout::Rule4;
 use bgp::router::Router;
 use bgp::session::{Asn, FsmEvent, FsmStateKind};
 use dropshot::{
@@ -9,7 +8,7 @@ use dropshot::{
     RequestContext, TypedBody,
 };
 use http::status::StatusCode;
-use rdb::{Policy, PolicyAction, Prefix4, Route4ImportKey, Route4Key};
+use rdb::{PolicyAction, Prefix4, Route4ImportKey, Route4Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::info;
@@ -350,27 +349,6 @@ pub async fn ensure_neighbor(
         }
     }
     event_tx.send(FsmEvent::ManualStart).unwrap();
-
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-#[endpoint { method = POST, path = "/bgp/export-policy" }]
-pub async fn add_export_policy(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AddExportPolicyRequest>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq = request.into_inner();
-
-    get_router!(&ctx, rq.asn)?.add_export_policy(
-        rq.addr,
-        Rule4 {
-            prefix: rq.prefix,
-            policy: Policy {
-                action: rq.action,
-                priority: rq.priority,
-            },
-        },
-    );
 
     Ok(HttpResponseUpdatedNoContent())
 }

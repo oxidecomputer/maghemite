@@ -696,8 +696,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             fanout.add_egress(
                 self.neighbor.host.ip(),
                 crate::fanout::Egress {
-                    rules: Vec::new(),
-                    event_tx: self.event_tx.clone(),
+                    event_tx: Some(self.event_tx.clone()),
                 },
             );
         }

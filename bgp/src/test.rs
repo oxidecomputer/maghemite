@@ -1,8 +1,7 @@
 use crate::config::{PeerConfig, RouterConfig};
 use crate::connection::test::{BgpConnectionChannel, BgpListenerChannel};
-use crate::fanout::Rule4;
 use crate::session::{Asn, FsmStateKind};
-use rdb::{Policy, PolicyAction, Prefix4};
+use rdb::Prefix4;
 use std::collections::BTreeMap;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
@@ -66,17 +65,6 @@ fn test_basic_peering() {
 #[test]
 fn test_basic_update() {
     let (r1, d1, r2, _d2) = two_router_test_setup("basic_update");
-
-    // set up export policy
-    let allow_default = Rule4 {
-        prefix: "0.0.0.0/0".parse().unwrap(),
-        policy: Policy {
-            action: PolicyAction::Allow,
-            priority: 47,
-        },
-    };
-    r1.add_export_policy("2.0.0.1".parse().unwrap(), allow_default);
-    r2.add_export_policy("1.0.0.1".parse().unwrap(), allow_default);
 
     // originate a prefix
     r1.originate4(
