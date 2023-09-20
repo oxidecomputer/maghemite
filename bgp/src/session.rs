@@ -725,6 +725,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .unwrap();
             }
             self.fanout.read().unwrap().send_all(&update);
+            self.send_update(update, &pc.conn);
         }
         FsmState::Established(pc)
     }
