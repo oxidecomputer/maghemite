@@ -537,12 +537,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     inf!(self; "accepted connection from {}", accepted.peer());
                     self.clock.timers.connect_retry_timer.disable();
                     self.send_open(&accepted);
+                    self.clock.timers.hold_timer.reset();
+                    self.clock.timers.hold_timer.enable();
                     return FsmState::OpenSent(accepted);
                 }
                 FsmEvent::TcpConnectionConfirmed => {
                     inf!(self; "connected to {}", conn.peer());
                     self.clock.timers.connect_retry_timer.disable();
                     self.send_open(&conn);
+                    self.clock.timers.hold_timer.reset();
+                    self.clock.timers.hold_timer.enable();
                     return FsmState::OpenSent(conn);
                 }
                 x => {
@@ -573,6 +577,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn on_open_sent(&self, conn: Cnx) -> FsmState<Cnx> {
         let om = match self.event_rx.recv().unwrap() {
             FsmEvent::Message(Message::Open(om)) => om,
+            FsmEvent::HoldTimerExpires => {
+                wrn!(self; "open sent: hold timer expired");
+                return FsmState::Connect;
+            }
             other => {
                 wrn!(
                     self;
