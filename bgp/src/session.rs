@@ -834,9 +834,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         FsmState::Connect
     }
 
-    // TODO
-    // - apply update atomically
     fn apply_update(&self, update: UpdateMessage, id: u32) {
+        if let Err(e) = self.check_update(&update) {
+            wrn!(
+                self;
+                "Update check failed for {:#?}: {e}. Ignoring",
+                update,
+            );
+            return;
+        }
         self.add_to_rib(&update, id);
         self.fanout_update(&update);
     }
@@ -869,6 +875,33 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         //TODO iterate through MpReachNlri attributes for IPv6
+    }
+
+    fn check_update(&self, update: &UpdateMessage) -> Result<(), Error> {
+        self.check_for_self_in_path(update)
+    }
+
+    fn check_for_self_in_path(
+        &self,
+        update: &UpdateMessage,
+    ) -> Result<(), Error> {
+        let asn = match self.asn {
+            Asn::TwoOctet(asn) => asn as u32,
+            Asn::FourOctet(asn) => asn,
+        };
+        for pa in &update.path_attributes {
+            let path = match &pa.value {
+                PathAttributeValue::AsPath(segments) => segments,
+                PathAttributeValue::As4Path(segments) => segments,
+                _ => continue,
+            };
+            for segment in path {
+                if segment.value.contains(&asn) {
+                    return Err(Error::SelfLoopDetected);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn fanout_update(&self, update: &UpdateMessage) {

@@ -104,6 +104,9 @@ pub enum Error {
 
     #[error("Capability not supported {0:?}")]
     UnsupportedCapability(crate::messages::CapabilityCode),
+
+    #[error("Self loop detected")]
+    SelfLoopDetected,
 }
 
 impl<'a> From<nom::Err<(&'a [u8], nom::error::ErrorKind)>> for Error {
