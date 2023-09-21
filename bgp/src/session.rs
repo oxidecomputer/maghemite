@@ -3,8 +3,9 @@ use crate::connection::BgpConnection;
 use crate::error::Error;
 use crate::fanout::Fanout;
 use crate::messages::{
-    AddPathElement, Capability, Message, OpenMessage, OptionalParameter,
-    PathAttributeValue, UpdateMessage,
+    AddPathElement, As4PathSegment, AsPathType, Capability, Message,
+    OpenMessage, OptionalParameter, PathAttributeValue, PathOrigin,
+    UpdateMessage,
 };
 use crate::{dbg, inf, wrn};
 use rdb::{Db, Prefix4, Route4Key};
@@ -711,11 +712,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         drop(fanout);
 
         for (nexthop, prefixes) in m {
+            let asn = match self.asn {
+                Asn::TwoOctet(asn) => asn as u32,
+                Asn::FourOctet(asn) => asn,
+            };
             let mut update = UpdateMessage {
-                path_attributes: vec![PathAttributeValue::NextHop(
-                    nexthop.into(),
-                )
-                .into()],
+                path_attributes: vec![
+                    PathAttributeValue::Origin(PathOrigin::Egp).into(),
+                    PathAttributeValue::NextHop(nexthop.into()).into(),
+                    PathAttributeValue::AsPath(vec![As4PathSegment {
+                        typ: AsPathType::AsSequence,
+                        value: vec![asn],
+                    }])
+                    .into(),
+                ],
                 ..Default::default()
             };
             for p in prefixes {
@@ -724,6 +734,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .add_origin4(Route4Key { prefix: p, nexthop })
                     .unwrap();
             }
+            self.send_keepalive(&pc.conn);
             self.fanout.read().unwrap().send_all(&update);
             self.send_update(update, &pc.conn);
         }
