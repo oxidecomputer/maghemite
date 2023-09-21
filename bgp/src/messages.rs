@@ -786,7 +786,10 @@ impl PathAttributeValue {
                     Ipv4Addr::new(b[0], b[1], b[2], b[3]).into(),
                 ))
             }
-            PathAttributeTypeCode::MultiExitDisc => todo!(),
+            PathAttributeTypeCode::MultiExitDisc => {
+                let (_input, v) = be_u32(input)?;
+                Ok(PathAttributeValue::MultiExitDisc(v))
+            }
             PathAttributeTypeCode::LocalPref => todo!(),
             PathAttributeTypeCode::AtomicAggregate => todo!(),
             PathAttributeTypeCode::Aggregator => todo!(),
