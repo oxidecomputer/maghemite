@@ -50,8 +50,8 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     api.register(bgp_admin::new_router).unwrap();
     api.register(bgp_admin::ensure_router).unwrap();
     api.register(bgp_admin::delete_router).unwrap();
-    api.register(bgp_admin::add_neighbor).unwrap();
-    api.register(bgp_admin::ensure_neighbor).unwrap();
+    api.register(bgp_admin::add_neighbor_handler).unwrap();
+    api.register(bgp_admin::ensure_neighbor_handler).unwrap();
     api.register(bgp_admin::delete_neighbor).unwrap();
     api.register(bgp_admin::originate4).unwrap();
     api.register(bgp_admin::get_originated4).unwrap();

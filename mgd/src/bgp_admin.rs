@@ -8,10 +8,10 @@ use dropshot::{
     RequestContext, TypedBody,
 };
 use http::status::StatusCode;
-use rdb::{PolicyAction, Prefix4, Route4ImportKey, Route4Key};
+use rdb::{BgpRouterInfo, PolicyAction, Prefix4, Route4ImportKey, Route4Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use slog::info;
+use slog::{info, Logger};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::channel;
@@ -19,7 +19,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 pub struct BgpContext {
-    router: Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>,
+    pub(crate) router: Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>,
     addr_to_session:
         Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionTcp>>>>>,
 }
@@ -56,7 +56,7 @@ pub struct DeleteRouterRequest {
 }
 
 //TODO use bgp::config::PeerConfig instead
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct AddNeighborRequest {
     pub asn: u32,
 
@@ -221,7 +221,7 @@ pub async fn new_router(
     add_router(ctx.clone(), rq, &mut guard)
 }
 
-fn add_router(
+pub(crate) fn add_router(
     ctx: Arc<HandlerContext>,
     rq: NewRouterRequest,
     routers: &mut BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>,
@@ -231,7 +231,7 @@ fn add_router(
         id: rq.id,
     };
 
-    let db = rdb::Db::new(&format!("{}/rdb{}", ctx.data_dir, rq.asn)).unwrap();
+    let db = rdb::Db::new(&format!("{}/rdb", ctx.data_dir)).unwrap();
 
     let router = Arc::new(Router::<BgpConnectionTcp>::new(
         cfg,
@@ -246,12 +246,21 @@ fn add_router(
     {
         let rt = Arc::new(tokio::runtime::Handle::current());
         let log = ctx.log.clone();
+        let db = db.clone();
         std::thread::spawn(move || {
             mg_lower::run(db, log, rt);
         });
     }
 
     routers.insert(rq.asn, router);
+    db.add_bgp_router(
+        rq.asn,
+        BgpRouterInfo {
+            id: rq.id,
+            listen: rq.listen.clone(),
+        },
+    )
+    .unwrap();
 
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -272,26 +281,34 @@ pub async fn delete_router(
 
 macro_rules! get_router {
     ($ctx:expr, $asn:expr) => {
-        $ctx.context().bgp.router.lock().unwrap().get(&$asn).ok_or(
+        $ctx.bgp.router.lock().unwrap().get(&$asn).ok_or(
             HttpError::for_not_found(None, "no bgp router configured".into()),
         )
     };
 }
 
 #[endpoint { method = POST, path = "/bgp/neighbor" }]
-pub async fn add_neighbor(
+pub async fn add_neighbor_handler(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddNeighborRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let log = ctx.context().log.clone();
     let rq = request.into_inner();
+    let ctx = ctx.context();
+    add_neighbor(ctx.clone(), rq, log).await
+}
 
+pub async fn add_neighbor(
+    ctx: Arc<HandlerContext>,
+    rq: AddNeighborRequest,
+    log: Logger,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     info!(log, "add neighbor: {:#?}", rq);
 
     let (event_tx, event_rx) = channel();
 
     match get_router!(&ctx, rq.asn)?.new_session(
-        rq.into(),
+        rq.clone().into(),
         "0.0.0.0:179".parse().unwrap(),
         event_tx.clone(),
         event_rx,
@@ -309,6 +326,20 @@ pub async fn add_neighbor(
     }
     event_tx.send(FsmEvent::ManualStart).unwrap();
 
+    let db = rdb::Db::new(&format!("{}/rdb", ctx.data_dir)).unwrap();
+    db.add_bgp_neighbor(rdb::BgpNeighborInfo {
+        asn: rq.asn,
+        name: rq.name.clone(),
+        host: rq.host,
+        hold_time: rq.hold_time,
+        idle_hold_time: rq.idle_hold_time,
+        delay_open: rq.delay_open,
+        connect_retry: rq.connect_retry,
+        keepalive: rq.keepalive,
+        resolution: rq.resolution,
+    })
+    .unwrap(); //TODO unwrap
+
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -318,18 +349,27 @@ pub async fn delete_neighbor(
     request: TypedBody<DeleteNeighborRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
+    let ctx = ctx.context();
     get_router!(ctx, rq.asn)?.delete_session(rq.addr);
     Ok(HttpResponseUpdatedNoContent())
 }
 
 #[endpoint { method = PUT, path = "/bgp/neighbor" }]
-pub async fn ensure_neighbor(
+pub async fn ensure_neighbor_handler(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddNeighborRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let log = ctx.context().log.clone();
     let rq = request.into_inner();
+    let ctx = ctx.context();
+    ensure_neighbor(ctx.clone(), rq, log)
+}
 
+pub fn ensure_neighbor(
+    ctx: Arc<HandlerContext>,
+    rq: AddNeighborRequest,
+    log: Logger,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     info!(log, "add neighbor: {:#?}", rq);
 
     let (event_tx, event_rx) = channel();
@@ -360,8 +400,9 @@ pub async fn originate4(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
+    let ctx = ctx.context();
 
-    get_router!(&ctx, rq.asn)?
+    get_router!(ctx, rq.asn)?
         .originate4(rq.nexthop, prefixes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
@@ -374,7 +415,8 @@ pub async fn get_originated4(
     request: TypedBody<GetOriginated4Request>,
 ) -> Result<HttpResponseOk<Vec<Route4Key>>, HttpError> {
     let rq = request.into_inner();
-    let originated = get_router!(&ctx, rq.asn)?
+    let ctx = ctx.context();
+    let originated = get_router!(ctx, rq.asn)?
         .db
         .get_originated4()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
@@ -387,6 +429,7 @@ pub async fn get_imported4(
     request: TypedBody<GetImported4Request>,
 ) -> Result<HttpResponseOk<Vec<Route4ImportKey>>, HttpError> {
     let rq = request.into_inner();
-    let imported = get_router!(&ctx, rq.asn)?.db.get_imported4();
+    let ctx = ctx.context();
+    let imported = get_router!(ctx, rq.asn)?.db.get_imported4();
     Ok(HttpResponseOk(imported))
 }

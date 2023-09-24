@@ -23,11 +23,13 @@
 // - local RIB
 // - outbound RIB
 
-const ORIGIN: &str = "origin";
+const BGP_ORIGIN: &str = "bgp_origin";
+const BGP_ROUTER: &str = "bgp_router";
+const BGP_NEIGHBOR: &str = "bgp_neighbor";
 
 use crate::types::*;
 use anyhow::Result;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
@@ -67,15 +69,67 @@ impl Db {
 
     // TODO return previous value if this is an update.
     pub fn add_origin4(&self, r: Route4Key) -> Result<()> {
-        let tree = self.persistent.open_tree(ORIGIN)?;
+        let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         tree.insert(r.db_key(), "")?;
+        tree.flush()?;
         let g = self.generation.fetch_add(1, Ordering::SeqCst);
         self.notify(ChangeSet::from_origin(OriginChangeSet::added([r]), g + 1));
         Ok(())
     }
 
+    pub fn add_bgp_router(&self, asn: u32, info: BgpRouterInfo) -> Result<()> {
+        let tree = self.persistent.open_tree(BGP_ROUTER)?;
+        let key = asn.to_string();
+        let value = serde_json::to_string(&info)?;
+        tree.insert(key.as_str(), value.as_str())?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn get_bgp_routers(&self) -> Result<HashMap<u32, BgpRouterInfo>> {
+        let tree = self.persistent.open_tree(BGP_ROUTER)?;
+        let result = tree
+            .scan_prefix(vec![])
+            .map(|item| {
+                // TODO don't unwrap
+                let (key, value) = item.unwrap();
+                let key = String::from_utf8_lossy(&key).parse().unwrap();
+                let value = String::from_utf8_lossy(&value);
+                let value: BgpRouterInfo =
+                    serde_json::from_str(&value).unwrap();
+                (key, value)
+            })
+            .collect();
+        Ok(result)
+    }
+
+    pub fn add_bgp_neighbor(&self, nbr: BgpNeighborInfo) -> Result<()> {
+        let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
+        let key = nbr.host.ip().to_string();
+        let value = serde_json::to_string(&nbr)?;
+        tree.insert(key.as_str(), value.as_str())?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn get_bgp_neighbors(&self) -> Result<Vec<BgpNeighborInfo>> {
+        let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
+        let result = tree
+            .scan_prefix(vec![])
+            .map(|item| {
+                // TODO don't unwrap
+                let (_key, value) = item.unwrap();
+                let value = String::from_utf8_lossy(&value);
+                let value: BgpNeighborInfo =
+                    serde_json::from_str(&value).unwrap();
+                value
+            })
+            .collect();
+        Ok(result)
+    }
+
     pub fn remove_origin4(&self, r: Route4Key) -> Result<()> {
-        let tree = self.persistent.open_tree(ORIGIN)?;
+        let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         tree.remove(r.db_key())?;
         let g = self.generation.fetch_add(1, Ordering::SeqCst);
         self.notify(ChangeSet::from_origin(
@@ -86,7 +140,7 @@ impl Db {
     }
 
     pub fn get_originated4(&self) -> Result<Vec<Route4Key>> {
-        let tree = self.persistent.open_tree(ORIGIN)?;
+        let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         let result = tree
             .scan_prefix(vec![])
             .map(|item| {

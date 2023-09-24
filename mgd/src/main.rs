@@ -76,11 +76,50 @@ async fn run(args: RunArgs) {
         data_dir: args.data_dir.clone(),
     });
 
+    let db = rdb::Db::new(&format!("{}/rdb", context.data_dir)).unwrap();
+    let routers = db.get_bgp_routers().unwrap();
+    {
+        slog::info!(log, "routers: {:#?}", routers);
+        let mut guard = context.bgp.router.lock().unwrap();
+        for (asn, info) in routers {
+            bgp_admin::add_router(
+                context.clone(),
+                bgp_admin::NewRouterRequest {
+                    asn,
+                    id: info.id,
+                    listen: info.listen.clone(),
+                },
+                &mut guard,
+            )
+            .unwrap(); //TODO unwrap
+        }
+    }
+
+    let neighbors = db.get_bgp_neighbors().unwrap();
+    for nbr in neighbors {
+        bgp_admin::ensure_neighbor(
+            context.clone(),
+            bgp_admin::AddNeighborRequest {
+                asn: nbr.asn,
+                name: nbr.name.clone(),
+                host: nbr.host,
+                hold_time: nbr.hold_time,
+                idle_hold_time: nbr.idle_hold_time,
+                delay_open: nbr.delay_open,
+                connect_retry: nbr.connect_retry,
+                keepalive: nbr.keepalive,
+                resolution: nbr.resolution,
+            },
+            log.clone(),
+        )
+        .unwrap(); //TODO unwrap
+    }
+
     let j = admin::start_server(
         log.clone(),
         args.admin_addr,
         args.admin_port,
-        context,
+        context.clone(),
     );
     j.unwrap().await.unwrap();
 }

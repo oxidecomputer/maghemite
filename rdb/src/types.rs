@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 #[derive(
@@ -257,4 +257,23 @@ impl ChangeSet {
             ..Default::default()
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+pub struct BgpRouterInfo {
+    pub id: u32,
+    pub listen: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+pub struct BgpNeighborInfo {
+    pub asn: u32,
+    pub name: String,
+    pub host: SocketAddr,
+    pub hold_time: u64,
+    pub idle_hold_time: u64,
+    pub delay_open: u64,
+    pub connect_retry: u64,
+    pub keepalive: u64,
+    pub resolution: u64,
 }
