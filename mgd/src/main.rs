@@ -110,6 +110,7 @@ async fn run(args: RunArgs) {
                 connect_retry: nbr.connect_retry,
                 keepalive: nbr.keepalive,
                 resolution: nbr.resolution,
+                group: nbr.group.clone(),
             },
             log.clone(),
         )

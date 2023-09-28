@@ -276,4 +276,5 @@ pub struct BgpNeighborInfo {
     pub connect_retry: u64,
     pub keepalive: u64,
     pub resolution: u64,
+    pub group: String,
 }

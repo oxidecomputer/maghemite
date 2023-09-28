@@ -72,8 +72,13 @@ pub struct Neighbor {
 
     /// Name for this neighbor
     name: String,
+
     /// Neighbor address
     addr: IpAddr,
+
+    /// Peer group to add the neighbor to.
+    group: String,
+
     /// Neighbor BGP TCP port.
     #[arg(long, default_value_t = 179)]
     port: u16,
@@ -103,6 +108,7 @@ impl From<Neighbor> for types::AddNeighborRequest {
             keepalive: n.keepalive_time,
             delay_open: n.delay_open_time,
             resolution: n.resolution,
+            group: n.group,
         }
     }
 }

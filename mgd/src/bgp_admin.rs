@@ -12,7 +12,7 @@ use rdb::{BgpRouterInfo, PolicyAction, Prefix4, Route4ImportKey, Route4Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{info, Logger};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::Sender;
@@ -68,6 +68,7 @@ pub struct AddNeighborRequest {
     pub connect_retry: u64,
     pub keepalive: u64,
     pub resolution: u64,
+    pub group: String,
 }
 
 impl From<AddNeighborRequest> for PeerConfig {
@@ -86,7 +87,11 @@ impl From<AddNeighborRequest> for PeerConfig {
 }
 
 impl AddNeighborRequest {
-    fn from_bgp_peer_config(asn: u32, rq: BgpPeerConfig) -> Self {
+    fn from_bgp_peer_config(
+        asn: u32,
+        group: String,
+        rq: BgpPeerConfig,
+    ) -> Self {
         Self {
             asn,
             name: rq.name.clone(),
@@ -97,6 +102,7 @@ impl AddNeighborRequest {
             connect_retry: rq.connect_retry,
             keepalive: rq.keepalive,
             resolution: rq.resolution,
+            group: group.clone(),
         }
     }
 }
@@ -359,6 +365,7 @@ pub async fn add_neighbor(
             connect_retry: rq.connect_retry,
             keepalive: rq.keepalive,
             resolution: rq.resolution,
+            group: rq.group.clone(),
         })
         .unwrap(); //TODO unwrap
 
@@ -473,7 +480,8 @@ pub async fn get_imported4(
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ApplyRequest {
     pub asn: u32,
-    pub peers: HashMap<String, BgpPeerConfig>,
+    pub peer_group: String,
+    pub peers: Vec<BgpPeerConfig>,
     pub routes: Vec<BgpRoute>,
 }
 
@@ -518,17 +526,20 @@ pub async fn bgp_apply(
         .await?;
     }
 
-    let current = ctx
+    let current: Vec<rdb::BgpNeighborInfo> = ctx
         .context()
         .db
         .get_bgp_neighbors()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?
+        .into_iter()
+        .filter(|x| x.group == rq.peer_group)
+        .collect();
 
     let current_nbr_addrs: HashSet<IpAddr> =
         current.iter().map(|x| x.host.ip()).collect();
 
     let specified_nbr_addrs: HashSet<IpAddr> =
-        rq.peers.values().map(|x| x.host.ip()).collect();
+        rq.peers.iter().map(|x| x.host.ip()).collect();
 
     let to_delete = current_nbr_addrs.difference(&specified_nbr_addrs);
     let to_add = specified_nbr_addrs.difference(&current_nbr_addrs);
@@ -537,10 +548,14 @@ pub async fn bgp_apply(
     info!(log, "removing {to_delete:#?}");
 
     for nbr in to_add {
-        let cfg = rq.peers.values().find(|x| x.host.ip() == *nbr).unwrap();
+        let cfg = rq.peers.iter().find(|x| x.host.ip() == *nbr).unwrap();
         add_neighbor(
             ctx.context().clone(),
-            AddNeighborRequest::from_bgp_peer_config(rq.asn, cfg.clone()),
+            AddNeighborRequest::from_bgp_peer_config(
+                rq.asn,
+                rq.peer_group.clone(),
+                cfg.clone(),
+            ),
             log.clone(),
         )
         .await?;
@@ -553,9 +568,15 @@ pub async fn bgp_apply(
 
     if rq.peers.is_empty() {
         let mut routers = ctx.context().bgp.router.lock().unwrap();
-        if let Some(r) = routers.remove(&rq.asn) {
-            r.shutdown()
-        };
+        let mut remove = false;
+        if let Some(r) = routers.get(&rq.asn) {
+            remove = r.sessions.lock().unwrap().is_empty();
+        }
+        if remove {
+            if let Some(r) = routers.remove(&rq.asn) {
+                r.shutdown()
+            };
+        }
     }
 
     for x in rq.routes {

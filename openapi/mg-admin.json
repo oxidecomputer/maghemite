@@ -337,6 +337,9 @@
             "format": "uint64",
             "minimum": 0
           },
+          "group": {
+            "type": "string"
+          },
           "hold_time": {
             "type": "integer",
             "format": "uint64",
@@ -368,6 +371,7 @@
           "asn",
           "connect_retry",
           "delay_open",
+          "group",
           "hold_time",
           "host",
           "idle_hold_time",
@@ -384,9 +388,12 @@
             "format": "uint32",
             "minimum": 0
           },
+          "peer_group": {
+            "type": "string"
+          },
           "peers": {
-            "type": "object",
-            "additionalProperties": {
+            "type": "array",
+            "items": {
               "$ref": "#/components/schemas/BgpPeerConfig"
             }
           },
@@ -399,6 +406,7 @@
         },
         "required": [
           "asn",
+          "peer_group",
           "peers",
           "routes"
         ]
