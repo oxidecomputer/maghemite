@@ -1742,6 +1742,7 @@ dependencies = [
  "mg-admin-client",
  "mg-common",
  "rdb",
+ "serde_json",
  "slog",
  "slog-async",
  "slog-envlogger",

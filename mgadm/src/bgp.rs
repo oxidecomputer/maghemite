@@ -4,6 +4,7 @@ use colored::*;
 use mg_admin_client::types;
 use mg_admin_client::Client;
 use rdb::types::{PolicyAction, Prefix4};
+use std::fs::read_to_string;
 use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -16,10 +17,10 @@ pub enum Commands {
     DeleteRouter { asn: u32 },
     AddNeighbor(Neighbor),
     DeleteNeighbor { asn: u32, addr: IpAddr },
-    AddExportPolicy(ExportPolicy),
     Originate4(Originate4),
     GetImported { asn: u32 },
     GetOriginated { asn: u32 },
+    Apply { filename: String },
 }
 
 #[derive(Args, Debug)]
@@ -115,12 +116,10 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
         Commands::DeleteNeighbor { asn, addr } => {
             delete_neighbor(asn, addr, client).await
         }
-        Commands::AddExportPolicy(policy) => {
-            add_export_policy(policy, client).await
-        }
         Commands::Originate4(originate) => originate4(originate, client).await,
         Commands::GetImported { asn } => get_imported(client, asn).await,
         Commands::GetOriginated { asn } => get_originated(client, asn).await,
+        Commands::Apply { filename } => apply(filename, client).await,
     }
     Ok(())
 }
@@ -191,25 +190,13 @@ async fn get_originated(c: Client, asn: u32) {
 }
 
 async fn add_neighbor(nbr: Neighbor, c: Client) {
-    c.add_neighbor(&nbr.into()).await.unwrap();
+    c.add_neighbor_handler(&nbr.into()).await.unwrap();
 }
 
 async fn delete_neighbor(asn: u32, addr: IpAddr, c: Client) {
     c.delete_neighbor(&types::DeleteNeighborRequest { asn, addr })
         .await
         .unwrap();
-}
-
-async fn add_export_policy(policy: ExportPolicy, c: Client) {
-    c.add_export_policy(&types::AddExportPolicyRequest {
-        asn: policy.asn,
-        addr: policy.addr,
-        prefix: policy.prefix,
-        priority: policy.priority,
-        action: policy.action,
-    })
-    .await
-    .unwrap();
 }
 
 async fn originate4(originate: Originate4, c: Client) {
@@ -220,4 +207,11 @@ async fn originate4(originate: Originate4, c: Client) {
     })
     .await
     .unwrap();
+}
+
+async fn apply(filename: String, c: Client) {
+    let contents = read_to_string(filename).expect("read file");
+    let request: types::ApplyRequest =
+        serde_json::from_str(&contents).expect("parse config");
+    c.bgp_apply(&request).await.expect("bgp apply");
 }

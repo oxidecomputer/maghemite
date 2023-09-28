@@ -30,6 +30,7 @@ const BGP_NEIGHBOR: &str = "bgp_neighbor";
 use crate::types::*;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
@@ -86,6 +87,14 @@ impl Db {
         Ok(())
     }
 
+    pub fn remove_bgp_router(&self, asn: u32) -> Result<()> {
+        let tree = self.persistent.open_tree(BGP_ROUTER)?;
+        let key = asn.to_string();
+        tree.remove(key.as_str())?;
+        tree.flush()?;
+        Ok(())
+    }
+
     pub fn get_bgp_routers(&self) -> Result<HashMap<u32, BgpRouterInfo>> {
         let tree = self.persistent.open_tree(BGP_ROUTER)?;
         let result = tree
@@ -108,6 +117,15 @@ impl Db {
         let key = nbr.host.ip().to_string();
         let value = serde_json::to_string(&nbr)?;
         tree.insert(key.as_str(), value.as_str())?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn remove_bgp_neighbor(&self, addr: IpAddr) -> Result<()> {
+        println!("db: removing neighbor {addr}");
+        let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
+        let key = addr.to_string();
+        tree.remove(key)?;
         tree.flush()?;
         Ok(())
     }

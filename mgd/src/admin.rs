@@ -1,6 +1,7 @@
 use crate::bgp_admin;
 use bgp_admin::BgpContext;
 use dropshot::{ApiDescription, ConfigDropshot, HttpServerStarter};
+use rdb::Db;
 use slog::o;
 use slog::{error, info, warn, Logger};
 use std::fs::File;
@@ -12,6 +13,7 @@ pub struct HandlerContext {
     pub bgp: BgpContext,
     pub log: Logger,
     pub data_dir: String,
+    pub db: Db,
 }
 
 pub fn start_server(
@@ -48,7 +50,7 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     let mut api = ApiDescription::new();
     api.register(bgp_admin::get_routers).unwrap();
     api.register(bgp_admin::new_router).unwrap();
-    api.register(bgp_admin::ensure_router).unwrap();
+    api.register(bgp_admin::ensure_router_handler).unwrap();
     api.register(bgp_admin::delete_router).unwrap();
     api.register(bgp_admin::add_neighbor_handler).unwrap();
     api.register(bgp_admin::ensure_neighbor_handler).unwrap();
@@ -56,6 +58,7 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     api.register(bgp_admin::originate4).unwrap();
     api.register(bgp_admin::get_originated4).unwrap();
     api.register(bgp_admin::get_imported4).unwrap();
+    api.register(bgp_admin::bgp_apply).unwrap();
     api
 }
 

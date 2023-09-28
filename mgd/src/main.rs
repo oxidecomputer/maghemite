@@ -69,14 +69,15 @@ async fn run(args: RunArgs) {
 
         spawn(move || bgp_dispatcher.run::<BgpListenerTcp>());
     }
+    let db = rdb::Db::new(&format!("{}/rdb", args.data_dir)).unwrap();
 
     let context = Arc::new(HandlerContext {
         log: log.clone(),
         bgp: BgpContext::new(addr_to_session),
         data_dir: args.data_dir.clone(),
+        db: db.clone(),
     });
 
-    let db = rdb::Db::new(&format!("{}/rdb", context.data_dir)).unwrap();
     let routers = db.get_bgp_routers().unwrap();
     {
         slog::info!(log, "routers: {:#?}", routers);

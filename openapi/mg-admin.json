@@ -5,14 +5,14 @@
     "version": "v0.1.0"
   },
   "paths": {
-    "/bgp/export-policy": {
+    "/bgp/apply": {
       "post": {
-        "operationId": "add_export_policy",
+        "operationId": "bgp_apply",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AddExportPolicyRequest"
+                "$ref": "#/components/schemas/ApplyRequest"
               }
             }
           },
@@ -70,7 +70,7 @@
     },
     "/bgp/neighbor": {
       "put": {
-        "operationId": "ensure_neighbor",
+        "operationId": "ensure_neighbor_handler",
         "requestBody": {
           "content": {
             "application/json": {
@@ -94,7 +94,7 @@
         }
       },
       "post": {
-        "operationId": "add_neighbor",
+        "operationId": "add_neighbor_handler",
         "requestBody": {
           "content": {
             "application/json": {
@@ -131,7 +131,7 @@
         },
         "responses": {
           "204": {
-            "description": "resource updated"
+            "description": "successful deletion"
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -205,7 +205,7 @@
     },
     "/bgp/router": {
       "put": {
-        "operationId": "ensure_router",
+        "operationId": "ensure_router_handler",
         "requestBody": {
           "content": {
             "application/json": {
@@ -319,51 +319,6 @@
       }
     },
     "schemas": {
-      "AddExportPolicyRequest": {
-        "type": "object",
-        "properties": {
-          "action": {
-            "description": "The policy action to apply.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PolicyAction"
-              }
-            ]
-          },
-          "addr": {
-            "description": "Address of the peer to apply this policy to.",
-            "type": "string",
-            "format": "ip"
-          },
-          "asn": {
-            "description": "ASN of the router to apply the export policy to.",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "prefix": {
-            "description": "Prefix this policy applies to",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Prefix4"
-              }
-            ]
-          },
-          "priority": {
-            "description": "Priority of the policy, higher value is higher priority.",
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "action",
-          "addr",
-          "asn",
-          "prefix",
-          "priority"
-        ]
-      },
       "AddNeighborRequest": {
         "type": "object",
         "properties": {
@@ -419,6 +374,103 @@
           "keepalive",
           "name",
           "resolution"
+        ]
+      },
+      "ApplyRequest": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "peers": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BgpPeerConfig"
+            }
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BgpRoute"
+            }
+          }
+        },
+        "required": [
+          "asn",
+          "peers",
+          "routes"
+        ]
+      },
+      "BgpPeerConfig": {
+        "type": "object",
+        "properties": {
+          "connect_retry": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "delay_open": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "host": {
+            "type": "string"
+          },
+          "idle_hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "keepalive": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "connect_retry",
+          "delay_open",
+          "hold_time",
+          "host",
+          "idle_hold_time",
+          "keepalive",
+          "name",
+          "resolution"
+        ]
+      },
+      "BgpRoute": {
+        "type": "object",
+        "properties": {
+          "nexthop": {
+            "type": "string",
+            "format": "ipv4"
+          },
+          "prefixes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prefix4"
+            }
+          }
+        },
+        "required": [
+          "nexthop",
+          "prefixes"
         ]
       },
       "DeleteNeighborRequest": {
@@ -587,13 +639,6 @@
         "required": [
           "duration_millis",
           "state"
-        ]
-      },
-      "PolicyAction": {
-        "type": "string",
-        "enum": [
-          "Allow",
-          "Deny"
         ]
       },
       "Prefix4": {

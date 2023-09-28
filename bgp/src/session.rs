@@ -457,6 +457,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 *(self.state.lock().unwrap()) = FsmStateKind::Idle;
                 self.shutdown.store(false, Ordering::Release);
                 self.running.store(false, Ordering::Release);
+                inf!(self; "shutdown complete");
                 return;
             }
             let current_state: FsmStateKind = (&current).into();
