@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
@@ -83,6 +84,7 @@ pub struct BgpConnectionTcp {
     source: Option<SocketAddr>,
     peer: SocketAddr,
     conn: Arc<Mutex<Option<TcpStream>>>, //TODO split into tx/rx?
+    dropped: Arc<AtomicBool>,
     log: Logger,
 }
 
@@ -94,16 +96,15 @@ impl BgpConnection for BgpConnectionTcp {
             peer,
             conn,
             log,
+            dropped: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    //TODO: this is dumb - should just to synchronously since we have a timeout
-    //anyway.
     fn connect(&self, event_tx: Sender<FsmEvent<Self>>, timeout: Duration) {
         let peer = self.peer;
         let conn = self.conn.clone();
         let log = self.log.clone();
-        spawn(move || match TcpStream::connect_timeout(&peer, timeout) {
+        match TcpStream::connect_timeout(&peer, timeout) {
             Ok(new_conn) => {
                 conn.lock().unwrap().replace(new_conn.try_clone().unwrap());
                 Self::recv(
@@ -111,6 +112,7 @@ impl BgpConnection for BgpConnectionTcp {
                     event_tx.clone(),
                     new_conn,
                     timeout,
+                    self.dropped.clone(),
                     log.clone(),
                 );
                 event_tx.send(FsmEvent::TcpConnectionConfirmed).unwrap();
@@ -118,7 +120,7 @@ impl BgpConnection for BgpConnectionTcp {
             Err(e) => {
                 error!(log, "connect error: {e}");
             }
-        });
+        };
     }
 
     fn send(&self, msg: Message) -> Result<(), Error> {
@@ -134,6 +136,13 @@ impl BgpConnection for BgpConnectionTcp {
     }
 }
 
+impl Drop for BgpConnectionTcp {
+    fn drop(&mut self) {
+        self.dropped
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl BgpConnectionTcp {
     fn with_conn(
         source: SocketAddr,
@@ -142,12 +151,14 @@ impl BgpConnectionTcp {
         event_tx: Sender<FsmEvent<Self>>,
         log: Logger,
     ) -> Self {
+        let dropped = Arc::new(AtomicBool::new(false));
         //TODO timeout as param
         Self::recv(
             peer,
             event_tx,
             conn.try_clone().unwrap(),
             Duration::from_millis(100),
+            dropped.clone(),
             log.clone(),
         );
         Self {
@@ -155,6 +166,7 @@ impl BgpConnectionTcp {
             peer,
             conn: Arc::new(Mutex::new(Some(conn))),
             log,
+            dropped,
         }
     }
 
@@ -162,11 +174,16 @@ impl BgpConnectionTcp {
         peer: SocketAddr,
         event_tx: Sender<FsmEvent<Self>>,
         mut conn: TcpStream,
-        _timeout: Duration, //TODO plumb
+        timeout: Duration,
+        dropped: Arc<AtomicBool>,
         log: Logger,
     ) {
+        conn.set_read_timeout(Some(timeout)).unwrap(); //TODO unwrap
         spawn(move || loop {
-            match Self::recv_msg(&mut conn, &log) {
+            if dropped.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            match Self::recv_msg(&mut conn, dropped.clone(), &log) {
                 Ok(msg) => {
                     debug!(log, "[{peer}] recv: {msg:#?}");
                     if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
@@ -184,11 +201,29 @@ impl BgpConnectionTcp {
         });
     }
 
-    fn recv_header(stream: &mut TcpStream) -> std::io::Result<Header> {
+    fn recv_header(
+        stream: &mut TcpStream,
+        dropped: Arc<AtomicBool>,
+    ) -> std::io::Result<Header> {
         let mut buf = [0u8; 19];
         let mut i = 0;
         loop {
-            let n = stream.read(&mut buf[i..])?;
+            if dropped.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "shutting down",
+                ));
+            }
+            let n = match stream.read(&mut buf[i..]) {
+                Ok(n) => Ok(n),
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        continue;
+                    } else {
+                        Err(e)
+                    }
+                }
+            }?;
             i += n;
             if i < 19 {
                 if i > 0 {
@@ -205,11 +240,18 @@ impl BgpConnectionTcp {
 
     fn recv_msg(
         stream: &mut TcpStream,
+        dropped: Arc<AtomicBool>,
         log: &Logger,
     ) -> std::io::Result<Message> {
         use crate::messages::{ErrorCode, ErrorSubcode, OpenErrorSubcode};
         loop {
-            let hdr = Self::recv_header(stream)?;
+            if dropped.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "shutting down",
+                ));
+            }
+            let hdr = Self::recv_header(stream, dropped.clone())?;
             println!("HDR: {:#?}", hdr);
 
             let mut msgbuf = vec![0u8; (hdr.length - 19) as usize];
