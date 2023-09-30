@@ -1,6 +1,4 @@
 {
-  "asn": 47,
   "peer_group": "qsfp1",
-  "peers": [],
-  "routes": []
+  "peers": []
 }

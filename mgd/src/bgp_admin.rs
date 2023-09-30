@@ -13,6 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{info, Logger};
 use std::collections::{BTreeMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::Sender;
@@ -479,10 +480,8 @@ pub async fn get_imported4(
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ApplyRequest {
-    pub asn: u32,
     pub peer_group: String,
     pub peers: Vec<BgpPeerConfig>,
-    pub routes: Vec<BgpRoute>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
@@ -493,7 +492,7 @@ pub struct BgpRoute {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct BgpPeerConfig {
-    // Session properties
+    pub asn: u32,
     pub host: SocketAddr,
     pub name: String,
     pub hold_time: u64,
@@ -502,6 +501,7 @@ pub struct BgpPeerConfig {
     pub connect_retry: u64,
     pub keepalive: u64,
     pub resolution: u64,
+    pub routes: Vec<BgpRoute>,
 }
 
 #[endpoint { method = POST, path = "/bgp/apply" }]
@@ -514,16 +514,38 @@ pub async fn bgp_apply(
 
     info!(log, "apply: {rq:#?}");
 
-    if !rq.peers.is_empty() {
+    let mut asns: Vec<u32> = rq.peers.iter().map(|x| x.asn).collect();
+    asns.sort();
+    asns.dedup();
+
+    for asn in asns {
         ensure_router(
             ctx.context().clone(),
             NewRouterRequest {
-                asn: rq.asn,
-                id: rq.asn,
+                asn,
+                id: asn,
                 listen: "[::]:179".to_string(), //TODO hardcode
             },
         )
         .await?;
+    }
+
+    #[derive(Debug, Eq)]
+    struct Nbr {
+        addr: IpAddr,
+        asn: u32,
+    }
+
+    impl Hash for Nbr {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.addr.hash(state);
+        }
+    }
+
+    impl PartialEq for Nbr {
+        fn eq(&self, other: &Nbr) -> bool {
+            self.addr.eq(&other.addr)
+        }
     }
 
     let current: Vec<rdb::BgpNeighborInfo> = ctx
@@ -535,11 +557,22 @@ pub async fn bgp_apply(
         .filter(|x| x.group == rq.peer_group)
         .collect();
 
-    let current_nbr_addrs: HashSet<IpAddr> =
-        current.iter().map(|x| x.host.ip()).collect();
+    let current_nbr_addrs: HashSet<Nbr> = current
+        .iter()
+        .map(|x| Nbr {
+            addr: x.host.ip(),
+            asn: x.asn,
+        })
+        .collect();
 
-    let specified_nbr_addrs: HashSet<IpAddr> =
-        rq.peers.iter().map(|x| x.host.ip()).collect();
+    let specified_nbr_addrs: HashSet<Nbr> = rq
+        .peers
+        .iter()
+        .map(|x| Nbr {
+            addr: x.host.ip(),
+            asn: x.asn,
+        })
+        .collect();
 
     let to_delete = current_nbr_addrs.difference(&specified_nbr_addrs);
     let to_add = specified_nbr_addrs.difference(&current_nbr_addrs);
@@ -548,11 +581,11 @@ pub async fn bgp_apply(
     info!(log, "removing {to_delete:#?}");
 
     for nbr in to_add {
-        let cfg = rq.peers.iter().find(|x| x.host.ip() == *nbr).unwrap();
+        let cfg = rq.peers.iter().find(|x| x.host.ip() == nbr.addr).unwrap();
         add_neighbor(
             ctx.context().clone(),
             AddNeighborRequest::from_bgp_peer_config(
-                rq.asn,
+                nbr.asn,
                 rq.peer_group.clone(),
                 cfg.clone(),
             ),
@@ -562,28 +595,28 @@ pub async fn bgp_apply(
     }
 
     for nbr in to_delete {
-        remove_neighbor(ctx.context().clone(), rq.asn, *nbr, log.clone())
+        remove_neighbor(ctx.context().clone(), nbr.asn, nbr.addr, log.clone())
             .await?;
-    }
 
-    if rq.peers.is_empty() {
         let mut routers = ctx.context().bgp.router.lock().unwrap();
         let mut remove = false;
-        if let Some(r) = routers.get(&rq.asn) {
+        if let Some(r) = routers.get(&nbr.asn) {
             remove = r.sessions.lock().unwrap().is_empty();
         }
         if remove {
-            if let Some(r) = routers.remove(&rq.asn) {
+            if let Some(r) = routers.remove(&nbr.asn) {
                 r.shutdown()
             };
         }
     }
 
-    for x in rq.routes {
-        let prefixes = x.prefixes.into_iter().map(Into::into).collect();
-        get_router!(ctx.context(), rq.asn)?
-            .originate4(x.nexthop, prefixes)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    for peer in rq.peers {
+        for x in peer.routes {
+            let prefixes = x.prefixes.into_iter().map(Into::into).collect();
+            get_router!(ctx.context(), peer.asn)?
+                .originate4(x.nexthop, prefixes)
+                .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        }
     }
 
     Ok(HttpResponseUpdatedNoContent())

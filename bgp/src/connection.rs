@@ -179,6 +179,7 @@ impl BgpConnectionTcp {
         log: Logger,
     ) {
         conn.set_read_timeout(Some(timeout)).unwrap(); //TODO unwrap
+        slog::info!(log, "spawning recv loop");
         spawn(move || loop {
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
@@ -542,6 +543,7 @@ pub mod test {
             _timeout: Duration, //TODO shutdown detection
             log: Logger,
         ) {
+            slog::info!(log, "spawning recv loop");
             spawn(move || loop {
                 match rx.recv() {
                     Ok(msg) => {

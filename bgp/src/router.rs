@@ -67,6 +67,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     pub fn run(&self) {
         for s in self.sessions.lock().unwrap().values() {
             let session = s.clone();
+            slog::info!(self.log, "spawning session");
             spawn(move || {
                 session.start();
             });
@@ -129,6 +130,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         ));
 
         let r = runner.clone();
+        slog::info!(self.log, "spawning new session");
         spawn(move || {
             r.start();
         });

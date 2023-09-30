@@ -383,11 +383,6 @@
       "ApplyRequest": {
         "type": "object",
         "properties": {
-          "asn": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
           "peer_group": {
             "type": "string"
           },
@@ -396,24 +391,21 @@
             "items": {
               "$ref": "#/components/schemas/BgpPeerConfig"
             }
-          },
-          "routes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BgpRoute"
-            }
           }
         },
         "required": [
-          "asn",
           "peer_group",
-          "peers",
-          "routes"
+          "peers"
         ]
       },
       "BgpPeerConfig": {
         "type": "object",
         "properties": {
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "connect_retry": {
             "type": "integer",
             "format": "uint64",
@@ -449,9 +441,16 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BgpRoute"
+            }
           }
         },
         "required": [
+          "asn",
           "connect_retry",
           "delay_open",
           "hold_time",
@@ -459,7 +458,8 @@
           "idle_hold_time",
           "keepalive",
           "name",
-          "resolution"
+          "resolution",
+          "routes"
         ]
       },
       "BgpRoute": {
