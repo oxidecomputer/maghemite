@@ -1,6 +1,6 @@
 use crate::admin::HandlerContext;
 use crate::bgp_admin::BgpContext;
-use bgp::connection::{BgpConnectionTcp, BgpListenerTcp};
+use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use bgp::log::init_logger;
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;

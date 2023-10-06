@@ -745,9 +745,6 @@ impl PathAttributeValue {
                 IpAddr::V4(a) => Ok(a.octets().into()),
                 IpAddr::V6(a) => Ok(a.octets().into()),
             },
-            Self::MultiExitDisc(_) => todo!(),
-            Self::LocalPref(_) => todo!(),
-            Self::Aggregator(_) => todo!(),
             Self::As4Path(segments) => {
                 let mut buf = Vec::new();
                 for s in segments {
@@ -755,7 +752,7 @@ impl PathAttributeValue {
                 }
                 Ok(buf)
             }
-            Self::As4Aggregator(_) => todo!(),
+            x => Err(Error::UnsupportedPathAttributeValue(x.clone())),
         }
     }
 
@@ -790,9 +787,6 @@ impl PathAttributeValue {
                 let (_input, v) = be_u32(input)?;
                 Ok(PathAttributeValue::MultiExitDisc(v))
             }
-            PathAttributeTypeCode::LocalPref => todo!(),
-            PathAttributeTypeCode::AtomicAggregate => todo!(),
-            PathAttributeTypeCode::Aggregator => todo!(),
             PathAttributeTypeCode::As4Path => {
                 let mut segments = Vec::new();
                 loop {
@@ -805,7 +799,7 @@ impl PathAttributeValue {
                 }
                 Ok(PathAttributeValue::As4Path(segments))
             }
-            PathAttributeTypeCode::As4Aggregator => todo!(),
+            x => Err(Error::UnsupportedPathAttributeTypeCode(x)),
         }
     }
 }
@@ -1122,7 +1116,6 @@ impl OptionalParameter {
         match self {
             Self::Reserved => Err(Error::ReservedOptionalParameter),
             Self::Unassigned => Err(Error::Unassigned(0)),
-            Self::Authentication => todo!(),
             Self::Capabilities(cs) => {
                 let mut buf = vec![OptionalParameterCode::Capabilities as u8];
                 let mut csbuf = Vec::new();
@@ -1134,7 +1127,7 @@ impl OptionalParameter {
                 buf.extend_from_slice(&csbuf);
                 Ok(buf)
             }
-            Self::ExtendedLength => todo!(),
+            x => Err(Error::UnsupportedOptionalParameter(x.clone())),
         }
     }
 
@@ -1150,7 +1143,6 @@ impl OptionalParameter {
             OptionalParameterCode::Reserved => {
                 Err(Error::ReservedOptionalParameter)
             }
-            OptionalParameterCode::Authentication => todo!(),
             OptionalParameterCode::Capabilities => {
                 let mut result = Vec::new();
                 while !cap_input.is_empty() {
@@ -1160,7 +1152,7 @@ impl OptionalParameter {
                 }
                 Ok((input, OptionalParameter::Capabilities(result)))
             }
-            OptionalParameterCode::ExtendedLength => todo!(),
+            x => Err(Error::UnsupportedOptionalParameterCode(x)),
         }
     }
 }
@@ -1282,13 +1274,6 @@ impl Capability {
                 let buf = vec![CapabilityCode::RouteRefresh as u8, 0];
                 Ok(buf)
             }
-            Self::OutboundRouteFiltering {} => todo!(),
-            Self::MultipleRoutesToDestination {} => todo!(),
-            Self::ExtendedNextHopEncoding {} => todo!(),
-            Self::BGPExtendedMessage {} => todo!(),
-            Self::BgpSec {} => todo!(),
-            Self::MultipleLabels {} => todo!(),
-            Self::BgpRole {} => todo!(),
             Self::GracefulRestart {} => {
                 //TODO audit
                 let buf = vec![CapabilityCode::GracefulRestart as u8, 0];
@@ -1299,8 +1284,6 @@ impl Capability {
                 buf.extend_from_slice(&asn.to_be_bytes());
                 Ok(buf)
             }
-            Self::DynamicCapability {} => todo!(),
-            Self::MultisessionBgp {} => todo!(),
             Self::AddPath { elements } => {
                 let mut buf = vec![
                     CapabilityCode::AddPath as u8,
@@ -1318,18 +1301,10 @@ impl Capability {
                 let buf = vec![CapabilityCode::EnhancedRouteRefresh as u8, 0];
                 Ok(buf)
             }
-            Self::LongLivedGracefulRestart {} => todo!(),
-            Self::RoutingPolicyDistribution {} => todo!(),
-            Self::Fqdn {} => todo!(),
-            Self::PrestandardRouteRefresh {} => todo!(),
-            Self::PrestandardOrfAndPd {} => todo!(),
-            Self::PrestandardOutboundRouteFiltering {} => todo!(),
-            Self::PrestandardMultisession {} => todo!(),
-            Self::PrestandardFqdn {} => todo!(),
-            Self::PrestandardOpereationalMessage {} => todo!(),
             Self::Experimental { code: _ } => Err(Error::Experimental),
             Self::Unassigned { code } => Err(Error::Unassigned(*code)),
             Self::Reserved { code: _ } => Err(Error::ReservedCapability),
+            x => Err(Error::UnsupportedCapability(x.clone())),
         }
     }
 
@@ -1357,30 +1332,6 @@ impl Capability {
                 Ok((&input[len..], Capability::RouteRefresh {}))
             }
 
-            c @ CapabilityCode::OutboundRouteFiltering => {
-                Err(Error::UnsupportedCapability(c))
-            }
-
-            c @ CapabilityCode::MultipleRoutesToDestination => {
-                Err(Error::UnsupportedCapability(c))
-            }
-
-            c @ CapabilityCode::ExtendedNextHopEncoding => {
-                Err(Error::UnsupportedCapability(c))
-            }
-
-            c @ CapabilityCode::BGPExtendedMessage => {
-                Err(Error::UnsupportedCapability(c))
-            }
-
-            c @ CapabilityCode::BgpSec => Err(Error::UnsupportedCapability(c)),
-
-            c @ CapabilityCode::MultipleLabels => {
-                Err(Error::UnsupportedCapability(c))
-            }
-
-            c @ CapabilityCode::BgpRole => Err(Error::UnsupportedCapability(c)),
-
             CapabilityCode::GracefulRestart => {
                 //TODO handle for real
                 Ok((&input[len..], Capability::GracefulRestart {}))
@@ -1389,8 +1340,6 @@ impl Capability {
                 let (input, asn) = be_u32(input)?;
                 Ok((input, Capability::FourOctetAs { asn }))
             }
-            CapabilityCode::DynamicCapability => todo!(),
-            CapabilityCode::MultisessionBgp => todo!(),
             CapabilityCode::AddPath => {
                 let mut elements = Vec::new();
                 while !input.is_empty() {
@@ -1412,14 +1361,6 @@ impl Capability {
                 Ok((&input[len..], Capability::EnhancedRouteRefresh {}))
             }
 
-            c @ CapabilityCode::LongLivedGracefulRestart => {
-                Err(Error::UnsupportedCapability(c))
-            }
-
-            c @ CapabilityCode::RoutingPolicyDistribution => {
-                Err(Error::UnsupportedCapability(c))
-            }
-
             CapabilityCode::Fqdn => {
                 //TODO handle for real
                 Ok((&input[len..], Capability::Fqdn {}))
@@ -1428,26 +1369,6 @@ impl Capability {
             CapabilityCode::PrestandardRouteRefresh => {
                 //TODO handle for real
                 Ok((&input[len..], Capability::PrestandardRouteRefresh {}))
-            }
-
-            c @ CapabilityCode::PrestandardOrfAndPd => {
-                Err(Error::UnsupportedCapability(c))
-            }
-
-            c @ CapabilityCode::PrestandardOutboundRouteFiltering => {
-                Err(Error::UnsupportedCapability(c))
-            }
-
-            c @ CapabilityCode::PrestandardMultisession => {
-                Err(Error::UnsupportedCapability(c))
-            }
-
-            c @ CapabilityCode::PrestandardFqdn => {
-                Err(Error::UnsupportedCapability(c))
-            }
-
-            c @ CapabilityCode::PrestandardOpereationalMessage => {
-                Err(Error::UnsupportedCapability(c))
             }
 
             CapabilityCode::Experimental0 => Err(Error::Experimental),
@@ -1503,6 +1424,7 @@ impl Capability {
             CapabilityCode::Experimental50 => Err(Error::Experimental),
             CapabilityCode::Experimental51 => Err(Error::Experimental),
             CapabilityCode::Reserved => Err(Error::ReservedCapabilityCode),
+            x => Err(Error::UnsupportedCapabilityCode(x)),
         }
     }
 }

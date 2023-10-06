@@ -754,14 +754,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             FsmEvent::Message(Message::Update(m)) => {
                 self.clock.timers.hold_timer.reset();
-                inf!(self; "update received: {:#?}", m);
-
+                inf!(self; "update received: {m:#?}");
                 self.apply_update(m, pc.id);
-
                 FsmState::Established(pc)
             }
             FsmEvent::Message(Message::Notification(m)) => {
-                wrn!(self; "notification received: {:#?}", m);
+                wrn!(self; "notification received: {m:#?}");
                 self.exit_established(pc)
             }
             FsmEvent::Message(Message::KeepAlive) => {
@@ -770,19 +768,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmState::Established(pc)
             }
             FsmEvent::Message(m) => {
-                wrn!(
-                    self;
-                    "established: unexpected message {:#?}",
-                    m
-                );
+                wrn!(self; "established: unexpected message {m:#?}");
                 FsmState::Established(pc)
             }
             FsmEvent::Announce(update) => {
                 self.send_update(update, &pc.conn);
                 FsmState::Established(pc)
             }
-            _ => {
-                todo!()
+            e => {
+                wrn!(self; "unhandled event: {e:?}");
+                FsmState::Established(pc)
             }
         }
     }

@@ -1,5 +1,5 @@
 use crate::config::{PeerConfig, RouterConfig};
-use crate::connection::test::{BgpConnectionChannel, BgpListenerChannel};
+use crate::connection_channel::{BgpConnectionChannel, BgpListenerChannel};
 use crate::session::{Asn, FsmStateKind};
 use rdb::Prefix4;
 use std::collections::BTreeMap;

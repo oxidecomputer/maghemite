@@ -1,6 +1,6 @@
 use crate::admin::HandlerContext;
 use bgp::config::{PeerConfig, RouterConfig};
-use bgp::connection::BgpConnectionTcp;
+use bgp::connection_tcp::BgpConnectionTcp;
 use bgp::router::Router;
 use bgp::session::{Asn, FsmEvent, FsmStateKind};
 use dropshot::{

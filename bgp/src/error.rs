@@ -102,8 +102,23 @@ pub enum Error {
     #[error("Session for peer already exists")]
     PeerExists,
 
+    #[error("Capability code not supported {0:?}")]
+    UnsupportedCapabilityCode(crate::messages::CapabilityCode),
+
     #[error("Capability not supported {0:?}")]
-    UnsupportedCapability(crate::messages::CapabilityCode),
+    UnsupportedCapability(crate::messages::Capability),
+
+    #[error("Path attribute value not supported {0:?}")]
+    UnsupportedPathAttributeValue(crate::messages::PathAttributeValue),
+
+    #[error("Path attribute type code not supported {0:?}")]
+    UnsupportedPathAttributeTypeCode(crate::messages::PathAttributeTypeCode),
+
+    #[error("Unsupported optional parameter {0:?}")]
+    UnsupportedOptionalParameter(crate::messages::OptionalParameter),
+
+    #[error("Unsupported optional parameter code {0:?}")]
+    UnsupportedOptionalParameterCode(crate::messages::OptionalParameterCode),
 
     #[error("Self loop detected")]
     SelfLoopDetected,
