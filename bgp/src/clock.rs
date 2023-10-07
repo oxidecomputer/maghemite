@@ -1,4 +1,5 @@
 use crate::connection::BgpConnection;
+use crate::lock;
 use crate::session::FsmEvent;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -137,30 +138,30 @@ impl Timer {
     }
 
     pub fn tick(&self, resolution: Duration) {
-        let mut value = self.value.lock().unwrap();
+        let mut value = lock!(self.value);
         if value.0 {
             value.1 = value.1.saturating_sub(resolution);
         }
     }
 
     pub fn enabled(&self) -> bool {
-        self.value.lock().unwrap().0
+        lock!(self.value).0
     }
 
     pub fn enable(&self) {
-        self.value.lock().unwrap().0 = true
+        lock!(self.value).0 = true
     }
 
     pub fn disable(&self) {
-        self.value.lock().unwrap().0 = false
+        lock!(self.value).0 = false
     }
 
     pub fn expired(&self) -> bool {
-        let v = self.value.lock().unwrap();
+        let v = lock!(self.value);
         v.0 && v.1.is_zero()
     }
 
     pub fn reset(&self) {
-        self.value.lock().unwrap().1 = self.interval;
+        lock!(self.value).1 = self.interval;
     }
 }

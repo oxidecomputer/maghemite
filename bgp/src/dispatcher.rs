@@ -1,4 +1,5 @@
 use crate::connection::{BgpConnection, BgpListener};
+use crate::lock;
 use crate::session::FsmEvent;
 use slog::Logger;
 use std::collections::BTreeMap;
@@ -34,7 +35,16 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                 self.shutdown.store(false, Ordering::Release);
                 break;
             }
-            let listener = Listener::bind(&self.listen).unwrap();
+            let listener = match Listener::bind(&self.listen) {
+                Ok(l) => l,
+                Err(e) => {
+                    slog::error!(
+                        self.log,
+                        "bgp dispatcher failed to listen {e}"
+                    );
+                    continue;
+                }
+            };
             let conn = match listener.accept(
                 self.log.clone(),
                 self.addr_to_session.clone(),
@@ -50,9 +60,15 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                 }
             };
             let addr = conn.peer().ip();
-            match self.addr_to_session.lock().unwrap().get(&addr) {
+            match lock!(self.addr_to_session).get(&addr) {
                 Some(tx) => {
-                    tx.send(FsmEvent::Connected(conn)).unwrap();
+                    if let Err(e) = tx.send(FsmEvent::Connected(conn)) {
+                        slog::error!(
+                            self.log,
+                            "failed to send connected envent to session: {e}",
+                        );
+                        continue;
+                    }
                 }
                 None => continue,
             }

@@ -1,4 +1,5 @@
 //! The routing database (rdb).
+//! TODO update this comment
 //!
 //! ## Structure
 //!
@@ -27,8 +28,8 @@ const BGP_ORIGIN: &str = "bgp_origin";
 const BGP_ROUTER: &str = "bgp_router";
 const BGP_NEIGHBOR: &str = "bgp_neighbor";
 
+use crate::error::Error;
 use crate::types::*;
-use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,7 +48,7 @@ unsafe impl Send for Db {}
 
 //TODO we need bulk operations with atomic semantics here.
 impl Db {
-    pub fn new(path: &str) -> Result<Self> {
+    pub fn new(path: &str) -> Result<Self, Error> {
         Ok(Self {
             persistent: sled::open(path)?,
             imported: Arc::new(Mutex::new(HashSet::new())),
@@ -69,7 +70,7 @@ impl Db {
     }
 
     // TODO return previous value if this is an update.
-    pub fn add_origin4(&self, r: Route4Key) -> Result<()> {
+    pub fn add_origin4(&self, r: Route4Key) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         tree.insert(r.db_key(), "")?;
         tree.flush()?;
@@ -78,7 +79,11 @@ impl Db {
         Ok(())
     }
 
-    pub fn add_bgp_router(&self, asn: u32, info: BgpRouterInfo) -> Result<()> {
+    pub fn add_bgp_router(
+        &self,
+        asn: u32,
+        info: BgpRouterInfo,
+    ) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ROUTER)?;
         let key = asn.to_string();
         let value = serde_json::to_string(&info)?;
@@ -87,7 +92,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn remove_bgp_router(&self, asn: u32) -> Result<()> {
+    pub fn remove_bgp_router(&self, asn: u32) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ROUTER)?;
         let key = asn.to_string();
         tree.remove(key.as_str())?;
@@ -95,7 +100,9 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_bgp_routers(&self) -> Result<HashMap<u32, BgpRouterInfo>> {
+    pub fn get_bgp_routers(
+        &self,
+    ) -> Result<HashMap<u32, BgpRouterInfo>, Error> {
         let tree = self.persistent.open_tree(BGP_ROUTER)?;
         let result = tree
             .scan_prefix(vec![])
@@ -112,7 +119,7 @@ impl Db {
         Ok(result)
     }
 
-    pub fn add_bgp_neighbor(&self, nbr: BgpNeighborInfo) -> Result<()> {
+    pub fn add_bgp_neighbor(&self, nbr: BgpNeighborInfo) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
         let key = nbr.host.ip().to_string();
         let value = serde_json::to_string(&nbr)?;
@@ -121,7 +128,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn remove_bgp_neighbor(&self, addr: IpAddr) -> Result<()> {
+    pub fn remove_bgp_neighbor(&self, addr: IpAddr) -> Result<(), Error> {
         println!("db: removing neighbor {addr}");
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
         let key = addr.to_string();
@@ -130,7 +137,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_bgp_neighbors(&self) -> Result<Vec<BgpNeighborInfo>> {
+    pub fn get_bgp_neighbors(&self) -> Result<Vec<BgpNeighborInfo>, Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
         let result = tree
             .scan_prefix(vec![])
@@ -146,7 +153,7 @@ impl Db {
         Ok(result)
     }
 
-    pub fn remove_origin4(&self, r: Route4Key) -> Result<()> {
+    pub fn remove_origin4(&self, r: Route4Key) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         tree.remove(r.db_key())?;
         let g = self.generation.fetch_add(1, Ordering::SeqCst);
@@ -157,7 +164,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_originated4(&self) -> Result<Vec<Route4Key>> {
+    pub fn get_originated4(&self) -> Result<Vec<Route4Key>, Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         let result = tree
             .scan_prefix(vec![])

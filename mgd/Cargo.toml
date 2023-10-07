@@ -19,6 +19,7 @@ slog-envlogger.workspace = true
 slog-term.workspace = true
 tokio.workspace = true
 http.workspace = true
+thiserror.workspace = true
 
 [features]
 default = ["mg-lower"]

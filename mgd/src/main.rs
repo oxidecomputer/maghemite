@@ -4,13 +4,16 @@ use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use bgp::log::init_logger;
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
-use std::collections::BTreeMap;
+use rdb::{BgpNeighborInfo, BgpRouterInfo};
+use slog::Logger;
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 
 mod admin;
 mod bgp_admin;
+mod error;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None, styles = oxide_cli_style())]
@@ -21,7 +24,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Run a BGP router instance.
+    /// Run the mgd routing daemon.
     Run(RunArgs),
     /// Generate the OpenAPI spec for this router.
     Apigen,
@@ -58,6 +61,36 @@ async fn main() {
 async fn run(args: RunArgs) {
     let log = init_logger();
 
+    let bgp = init_bgp(&args, &log);
+    let db = rdb::Db::new(&format!("{}/rdb", args.data_dir))
+        .expect("open datastore file");
+
+    let context = Arc::new(HandlerContext {
+        log: log.clone(),
+        bgp,
+        data_dir: args.data_dir.clone(),
+        db: db.clone(),
+    });
+
+    start_bgp_routers(
+        context.clone(),
+        db.get_bgp_routers()
+            .expect("get BGP routers from datastore"),
+        db.get_bgp_neighbors()
+            .expect("get BGP neighbors from data store"),
+    );
+
+    let j = admin::start_server(
+        log.clone(),
+        args.admin_addr,
+        args.admin_port,
+        context.clone(),
+    )
+    .expect("start API server");
+    j.await.expect("API server quit unexpectedly");
+}
+
+fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
     let addr_to_session = Arc::new(Mutex::new(BTreeMap::new()));
     if !args.no_bgp_dispatcher {
         let bgp_dispatcher =
@@ -69,34 +102,29 @@ async fn run(args: RunArgs) {
 
         spawn(move || bgp_dispatcher.run::<BgpListenerTcp>());
     }
-    let db = rdb::Db::new(&format!("{}/rdb", args.data_dir)).unwrap();
+    BgpContext::new(addr_to_session)
+}
 
-    let context = Arc::new(HandlerContext {
-        log: log.clone(),
-        bgp: BgpContext::new(addr_to_session),
-        data_dir: args.data_dir.clone(),
-        db: db.clone(),
-    });
-
-    let routers = db.get_bgp_routers().unwrap();
-    {
-        slog::info!(log, "routers: {:#?}", routers);
-        let mut guard = context.bgp.router.lock().unwrap();
-        for (asn, info) in routers {
-            bgp_admin::add_router(
-                context.clone(),
-                bgp_admin::NewRouterRequest {
-                    asn,
-                    id: info.id,
-                    listen: info.listen.clone(),
-                },
-                &mut guard,
-            )
-            .unwrap(); //TODO unwrap
-        }
+fn start_bgp_routers(
+    context: Arc<HandlerContext>,
+    routers: HashMap<u32, BgpRouterInfo>,
+    neighbors: Vec<BgpNeighborInfo>,
+) {
+    slog::info!(context.log, "routers: {:#?}", routers);
+    let mut guard = context.bgp.router.lock().expect("lock bgp routers");
+    for (asn, info) in routers {
+        bgp_admin::add_router(
+            context.clone(),
+            bgp_admin::NewRouterRequest {
+                asn,
+                id: info.id,
+                listen: info.listen.clone(),
+            },
+            &mut guard,
+        )
+        .unwrap_or_else(|_| panic!("add BGP router {asn} {info:#?}"));
     }
 
-    let neighbors = db.get_bgp_neighbors().unwrap();
     for nbr in neighbors {
         bgp_admin::ensure_neighbor(
             context.clone(),
@@ -112,16 +140,7 @@ async fn run(args: RunArgs) {
                 resolution: nbr.resolution,
                 group: nbr.group.clone(),
             },
-            log.clone(),
         )
-        .unwrap(); //TODO unwrap
+        .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
     }
-
-    let j = admin::start_server(
-        log.clone(),
-        args.admin_addr,
-        args.admin_port,
-        context.clone(),
-    );
-    j.unwrap().await.unwrap();
 }

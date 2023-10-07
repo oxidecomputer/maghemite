@@ -8,6 +8,7 @@ use crate::messages::{
     UpdateMessage,
 };
 use crate::session::{Asn, FsmEvent, NeighborInfo, Session, SessionRunner};
+use crate::{lock, read_lock, write_lock};
 use rdb::{Db, Route4Key};
 use slog::Logger;
 use std::collections::BTreeMap;
@@ -53,19 +54,19 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn get_session(&self, addr: IpAddr) -> Option<Arc<SessionRunner<Cnx>>> {
-        self.sessions.lock().unwrap().get(&addr).cloned()
+        lock!(self.sessions).get(&addr).cloned()
     }
 
     pub fn shutdown(&self) {
-        for (addr, s) in self.sessions.lock().unwrap().iter() {
-            self.addr_to_session.lock().unwrap().remove(addr);
+        for (addr, s) in lock!(self.sessions).iter() {
+            lock!(self.addr_to_session).remove(addr);
             s.shutdown();
         }
         self.shutdown.store(true, Ordering::Release);
     }
 
     pub fn run(&self) {
-        for s in self.sessions.lock().unwrap().values() {
+        for s in lock!(self.sessions).values() {
             let session = s.clone();
             slog::info!(self.log, "spawning session");
             spawn(move || {
@@ -75,17 +76,18 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn add_fanout(&self, peer: IpAddr, event_tx: Sender<FsmEvent<Cnx>>) {
-        let mut fanout = self.fanout.write().unwrap();
+        let mut fanout = write_lock!(self.fanout);
         fanout.add_egress(
             peer,
             Egress {
                 event_tx: Some(event_tx.clone()),
+                log: self.log.clone(),
             },
         )
     }
 
     pub fn remove_fanout(&self, peer: IpAddr) {
-        let mut fanout = self.fanout.write().unwrap();
+        let mut fanout = write_lock!(self.fanout);
         fanout.remove_egress(peer);
     }
 
@@ -98,7 +100,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         let session = Session::new();
 
-        let mut a2s = self.addr_to_session.lock().unwrap();
+        let mut a2s = lock!(self.addr_to_session);
         if a2s.contains_key(&peer.host.ip()) {
             return Err(Error::PeerExists);
         }
@@ -136,24 +138,21 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         });
 
         self.add_fanout(neighbor.host.ip(), event_tx);
-        self.sessions
-            .lock()
-            .unwrap()
-            .insert(neighbor.host.ip(), runner.clone());
+        lock!(self.sessions).insert(neighbor.host.ip(), runner.clone());
 
         Ok(runner)
     }
 
     pub fn delete_session(&self, addr: IpAddr) {
-        self.addr_to_session.lock().unwrap().remove(&addr);
+        lock!(self.addr_to_session).remove(&addr);
         self.remove_fanout(addr);
-        if let Some(s) = self.sessions.lock().unwrap().remove(&addr) {
+        if let Some(s) = lock!(self.sessions).remove(&addr) {
             s.shutdown();
         }
     }
 
     pub fn send_event(&self, e: FsmEvent<Cnx>) -> Result<(), Error> {
-        for s in self.sessions.lock().unwrap().values() {
+        for s in lock!(self.sessions).values() {
             s.send_event(e.clone())?;
         }
         Ok(())
@@ -205,15 +204,13 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
         for p in &prefixes {
             update.nlri.push(p.clone());
-            self.db
-                .add_origin4(Route4Key {
-                    prefix: p.into(),
-                    nexthop,
-                })
-                .unwrap();
+            self.db.add_origin4(Route4Key {
+                prefix: p.into(),
+                nexthop,
+            })?;
         }
 
-        self.fanout.read().unwrap().send_all(&update);
+        read_lock!(self.fanout).send_all(&update);
 
         Ok(())
     }

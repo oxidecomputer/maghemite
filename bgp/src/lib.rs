@@ -19,3 +19,26 @@ mod test;
 
 #[cfg(test)]
 pub mod connection_channel;
+
+pub const BGP_PORT: u16 = 179;
+
+#[macro_export]
+macro_rules! lock {
+    ($mtx:expr) => {
+        $mtx.lock().expect("lock mutex")
+    };
+}
+
+#[macro_export]
+macro_rules! read_lock {
+    ($rwl:expr) => {
+        $rwl.read().expect("rwlock read")
+    };
+}
+
+#[macro_export]
+macro_rules! write_lock {
+    ($rwl:expr) => {
+        $rwl.write().expect("rwlock write")
+    };
+}

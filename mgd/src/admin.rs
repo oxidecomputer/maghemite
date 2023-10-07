@@ -46,25 +46,31 @@ pub fn start_server(
     }))
 }
 
+macro_rules! register {
+    ($api:expr, $endpoint:expr) => {
+        $api.register($endpoint).expect(stringify!($endpoint))
+    };
+}
+
 pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     let mut api = ApiDescription::new();
-    api.register(bgp_admin::get_routers).unwrap();
-    api.register(bgp_admin::new_router).unwrap();
-    api.register(bgp_admin::ensure_router_handler).unwrap();
-    api.register(bgp_admin::delete_router).unwrap();
-    api.register(bgp_admin::add_neighbor_handler).unwrap();
-    api.register(bgp_admin::ensure_neighbor_handler).unwrap();
-    api.register(bgp_admin::delete_neighbor).unwrap();
-    api.register(bgp_admin::originate4).unwrap();
-    api.register(bgp_admin::get_originated4).unwrap();
-    api.register(bgp_admin::get_imported4).unwrap();
-    api.register(bgp_admin::bgp_apply).unwrap();
+    register!(api, bgp_admin::get_routers);
+    register!(api, bgp_admin::new_router);
+    register!(api, bgp_admin::ensure_router_handler);
+    register!(api, bgp_admin::delete_router);
+    register!(api, bgp_admin::add_neighbor_handler);
+    register!(api, bgp_admin::ensure_neighbor_handler);
+    register!(api, bgp_admin::delete_neighbor);
+    register!(api, bgp_admin::originate4);
+    register!(api, bgp_admin::get_originated4);
+    register!(api, bgp_admin::get_imported4);
+    register!(api, bgp_admin::bgp_apply);
     api
 }
 
 pub fn apigen() {
     let api = api_description();
     let openapi = api.openapi("Maghemite Admin", "v0.1.0");
-    let mut out = File::create("mg-admin.json").unwrap();
-    openapi.write(&mut out).unwrap();
+    let mut out = File::create("mg-admin.json").expect("create json api file");
+    openapi.write(&mut out).expect("write json api file");
 }

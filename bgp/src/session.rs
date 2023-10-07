@@ -7,7 +7,8 @@ use crate::messages::{
     OpenMessage, OptionalParameter, PathAttributeValue, PathOrigin,
     UpdateMessage,
 };
-use crate::{dbg, inf, wrn};
+use crate::{dbg, err, inf, read_lock, wrn};
+use crate::{lock, write_lock};
 use rdb::{Db, Prefix4, Route4Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -454,7 +455,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         loop {
             if self.shutdown.load(Ordering::Acquire) {
                 inf!(self; "shutting down");
-                *(self.state.lock().unwrap()) = FsmStateKind::Idle;
+                *(lock!(self.state)) = FsmStateKind::Idle;
                 self.shutdown.store(false, Ordering::Release);
                 self.running.store(false, Ordering::Release);
                 inf!(self; "shutdown complete");
@@ -500,8 +501,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             if current_state != next_state {
                 inf!(self; "{} -> {}", current_state, next_state);
-                *(self.state.lock().unwrap()) = next_state;
-                *(self.last_state_change.lock().unwrap()) = Instant::now();
+                *(lock!(self.state)) = next_state;
+                *(lock!(self.last_state_change)) = Instant::now();
             }
         }
     }
@@ -513,8 +514,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn idle(&self) -> FsmState<Cnx> {
-        //TODO(unwrap)
-        match self.event_rx.recv().unwrap() {
+        let event = match self.event_rx.recv() {
+            Ok(event) => event,
+            Err(e) => {
+                err!(self; "idle: event rx {e}");
+                return FsmState::Idle;
+            }
+        };
+        match event {
             FsmEvent::ManualStart => FsmState::Connect,
             x => {
                 wrn!(self; "event {:?} not allowed in idle", x);
@@ -524,21 +531,38 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn on_connect(&self) -> FsmState<Cnx> {
-        self.session.lock().unwrap().connect_retry_counter = 0;
+        lock!(self.session).connect_retry_counter = 0;
         let conn =
             Cnx::new(self.bind_addr, self.neighbor.host, self.log.clone());
-        conn.connect(self.event_tx.clone(), self.clock.resolution);
+        if let Err(e) =
+            conn.connect(self.event_tx.clone(), self.clock.resolution)
+        {
+            wrn!(self; "connect attempt failed: {e}");
+        }
         self.clock.timers.connect_retry_timer.enable();
         loop {
-            //TODO(unwrap)
-            match self.event_rx.recv().unwrap() {
+            let event = match self.event_rx.recv() {
+                Ok(event) => event,
+                Err(e) => {
+                    err!(self; "on connect event rx: {e}");
+                    continue;
+                }
+            };
+            match event {
                 FsmEvent::ConnectRetryTimerExpires => {
-                    conn.connect(self.event_tx.clone(), self.clock.resolution);
+                    if let Err(e) = conn
+                        .connect(self.event_tx.clone(), self.clock.resolution)
+                    {
+                        wrn!(self; "connect attempt failed: {e}");
+                    }
                 }
                 FsmEvent::Connected(accepted) => {
                     inf!(self; "accepted connection from {}", accepted.peer());
                     self.clock.timers.connect_retry_timer.disable();
-                    self.send_open(&accepted);
+                    if let Err(e) = self.send_open(&accepted) {
+                        err!(self; "send open failed {e}");
+                        return FsmState::Connect;
+                    }
                     self.clock.timers.hold_timer.reset();
                     self.clock.timers.hold_timer.enable();
                     return FsmState::OpenSent(accepted);
@@ -546,7 +570,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmEvent::TcpConnectionConfirmed => {
                     inf!(self; "connected to {}", conn.peer());
                     self.clock.timers.connect_retry_timer.disable();
-                    self.send_open(&conn);
+                    if let Err(e) = self.send_open(&conn) {
+                        err!(self; "send open failed {e}");
+                        return FsmState::Connect;
+                    }
                     self.clock.timers.hold_timer.reset();
                     self.clock.timers.hold_timer.enable();
                     return FsmState::OpenSent(conn);
@@ -560,7 +587,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn on_active(&self, conn: Cnx) -> FsmState<Cnx> {
-        let om = match self.event_rx.recv().unwrap() {
+        let event = match self.event_rx.recv() {
+            Ok(event) => event,
+            Err(e) => {
+                err!(self; "on active event rx: {e}");
+                return FsmState::Active(conn);
+            }
+        };
+        let om = match event {
             FsmEvent::Message(Message::Open(om)) => om,
             other => {
                 wrn!(self;
@@ -577,7 +611,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn on_open_sent(&self, conn: Cnx) -> FsmState<Cnx> {
-        let om = match self.event_rx.recv().unwrap() {
+        let event = match self.event_rx.recv() {
+            Ok(event) => event,
+            Err(e) => {
+                err!(self; "on open sent event rx: {e}");
+                return FsmState::OpenSent(conn);
+            }
+        };
+        let om = match event {
             FsmEvent::Message(Message::Open(om)) => om,
             FsmEvent::HoldTimerExpires => {
                 wrn!(self; "open sent: hold timer expired");
@@ -611,17 +652,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             }
         }
-        self.session.lock().unwrap().remote_asn = Some(remote_asn);
+        lock!(self.session).remote_asn = Some(remote_asn);
         true
     }
 
     fn send_keepalive(&self, conn: &Cnx) {
         dbg!(self; "sending keepalive");
-        //TODO(unwrap)
-        conn.send(Message::KeepAlive).unwrap();
+        if let Err(e) = conn.send(Message::KeepAlive) {
+            err!(self; "failed to send keepalive {e}");
+        }
     }
 
-    fn send_open(&self, conn: &Cnx) {
+    fn send_open(&self, conn: &Cnx) -> Result<(), Error> {
         let mut msg = match self.asn {
             Asn::FourOctet(asn) => OpenMessage::new4(
                 asn,
@@ -651,18 +693,26 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }],
             },
         ]);
-        // TODO(unwrap)
-        conn.send(msg.into()).unwrap();
+        conn.send(msg.into())
     }
 
-    fn send_update(&self, update: UpdateMessage, conn: &Cnx) {
-        // TODO(unwrap)
-        conn.send(update.into()).unwrap();
+    fn send_update(
+        &self,
+        update: UpdateMessage,
+        conn: &Cnx,
+    ) -> Result<(), Error> {
+        conn.send(update.into())
     }
 
     fn on_open_confirm(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
-        //TODO(unwrap)
-        match self.event_rx.recv().unwrap() {
+        let event = match self.event_rx.recv() {
+            Ok(event) => event,
+            Err(e) => {
+                err!(self; "on open confirm: event rx {e}");
+                return FsmState::OpenConfirm(pc);
+            }
+        };
+        match event {
             FsmEvent::Message(Message::KeepAlive) => {
                 self.clock.timers.hold_timer.reset();
                 self.clock.timers.hold_timer.enable();
@@ -672,7 +722,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             FsmEvent::Message(Message::Notification(m)) => {
                 wrn!(self; "notification received: {:#?}", m);
-                self.session.lock().unwrap().connect_retry_counter += 1;
+                lock!(self.session).connect_retry_counter += 1;
                 self.clock.timers.hold_timer.disable();
                 self.clock.timers.keepalive_timer.disable();
                 FsmState::Connect
@@ -688,7 +738,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn session_setup(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
-        let originated = self.db.get_originated4().unwrap();
+        let originated = match self.db.get_originated4() {
+            Ok(value) => value,
+            Err(e) => {
+                //TODO possible death loop. Should we just panic here?
+                err!(self; "failed to get originated from db: {e}");
+                return FsmState::SessionSetup(pc);
+            }
+        };
         let mut m = BTreeMap::<Ipv4Addr, Vec<Prefix4>>::new();
         for o in originated {
             match m.get_mut(&o.nexthop) {
@@ -701,12 +758,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
 
-        let mut fanout = self.fanout.write().unwrap();
+        let mut fanout = write_lock!(self.fanout);
         if fanout.is_empty() {
             fanout.add_egress(
                 self.neighbor.host.ip(),
                 crate::fanout::Egress {
                     event_tx: Some(self.event_tx.clone()),
+                    log: self.log.clone(),
                 },
             );
         }
@@ -731,19 +789,36 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             };
             for p in prefixes {
                 update.nlri.push(p.into());
-                self.db
-                    .add_origin4(Route4Key { prefix: p, nexthop })
-                    .unwrap();
+                if let Err(e) =
+                    self.db.add_origin4(Route4Key { prefix: p, nexthop })
+                {
+                    //TODO possible death loop. Should we just panic here?
+                    err!(self; "failed to add origin to db: {e}");
+                    return FsmState::SessionSetup(pc);
+                }
             }
             self.send_keepalive(&pc.conn);
-            self.fanout.read().unwrap().send_all(&update);
-            self.send_update(update, &pc.conn);
+            read_lock!(self.fanout).send_all(&update);
+            if let Err(e) = self.send_update(update, &pc.conn) {
+                err!(self; "sending update to peer failed {e}");
+                return self.exit_established(pc);
+            }
         }
         FsmState::Established(pc)
     }
 
     fn on_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
-        match self.event_rx.recv().unwrap() {
+        let event = match self.event_rx.recv() {
+            Ok(event) => event,
+            Err(e) => {
+                //TODO possible death loop. Should we just panic here? Is it
+                // even possible to recover from an error here as it likely
+                // means the channel is toast.
+                err!(self; "on established: event rx {e}");
+                return FsmState::Established(pc);
+            }
+        };
+        match event {
             FsmEvent::KeepaliveTimerExpires => {
                 self.send_keepalive(&pc.conn);
                 FsmState::Established(pc)
@@ -772,7 +847,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmState::Established(pc)
             }
             FsmEvent::Announce(update) => {
-                self.send_update(update, &pc.conn);
+                if let Err(e) = self.send_update(update, &pc.conn) {
+                    err!(self; "sending update to peer failed {e}");
+                    return self.exit_established(pc);
+                }
                 FsmState::Established(pc)
             }
             e => {
@@ -783,14 +861,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
-        self.session.lock().unwrap().connect_retry_counter += 1;
+        lock!(self.session).connect_retry_counter += 1;
         self.clock.timers.hold_timer.disable();
         self.clock.timers.keepalive_timer.disable();
 
-        self.fanout
-            .write()
-            .unwrap()
-            .remove_egress(self.neighbor.host.ip());
+        write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
 
         //TODO need to remove from Router::addr_to_session also
 
@@ -820,11 +895,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             };
             for p in prefixes {
                 update.withdrawn.push(p.into());
-                self.db
-                    .add_origin4(Route4Key { prefix: p, nexthop })
-                    .unwrap();
+                if let Err(e) =
+                    self.db.remove_origin4(Route4Key { prefix: p, nexthop })
+                {
+                    err!(self; "failed to remove origin {p} from db {e}");
+                }
             }
-            self.fanout.read().unwrap().send_all(&update);
+            read_lock!(self.fanout).send_all(&update);
         }
 
         FsmState::Connect
@@ -901,19 +978,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn fanout_update(&self, update: &UpdateMessage) {
-        let fanout = self.fanout.read().unwrap();
+        let fanout = read_lock!(self.fanout);
         fanout.send(self.neighbor.host.ip(), update);
     }
 
     pub fn state(&self) -> FsmStateKind {
-        *self.state.lock().unwrap()
+        *lock!(self.state)
     }
 
     pub fn remote_asn(&self) -> Option<u32> {
-        self.session.lock().unwrap().remote_asn
+        lock!(self.session).remote_asn
     }
 
     pub fn current_state_duration(&self) -> Duration {
-        self.last_state_change.lock().unwrap().elapsed()
+        lock!(self.last_state_change).elapsed()
     }
 }

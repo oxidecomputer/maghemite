@@ -32,12 +32,35 @@ macro_rules! wait_for_eq {
     };
 }
 
+macro_rules! parse {
+    ($x:expr, $err:expr) => {
+        $x.parse().expect($err)
+    };
+}
+macro_rules! ip {
+    ($x:expr) => {
+        parse!($x, "ip address")
+    };
+}
+
+macro_rules! cidr {
+    ($x:expr) => {
+        parse!($x, "ip cidr")
+    };
+}
+
+macro_rules! sockaddr {
+    ($x:expr) => {
+        parse!($x, "socket address")
+    };
+}
+
 #[test]
 fn test_basic_peering() {
     let (r1, _d1, r2, d2) = two_router_test_setup("basic_peering");
 
-    let r1_session = r1.get_session("2.0.0.1".parse().unwrap()).unwrap();
-    let r2_session = r2.get_session("1.0.0.1".parse().unwrap()).unwrap();
+    let r1_session = r1.get_session(ip!("2.0.0.1")).expect("get session one");
+    let r2_session = r2.get_session(ip!("1.0.0.1")).expect("get session two");
 
     // Give peer sessions a few seconds and ensure we have reached the
     // established state on both sides.
@@ -56,7 +79,8 @@ fn test_basic_peering() {
     spawn(move || {
         d2.run::<BgpListenerChannel>();
     });
-    r2.send_event(FsmEvent::ManualStart).unwrap();
+    r2.send_event(FsmEvent::ManualStart)
+        .expect("manual start session two");
 
     wait_for_eq!(r1_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_session.state(), FsmStateKind::Established);
@@ -67,19 +91,16 @@ fn test_basic_update() {
     let (r1, d1, r2, _d2) = two_router_test_setup("basic_update");
 
     // originate a prefix
-    r1.originate4(
-        "1.0.0.1".parse().unwrap(),
-        vec!["1.2.3.0/24".parse().unwrap()],
-    )
-    .unwrap();
+    r1.originate4(ip!("1.0.0.1"), vec![ip!("1.2.3.0/24")])
+        .expect("originate");
 
     // once we reach established the originated routes should have propagated
-    let r1_session = r1.get_session("2.0.0.1".parse().unwrap()).unwrap();
-    let r2_session = r2.get_session("1.0.0.1".parse().unwrap()).unwrap();
+    let r1_session = r1.get_session(ip!("2.0.0.1")).expect("get session one");
+    let r2_session = r2.get_session(ip!("1.0.0.1")).expect("get session two");
     wait_for_eq!(r1_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
-    let prefix: Prefix4 = "1.2.3.0/24".parse().unwrap();
+    let prefix: Prefix4 = cidr!("1.2.3.0/24");
 
     wait_for_eq!(r2.db.get_nexthop4(&prefix).is_empty(), false);
 
@@ -97,13 +118,13 @@ fn two_router_test_setup(
 ) -> (Arc<Router>, Arc<Dispatcher>, Arc<Router>, Arc<Dispatcher>) {
     let log = crate::log::init_file_logger(&format!("r1.{name}.log"));
 
-    std::fs::create_dir_all("/tmp").unwrap();
+    std::fs::create_dir_all("/tmp").expect("create tmp dir");
 
     // Router 1 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     let db_path = format!("/tmp/r1.{name}.db");
     let _ = std::fs::remove_dir_all(&db_path);
-    let db = rdb::Db::new(&db_path).unwrap();
+    let db = rdb::Db::new(&db_path).expect("create db");
 
     let a2s1 = Arc::new(Mutex::new(BTreeMap::new()));
     let d1 =
@@ -133,7 +154,7 @@ fn two_router_test_setup(
     r1.new_session(
         PeerConfig {
             name: "r2".into(),
-            host: "2.0.0.1:179".parse().unwrap(),
+            host: sockaddr!("2.0.0.1:179"),
             hold_time: 6,
             idle_hold_time: 6,
             delay_open: 0,
@@ -141,12 +162,15 @@ fn two_router_test_setup(
             keepalive: 3,
             resolution: 100,
         },
-        "1.0.0.1:179".parse().unwrap(),
+        sockaddr!("1.0.0.1:179"),
         r1_event_tx.clone(),
         event_rx,
     )
-    .unwrap();
-    r1_event_tx.send(FsmEvent::ManualStart).unwrap();
+    .expect("new session on router one");
+
+    r1_event_tx
+        .send(FsmEvent::ManualStart)
+        .expect("session manual start on router one");
 
     // Router 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -154,7 +178,7 @@ fn two_router_test_setup(
 
     let db_path = format!("/tmp/r2.{name}.db");
     let _ = std::fs::remove_dir_all(&db_path);
-    let db = rdb::Db::new(&db_path).unwrap();
+    let db = rdb::Db::new(&db_path).expect("create datastore for router 2");
 
     let a2s2 = Arc::new(Mutex::new(BTreeMap::new()));
     let d2 =
@@ -185,7 +209,7 @@ fn two_router_test_setup(
     r2.new_session(
         PeerConfig {
             name: "r1".into(),
-            host: "1.0.0.1:179".parse().unwrap(),
+            host: sockaddr!("1.0.0.1:179"),
             hold_time: 6,
             idle_hold_time: 6,
             delay_open: 0,
@@ -193,12 +217,15 @@ fn two_router_test_setup(
             keepalive: 3,
             resolution: 100,
         },
-        "2.0.0.1:179".parse().unwrap(),
+        sockaddr!("2.0.0.1:179"),
         r2_event_tx.clone(),
         event_rx,
     )
-    .unwrap();
-    r2_event_tx.send(FsmEvent::ManualStart).unwrap();
+    .expect("new session on router two");
+
+    r2_event_tx
+        .send(FsmEvent::ManualStart)
+        .expect("start session on router two");
 
     (r1, d1, r2, d2)
 }

@@ -122,6 +122,15 @@ pub enum Error {
 
     #[error("Self loop detected")]
     SelfLoopDetected,
+
+    #[error("Invalid address")]
+    InvalidAddress(String),
+
+    #[error("Datastore error {0}")]
+    Datastore(#[from] rdb::error::Error),
+
+    #[error("Internal communication error {0}")]
+    InternalCommunication(String),
 }
 
 impl<'a> From<nom::Err<(&'a [u8], nom::error::ErrorKind)>> for Error {

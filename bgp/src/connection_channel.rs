@@ -1,5 +1,6 @@
 use crate::connection::{BgpConnection, BgpListener};
 use crate::error::Error;
+use crate::lock;
 use crate::messages::Message;
 use crate::session::FsmEvent;
 use slog::debug;
@@ -51,7 +52,7 @@ impl Network {
 
     fn bind(&self, sa: SocketAddr) -> Listener {
         let (tx, rx) = std::sync::mpsc::channel();
-        self.endpoints.lock().unwrap().insert(sa, tx);
+        lock!(self.endpoints).insert(sa, tx);
         Listener { rx }
     }
 
@@ -61,7 +62,7 @@ impl Network {
         to: SocketAddr,
         ep: Endpoint<Message>,
     ) -> Result<(), Error> {
-        match self.endpoints.lock().unwrap().get(&to) {
+        match lock!(self.endpoints).get(&to) {
             None => return Err(Error::ChannelConnect),
             Some(sender) => {
                 sender
@@ -84,7 +85,13 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     where
         Self: Sized,
     {
-        let addr = addr.to_socket_addrs().unwrap().next().unwrap();
+        let addr = addr
+            .to_socket_addrs()
+            .map_err(|e| Error::InvalidAddress(e.to_string()))?
+            .next()
+            .ok_or(Error::InvalidAddress(
+                "at least one address required".into(),
+            ))?;
         let listener = NET.bind(addr);
         Ok(Self { listener, addr })
     }
@@ -98,7 +105,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         timeout: Duration,
     ) -> Result<BgpConnectionChannel, Error> {
         let (peer, endpoint) = self.listener.accept(timeout)?;
-        match addr_to_session.lock().unwrap().get(&peer.ip()) {
+        match lock!(addr_to_session).get(&peer.ip()) {
             Some(event_tx) => Ok(BgpConnectionChannel::with_conn(
                 self.addr,
                 peer,
@@ -122,19 +129,24 @@ pub struct BgpConnectionChannel {
 impl BgpConnection for BgpConnectionChannel {
     fn new(addr: Option<SocketAddr>, peer: SocketAddr, log: Logger) -> Self {
         Self {
-            addr: addr.unwrap(),
+            addr: addr
+                .expect("source address required for channel-based connection"),
             peer,
             conn_tx: Arc::new(Mutex::new(None)),
             log,
         }
     }
 
-    fn connect(&self, event_tx: Sender<FsmEvent<Self>>, timeout: Duration) {
+    fn connect(
+        &self,
+        event_tx: Sender<FsmEvent<Self>>,
+        timeout: Duration,
+    ) -> Result<(), Error> {
         debug!(self.log, "[{}] connecting", self.peer);
         let (local, remote) = channel();
         match NET.connect(self.addr, self.peer, remote) {
             Ok(()) => {
-                self.conn_tx.lock().unwrap().replace(local.tx);
+                lock!(self.conn_tx).replace(local.tx);
                 Self::recv(
                     self.peer,
                     local.rx,
@@ -142,16 +154,24 @@ impl BgpConnection for BgpConnectionChannel {
                     timeout,
                     self.log.clone(),
                 );
-                event_tx.send(FsmEvent::TcpConnectionConfirmed).unwrap();
+                event_tx.send(FsmEvent::TcpConnectionConfirmed).map_err(
+                    |e| {
+                        Error::InternalCommunication(format!(
+                            "fsm-send: tcp connection confirmed: {e}"
+                        ))
+                    },
+                )?;
+                Ok(())
             }
             Err(e) => {
-                error!(self.log, "connect: {e}");
+                error!(self.log, "connect: {e:?}");
+                Err(e)
             }
         }
     }
 
     fn send(&self, msg: Message) -> Result<(), Error> {
-        let guard = self.conn_tx.lock().unwrap();
+        let guard = lock!(self.conn_tx);
         match *guard {
             Some(ref ch) => {
                 ch.send(msg)
@@ -205,7 +225,12 @@ impl BgpConnectionChannel {
             match rx.recv() {
                 Ok(msg) => {
                     debug!(log, "[{peer}] recv: {msg:#?}");
-                    event_tx.send(FsmEvent::Message(msg)).unwrap();
+                    if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
+                        error!(
+                            log,
+                            "[{peer}] failed to send fsm message to sm: {e}"
+                        );
+                    }
                 }
                 Err(_e) => {
                     //TODO this goes a bit nuts .... sort out why

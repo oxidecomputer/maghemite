@@ -26,7 +26,11 @@ pub trait BgpConnection: Send + Clone {
     where
         Self: Sized;
 
-    fn connect(&self, event_tx: Sender<FsmEvent<Self>>, timeout: Duration)
+    fn connect(
+        &self,
+        event_tx: Sender<FsmEvent<Self>>,
+        timeout: Duration,
+    ) -> Result<(), Error>
     where
         Self: Sized;
 

@@ -1,6 +1,7 @@
 use crate::connection::BgpConnection;
 use crate::messages::UpdateMessage;
 use crate::session::FsmEvent;
+use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::mpsc::Sender;
@@ -21,6 +22,7 @@ impl<Cnx: BgpConnection> Default for Fanout<Cnx> {
 
 pub struct Egress<Cnx: BgpConnection> {
     pub event_tx: Option<Sender<FsmEvent<Cnx>>>,
+    pub log: Logger,
 }
 
 impl<Cnx: BgpConnection> Fanout<Cnx> {
@@ -55,7 +57,9 @@ impl<Cnx: BgpConnection> Fanout<Cnx> {
 impl<Cnx: BgpConnection> Egress<Cnx> {
     fn send(&self, update: &UpdateMessage) {
         if let Some(tx) = self.event_tx.as_ref() {
-            tx.send(FsmEvent::Announce(update.clone())).unwrap()
+            if let Err(e) = tx.send(FsmEvent::Announce(update.clone())) {
+                slog::error!(self.log, "egress fanout failed: {e}");
+            }
         }
     }
 }

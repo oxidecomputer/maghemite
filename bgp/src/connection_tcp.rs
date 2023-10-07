@@ -1,5 +1,6 @@
 use crate::connection::{BgpConnection, BgpListener};
 use crate::error::Error;
+use crate::lock;
 use crate::messages::{
     ErrorCode, ErrorSubcode, Header, Message, MessageType, NotificationMessage,
     OpenMessage, UpdateMessage,
@@ -34,7 +35,13 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     where
         Self: Sized,
     {
-        let addr = addr.to_socket_addrs().unwrap().next().unwrap();
+        let addr = addr
+            .to_socket_addrs()
+            .map_err(|e| Error::InvalidAddress(e.to_string()))?
+            .next()
+            .ok_or(Error::InvalidAddress(
+                "at least one address required".into(),
+            ))?;
         let listener = TcpListener::bind(addr)?;
         Ok(Self { listener, addr })
     }
@@ -48,14 +55,14 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         _timeout: Duration, //TODO implement
     ) -> Result<BgpConnectionTcp, Error> {
         let (conn, peer) = self.listener.accept()?;
-        match addr_to_session.lock().unwrap().get(&peer.ip()) {
+        match lock!(addr_to_session).get(&peer.ip()) {
             Some(event_tx) => Ok(BgpConnectionTcp::with_conn(
                 self.addr,
                 peer,
                 conn,
                 event_tx.clone(),
                 log,
-            )),
+            )?),
             None => Err(Error::UnknownPeer),
         }
     }
@@ -72,13 +79,14 @@ impl BgpConnection for BgpConnectionTcp {
         }
     }
 
-    fn connect(&self, event_tx: Sender<FsmEvent<Self>>, timeout: Duration) {
+    fn connect(
+        &self,
+        event_tx: Sender<FsmEvent<Self>>,
+        timeout: Duration,
+    ) -> Result<(), Error> {
         match TcpStream::connect_timeout(&self.peer, timeout) {
             Ok(new_conn) => {
-                self.conn
-                    .lock()
-                    .unwrap()
-                    .replace(new_conn.try_clone().unwrap());
+                lock!(self.conn).replace(new_conn.try_clone()?);
                 Self::recv(
                     self.peer,
                     event_tx.clone(),
@@ -87,16 +95,24 @@ impl BgpConnection for BgpConnectionTcp {
                     self.dropped.clone(),
                     self.log.clone(),
                 );
-                event_tx.send(FsmEvent::TcpConnectionConfirmed).unwrap();
+                event_tx.send(FsmEvent::TcpConnectionConfirmed).map_err(
+                    |e| {
+                        Error::InternalCommunication(format!(
+                            "fsm-send: tcp connection confirmed: {e}"
+                        ))
+                    },
+                )?;
+                Ok(())
             }
             Err(e) => {
                 error!(self.log, "connect error: {e}");
+                Err(Error::Io(e))
             }
-        };
+        }
     }
 
     fn send(&self, msg: Message) -> Result<(), Error> {
-        let mut guard = self.conn.lock().unwrap();
+        let mut guard = lock!(self.conn);
         match *guard {
             Some(ref mut ch) => Self::send_msg(ch, &self.log, msg),
             None => Err(Error::NotConnected),
@@ -122,23 +138,23 @@ impl BgpConnectionTcp {
         conn: TcpStream,
         event_tx: Sender<FsmEvent<Self>>,
         log: Logger,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let dropped = Arc::new(AtomicBool::new(false));
         //TODO timeout as param
         Self::recv(
             peer,
             event_tx,
-            conn.try_clone().unwrap(),
+            conn.try_clone()?,
             Duration::from_millis(100),
             dropped.clone(),
             log.clone(),
         );
-        Self {
+        Ok(Self {
             peer,
             conn: Arc::new(Mutex::new(Some(conn))),
             log,
             dropped,
-        }
+        })
     }
 
     fn recv(
@@ -152,7 +168,8 @@ impl BgpConnectionTcp {
         if !timeout.is_zero() {
             // Unwrap is OK here as this function only returns an error when a
             // zero timeout is supplied.
-            conn.set_read_timeout(Some(timeout)).unwrap();
+            conn.set_read_timeout(Some(timeout))
+                .unwrap_or_else(|_| panic!("set read timeout failed"));
         }
 
         slog::info!(log, "spawning recv loop");
@@ -226,7 +243,7 @@ impl BgpConnectionTcp {
         println!("HDR: {:#?}", hdr);
 
         let mut msgbuf = vec![0u8; (hdr.length - 19) as usize];
-        stream.read_exact(&mut msgbuf).unwrap();
+        stream.read_exact(&mut msgbuf)?;
 
         let msg = match hdr.typ {
             MessageType::Open => match OpenMessage::from_wire(&msgbuf) {

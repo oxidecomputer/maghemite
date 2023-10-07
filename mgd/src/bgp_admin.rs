@@ -1,8 +1,13 @@
 use crate::admin::HandlerContext;
-use bgp::config::{PeerConfig, RouterConfig};
-use bgp::connection_tcp::BgpConnectionTcp;
-use bgp::router::Router;
-use bgp::session::{Asn, FsmEvent, FsmStateKind};
+use crate::error::Error;
+use bgp::{
+    config::{PeerConfig, RouterConfig},
+    connection::BgpConnection,
+    connection_tcp::BgpConnectionTcp,
+    router::Router,
+    session::{Asn, FsmEvent, FsmStateKind},
+    BGP_PORT,
+};
 use dropshot::{
     endpoint, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
@@ -14,10 +19,13 @@ use serde::{Deserialize, Serialize};
 use slog::{info, Logger};
 use std::collections::{BTreeMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+
+const DEFAULT_BGP_LISTEN: SocketAddr =
+    SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, BGP_PORT, 0, 0));
 
 pub struct BgpContext {
     pub(crate) router: Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>,
@@ -177,16 +185,22 @@ pub struct PeerInfo {
     pub duration_millis: u64,
 }
 
+macro_rules! lock {
+    ($mtx:expr) => {
+        $mtx.lock().expect("lock mutex")
+    };
+}
+
 #[endpoint { method = GET, path = "/bgp/routers" }]
 pub async fn get_routers(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<Vec<RouterInfo>>, HttpError> {
-    let rs = ctx.context().bgp.router.lock().unwrap();
+    let rs = lock!(ctx.context().bgp.router);
     let mut result = Vec::new();
 
     for r in rs.values() {
         let mut peers = BTreeMap::new();
-        for s in r.sessions.lock().unwrap().values() {
+        for s in lock!(r.sessions).values() {
             let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
             peers.insert(
                 s.neighbor.host.ip(),
@@ -216,14 +230,14 @@ pub async fn ensure_router_handler(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    ensure_router(ctx.clone(), rq).await
+    Ok(ensure_router(ctx.clone(), rq).await?)
 }
 
 pub async fn ensure_router(
     ctx: Arc<HandlerContext>,
     rq: NewRouterRequest,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let mut guard = ctx.bgp.router.lock().unwrap();
+) -> Result<HttpResponseUpdatedNoContent, Error> {
+    let mut guard = lock!(ctx.bgp.router);
     if guard.get(&rq.asn).is_some() {
         return Ok(HttpResponseUpdatedNoContent());
     }
@@ -239,7 +253,7 @@ pub async fn new_router(
     let ctx = ctx.context();
     let rq = request.into_inner();
 
-    let mut guard = ctx.bgp.router.lock().unwrap();
+    let mut guard = lock!(ctx.bgp.router);
     if guard.get(&rq.asn).is_some() {
         return Err(HttpError::for_status(
             Some("bgp router with specified ASN exists".into()),
@@ -247,14 +261,14 @@ pub async fn new_router(
         ));
     }
 
-    add_router(ctx.clone(), rq, &mut guard)
+    Ok(add_router(ctx.clone(), rq, &mut guard)?)
 }
 
 pub(crate) fn add_router(
     ctx: Arc<HandlerContext>,
     rq: NewRouterRequest,
     routers: &mut BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+) -> Result<HttpResponseUpdatedNoContent, Error> {
     let cfg = RouterConfig {
         asn: Asn::FourOctet(rq.asn),
         id: rq.id,
@@ -288,8 +302,7 @@ pub(crate) fn add_router(
             id: rq.id,
             listen: rq.listen.clone(),
         },
-    )
-    .unwrap();
+    )?;
 
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -300,7 +313,7 @@ pub async fn delete_router(
     request: TypedBody<DeleteRouterRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
-    let mut routers = ctx.context().bgp.router.lock().unwrap();
+    let mut routers = lock!(ctx.context().bgp.router);
     if let Some(r) = routers.remove(&rq.asn) {
         r.shutdown()
     };
@@ -310,9 +323,9 @@ pub async fn delete_router(
 
 macro_rules! get_router {
     ($ctx:expr, $asn:expr) => {
-        $ctx.bgp.router.lock().unwrap().get(&$asn).ok_or(
-            HttpError::for_not_found(None, "no bgp router configured".into()),
-        )
+        lock!($ctx.bgp.router)
+            .get(&$asn)
+            .ok_or(Error::NotFound("no bgp router configured".into()))
     };
 }
 
@@ -324,64 +337,52 @@ pub async fn add_neighbor_handler(
     let log = ctx.context().log.clone();
     let rq = request.into_inner();
     let ctx = ctx.context();
-    add_neighbor(ctx.clone(), rq, log).await
+    add_neighbor(ctx.clone(), rq, log).await?;
+    Ok(HttpResponseUpdatedNoContent())
 }
 
 pub async fn add_neighbor(
     ctx: Arc<HandlerContext>,
     rq: AddNeighborRequest,
     log: Logger,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+) -> Result<(), Error> {
     info!(log, "add neighbor: {:#?}", rq);
 
     let (event_tx, event_rx) = channel();
 
-    match get_router!(&ctx, rq.asn)?.new_session(
+    get_router!(&ctx, rq.asn)?.new_session(
         rq.clone().into(),
-        "0.0.0.0:179".parse().unwrap(),
+        DEFAULT_BGP_LISTEN,
         event_tx.clone(),
         event_rx,
-    ) {
-        Ok(_) => {}
-        Err(bgp::error::Error::PeerExists) => {
-            return Err(HttpError::for_status(
-                Some("bgp peer with specified address exists".into()),
-                StatusCode::CONFLICT,
-            ));
-        }
-        Err(e) => {
-            return Err(HttpError::for_internal_error(format!("{:?}", e)))
-        }
-    }
-    event_tx.send(FsmEvent::ManualStart).unwrap();
+    )?;
 
-    ctx.db
-        .add_bgp_neighbor(rdb::BgpNeighborInfo {
-            asn: rq.asn,
-            name: rq.name.clone(),
-            host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
-            group: rq.group.clone(),
-        })
-        .unwrap(); //TODO unwrap
+    ctx.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
+        asn: rq.asn,
+        name: rq.name.clone(),
+        host: rq.host,
+        hold_time: rq.hold_time,
+        idle_hold_time: rq.idle_hold_time,
+        delay_open: rq.delay_open,
+        connect_retry: rq.connect_retry,
+        keepalive: rq.keepalive,
+        resolution: rq.resolution,
+        group: rq.group.clone(),
+    })?;
 
-    Ok(HttpResponseUpdatedNoContent())
+    start_bgp_session(&event_tx)?;
+
+    Ok(())
 }
 
 pub async fn remove_neighbor(
     ctx: Arc<HandlerContext>,
     asn: u32,
     addr: IpAddr,
-    log: Logger,
-) -> Result<HttpResponseDeleted, HttpError> {
-    info!(log, "remove neighbor: {}", addr);
+) -> Result<HttpResponseDeleted, Error> {
+    info!(ctx.log, "remove neighbor: {}", addr);
 
-    ctx.db.remove_bgp_neighbor(addr).unwrap(); //TODO unwrap
+    ctx.db.remove_bgp_neighbor(addr)?;
     get_router!(&ctx, asn)?.delete_session(addr);
 
     Ok(HttpResponseDeleted())
@@ -394,8 +395,7 @@ pub async fn delete_neighbor(
 ) -> Result<HttpResponseDeleted, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let log = ctx.log.clone();
-    remove_neighbor(ctx.clone(), rq.asn, rq.addr, log).await
+    Ok(remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
 }
 
 #[endpoint { method = PUT, path = "/bgp/neighbor" }]
@@ -403,24 +403,22 @@ pub async fn ensure_neighbor_handler(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddNeighborRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let log = ctx.context().log.clone();
     let rq = request.into_inner();
     let ctx = ctx.context();
-    ensure_neighbor(ctx.clone(), rq, log)
+    ensure_neighbor(ctx.clone(), rq)
 }
 
 pub fn ensure_neighbor(
     ctx: Arc<HandlerContext>,
     rq: AddNeighborRequest,
-    log: Logger,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    info!(log, "add neighbor: {:#?}", rq);
+    info!(ctx.log, "add neighbor: {:#?}", rq);
 
     let (event_tx, event_rx) = channel();
 
     match get_router!(&ctx, rq.asn)?.new_session(
         rq.into(),
-        "0.0.0.0:179".parse().unwrap(),
+        DEFAULT_BGP_LISTEN,
         event_tx.clone(),
         event_rx,
     ) {
@@ -432,7 +430,7 @@ pub fn ensure_neighbor(
             return Err(HttpError::for_internal_error(format!("{:?}", e)));
         }
     }
-    event_tx.send(FsmEvent::ManualStart).unwrap();
+    start_bgp_session(&event_tx)?;
 
     Ok(HttpResponseUpdatedNoContent())
 }
@@ -518,18 +516,6 @@ pub async fn bgp_apply(
     asns.sort();
     asns.dedup();
 
-    for asn in asns {
-        ensure_router(
-            ctx.context().clone(),
-            NewRouterRequest {
-                asn,
-                id: asn,
-                listen: "[::]:179".to_string(), //TODO hardcode
-            },
-        )
-        .await?;
-    }
-
     #[derive(Debug, Eq)]
     struct Nbr {
         addr: IpAddr,
@@ -552,7 +538,7 @@ pub async fn bgp_apply(
         .context()
         .db
         .get_bgp_neighbors()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?
+        .map_err(Error::Db)?
         .into_iter()
         .filter(|x| x.group == rq.peer_group)
         .collect();
@@ -580,8 +566,32 @@ pub async fn bgp_apply(
     info!(log, "adding {to_add:#?}");
     info!(log, "removing {to_delete:#?}");
 
+    let mut nbr_config = Vec::new();
     for nbr in to_add {
-        let cfg = rq.peers.iter().find(|x| x.host.ip() == nbr.addr).unwrap();
+        let cfg = rq
+            .peers
+            .iter()
+            .find(|x| x.host.ip() == nbr.addr)
+            .ok_or(Error::NotFound(nbr.addr.to_string()))?;
+        nbr_config.push((nbr, cfg));
+    }
+
+    // TODO all the db modification that happens below needs to happen in a
+    // transaction.
+
+    for asn in asns {
+        ensure_router(
+            ctx.context().clone(),
+            NewRouterRequest {
+                asn,
+                id: asn,
+                listen: DEFAULT_BGP_LISTEN.to_string(), //TODO as parameter
+            },
+        )
+        .await?;
+    }
+
+    for (nbr, cfg) in nbr_config {
         add_neighbor(
             ctx.context().clone(),
             AddNeighborRequest::from_bgp_peer_config(
@@ -595,13 +605,12 @@ pub async fn bgp_apply(
     }
 
     for nbr in to_delete {
-        remove_neighbor(ctx.context().clone(), nbr.asn, nbr.addr, log.clone())
-            .await?;
+        remove_neighbor(ctx.context().clone(), nbr.asn, nbr.addr).await?;
 
-        let mut routers = ctx.context().bgp.router.lock().unwrap();
+        let mut routers = lock!(ctx.context().bgp.router);
         let mut remove = false;
         if let Some(r) = routers.get(&nbr.asn) {
-            remove = r.sessions.lock().unwrap().is_empty();
+            remove = lock!(r.sessions).is_empty();
         }
         if remove {
             if let Some(r) = routers.remove(&nbr.asn) {
@@ -620,4 +629,14 @@ pub async fn bgp_apply(
     }
 
     Ok(HttpResponseUpdatedNoContent())
+}
+
+fn start_bgp_session<Cnx: BgpConnection>(
+    event_tx: &Sender<FsmEvent<Cnx>>,
+) -> Result<(), Error> {
+    event_tx.send(FsmEvent::ManualStart).map_err(|e| {
+        Error::InternalCommunicationError(format!(
+            "failed to start bgp session {e}",
+        ))
+    })
 }
