@@ -1,70 +1,84 @@
 //! The routing database (rdb).
-//! TODO update this comment
 //!
-//! ## Structure
-//!
-//! The rdb is a key-value store for routing information. There are a
-//! pre-defined set of keys for routing elements such as routes and and
-//! nexthops. Each key may exist in multiple key spaces. For example in one
-//! keyspace a route key may map to a nexthop, and in another the route key may
-//! map to a set of BGP attributes.
-//!
-//! ### Key Spaces
-//!
-//! - nexthop:       /:nexthop/:prefix          -> ()
-//! - bgp:           /:nexthop/:prefix          -> BgpAttributes
-//! - metrics:       /:nexthop:prefix:/:metricy -> u64
-//! - bfd:           /:nexthop                  -> Status
-//! - import-policy: /:peer/:prefix/:tag        -> Policy
-//! - export-policy: /:peer/:prefix/:tag        -> Policy
-//!
-
-// TODO: break out key spaces into
-// - inbound RIB
-// - local RIB
-// - outbound RIB
-
-const BGP_ORIGIN: &str = "bgp_origin";
-const BGP_ROUTER: &str = "bgp_router";
-const BGP_NEIGHBOR: &str = "bgp_neighbor";
-
+//! This is the maghmite routing database. The routing database holds both
+//! volatile and non-volatile information. Non-volatile information is stored
+//! in a sled key-value store that is persisted to disk via flush operations.
+//! Volatile information is stored in in-memory data structures such as hash
+//! sets.
 use crate::error::Error;
 use crate::types::*;
+use crate::{lock, read_lock, write_lock};
+use slog::{error, Logger};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 
+/// The handle used to open a persistent key-value tree for BGP origin
+/// information.
+const BGP_ORIGIN: &str = "bgp_origin";
+
+/// The handle used to open a persistent key-value tree for BGP router
+/// information.
+const BGP_ROUTER: &str = "bgp_router";
+
+/// The handle used to open a persistent key-value tree for BGP neighbor
+/// information.
+const BGP_NEIGHBOR: &str = "bgp_neighbor";
+
+/// The central routing information base. Both persistent an volatile route
+/// information is managed through this structure.
 #[derive(Clone)]
 pub struct Db {
+    /// A sled database handle where persistent routing information is stored.
     persistent: sled::Db,
+
+    /// Routes imported via dynamic routing protocols. These are volatile.
     imported: Arc<Mutex<HashSet<Route4ImportKey>>>,
+
+    /// A generation number for the overall data store.
     generation: Arc<AtomicU64>,
-    watchers: Arc<RwLock<Vec<Sender<ChangeSet>>>>,
+
+    /// A set of watchers that are notified when changes to the data store occur.
+    watchers: Arc<RwLock<Vec<Watcher>>>,
+
+    log: Logger,
 }
 unsafe impl Sync for Db {}
 unsafe impl Send for Db {}
 
+#[derive(Clone)]
+struct Watcher {
+    tag: String,
+    sender: Sender<ChangeSet>,
+}
+
 //TODO we need bulk operations with atomic semantics here.
 impl Db {
-    pub fn new(path: &str) -> Result<Self, Error> {
+    /// Create a new routing database that stores persistent data at `path`.
+    pub fn new(path: &str, log: Logger) -> Result<Self, Error> {
         Ok(Self {
             persistent: sled::open(path)?,
             imported: Arc::new(Mutex::new(HashSet::new())),
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
+            log,
         })
     }
 
-    pub fn watch(&self, s: Sender<ChangeSet>) {
-        self.watchers.write().unwrap().push(s);
+    /// Register a routing databse watcher.
+    pub fn watch(&self, tag: String, sender: Sender<ChangeSet>) {
+        write_lock!(self.watchers).push(Watcher { tag, sender });
     }
 
     fn notify(&self, c: ChangeSet) {
-        for w in self.watchers.read().unwrap().iter() {
-            if let Err(_e) = w.send(c.clone()) {
-                //TODO log
+        for Watcher { tag, sender } in read_lock!(self.watchers).iter() {
+            if let Err(e) = sender.send(c.clone()) {
+                error!(
+                    self.log,
+                    "failed to send notification to watcher '{tag}': {e}"
+                );
             }
         }
     }
@@ -106,14 +120,39 @@ impl Db {
         let tree = self.persistent.open_tree(BGP_ROUTER)?;
         let result = tree
             .scan_prefix(vec![])
-            .map(|item| {
-                // TODO don't unwrap
-                let (key, value) = item.unwrap();
-                let key = String::from_utf8_lossy(&key).parse().unwrap();
+            .filter_map(|item| {
+                let (key, value) = match item {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error fetching bgp router entry: {e}"
+                        );
+                        return None;
+                    }
+                };
+                let key = match String::from_utf8_lossy(&key).parse() {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error parsing bgp router entry key: {e}"
+                        );
+                        return None;
+                    }
+                };
                 let value = String::from_utf8_lossy(&value);
-                let value: BgpRouterInfo =
-                    serde_json::from_str(&value).unwrap();
-                (key, value)
+                let value: BgpRouterInfo = match serde_json::from_str(&value) {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error parsing bgp router entry value: {e}"
+                        );
+                        return None;
+                    }
+                };
+                Some((key, value))
             })
             .collect();
         Ok(result)
@@ -141,13 +180,30 @@ impl Db {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
         let result = tree
             .scan_prefix(vec![])
-            .map(|item| {
-                // TODO don't unwrap
-                let (_key, value) = item.unwrap();
+            .filter_map(|item| {
+                let (_key, value) = match item {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error fetching bgp neighbor entry: {e}"
+                        );
+                        return None;
+                    }
+                };
                 let value = String::from_utf8_lossy(&value);
-                let value: BgpNeighborInfo =
-                    serde_json::from_str(&value).unwrap();
-                value
+                let value: BgpNeighborInfo = match serde_json::from_str(&value)
+                {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error parsing bgp neighbor entry value: {e}"
+                        );
+                        return None;
+                    }
+                };
+                Some(value)
             })
             .collect();
         Ok(result)
@@ -168,19 +224,35 @@ impl Db {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         let result = tree
             .scan_prefix(vec![])
-            .map(|item| {
-                let (key, _) = item.unwrap();
+            .filter_map(|item| {
+                let (key, _value) = match item {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error fetching bgp origin entry: {e}"
+                        );
+                        return None;
+                    }
+                };
                 let key = String::from_utf8_lossy(&key);
-                key.parse().unwrap()
+                Some(match key.parse() {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error parsing bgp origin entry value: {e}"
+                        );
+                        return None;
+                    }
+                })
             })
             .collect();
         Ok(result)
     }
 
     pub fn get_nexthop4(&self, prefix: &Prefix4) -> Vec<Route4ImportKey> {
-        self.imported
-            .lock()
-            .unwrap()
+        lock!(self.imported)
             .iter()
             .filter(|x| prefix == &x.prefix)
             .cloned()
@@ -188,17 +260,17 @@ impl Db {
     }
 
     pub fn get_imported4(&self) -> Vec<Route4ImportKey> {
-        self.imported.lock().unwrap().clone().into_iter().collect()
+        lock!(self.imported).clone().into_iter().collect()
     }
 
     pub fn set_nexthop4(&self, r: Route4ImportKey) {
-        self.imported.lock().unwrap().insert(r);
+        lock!(self.imported).insert(r);
         let g = self.generation.fetch_add(1, Ordering::SeqCst);
         self.notify(ChangeSet::from_import(ImportChangeSet::added([r]), g + 1));
     }
 
     pub fn remove_nexthop4(&self, r: Route4ImportKey) {
-        self.imported.lock().unwrap().remove(&r);
+        lock!(self.imported).remove(&r);
         let g = self.generation.fetch_add(1, Ordering::SeqCst);
         self.notify(ChangeSet::from_import(
             ImportChangeSet::removed([r]),
@@ -207,7 +279,7 @@ impl Db {
     }
 
     pub fn remove_peer_nexthop4(&self, id: u32) -> Vec<Route4ImportKey> {
-        let mut imported = self.imported.lock().unwrap();
+        let mut imported = lock!(self.imported);
         //TODO do in one pass instead of two
         let result = imported.iter().filter(|x| x.id == id).copied().collect();
         imported.retain(|x| x.id != id);

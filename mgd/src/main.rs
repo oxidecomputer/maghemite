@@ -62,7 +62,7 @@ async fn run(args: RunArgs) {
     let log = init_logger();
 
     let bgp = init_bgp(&args, &log);
-    let db = rdb::Db::new(&format!("{}/rdb", args.data_dir))
+    let db = rdb::Db::new(&format!("{}/rdb", args.data_dir), log.clone())
         .expect("open datastore file");
 
     let context = Arc::new(HandlerContext {

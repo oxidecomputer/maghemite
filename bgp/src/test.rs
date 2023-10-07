@@ -124,7 +124,7 @@ fn two_router_test_setup(
 
     let db_path = format!("/tmp/r1.{name}.db");
     let _ = std::fs::remove_dir_all(&db_path);
-    let db = rdb::Db::new(&db_path).expect("create db");
+    let db = rdb::Db::new(&db_path, log.clone()).expect("create db");
 
     let a2s1 = Arc::new(Mutex::new(BTreeMap::new()));
     let d1 =
@@ -178,7 +178,8 @@ fn two_router_test_setup(
 
     let db_path = format!("/tmp/r2.{name}.db");
     let _ = std::fs::remove_dir_all(&db_path);
-    let db = rdb::Db::new(&db_path).expect("create datastore for router 2");
+    let db = rdb::Db::new(&db_path, log.clone())
+        .expect("create datastore for router 2");
 
     let a2s2 = Arc::new(Mutex::new(BTreeMap::new()));
     let d2 =

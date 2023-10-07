@@ -9,14 +9,14 @@ use std::str::FromStr;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 
-const MG_LOWER_DPD_TAG: &str = "mg-lower";
+const MG_LOWER_TAG: &str = "mg-lower";
 
 pub fn run(db: Db, log: Logger, rt: Arc<tokio::runtime::Handle>) {
     let (tx, rx) = channel();
 
     // start the db watcher first so we catch any changes that may occur while
     // we're initializing
-    db.watch(tx);
+    db.watch(MG_LOWER_TAG.into(), tx);
 
     // initialize the underlying router with the current state
     let dpd = new_dpd_client(&log);
@@ -80,7 +80,7 @@ fn initialize(
         .unwrap()
         .items
         .iter()
-        .filter(|x| x.tag == MG_LOWER_DPD_TAG)
+        .filter(|x| x.tag == MG_LOWER_TAG)
         .map(|x| RouteHash(x.clone()))
         .collect();
 
@@ -178,7 +178,7 @@ fn db_route_to_dendrite_route(
         let link = dpd_client::types::LinkId(0);
 
         result.push(dpd_client::types::Route {
-            tag: MG_LOWER_DPD_TAG.into(),
+            tag: MG_LOWER_TAG.into(),
             cidr: dpd_client::Cidr::V4(dpd_client::Ipv4Cidr {
                 prefix: r.prefix.value,
                 prefix_len: r.prefix.length,
@@ -227,7 +227,7 @@ fn handle_change(
 
 fn new_dpd_client(log: &Logger) -> DpdClient {
     let client_state = dpd_client::ClientState {
-        tag: MG_LOWER_DPD_TAG.into(),
+        tag: MG_LOWER_TAG.into(),
         log: log.clone(),
     };
     DpdClient::new(
