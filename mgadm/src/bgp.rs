@@ -82,16 +82,28 @@ pub struct Neighbor {
     /// Neighbor BGP TCP port.
     #[arg(long, default_value_t = 179)]
     port: u16,
-    #[arg(long, default_value_t = 30)]
+
+    /// How long to hold connection without keepalive (s).
+    #[arg(long, default_value_t = 6)]
     hold_time: u64,
-    #[arg(long, default_value_t = 30)]
+
+    /// How long a peer is kept in idle before automatic restart (s).
+    #[arg(long, default_value_t = 6)]
     idle_hold_time: u64,
+
+    /// How long to wait between connection retries (s).
     #[arg(long, default_value_t = 5)]
     connect_retry_time: u64,
-    #[arg(long, default_value_t = 20)]
+
+    /// Interval for sending keepalive messages (s).
+    #[arg(long, default_value_t = 2)]
     keepalive_time: u64,
-    #[arg(long, default_value_t = 10)]
+
+    /// How long to delay sending an open message (s).
+    #[arg(long, default_value_t = 0)]
     delay_open_time: u64,
+
+    /// Blocking interval for message loops (ms).
     #[arg(long, default_value_t = 100)]
     resolution: u64,
 }
@@ -183,16 +195,44 @@ async fn get_imported(c: Client, asn: u32) {
     let imported = c
         .get_imported4(&types::GetImported4Request { asn })
         .await
-        .unwrap();
-    println!("{:#?}", imported);
+        .unwrap()
+        .into_inner();
+
+    let mut tw = TabWriter::new(stdout());
+    writeln!(
+        &mut tw,
+        "{}\t{}\t{}",
+        "Prefix".dimmed(),
+        "Nexthop".dimmed(),
+        "Peer Id".dimmed()
+    )
+    .unwrap();
+
+    for route in &imported {
+        let id = Ipv4Addr::from(route.id);
+        writeln!(&mut tw, "{}\t{}\t{}", route.prefix, route.nexthop, id)
+            .unwrap();
+    }
+
+    tw.flush().unwrap();
 }
 
 async fn get_originated(c: Client, asn: u32) {
     let originated = c
         .get_originated4(&types::GetOriginated4Request { asn })
         .await
+        .unwrap()
+        .into_inner();
+
+    let mut tw = TabWriter::new(stdout());
+    writeln!(&mut tw, "{}\t{}", "Prefix".dimmed(), "Nexthop".dimmed(),)
         .unwrap();
-    println!("{:#?}", originated);
+
+    for route in &originated {
+        writeln!(&mut tw, "{}\t{}", route.prefix, route.nexthop).unwrap();
+    }
+
+    tw.flush().unwrap();
 }
 
 async fn add_neighbor(nbr: Neighbor, c: Client) {
