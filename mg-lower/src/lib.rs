@@ -185,7 +185,7 @@ fn db_route_to_dendrite_route(
             }),
             switch_port,
             link,
-            nexthop: Some(r.nexthop.into()),
+            nexthop: r.nexthop.into(),
             vid: None,
         });
     }
