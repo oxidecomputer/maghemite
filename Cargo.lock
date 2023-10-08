@@ -694,7 +694,7 @@ dependencies = [
  "hostname",
  "hyper",
  "ispf",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=get-route)",
+ "libnet",
  "schemars",
  "serde",
  "serde_json",
@@ -745,7 +745,7 @@ dependencies = [
  "ddm",
  "dpd-client",
  "hostname",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=get-route)",
+ "libnet",
  "slog",
  "slog-async",
  "slog-bunyan",
@@ -1656,7 +1656,7 @@ dependencies = [
  "futures",
  "home",
  "libc",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
+ "libnet",
  "portpicker",
  "propolis-client",
  "propolis-server-config",
@@ -1683,25 +1683,6 @@ name = "libm"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
-
-[[package]]
-name = "libnet"
-version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys?branch=get-route#cb16975be26180a70810e985348252532bbc2aaa"
-dependencies = [
- "anyhow",
- "cfg-if",
- "colored",
- "dlpi",
- "libc",
- "num_enum",
- "nvpair",
- "nvpair-sys",
- "rusty-doors",
- "socket2 0.4.9",
- "thiserror",
- "tracing",
-]
 
 [[package]]
 name = "libnet"
@@ -1833,7 +1814,7 @@ dependencies = [
  "anyhow",
  "common",
  "dpd-client",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=get-route)",
+ "libnet",
  "rdb",
  "slog",
  "tokio",
@@ -1854,7 +1835,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ddm-admin-client",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=get-route)",
+ "libnet",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -4249,7 +4230,7 @@ name = "util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=get-route)",
+ "libnet",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -4781,7 +4762,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/falcon?branch=main#2821ee761abe164ed31536f3e4502ea19b18eefe"
 dependencies = [
  "anyhow",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
+ "libnet",
  "slog",
  "slog-async",
  "slog-envlogger",
