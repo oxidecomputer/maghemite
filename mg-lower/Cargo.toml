@@ -11,3 +11,4 @@ dendrite-common.workspace = true
 slog.workspace = true
 libnet.workspace = true
 tokio.workspace = true
+thiserror.workspace = true

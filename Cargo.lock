@@ -1817,6 +1817,7 @@ dependencies = [
  "libnet",
  "rdb",
  "slog",
+ "thiserror",
  "tokio",
 ]
 
