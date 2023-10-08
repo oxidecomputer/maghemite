@@ -4,26 +4,37 @@ use num_enum::TryFromPrimitiveError;
 pub enum Error {
     #[error("too small")]
     TooSmall,
+
     #[error("too large")]
     TooLarge,
+
     #[error("no marker")]
     NoMarker,
+
     #[error("invalid message type")]
     InvalidMessageType(u8),
+
     #[error("bad version")]
     BadVersion,
+
     #[error("reserved capability")]
     ReservedCapability,
+
     #[error("reserved capability code")]
     ReservedCapabilityCode,
+
     #[error("reserved optional parameter")]
     ReservedOptionalParameter,
+
     #[error("unassigned")]
     Unassigned(u8),
+
     #[error("experimental")]
     Experimental,
+
     #[error("invalid code")]
     InvalidCode(u8),
+
     #[error("bad length")]
     BadLength { expected: u8, found: u8 },
 

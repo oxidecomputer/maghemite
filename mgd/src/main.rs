@@ -124,6 +124,7 @@ fn start_bgp_routers(
         )
         .unwrap_or_else(|_| panic!("add BGP router {asn} {info:#?}"));
     }
+    drop(guard);
 
     for nbr in neighbors {
         bgp_admin::ensure_neighbor(

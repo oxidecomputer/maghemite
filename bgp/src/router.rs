@@ -7,9 +7,9 @@ use crate::messages::{
     As4PathSegment, AsPathType, PathAttributeValue, PathOrigin, Prefix,
     UpdateMessage,
 };
-use crate::session::{Asn, FsmEvent, NeighborInfo, Session, SessionRunner};
+use crate::session::{FsmEvent, NeighborInfo, Session, SessionRunner};
 use crate::{lock, read_lock, write_lock};
-use rdb::{Db, Route4Key};
+use rdb::{Asn, Db, Route4Key};
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -106,6 +106,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
 
         a2s.insert(peer.host.ip(), event_tx.clone());
+        drop(a2s);
 
         let neighbor = NeighborInfo {
             name: peer.name.clone(),

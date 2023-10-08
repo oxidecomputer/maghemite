@@ -9,7 +9,7 @@ use crate::messages::{
 };
 use crate::{dbg, err, inf, read_lock, wrn};
 use crate::{lock, write_lock};
-use rdb::{Db, Prefix4, Route4Key};
+use rdb::{Asn, Db, Prefix4, Route4Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -70,7 +70,6 @@ impl<Cnx: BgpConnection> Display for FsmState<Cnx> {
     }
 }
 
-//XXX
 #[derive(
     Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
 )]
@@ -329,34 +328,6 @@ impl Session {
     }
 }
 
-//XXX move to rdb
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum Asn {
-    TwoOctet(u16),
-    FourOctet(u32),
-}
-
-impl std::fmt::Display for Asn {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            Asn::TwoOctet(asn) => write!(f, "{}", asn),
-            Asn::FourOctet(asn) => write!(f, "{}", asn),
-        }
-    }
-}
-
-impl From<u32> for Asn {
-    fn from(value: u32) -> Asn {
-        Asn::FourOctet(value)
-    }
-}
-
-impl From<u16> for Asn {
-    fn from(value: u16) -> Asn {
-        Asn::TwoOctet(value)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct NeighborInfo {
     pub name: String,
@@ -366,25 +337,19 @@ pub struct NeighborInfo {
 pub struct SessionRunner<Cnx: BgpConnection> {
     pub event_tx: Sender<FsmEvent<Cnx>>,
     pub neighbor: NeighborInfo,
-
     session: Arc<Mutex<Session>>,
     event_rx: Receiver<FsmEvent<Cnx>>,
-
     state: Arc<Mutex<FsmStateKind>>,
     last_state_change: Mutex<Instant>,
-
     asn: Asn,
     id: u32,
-
-    log: Logger,
-
     clock: Clock,
     bind_addr: Option<SocketAddr>,
     shutdown: AtomicBool,
     running: AtomicBool,
-
     db: Db,
     fanout: Arc<RwLock<Fanout<Cnx>>>,
+    log: Logger,
 }
 
 unsafe impl<Cnx: BgpConnection> Send for SessionRunner<Cnx> {}
@@ -640,8 +605,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn open_is_valid(&self, om: &OpenMessage) -> bool {
-        //TODO
-
         let mut remote_asn = om.asn as u32;
         for p in &om.parameters {
             if let OptionalParameter::Capabilities(caps) = p {
@@ -866,8 +829,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.clock.timers.keepalive_timer.disable();
 
         write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
-
-        //TODO need to remove from Router::addr_to_session also
 
         // remove peer prefixes from db
         let withdraw = self.db.remove_peer_nexthop4(pc.id);

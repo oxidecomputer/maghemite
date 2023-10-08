@@ -114,7 +114,7 @@ impl BgpConnection for BgpConnectionTcp {
     fn send(&self, msg: Message) -> Result<(), Error> {
         let mut guard = lock!(self.conn);
         match *guard {
-            Some(ref mut ch) => Self::send_msg(ch, &self.log, msg),
+            Some(ref mut stream) => Self::send_msg(stream, &self.log, msg),
             None => Err(Error::NotConnected),
         }
     }
@@ -200,7 +200,7 @@ impl BgpConnectionTcp {
         stream: &mut TcpStream,
         dropped: Arc<AtomicBool>,
     ) -> std::io::Result<Header> {
-        let mut buf = [0u8; 19];
+        let mut buf = [0u8; Header::WIRE_SIZE];
         let mut i = 0;
         loop {
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {
@@ -220,7 +220,7 @@ impl BgpConnectionTcp {
                 }
             }?;
             i += n;
-            if i < 19 {
+            if i < Header::WIRE_SIZE {
                 if i > 0 {
                     println!("i={}", i);
                 }
@@ -242,7 +242,7 @@ impl BgpConnectionTcp {
         let hdr = Self::recv_header(stream, dropped.clone())?;
         println!("HDR: {:#?}", hdr);
 
-        let mut msgbuf = vec![0u8; (hdr.length - 19) as usize];
+        let mut msgbuf = vec![0u8; usize::from(hdr.length) - Header::WIRE_SIZE];
         stream.read_exact(&mut msgbuf)?;
 
         let msg = match hdr.typ {
@@ -322,7 +322,9 @@ impl BgpConnectionTcp {
         debug!(log, "sending {:#?}", msg);
         let msg_buf = msg.to_wire()?;
         let header = Header {
-            length: msg_buf.len() as u16 + 19,
+            length: (msg_buf.len() + Header::WIRE_SIZE)
+                .try_into()
+                .map_err(|_| Error::TooLarge)?,
             typ: MessageType::from(&msg),
         };
         let mut buf = header.to_wire().to_vec();

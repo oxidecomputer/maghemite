@@ -150,10 +150,31 @@ pub struct BgpAttributes6 {
     pub path: Vec<Asn>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Asn {
     TwoOctet(u16),
     FourOctet(u32),
+}
+
+impl std::fmt::Display for Asn {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
+        match self {
+            Asn::TwoOctet(asn) => write!(f, "{}", asn),
+            Asn::FourOctet(asn) => write!(f, "{}", asn),
+        }
+    }
+}
+
+impl From<u32> for Asn {
+    fn from(value: u32) -> Asn {
+        Asn::FourOctet(value)
+    }
+}
+
+impl From<u16> for Asn {
+    fn from(value: u16) -> Asn {
+        Asn::TwoOctet(value)
+    }
 }
 
 #[derive(Serialize, Deserialize)]

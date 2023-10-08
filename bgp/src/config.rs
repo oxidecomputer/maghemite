@@ -1,4 +1,4 @@
-use crate::session::Asn;
+use rdb::Asn;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;

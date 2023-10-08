@@ -5,7 +5,7 @@ use bgp::{
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
     router::Router,
-    session::{Asn, FsmEvent, FsmStateKind},
+    session::{FsmEvent, FsmStateKind},
     BGP_PORT,
 };
 use dropshot::{
@@ -13,7 +13,9 @@ use dropshot::{
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
 use http::status::StatusCode;
-use rdb::{BgpRouterInfo, PolicyAction, Prefix4, Route4ImportKey, Route4Key};
+use rdb::{
+    Asn, BgpRouterInfo, PolicyAction, Prefix4, Route4ImportKey, Route4Key,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{info, Logger};

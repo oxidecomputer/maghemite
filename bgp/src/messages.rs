@@ -120,6 +120,8 @@ pub struct Header {
 const MARKER: [u8; 16] = [0xFFu8; 16];
 
 impl Header {
+    pub const WIRE_SIZE: usize = 19;
+
     /// Create a new BGP message header. Length must be between 19 and 4096 per
     /// RFC 4271 §4.1.
     pub fn new(length: u16, typ: MessageType) -> Result<Header, Error> {

@@ -1,7 +1,7 @@
 use crate::config::{PeerConfig, RouterConfig};
 use crate::connection_channel::{BgpConnectionChannel, BgpListenerChannel};
-use crate::session::{Asn, FsmStateKind};
-use rdb::Prefix4;
+use crate::session::FsmStateKind;
+use rdb::{Asn, Prefix4};
 use std::collections::BTreeMap;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
