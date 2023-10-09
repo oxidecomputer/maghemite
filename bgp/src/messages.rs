@@ -3,7 +3,7 @@ use nom::{
     bytes::complete::{tag, take},
     number::complete::{be_u16, be_u32, be_u8, u8 as parse_u8},
 };
-use num_enum::TryFromPrimitive;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::net::{IpAddr, Ipv4Addr};
 
 /// BGP Message types.
@@ -468,6 +468,22 @@ impl UpdateMessage {
         }
         None
     }
+
+    pub fn graceful_shutdown(&self) -> bool {
+        for a in &self.path_attributes {
+            match &a.value {
+                PathAttributeValue::Communities(communities) => {
+                    for c in communities {
+                        if *c == Community::GracefulShutdown {
+                            return true;
+                        }
+                    }
+                }
+                _ => continue,
+            }
+        }
+        false
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -570,12 +586,23 @@ pub struct PathAttribute {
 impl From<PathAttributeValue> for PathAttribute {
     fn from(v: PathAttributeValue) -> Self {
         let flags = match v {
-            PathAttributeValue::Origin(_) => PathAttributeFlags::Transitive,
-            PathAttributeValue::AsPath(_) => PathAttributeFlags::Transitive,
-            PathAttributeValue::As4Path(_) => PathAttributeFlags::Transitive,
-            PathAttributeValue::NextHop(_) => PathAttributeFlags::Transitive,
-            _ => PathAttributeFlags::Optional,
-        } as u8;
+            PathAttributeValue::Origin(_) => {
+                PathAttributeFlags::Transitive as u8
+            }
+            PathAttributeValue::AsPath(_) => {
+                PathAttributeFlags::Transitive as u8
+            }
+            PathAttributeValue::As4Path(_) => {
+                PathAttributeFlags::Transitive as u8
+            }
+            PathAttributeValue::NextHop(_) => {
+                PathAttributeFlags::Transitive as u8
+            }
+            PathAttributeValue::Communities(_) => {
+                PathAttributeFlags::Optional | PathAttributeFlags::Transitive
+            }
+            _ => PathAttributeFlags::Optional as u8,
+        };
         Self {
             typ: PathAttributeType {
                 flags,
@@ -643,7 +670,7 @@ impl PathAttributeType {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive)]
 #[repr(u8)]
 pub enum PathAttributeFlags {
     Optional = 0b10000000,
@@ -677,6 +704,7 @@ pub enum PathAttributeTypeCode {
     LocalPref = 5,
     AtomicAggregate = 6,
     Aggregator = 7,
+    Communities = 8,
 
     /// RFC 6793
     As4Path = 17,
@@ -697,6 +725,9 @@ impl From<PathAttributeValue> for PathAttributeTypeCode {
             }
             PathAttributeValue::Aggregator(_) => {
                 PathAttributeTypeCode::Aggregator
+            }
+            PathAttributeValue::Communities(_) => {
+                PathAttributeTypeCode::Communities
             }
             /* TODO according to RFC 4893 we do not have this as an explicit
              * attribute type when 4-byte ASNs have been negotiated - but are
@@ -723,6 +754,7 @@ pub enum PathAttributeValue {
     MultiExitDisc(u32),
     LocalPref(u32),
     Aggregator([u8; 6]),
+    Communities(Vec<Community>),
     As4Path(Vec<As4PathSegment>),
     As4Aggregator([u8; 8]),
     //MpReachNlri(MpReachNlri), //TODO for IPv6
@@ -751,6 +783,13 @@ impl PathAttributeValue {
                 let mut buf = Vec::new();
                 for s in segments {
                     buf.extend_from_slice(&s.to_wire()?);
+                }
+                Ok(buf)
+            }
+            Self::Communities(communities) => {
+                let mut buf = Vec::new();
+                for community in communities {
+                    buf.extend_from_slice(&u32::from(*community).to_be_bytes());
                 }
                 Ok(buf)
             }
@@ -801,9 +840,50 @@ impl PathAttributeValue {
                 }
                 Ok(PathAttributeValue::As4Path(segments))
             }
+            PathAttributeTypeCode::Communities => {
+                let mut communities = Vec::new();
+                loop {
+                    if input.is_empty() {
+                        break;
+                    }
+                    let (out, v) = be_u32(input)?;
+                    communities.push(Community::try_from(v)?);
+                    input = out;
+                }
+                Ok(PathAttributeValue::Communities(communities))
+            }
             x => Err(Error::UnsupportedPathAttributeTypeCode(x)),
         }
     }
+}
+
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, IntoPrimitive,
+)]
+#[repr(u32)]
+pub enum Community {
+    /// All routes received carrying a communities attribute
+    /// containing this value MUST NOT be advertised outside a BGP
+    /// confederation boundary (a stand-alone autonomous system that
+    /// is not part of a confederation should be considered a
+    /// confederation itself)
+    NoExport = 0xFFFFFF01,
+
+    /// All routes received carrying a communities attribute
+    /// containing this value MUST NOT be advertised to other BGP
+    /// peers.
+    NoAdvertise = 0xFFFFFF02,
+
+    /// All routes received carrying a communities attribute
+    /// containing this value MUST NOT be advertised to external BGP
+    /// peers (this includes peers in other members autonomous
+    /// systems inside a BGP confederation).
+    NoExportSubConfed = 0xFFFFFF03,
+
+    /// All routes received carrying a communities attribute
+    /// containing this value must set the local preference for
+    /// the received routes to a low value, preferably zero.
+    GracefulShutdown = 0xFFFF0000,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]

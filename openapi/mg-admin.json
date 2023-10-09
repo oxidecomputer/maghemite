@@ -31,6 +31,32 @@
         }
       }
     },
+    "/bgp/graceful_shutdown": {
+      "post": {
+        "operationId": "graceful_shutdown",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GracefulShutdownRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/imported4": {
       "get": {
         "operationId": "get_imported4",
@@ -548,7 +574,7 @@
         "type": "object",
         "properties": {
           "asn": {
-            "description": "ASN of the router to get imported prefixes from",
+            "description": "ASN of the router to get imported prefixes from.",
             "type": "integer",
             "format": "uint32",
             "minimum": 0
@@ -562,7 +588,7 @@
         "type": "object",
         "properties": {
           "asn": {
-            "description": "ASN of the router to get originated prefixes from",
+            "description": "ASN of the router to get originated prefixes from.",
             "type": "integer",
             "format": "uint32",
             "minimum": 0
@@ -570,6 +596,25 @@
         },
         "required": [
           "asn"
+        ]
+      },
+      "GracefulShutdownRequest": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "ASN of the router to gracefully shut down.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "enabled": {
+            "description": "Set whether or not graceful shutdown is initiated from this router.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "asn",
+          "enabled"
         ]
       },
       "NewRouterRequest": {
@@ -671,22 +716,36 @@
         "type": "object",
         "properties": {
           "id": {
+            "description": "A BGP route identifier.",
             "type": "integer",
             "format": "uint32",
             "minimum": 0
           },
           "nexthop": {
+            "description": "The nexthop/gateway for the route.",
             "type": "string",
             "format": "ipv4"
           },
           "prefix": {
-            "$ref": "#/components/schemas/Prefix4"
+            "description": "The destination prefix of the route.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Prefix4"
+              }
+            ]
+          },
+          "priority": {
+            "description": "Local priority/preference for the route.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
           }
         },
         "required": [
           "id",
           "nexthop",
-          "prefix"
+          "prefix",
+          "priority"
         ]
       },
       "Route4Key": {
@@ -713,6 +772,9 @@
             "format": "uint32",
             "minimum": 0
           },
+          "graceful_shutdown": {
+            "type": "boolean"
+          },
           "peers": {
             "type": "object",
             "additionalProperties": {
@@ -722,6 +784,7 @@
         },
         "required": [
           "asn",
+          "graceful_shutdown",
           "peers"
         ]
       }

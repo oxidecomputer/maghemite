@@ -4,14 +4,15 @@ use crate::connection::BgpConnection;
 use crate::error::Error;
 use crate::fanout::{Egress, Fanout};
 use crate::messages::{
-    As4PathSegment, AsPathType, PathAttributeValue, PathOrigin, Prefix,
-    UpdateMessage,
+    As4PathSegment, AsPathType, Community, PathAttribute, PathAttributeValue,
+    PathOrigin, Prefix, UpdateMessage,
 };
 use crate::session::{FsmEvent, NeighborInfo, Session, SessionRunner};
 use crate::{lock, read_lock, write_lock};
-use rdb::{Asn, Db, Route4Key};
+use rdb::{Asn, Db, Prefix4, Route4Key};
 use slog::Logger;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +29,7 @@ pub struct Router<Cnx: BgpConnection> {
 
     log: Logger,
     shutdown: AtomicBool,
+    graceful_shutdown: AtomicBool,
     addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
     fanout: Arc<RwLock<Fanout<Cnx>>>,
 }
@@ -47,6 +49,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             addr_to_session,
             log,
             shutdown: AtomicBool::new(false),
+            graceful_shutdown: AtomicBool::new(false),
             db,
             sessions: Mutex::new(BTreeMap::new()),
             fanout: Arc::new(RwLock::new(Fanout::default())),
@@ -92,7 +95,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn new_session(
-        &self,
+        self: &Arc<Self>,
         peer: PeerConfig,
         bind_addr: SocketAddr,
         event_tx: Sender<FsmEvent<Cnx>>,
@@ -129,6 +132,9 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             Some(bind_addr),
             self.db.clone(),
             self.fanout.clone(),
+            //TODO remove all the other self properties in favor just passing
+            //     the router through.
+            self.clone(),
             self.log.clone(),
         ));
 
@@ -165,16 +171,41 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         prefixes: Vec<Prefix>,
     ) -> Result<(), Error> {
         let mut update = UpdateMessage {
-            path_attributes: vec![
-                //TODO hardcode
-                PathAttributeValue::Origin(PathOrigin::Egp).into(),
-                PathAttributeValue::NextHop(nexthop.into()).into(),
-            ],
+            path_attributes: self.base_attributes(),
             ..Default::default()
         };
+
+        for p in &prefixes {
+            update.nlri.push(p.clone());
+            self.db.add_origin4(Route4Key {
+                prefix: p.into(),
+                nexthop,
+            })?;
+        }
+
+        read_lock!(self.fanout).send_all(&update);
+
+        Ok(())
+    }
+
+    pub fn base_attributes(&self) -> Vec<PathAttribute> {
+        let mut path_attributes = vec![
+            //TODO hardcode
+            PathAttributeValue::Origin(PathOrigin::Egp).into(),
+        ];
+
+        if self.graceful_shutdown.load(Ordering::Relaxed) {
+            path_attributes.push(
+                PathAttributeValue::Communities(vec![
+                    Community::GracefulShutdown,
+                ])
+                .into(),
+            );
+        }
+
         match self.config.asn {
             Asn::TwoOctet(asn) => {
-                update.path_attributes.extend_from_slice(&[
+                path_attributes.extend_from_slice(&[
                     PathAttributeValue::AsPath(vec![As4PathSegment {
                         typ: AsPathType::AsSequence,
                         value: vec![asn as u32],
@@ -183,7 +214,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
                 ]);
             }
             Asn::FourOctet(asn) => {
-                update.path_attributes.extend_from_slice(&[
+                path_attributes.extend_from_slice(&[
                     /* TODO according to RFC 4893 we do not have this as an
                      * explicit attribute type when 4-byte ASNs have been
                      * negotiated - but are there some circumstances when we'll
@@ -203,15 +234,52 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
                 ]);
             }
         }
-        for p in &prefixes {
-            update.nlri.push(p.clone());
-            self.db.add_origin4(Route4Key {
-                prefix: p.into(),
-                nexthop,
-            })?;
+
+        path_attributes
+    }
+
+    pub fn graceful_shutdown(&self, enabled: bool) -> Result<(), Error> {
+        self.graceful_shutdown.store(enabled, Ordering::Relaxed);
+        self.announce_all()
+    }
+
+    pub fn in_graceful_shutdown(&self) -> bool {
+        self.graceful_shutdown.load(Ordering::Relaxed)
+    }
+
+    fn announce_all(&self) -> Result<(), Error> {
+        let originated = self.db.get_originated4()?;
+        let mut by_nexthop: HashMap<Ipv4Addr, Vec<Prefix4>> = HashMap::new();
+
+        for route in &originated {
+            match by_nexthop.get_mut(&route.nexthop) {
+                Some(list) => {
+                    list.push(route.prefix);
+                }
+                None => {
+                    by_nexthop.insert(route.nexthop, vec![route.prefix]);
+                }
+            }
         }
 
-        read_lock!(self.fanout).send_all(&update);
+        for (nexthop, prefixes) in &by_nexthop {
+            let mut path_attributes = self.base_attributes();
+            path_attributes
+                .push(PathAttributeValue::NextHop((*nexthop).into()).into());
+
+            let mut update = UpdateMessage {
+                path_attributes: path_attributes.clone(),
+                ..Default::default()
+            };
+            for p in prefixes {
+                update.nlri.push((*p).into());
+                self.db.add_origin4(Route4Key {
+                    prefix: *p,
+                    nexthop: *nexthop,
+                })?;
+            }
+            read_lock!(self.fanout).send_all(&update);
+        }
 
         Ok(())
     }

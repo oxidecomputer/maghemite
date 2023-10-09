@@ -12,15 +12,38 @@ use tabwriter::TabWriter;
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Get the running set of BGP routers.
     GetRouters,
+
+    /// Add a BGP router.
     AddRouter(RouterConfig),
+
+    /// Delete a BGP router.
     DeleteRouter { asn: u32 },
+
+    /// Add a neighbor to a BGP router.
     AddNeighbor(Neighbor),
+
+    /// Remove a neighbor from a BGP router.
     DeleteNeighbor { asn: u32, addr: IpAddr },
+
+    /// Originate a set of prefixes from a BGP router.
     Originate4(Originate4),
+
+    /// Get the prefixes imported by a BGP router.
     GetImported { asn: u32 },
+
+    /// Get the prefixes originated by a BGP router.
     GetOriginated { asn: u32 },
+
+    /// Apply a BGP peer group configuration.
     Apply { filename: String },
+
+    /// Initiate a graceful shutdown of a BGP router.
+    EnableGshut { asn: u32 },
+
+    /// Disable graceful shutdown of a BGP router.
+    DisableGshut { asn: u32 },
 }
 
 #[derive(Args, Debug)]
@@ -138,6 +161,12 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
         Commands::GetImported { asn } => get_imported(client, asn).await,
         Commands::GetOriginated { asn } => get_originated(client, asn).await,
         Commands::Apply { filename } => apply(filename, client).await,
+        Commands::EnableGshut { asn } => {
+            graceful_shutdown(asn, true, client).await
+        }
+        Commands::DisableGshut { asn } => {
+            graceful_shutdown(asn, false, client).await
+        }
     }
     Ok(())
 }
@@ -145,7 +174,12 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
 async fn get_routers(c: Client) {
     let routers = c.get_routers().await.unwrap().into_inner();
     for r in &routers {
-        println!("{}: {}", "ASN".dimmed(), r.asn);
+        let gshut = if r.graceful_shutdown {
+            " graceful shutdown".yellow()
+        } else {
+            "".normal()
+        };
+        println!("{}: {}{gshut}", "ASN".dimmed(), r.asn);
         let mut tw = TabWriter::new(stdout());
         writeln!(
             &mut tw,
@@ -201,17 +235,22 @@ async fn get_imported(c: Client, asn: u32) {
     let mut tw = TabWriter::new(stdout());
     writeln!(
         &mut tw,
-        "{}\t{}\t{}",
+        "{}\t{}\t{}\t{}",
         "Prefix".dimmed(),
         "Nexthop".dimmed(),
-        "Peer Id".dimmed()
+        "Peer Id".dimmed(),
+        "Priority".dimmed(),
     )
     .unwrap();
 
     for route in &imported {
         let id = Ipv4Addr::from(route.id);
-        writeln!(&mut tw, "{}\t{}\t{}", route.prefix, route.nexthop, id)
-            .unwrap();
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}\t{}",
+            route.prefix, route.nexthop, route.priority, id
+        )
+        .unwrap();
     }
 
     tw.flush().unwrap();
@@ -260,4 +299,10 @@ async fn apply(filename: String, c: Client) {
     let request: types::ApplyRequest =
         serde_json::from_str(&contents).expect("parse config");
     c.bgp_apply(&request).await.expect("bgp apply");
+}
+
+async fn graceful_shutdown(asn: u32, enabled: bool, c: Client) {
+    c.graceful_shutdown(&types::GracefulShutdownRequest { asn, enabled })
+        .await
+        .unwrap();
 }

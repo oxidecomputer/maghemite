@@ -132,7 +132,7 @@ pub struct AddExportPolicyRequest {
     /// Address of the peer to apply this policy to.
     pub addr: IpAddr,
 
-    /// Prefix this policy applies to
+    /// Prefix this policy applies to.
     pub prefix: Prefix4,
 
     /// Priority of the policy, higher value is higher priority.
@@ -156,13 +156,21 @@ pub struct Originate4Request {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetImported4Request {
-    /// ASN of the router to get imported prefixes from
+    /// ASN of the router to get imported prefixes from.
     pub asn: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GracefulShutdownRequest {
+    /// ASN of the router to gracefully shut down.
+    pub asn: u32,
+    /// Set whether or not graceful shutdown is initiated from this router.
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetOriginated4Request {
-    /// ASN of the router to get originated prefixes from
+    /// ASN of the router to get originated prefixes from.
     pub asn: u32,
 }
 
@@ -178,6 +186,7 @@ pub struct GetRouersResponse {
 pub struct RouterInfo {
     pub asn: u32,
     pub peers: BTreeMap<IpAddr, PeerInfo>,
+    pub graceful_shutdown: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -219,6 +228,7 @@ pub async fn get_routers(
                 Asn::FourOctet(asn) => asn,
             },
             peers,
+            graceful_shutdown: r.in_graceful_shutdown(),
         });
     }
 
@@ -476,6 +486,19 @@ pub async fn get_imported4(
     let ctx = ctx.context();
     let imported = get_router!(ctx, rq.asn)?.db.get_imported4();
     Ok(HttpResponseOk(imported))
+}
+
+#[endpoint { method = POST, path = "/bgp/graceful_shutdown" }]
+pub async fn graceful_shutdown(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<GracefulShutdownRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    get_router!(ctx, rq.asn)?
+        .graceful_shutdown(rq.enabled)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    Ok(HttpResponseUpdatedNoContent())
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

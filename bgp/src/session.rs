@@ -3,10 +3,10 @@ use crate::connection::BgpConnection;
 use crate::error::Error;
 use crate::fanout::Fanout;
 use crate::messages::{
-    AddPathElement, As4PathSegment, AsPathType, Capability, Message,
-    OpenMessage, OptionalParameter, PathAttributeValue, PathOrigin,
-    UpdateMessage,
+    AddPathElement, Capability, Message, OpenMessage, OptionalParameter,
+    PathAttributeValue, UpdateMessage,
 };
+use crate::router::Router;
 use crate::{dbg, err, inf, read_lock, wrn};
 use crate::{lock, write_lock};
 use rdb::{Asn, Db, Prefix4, Route4Key};
@@ -20,6 +20,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+
+pub const DEFAULT_ROUTE_PRIORITY: u64 = 100;
 
 #[derive(Debug)]
 pub struct PeerConnection<Cnx: BgpConnection> {
@@ -349,6 +351,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     running: AtomicBool,
     db: Db,
     fanout: Arc<RwLock<Fanout<Cnx>>>,
+    router: Arc<Router<Cnx>>,
     log: Logger,
 }
 
@@ -373,6 +376,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         bind_addr: Option<SocketAddr>,
         db: Db,
         fanout: Arc<RwLock<Fanout<Cnx>>>,
+        router: Arc<Router<Cnx>>,
         log: Logger,
     ) -> SessionRunner<Cnx> {
         SessionRunner {
@@ -398,6 +402,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             shutdown: AtomicBool::new(false),
             running: AtomicBool::new(false),
             fanout,
+            router,
             db,
         }
     }
@@ -734,31 +739,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         drop(fanout);
 
         for (nexthop, prefixes) in m {
-            let asn = match self.asn {
-                Asn::TwoOctet(asn) => asn as u32,
-                Asn::FourOctet(asn) => asn,
-            };
+            let mut path_attributes = self.router.base_attributes();
+            path_attributes
+                .push(PathAttributeValue::NextHop(nexthop.into()).into());
             let mut update = UpdateMessage {
-                path_attributes: vec![
-                    PathAttributeValue::Origin(PathOrigin::Egp).into(),
-                    PathAttributeValue::NextHop(nexthop.into()).into(),
-                    PathAttributeValue::AsPath(vec![As4PathSegment {
-                        typ: AsPathType::AsSequence,
-                        value: vec![asn],
-                    }])
-                    .into(),
-                ],
+                path_attributes,
                 ..Default::default()
             };
             for p in prefixes {
                 update.nlri.push(p.into());
-                if let Err(e) =
-                    self.db.add_origin4(Route4Key { prefix: p, nexthop })
-                {
-                    //TODO possible death loop. Should we just panic here?
-                    err!(self; "failed to add origin to db: {e}");
-                    return FsmState::SessionSetup(pc);
-                }
             }
             self.send_keepalive(&pc.conn);
             read_lock!(self.fanout).send_all(&update);
@@ -890,11 +879,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
+        let priority = if update.graceful_shutdown() {
+            0
+        } else {
+            DEFAULT_ROUTE_PRIORITY
+        };
+
         for w in &update.withdrawn {
             let k = rdb::Route4ImportKey {
                 prefix: w.into(),
                 nexthop,
                 id,
+                priority,
             };
             self.db.remove_nexthop4(k);
         }
@@ -904,6 +900,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 prefix: n.into(),
                 nexthop,
                 id,
+                priority,
             };
             self.db.set_nexthop4(k);
         }

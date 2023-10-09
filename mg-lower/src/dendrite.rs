@@ -112,6 +112,9 @@ pub(crate) fn db_route_to_dendrite_route(
         // TODO breakout considerations
         let link = dpd_client::types::LinkId(0);
 
+        // TODO need route priorities to finish graceful shutdown. This should
+        // be possible by exposing P4/Tofino match action table priorities
+        // through the dpd routing API.
         result.push(dpd_client::types::Route {
             tag: MG_LOWER_TAG.into(),
             cidr: dpd_client::Cidr::V4(dpd_client::Ipv4Cidr {

@@ -3,16 +3,36 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
-#[derive(
-    Copy, Clone, Hash, Eq, PartialEq, Serialize, Deserialize, JsonSchema, Debug,
-)]
+#[derive(Copy, Clone, Eq, Serialize, Deserialize, JsonSchema, Debug)]
 pub struct Route4ImportKey {
+    /// The destination prefix of the route.
     pub prefix: Prefix4,
+
+    /// The nexthop/gateway for the route.
     pub nexthop: Ipv4Addr,
+
+    /// A BGP route identifier.
     pub id: u32,
+
+    /// Local priority/preference for the route.
+    pub priority: u64,
+}
+
+impl Hash for Route4ImportKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.prefix.hash(state);
+        self.nexthop.hash(state);
+    }
+}
+
+impl PartialEq for Route4ImportKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.prefix == other.prefix && self.nexthop == other.nexthop
+    }
 }
 
 #[derive(
