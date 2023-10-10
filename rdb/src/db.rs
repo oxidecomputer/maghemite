@@ -264,18 +264,23 @@ impl Db {
     }
 
     pub fn set_nexthop4(&self, r: Route4ImportKey) {
-        lock!(self.imported).insert(r);
-        let g = self.generation.fetch_add(1, Ordering::SeqCst);
-        self.notify(ChangeSet::from_import(ImportChangeSet::added([r]), g + 1));
+        let before = self.effective_set_for_prefix4(r.prefix);
+        lock!(self.imported).replace(r);
+        let after = self.effective_set_for_prefix4(r.prefix);
+
+        if let Some(change_set) = self.import_route_change_set(before, after) {
+            self.notify(change_set);
+        }
     }
 
     pub fn remove_nexthop4(&self, r: Route4ImportKey) {
+        let before = self.effective_set_for_prefix4(r.prefix);
         lock!(self.imported).remove(&r);
-        let g = self.generation.fetch_add(1, Ordering::SeqCst);
-        self.notify(ChangeSet::from_import(
-            ImportChangeSet::removed([r]),
-            g + 1,
-        ));
+        let after = self.effective_set_for_prefix4(r.prefix);
+
+        if let Some(change_set) = self.import_route_change_set(before, after) {
+            self.notify(change_set);
+        }
     }
 
     pub fn remove_peer_nexthop4(&self, id: u32) -> Vec<Route4ImportKey> {
@@ -288,5 +293,65 @@ impl Db {
 
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Given a target prefix, compute the effective route set for that prefix.
+    /// This is needed to support graceful shutdown. Routes being shutdown are
+    /// always a last resort - so there are three cases.
+    ///
+    ///   1. Only shutdown routes exist, in which case the effective set is all
+    ///      the shutdown routes.
+    ///   2. Only active routes (routes not being shut down) exist, in which
+    ///      case the effective set is all the active routes.
+    ///   3. A mixture of shutdown routes and active routes exist, in which
+    ///      case the effective set is only the active routes.
+    ///
+    fn effective_set_for_prefix4(
+        &self,
+        prefix: Prefix4,
+    ) -> HashSet<Route4ImportKey> {
+        let imported = lock!(self.imported);
+        let full: HashSet<Route4ImportKey> = imported
+            .iter()
+            .filter(|x| x.prefix == prefix)
+            .copied()
+            .collect();
+
+        let shutdown: HashSet<Route4ImportKey> =
+            full.iter().filter(|x| x.priority == 0).copied().collect();
+
+        let active: HashSet<Route4ImportKey> =
+            full.iter().filter(|x| x.priority > 0).copied().collect();
+
+        match (active.len(), shutdown.len()) {
+            (0, _) => shutdown,
+            (_, 0) => active,
+            _ => active,
+        }
+    }
+
+    /// Compute a a change set for a before/after set of routes invluding
+    /// bumping the RIB generation number if there are changes.
+    fn import_route_change_set(
+        &self,
+        before: HashSet<Route4ImportKey>,
+        after: HashSet<Route4ImportKey>,
+    ) -> Option<ChangeSet> {
+        let added: HashSet<Route4ImportKey> =
+            after.difference(&before).copied().collect();
+
+        let removed: HashSet<Route4ImportKey> =
+            before.difference(&after).copied().collect();
+
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst);
+
+        if added.is_empty() && removed.is_empty() {
+            return None;
+        }
+
+        Some(ChangeSet::from_import(
+            ImportChangeSet { added, removed },
+            gen,
+        ))
     }
 }
