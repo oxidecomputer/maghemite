@@ -66,7 +66,6 @@ pub struct DeleteRouterRequest {
     pub asn: u32,
 }
 
-//TODO use bgp::config::PeerConfig instead
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct AddNeighborRequest {
     pub asn: u32,

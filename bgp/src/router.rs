@@ -7,7 +7,7 @@ use crate::messages::{
     As4PathSegment, AsPathType, Community, PathAttribute, PathAttributeValue,
     PathOrigin, Prefix, UpdateMessage,
 };
-use crate::session::{FsmEvent, NeighborInfo, Session, SessionRunner};
+use crate::session::{FsmEvent, NeighborInfo, SessionInfo, SessionRunner};
 use crate::{lock, read_lock, write_lock};
 use rdb::{Asn, Db, Prefix4, Route4Key};
 use slog::Logger;
@@ -101,8 +101,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        let session = Session::new();
-
         let mut a2s = lock!(self.addr_to_session);
         if a2s.contains_key(&peer.host.ip()) {
             return Err(Error::PeerExists);
@@ -122,7 +120,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             Duration::from_secs(peer.hold_time),
             Duration::from_secs(peer.idle_hold_time),
             Duration::from_secs(peer.delay_open),
-            session,
+            SessionInfo::new(),
             event_rx,
             event_tx.clone(),
             neighbor.clone(),
