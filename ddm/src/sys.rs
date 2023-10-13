@@ -211,7 +211,6 @@ pub fn add_routes_dendrite(
             switch_port,
             link,
             nexthop: gw.into(),
-            vid: None,
         };
 
         let client = client.clone();
