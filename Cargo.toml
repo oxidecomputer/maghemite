@@ -54,10 +54,10 @@ anstyle = "1.0.0"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "main"
+branch = "rpf_removal"
 package = "dpd-client"
 
 [workspace.dependencies.dendrite-common]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "main"
+branch = "rpf_removal"
 package = "common"
