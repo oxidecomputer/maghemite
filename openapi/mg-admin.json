@@ -329,6 +329,32 @@
           }
         }
       }
+    },
+    "/bgp/withdraw4": {
+      "post": {
+        "operationId": "withdraw4",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Withdraw4Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -559,15 +585,57 @@
         ]
       },
       "FsmStateKind": {
-        "type": "string",
-        "enum": [
-          "Idle",
-          "Connect",
-          "Active",
-          "OpenSent",
-          "OpenConfirm",
-          "SessionSetup",
-          "Established"
+        "description": "Simplified representation of a BGP state without having to carry a connection.",
+        "oneOf": [
+          {
+            "description": "Initial state. Refuse all incomming BGP connections. No resources allocated to peer.",
+            "type": "string",
+            "enum": [
+              "Idle"
+            ]
+          },
+          {
+            "description": "Waiting for the TCP connection to be completed.",
+            "type": "string",
+            "enum": [
+              "Connect"
+            ]
+          },
+          {
+            "description": "Trying to acquire peer by listening for and accepting a TCP connection.",
+            "type": "string",
+            "enum": [
+              "Active"
+            ]
+          },
+          {
+            "description": "Waiting for open message from peer.",
+            "type": "string",
+            "enum": [
+              "OpenSent"
+            ]
+          },
+          {
+            "description": "Waiting for keepaliave or notification from peer.",
+            "type": "string",
+            "enum": [
+              "OpenConfirm"
+            ]
+          },
+          {
+            "description": "Sync up with peers.",
+            "type": "string",
+            "enum": [
+              "SessionSetup"
+            ]
+          },
+          {
+            "description": "Able to exchange update, notification and keepliave messages with peers.",
+            "type": "string",
+            "enum": [
+              "Established"
+            ]
+          }
         ]
       },
       "GetImported4Request": {
@@ -786,6 +854,34 @@
           "asn",
           "graceful_shutdown",
           "peers"
+        ]
+      },
+      "Withdraw4Request": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "ASN of the router to originate from.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "nexthop": {
+            "description": "Nexthop to originate.",
+            "type": "string",
+            "format": "ipv4"
+          },
+          "prefixes": {
+            "description": "Set of prefixes to originate.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prefix4"
+            }
+          }
+        },
+        "required": [
+          "asn",
+          "nexthop",
+          "prefixes"
         ]
       }
     }

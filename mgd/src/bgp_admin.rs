@@ -154,6 +154,18 @@ pub struct Originate4Request {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Withdraw4Request {
+    /// ASN of the router to originate from.
+    pub asn: u32,
+
+    /// Nexthop to originate.
+    pub nexthop: Ipv4Addr,
+
+    /// Set of prefixes to originate.
+    pub prefixes: Vec<Prefix4>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetImported4Request {
     /// ASN of the router to get imported prefixes from.
     pub asn: u32,
@@ -457,6 +469,22 @@ pub async fn originate4(
 
     get_router!(ctx, rq.asn)?
         .originate4(rq.nexthop, prefixes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = POST, path = "/bgp/withdraw4" }]
+pub async fn withdraw4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<Withdraw4Request>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
+    let ctx = ctx.context();
+
+    get_router!(ctx, rq.asn)?
+        .withdraw4(rq.nexthop, prefixes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())

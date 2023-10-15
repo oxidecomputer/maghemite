@@ -62,6 +62,7 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     register!(api, bgp_admin::ensure_neighbor_handler);
     register!(api, bgp_admin::delete_neighbor);
     register!(api, bgp_admin::originate4);
+    register!(api, bgp_admin::withdraw4);
     register!(api, bgp_admin::get_originated4);
     register!(api, bgp_admin::get_imported4);
     register!(api, bgp_admin::bgp_apply);

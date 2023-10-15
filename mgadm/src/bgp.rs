@@ -30,6 +30,9 @@ pub enum Commands {
     /// Originate a set of prefixes from a BGP router.
     Originate4(Originate4),
 
+    /// Withdraw a set of prefixes from a BGP router.
+    Withdraw4(Withdraw4),
+
     /// Get the prefixes imported by a BGP router.
     GetImported { asn: u32 },
 
@@ -78,6 +81,18 @@ pub struct ExportPolicy {
 
 #[derive(Args, Debug)]
 pub struct Originate4 {
+    /// Autonomous system number for the router to originated the prefixes from.
+    pub asn: u32,
+
+    /// Nexthop to originate.
+    pub nexthop: Ipv4Addr,
+
+    /// Set of prefixes to originate.
+    pub prefixes: Vec<Prefix4>,
+}
+
+#[derive(Args, Debug)]
+pub struct Withdraw4 {
     /// Autonomous system number for the router to originated the prefixes from.
     pub asn: u32,
 
@@ -158,6 +173,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             delete_neighbor(asn, addr, client).await
         }
         Commands::Originate4(originate) => originate4(originate, client).await,
+        Commands::Withdraw4(withdraw) => withdraw4(withdraw, client).await,
         Commands::GetImported { asn } => get_imported(client, asn).await,
         Commands::GetOriginated { asn } => get_originated(client, asn).await,
         Commands::Apply { filename } => apply(filename, client).await,
@@ -248,7 +264,7 @@ async fn get_imported(c: Client, asn: u32) {
         writeln!(
             &mut tw,
             "{}\t{}\t{}\t{}",
-            route.prefix, route.nexthop, route.priority, id
+            route.prefix, route.nexthop, id, route.priority,
         )
         .unwrap();
     }
@@ -289,6 +305,16 @@ async fn originate4(originate: Originate4, c: Client) {
         asn: originate.asn,
         nexthop: originate.nexthop,
         prefixes: originate.prefixes.clone(),
+    })
+    .await
+    .unwrap();
+}
+
+async fn withdraw4(withdraw: Withdraw4, c: Client) {
+    c.withdraw4(&types::Withdraw4Request {
+        asn: withdraw.asn,
+        nexthop: withdraw.nexthop,
+        prefixes: withdraw.prefixes.clone(),
     })
     .await
     .unwrap();

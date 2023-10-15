@@ -172,10 +172,39 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             path_attributes: self.base_attributes(),
             ..Default::default()
         };
+        update
+            .path_attributes
+            .push(PathAttributeValue::NextHop(nexthop.into()).into());
 
         for p in &prefixes {
             update.nlri.push(p.clone());
             self.db.add_origin4(Route4Key {
+                prefix: p.into(),
+                nexthop,
+            })?;
+        }
+
+        read_lock!(self.fanout).send_all(&update);
+
+        Ok(())
+    }
+
+    pub fn withdraw4(
+        &self,
+        nexthop: Ipv4Addr,
+        prefixes: Vec<Prefix>,
+    ) -> Result<(), Error> {
+        let mut update = UpdateMessage {
+            path_attributes: self.base_attributes(),
+            ..Default::default()
+        };
+        update
+            .path_attributes
+            .push(PathAttributeValue::NextHop(nexthop.into()).into());
+
+        for p in &prefixes {
+            update.withdrawn.push(p.clone());
+            self.db.remove_origin4(Route4Key {
                 prefix: p.into(),
                 nexthop,
             })?;
