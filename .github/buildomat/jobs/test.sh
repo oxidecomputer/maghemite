@@ -42,9 +42,9 @@ ipadm
 
 banner "collect"
 get_artifact softnpu image 64beaff129b7f63a04a53dd5ed0ec09f012f5756 softnpu
-get_artifact sidecar-lite release 47c7e8e70253ed441ae25db20b2e32ee9c38e3e3 libsidecar_lite.so
-get_artifact sidecar-lite release 47c7e8e70253ed441ae25db20b2e32ee9c38e3e3 scadm
-get_artifact dendrite image dccf86cf40806bf118ae692e81229e2e8ae7ed8d dendrite-softnpu.tar.gz
+get_artifact sidecar-lite release 4ba9c18928edece80f83153b9d78b76cf093da19 libsidecar_lite.so
+get_artifact sidecar-lite release 4ba9c18928edece80f83153b9d78b76cf093da19 scadm
+get_artifact dendrite image 0be6f25c7597cbe7dab04d72707ea2adf9b10f0a dendrite-softnpu.tar.gz
 
 pushd download
 chmod +x softnpu

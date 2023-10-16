@@ -211,7 +211,6 @@ pub fn add_routes_dendrite(
             switch_port,
             link,
             nexthop: gw.into(),
-            vid: None,
         };
 
         let client = client.clone();
@@ -324,23 +323,21 @@ pub fn get_routes_dendrite(
             Cidr::V6(cidr) => (cidr.prefix.into(), cidr.prefix_len),
             _ => continue,
         };
-        let parts: Vec<&str> = r.switch_port.split(':').collect();
-        if parts.is_empty() {
-            return Err(format!(
-                "expected port format M:N, got {}",
-                r.switch_port.as_str()
-            ));
-        }
-        let egress_port = match parts[0].parse::<u16>() {
-            Ok(n) => n,
-            Err(e) => {
-                return Err(format!(
-                    "expected port format M:N, got {}: {}",
-                    r.switch_port.as_str(),
-                    e,
-                ))
+
+        let egress_port = match r.switch_port {
+            types::PortId::Rear(port) => {
+                let port = port.as_str();
+                match port["rear".len()..].parse() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        slog::error!(log, "invalid rear port {port}: {e:?}");
+                        continue;
+                    }
+                }
             }
+            _ => continue,
         };
+
         result.push(Route {
             dest,
             prefix_len,
