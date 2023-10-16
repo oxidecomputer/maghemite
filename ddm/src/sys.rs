@@ -325,10 +325,16 @@ pub fn get_routes_dendrite(
         };
 
         let egress_port = match r.switch_port {
-            types::PortId::Rear(port) => port
-                .to_string()
-                .parse::<u16>()
-                .expect("RearPort(n) is a u8, so should always parse"),
+            types::PortId::Rear(port) => {
+                let port = port.as_str();
+                match port["rear".len()..].parse() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        slog::error!(log, "invalid rear port {port}: {e:?}");
+                        continue;
+                    }
+                }
+            }
             _ => continue,
         };
 
