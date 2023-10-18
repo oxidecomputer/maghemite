@@ -7,8 +7,8 @@ use crate::messages::{
     PathAttributeValue, UpdateMessage,
 };
 use crate::router::Router;
-use crate::{dbg, err, inf, read_lock, wrn};
-use crate::{lock, write_lock};
+use crate::{dbg, err, inf, wrn};
+use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db, Prefix4, Route4Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -431,6 +431,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 idle_hold_time,
                 delay_open_time,
                 event_tx.clone(),
+                log.clone(),
             ),
             bind_addr,
             log,

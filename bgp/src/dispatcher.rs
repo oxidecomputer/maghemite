@@ -1,6 +1,6 @@
 use crate::connection::{BgpConnection, BgpListener};
-use crate::lock;
 use crate::session::FsmEvent;
+use mg_common::lock;
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::IpAddr;

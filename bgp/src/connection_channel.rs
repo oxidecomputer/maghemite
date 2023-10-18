@@ -1,8 +1,13 @@
+/// This file contains code for testing purposes only. Note that it's only
+/// included in `lib.rs` with a `#[cfg(test)]` guard. The purpose of the
+/// code in this file is to implement BgpListener and BgpConnection such that
+/// the core functionality of the BGP upper-half in `session.rs` may be tested
+/// rapidly using a simulated network.
 use crate::connection::{BgpConnection, BgpListener};
 use crate::error::Error;
-use crate::lock;
 use crate::messages::Message;
 use crate::session::FsmEvent;
+use mg_common::lock;
 use slog::debug;
 use slog::error;
 use slog::Logger;
@@ -17,12 +22,15 @@ lazy_static! {
     static ref NET: Network = Network::new();
 }
 
+/// A simulated network that maps socket addresses to channels that can send
+/// messages to listeners for those addresses.
 pub struct Network {
     #[allow(clippy::type_complexity)]
     endpoints:
         Mutex<HashMap<SocketAddr, Sender<(SocketAddr, Endpoint<Message>)>>>,
 }
 
+/// A listener that can listen for messages on our simulated network.
 struct Listener {
     rx: Receiver<(SocketAddr, Endpoint<Message>)>,
 }
@@ -50,12 +58,16 @@ impl Network {
         }
     }
 
+    /// Bind to the specified address and return a listener.
     fn bind(&self, sa: SocketAddr) -> Listener {
         let (tx, rx) = std::sync::mpsc::channel();
         lock!(self.endpoints).insert(sa, tx);
         Listener { rx }
     }
 
+    /// Send a copy of the provided endpoint to the endpoint identified by the
+    // `to` address along with our `from` address so the endpoints identified
+    // by `from` and `to` can exchange messages.
     fn connect(
         &self,
         from: SocketAddr,
@@ -75,6 +87,7 @@ impl Network {
     }
 }
 
+/// A strcut to implement BgpListener for our simulated test network.
 pub struct BgpListenerChannel {
     listener: Listener,
     addr: SocketAddr,
@@ -118,6 +131,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     }
 }
 
+/// A strcut to implement BgpConnection for our simulated test network.
 #[derive(Clone)]
 pub struct BgpConnectionChannel {
     addr: SocketAddr,
@@ -245,7 +259,7 @@ impl BgpConnectionChannel {
 
 use std::sync::mpsc::{self, Receiver, Sender};
 
-/// A combined mpsc sender/receiver.
+/// A combined (duplex) mpsc sender/receiver.
 pub struct Endpoint<T> {
     pub rx: Receiver<T>,
     pub tx: Sender<T>,
@@ -257,7 +271,7 @@ impl<T> Endpoint<T> {
     }
 }
 
-/// Analsgous to std::sync::mpsc::channel for bidirectional endpoints.
+/// Analagous to std::sync::mpsc::channel for bidirectional endpoints.
 #[allow(dead_code)]
 pub fn channel<T>() -> (Endpoint<T>, Endpoint<T>) {
     let (tx_a, rx_b) = mpsc::channel();

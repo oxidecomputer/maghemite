@@ -15,8 +15,9 @@ pub trait BgpListener<Cnx: BgpConnection> {
     where
         Self: Sized;
 
-    // Accept a connection. If no connections are curently available this
-    // function will block.
+    /// Accept a connection. If no connections are currently available this
+    /// function will block. This function may be called multiple times,
+    /// returning a new connection each time.
     fn accept(
         &self,
         log: Logger,

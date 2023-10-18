@@ -7,7 +7,7 @@
 //! sets.
 use crate::error::Error;
 use crate::types::*;
-use crate::{lock, read_lock, write_lock};
+use mg_common::{lock, read_lock, write_lock};
 use slog::{error, Logger};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -168,7 +168,6 @@ impl Db {
     }
 
     pub fn remove_bgp_neighbor(&self, addr: IpAddr) -> Result<(), Error> {
-        println!("db: removing neighbor {addr}");
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
         let key = addr.to_string();
         tree.remove(key)?;
@@ -330,7 +329,7 @@ impl Db {
         }
     }
 
-    /// Compute a a change set for a before/after set of routes invluding
+    /// Compute a a change set for a before/after set of routes including
     /// bumping the RIB generation number if there are changes.
     fn import_route_change_set(
         &self,

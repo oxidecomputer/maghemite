@@ -75,6 +75,7 @@ sled = "0.34"
 ciborium = "0.2"
 http = "0.2"
 humantime = "2.1"
+mg-common = { path = "mg-common" }
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"

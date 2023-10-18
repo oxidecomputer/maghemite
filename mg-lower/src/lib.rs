@@ -41,7 +41,7 @@ pub fn run(db: Db, log: Logger, rt: Arc<tokio::runtime::Handle>) {
         let mut generation = match initialize(&db, &log, &dpd, rt.clone()) {
             Ok(gen) => gen,
             Err(e) => {
-                error!(log, "handling change failed: {e}");
+                error!(log, "full sync failed: {e}");
                 info!(log, "restarting sync loop in one second");
                 sleep(Duration::from_secs(1));
                 continue;
@@ -106,7 +106,7 @@ fn initialize(
     let to_add = imported.difference(&active);
     let to_del = active.difference(&imported);
 
-    update_dendrite(to_add, to_del, dpd, rt, log);
+    update_dendrite(to_add, to_del, dpd, rt, log)?;
 
     Ok(generation)
 }
@@ -137,7 +137,7 @@ fn handle_change(
             .map(|x| RouteHash(x.clone()))
             .collect();
 
-    update_dendrite(to_add.iter(), to_del.iter(), dpd, rt.clone(), log);
+    update_dendrite(to_add.iter(), to_del.iter(), dpd, rt.clone(), log)?;
 
     Ok(change.generation)
 }

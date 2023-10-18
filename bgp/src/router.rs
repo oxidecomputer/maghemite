@@ -8,7 +8,7 @@ use crate::messages::{
     PathOrigin, Prefix, UpdateMessage,
 };
 use crate::session::{FsmEvent, NeighborInfo, SessionInfo, SessionRunner};
-use crate::{lock, read_lock, write_lock};
+use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db, Prefix4, Route4Key};
 use slog::Logger;
 use std::collections::BTreeMap;
@@ -23,14 +23,36 @@ use std::thread::spawn;
 use std::time::Duration;
 
 pub struct Router<Cnx: BgpConnection> {
+    /// The underlying routing information base (RIB) databse this router
+    /// will update in response to BGP update messages (imported routes)
+    /// and administrative API requests (originated routes).
     pub db: Db,
+
+    /// The static configuration associated with this router.
     pub config: RouterConfig,
+
+    /// A set of BGP session runners indexed by peer IP address.
     pub sessions: Mutex<BTreeMap<IpAddr, Arc<SessionRunner<Cnx>>>>,
 
+    /// The logger used by this router.
     log: Logger,
+
+    /// A flag indicating whether this router should shut itself down.
     shutdown: AtomicBool,
+
+    /// A flag indicating whether this router should initiate a
+    /// graceful shutdown (RFC 8326) with its peers.
     graceful_shutdown: AtomicBool,
+
+    /// A set of event channels indexed by peer IP address. These channels
+    /// are used for cross-peer session communications.
     addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
+
+    /// A fanout is used to distribute originated prefixes to all peer
+    /// sessions. In the event that redistribution becomes supported this
+    /// will also act as a redistribution mechanism from one peer session
+    /// to all others. If/when we do that, there will need to be export
+    /// policy that governs what updates fan out to what peers.
     fanout: Arc<RwLock<Fanout<Cnx>>>,
 }
 

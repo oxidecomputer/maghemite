@@ -1,3 +1,4 @@
+use crate::Error;
 use crate::MG_LOWER_TAG;
 use dpd_client::types::PortId;
 use dpd_client::Client as DpdClient;
@@ -7,6 +8,9 @@ use slog::{error, Logger};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use std::sync::Arc;
+
+const TFPORT_QSFP_DEVICE_PREFIX: &str = "tfportqsfp";
+const DPD_QSFP_DPORT_PREFIX: &str = "qsfp";
 
 /// A wrapper around Dendrite routes so we can perform set functions over them.
 pub(crate) struct RouteHash(pub(crate) dpd_client::types::Route);
@@ -33,13 +37,15 @@ pub(crate) fn update_dendrite<'a, I>(
     dpd: &DpdClient,
     rt: Arc<tokio::runtime::Handle>,
     log: &Logger,
-) where
+) -> Result<(), Error>
+where
     I: Iterator<Item = &'a RouteHash>,
 {
     for r in to_add {
         if let Err(e) = rt.block_on(async { dpd.route_ipv4_create(&r.0).await })
         {
             error!(log, "failed to create route {:?}: {}", r.0, e);
+            Err(e)?;
         }
     }
     for r in to_del {
@@ -51,8 +57,10 @@ pub(crate) fn update_dendrite<'a, I>(
             rt.block_on(async { dpd.route_ipv4_delete(&cidr).await })
         {
             error!(log, "failed to create route {:?}: {}", r.0, e);
+            Err(e)?;
         }
     }
+    Ok(())
 }
 
 /// Translate a RIB route data structure to a Dendrite route.
@@ -91,23 +99,28 @@ pub(crate) fn db_route_to_dendrite_route(
         // TODO this is gross, use link type properties rather than futzing
         // around with strings.
         let Some(egress_port_num) = ifname
-            .strip_prefix("tfportqsfp")
+            .strip_prefix(TFPORT_QSFP_DEVICE_PREFIX)
             .and_then(|x| x.strip_suffix("_0"))
             .map(|x| x.trim())
             .and_then(|x| x.parse::<usize>().ok())
         else {
-            error!(log, "expected tfportqsfp$M_$N, got {}", ifname);
+            error!(
+                log,
+                "expected {}$M_0, got {}", TFPORT_QSFP_DEVICE_PREFIX, ifname
+            );
             continue;
         };
 
-        let switch_port =
-            match PortId::from_str(&format!("qsfp{}", egress_port_num)) {
-                Ok(swp) => swp,
-                Err(e) => {
-                    error!(log, "bad port name: {e}");
-                    continue;
-                }
-            };
+        let switch_port = match PortId::from_str(&format!(
+            "{}{}",
+            DPD_QSFP_DPORT_PREFIX, egress_port_num
+        )) {
+            Ok(swp) => swp,
+            Err(e) => {
+                error!(log, "bad port name: {e}");
+                continue;
+            }
+        };
 
         // TODO breakout considerations
         let link = dpd_client::types::LinkId(0);

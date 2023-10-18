@@ -1,11 +1,11 @@
 use crate::connection::{BgpConnection, BgpListener};
 use crate::error::Error;
-use crate::lock;
 use crate::messages::{
     ErrorCode, ErrorSubcode, Header, Message, MessageType, NotificationMessage,
     OpenMessage, UpdateMessage,
 };
 use crate::session::FsmEvent;
+use mg_common::lock;
 use slog::{debug, error, warn, Logger};
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -213,6 +213,11 @@ impl BgpConnectionTcp {
                 Ok(n) => Ok(n),
                 Err(e) => {
                     if e.kind() == std::io::ErrorKind::WouldBlock {
+                        // This condition happens due to the read timeout that
+                        // is set on the TcpStream object on connect being hit.
+                        // This is a normal condition and we just jump back to
+                        // the beginning of the loop, check the shutdown flag
+                        // and carry on reading if there is no shutdown.
                         continue;
                     } else {
                         Err(e)
@@ -221,9 +226,6 @@ impl BgpConnectionTcp {
             }?;
             i += n;
             if i < Header::WIRE_SIZE {
-                if i > 0 {
-                    println!("i={}", i);
-                }
                 continue;
             }
             match Header::from_wire(&buf) {
@@ -240,7 +242,6 @@ impl BgpConnectionTcp {
     ) -> std::io::Result<Message> {
         use crate::messages::OpenErrorSubcode;
         let hdr = Self::recv_header(stream, dropped.clone())?;
-        println!("HDR: {:#?}", hdr);
 
         let mut msgbuf = vec![0u8; usize::from(hdr.length) - Header::WIRE_SIZE];
         stream.read_exact(&mut msgbuf)?;
@@ -251,35 +252,21 @@ impl BgpConnectionTcp {
                 Err(e) => {
                     error!(log, "open message error: {e}");
 
-                    match e {
+                    let subcode = match e {
                         Error::UnsupportedCapability(_) => {
-                            if let Err(e) = Self::send_notification(
-                                stream,
-                                log,
-                                ErrorCode::Open,
-                                ErrorSubcode::Open(
-                                    OpenErrorSubcode::UnsupportedCapability,
-                                ),
-                                Vec::new(),
-                            ) {
-                                warn!(log, "send notification: {e}");
-                            }
+                            OpenErrorSubcode::UnsupportedCapability
                         }
-                        _ => {
-                            if let Err(e) = Self::send_notification(
-                                stream,
-                                log,
-                                ErrorCode::Open,
-                                ErrorSubcode::Open(
-                                    OpenErrorSubcode::Unspecific,
-                                ),
-                                //TODO put error info here as Unspecific
-                                //is not super helpful?
-                                Vec::new(),
-                            ) {
-                                warn!(log, "send notification: {e}");
-                            }
-                        }
+                        _ => OpenErrorSubcode::Unspecific,
+                    };
+
+                    if let Err(e) = Self::send_notification(
+                        stream,
+                        log,
+                        ErrorCode::Open,
+                        ErrorSubcode::Open(subcode),
+                        Vec::new(),
+                    ) {
+                        warn!(log, "send notification: {e}");
                     }
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::Other,
@@ -310,7 +297,6 @@ impl BgpConnectionTcp {
             MessageType::KeepAlive => return Ok(Message::KeepAlive),
         };
 
-        println!("MSG: {:#?}", msg);
         Ok(msg)
     }
 

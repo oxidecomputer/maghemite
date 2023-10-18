@@ -243,6 +243,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "lazy_static",
+ "mg-common",
  "nom",
  "num_enum",
  "pretty-hex 0.3.0",
@@ -2768,6 +2769,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ciborium",
+ "mg-common",
  "schemars",
  "serde",
  "serde_json",
