@@ -256,7 +256,7 @@ pub async fn ensure_router_handler(
     Ok(ensure_router(ctx.clone(), rq).await?)
 }
 
-pub async fn ensure_router(
+async fn ensure_router(
     ctx: Arc<HandlerContext>,
     rq: NewRouterRequest,
 ) -> Result<HttpResponseUpdatedNoContent, Error> {
@@ -364,7 +364,7 @@ pub async fn add_neighbor_handler(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-pub async fn add_neighbor(
+async fn add_neighbor(
     ctx: Arc<HandlerContext>,
     rq: AddNeighborRequest,
     log: Logger,
@@ -398,7 +398,7 @@ pub async fn add_neighbor(
     Ok(())
 }
 
-pub async fn remove_neighbor(
+async fn remove_neighbor(
     ctx: Arc<HandlerContext>,
     asn: u32,
     addr: IpAddr,
@@ -431,7 +431,7 @@ pub async fn ensure_neighbor_handler(
     ensure_neighbor(ctx.clone(), rq)
 }
 
-pub fn ensure_neighbor(
+pub(crate) fn ensure_neighbor(
     ctx: Arc<HandlerContext>,
     rq: AddNeighborRequest,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {

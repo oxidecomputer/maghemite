@@ -6,6 +6,8 @@ use nom::{
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::net::{IpAddr, Ipv4Addr};
 
+pub const MAX_MESSAGE_SIZE: usize = 4096;
+
 /// BGP Message types.
 ///
 /// Ref: RFC 4271 §4.1
@@ -126,10 +128,10 @@ impl Header {
     /// RFC 4271 §4.1.
     pub fn new(length: u16, typ: MessageType) -> Result<Header, Error> {
         if length < 19 {
-            return Err(Error::TooSmall);
+            return Err(Error::TooSmall("message header length".into()));
         }
         if length > 4096 {
-            return Err(Error::TooLarge);
+            return Err(Error::TooLarge("message header length".into()));
         }
         Ok(Header { length, typ })
     }
@@ -259,7 +261,9 @@ impl OpenMessage {
         // opt param len
         let opt_buf = self.parameters_to_wire()?;
         if opt_buf.len() > u8::MAX as usize {
-            return Err(Error::TooLarge);
+            return Err(Error::TooLarge(
+                "open message optional parameters".into(),
+            ));
         }
         buf.push(opt_buf.len() as u8);
         buf.extend_from_slice(&opt_buf);
@@ -285,7 +289,9 @@ impl OpenMessage {
         let param_len = param_len as usize;
 
         if input.len() < param_len {
-            return Err(Error::TooSmall);
+            return Err(Error::TooSmall(
+                "open message optional parameters".into(),
+            ));
         }
 
         let parameters = Self::parameters_from_wire(&input[..param_len])?;
@@ -362,7 +368,9 @@ impl UpdateMessage {
         // withdrawn
         let withdrawn = self.withdrawn_to_wire()?;
         if withdrawn.len() > u16::MAX as usize {
-            return Err(Error::TooLarge);
+            return Err(Error::TooLarge(
+                "update: too many withdrawn prefixes".into(),
+            ));
         }
         let len = withdrawn.len() as u16;
         buf.extend_from_slice(&len.to_be_bytes());
@@ -371,7 +379,9 @@ impl UpdateMessage {
         // path attributes
         let attrs = self.path_attrs_to_wire()?;
         if attrs.len() > u16::MAX as usize {
-            return Err(Error::TooLarge);
+            return Err(Error::TooLarge(
+                "update: too many path attributes".into(),
+            ));
         }
         let len = attrs.len() as u16;
         buf.extend_from_slice(&len.to_be_bytes());
@@ -379,6 +389,12 @@ impl UpdateMessage {
 
         // nlri
         buf.extend_from_slice(&self.nlri_to_wire()?);
+
+        if buf.len() > MAX_MESSAGE_SIZE {
+            return Err(Error::TooLarge(
+                "update exceeds max message size".into(),
+            ));
+        }
 
         Ok(buf)
     }
@@ -395,7 +411,7 @@ impl UpdateMessage {
         let mut buf = Vec::new();
         for p in &self.path_attributes {
             buf.extend_from_slice(&p.to_wire(
-                p.typ.flags & PathAttributeFlags::ExtendedLength as u8 != 0,
+                p.typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0,
             )?);
         }
         Ok(buf)
@@ -431,10 +447,7 @@ impl UpdateMessage {
 
     fn prefixes_from_wire(mut buf: &[u8]) -> Result<Vec<Prefix>, Error> {
         let mut result = Vec::new();
-        loop {
-            if buf.is_empty() {
-                break;
-            }
+        while !buf.is_empty() {
             let (out, pfx) = Prefix::from_wire(buf)?;
             result.push(pfx);
             buf = out;
@@ -486,6 +499,9 @@ impl UpdateMessage {
     }
 }
 
+/// This data structure captures a network prefix as it's layed out in a BGP
+/// message. There is a prefix length followed by a variable number of bytes.
+/// Just enouhg bytes to express the prefix.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Prefix {
     pub length: u8,
@@ -495,7 +511,7 @@ pub struct Prefix {
 impl Prefix {
     fn to_wire(&self) -> Result<Vec<u8>, Error> {
         if self.value.len() > u8::MAX as usize {
-            return Err(Error::TooLarge);
+            return Err(Error::TooLarge("prefix too long".into()));
         }
         let mut buf = vec![self.length];
         let n = (self.length as usize) >> 3;
@@ -540,6 +556,8 @@ impl std::str::FromStr for Prefix {
     }
 }
 
+/// The BGP prefix format only contains enough bytes to describe the prefix
+/// so we need to be careful about tranfersing into fixed widht IP addresses.
 impl From<&Prefix> for rdb::Prefix4 {
     fn from(p: &Prefix) -> Self {
         let v = &p.value;
@@ -586,22 +604,15 @@ pub struct PathAttribute {
 impl From<PathAttributeValue> for PathAttribute {
     fn from(v: PathAttributeValue) -> Self {
         let flags = match v {
-            PathAttributeValue::Origin(_) => {
-                PathAttributeFlags::Transitive as u8
-            }
-            PathAttributeValue::AsPath(_) => {
-                PathAttributeFlags::Transitive as u8
-            }
-            PathAttributeValue::As4Path(_) => {
-                PathAttributeFlags::Transitive as u8
-            }
-            PathAttributeValue::NextHop(_) => {
-                PathAttributeFlags::Transitive as u8
-            }
+            PathAttributeValue::Origin(_) => path_attribute_flags::TRANSITIVE,
+            PathAttributeValue::AsPath(_) => path_attribute_flags::TRANSITIVE,
+            PathAttributeValue::As4Path(_) => path_attribute_flags::TRANSITIVE,
+            PathAttributeValue::NextHop(_) => path_attribute_flags::TRANSITIVE,
             PathAttributeValue::Communities(_) => {
-                PathAttributeFlags::Optional | PathAttributeFlags::Transitive
+                path_attribute_flags::OPTIONAL
+                    | path_attribute_flags::TRANSITIVE
             }
-            _ => PathAttributeFlags::Optional as u8,
+            _ => path_attribute_flags::OPTIONAL,
         };
         Self {
             typ: PathAttributeType {
@@ -619,13 +630,13 @@ impl PathAttribute {
         let val = &self.value.to_wire()?;
         if extended_length {
             if val.len() > u16::MAX as usize {
-                return Err(Error::TooLarge);
+                return Err(Error::TooLarge("extended path attribute".into()));
             }
             let len = val.len() as u16;
             buf.extend_from_slice(&len.to_be_bytes())
         } else {
             if val.len() > u8::MAX as usize {
-                return Err(Error::TooLarge);
+                return Err(Error::TooLarge("pathattribute".into()));
             }
             buf.push(val.len() as u8);
         }
@@ -638,7 +649,7 @@ impl PathAttribute {
         let typ = PathAttributeType::from_wire(type_input)?;
 
         let (input, len) =
-            if typ.flags & PathAttributeFlags::ExtendedLength as u8 != 0 {
+            if typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0 {
                 let (input, len) = be_u16(input)?;
                 (input, len as usize)
             } else {
@@ -670,27 +681,11 @@ impl PathAttributeType {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive)]
-#[repr(u8)]
-pub enum PathAttributeFlags {
-    Optional = 0b10000000,
-    Transitive = 0b01000000,
-    Partial = 0b00100000,
-    ExtendedLength = 0b00010000,
-}
-
-impl std::ops::BitOr<PathAttributeFlags> for PathAttributeFlags {
-    type Output = u8;
-    fn bitor(self, other: PathAttributeFlags) -> u8 {
-        self as u8 | other as u8
-    }
-}
-
-impl std::ops::BitAnd<PathAttributeFlags> for PathAttributeFlags {
-    type Output = u8;
-    fn bitand(self, other: PathAttributeFlags) -> u8 {
-        self as u8 & other as u8
-    }
+pub mod path_attribute_flags {
+    pub const OPTIONAL: u8 = 0b10000000;
+    pub const TRANSITIVE: u8 = 0b01000000;
+    pub const PARTIAL: u8 = 0b00100000;
+    pub const EXTENDED_LENGTH: u8 = 0b00010000;
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive)]
@@ -909,7 +904,7 @@ pub struct As4PathSegment {
 impl As4PathSegment {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         if self.value.len() > u8::MAX as usize {
-            return Err(Error::TooLarge);
+            return Err(Error::TooLarge("AS4 path segment".into()));
         }
         let mut buf = vec![self.typ as u8, self.value.len() as u8];
         for v in &self.value {
@@ -959,6 +954,9 @@ pub struct NotificationMessage {
 
     /*
      * Implementation notes for later on the data field ...
+     *
+     * What follows is verbatim from RFC 4271
+     * <https://datatracker.ietf.org/doc/html/rfc4271>
      *
      * §6.1 Message Header Error Handling
      * ==================================
@@ -1239,13 +1237,25 @@ impl OptionalParameter {
     }
 }
 
+/// The `AddPathElement` comes as a BGP capability extension as described in
+/// RFC 7911.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct AddPathElement {
+    /// Address family identifier.
+    /// <https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml>
     pub afi: u16,
+    /// Subsequent address family identifier. There are a large pile of these
+    /// <https://www.iana.org/assignments/safi-namespace/safi-namespace.xhtml>
     pub safi: u8,
+    /// This field indicates whether the sender is (a) able to receive multiple
+    /// paths from its peer (value 1), (b) able to send multiple paths to its
+    /// peer (value 2), or (c) both (value 3) for the <AFI, SAFI>.
     pub send_receive: u8,
 }
 
+/// Optional capabilities supported by a BGP implementation. An issue tracking
+/// the TODOs below is here
+/// <https://github.com/oxidecomputer/maghemite/issues/80>
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Capability {
     /// RFC 2858 TODO
@@ -1694,8 +1704,8 @@ mod tests {
             }],
             path_attributes: vec![PathAttribute {
                 typ: PathAttributeType {
-                    flags: PathAttributeFlags::Optional
-                        | PathAttributeFlags::Partial,
+                    flags: path_attribute_flags::OPTIONAL
+                        | path_attribute_flags::PARTIAL,
                     type_code: PathAttributeTypeCode::As4Path,
                 },
                 value: PathAttributeValue::As4Path(vec![As4PathSegment {

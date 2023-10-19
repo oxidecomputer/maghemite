@@ -308,9 +308,13 @@ impl BgpConnectionTcp {
         debug!(log, "sending {:#?}", msg);
         let msg_buf = msg.to_wire()?;
         let header = Header {
-            length: (msg_buf.len() + Header::WIRE_SIZE)
-                .try_into()
-                .map_err(|_| Error::TooLarge)?,
+            length: (msg_buf.len() + Header::WIRE_SIZE).try_into().map_err(
+                |_| {
+                    Error::TooLarge(
+                        "BGP message being sent is too large".into(),
+                    )
+                },
+            )?,
             typ: MessageType::from(&msg),
         };
         let mut buf = header.to_wire().to_vec();

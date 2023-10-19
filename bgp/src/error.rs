@@ -3,10 +3,10 @@ use num_enum::TryFromPrimitiveError;
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("too small")]
-    TooSmall,
+    TooSmall(String),
 
     #[error("too large")]
-    TooLarge,
+    TooLarge(String),
 
     #[error("no marker")]
     NoMarker,
