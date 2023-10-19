@@ -87,7 +87,7 @@ impl Network {
     }
 }
 
-/// A strcut to implement BgpListener for our simulated test network.
+/// A struct to implement BgpListener for our simulated test network.
 pub struct BgpListenerChannel {
     listener: Listener,
     addr: SocketAddr,
@@ -131,7 +131,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     }
 }
 
-/// A strcut to implement BgpConnection for our simulated test network.
+/// A struct to implement BgpConnection for our simulated test network.
 #[derive(Clone)]
 pub struct BgpConnectionChannel {
     addr: SocketAddr,

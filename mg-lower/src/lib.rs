@@ -41,7 +41,7 @@ pub fn run(db: Db, log: Logger, rt: Arc<tokio::runtime::Handle>) {
         let mut generation = match initialize(&db, &log, &dpd, rt.clone()) {
             Ok(gen) => gen,
             Err(e) => {
-                error!(log, "full sync failed: {e}");
+                error!(log, "initializing failed: {e}");
                 info!(log, "restarting sync loop in one second");
                 sleep(Duration::from_secs(1));
                 continue;

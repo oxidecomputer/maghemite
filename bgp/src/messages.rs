@@ -127,10 +127,10 @@ impl Header {
     /// Create a new BGP message header. Length must be between 19 and 4096 per
     /// RFC 4271 §4.1.
     pub fn new(length: u16, typ: MessageType) -> Result<Header, Error> {
-        if length < 19 {
+        if usize::from(length) < Header::WIRE_SIZE {
             return Err(Error::TooSmall("message header length".into()));
         }
-        if length > 4096 {
+        if usize::from(length) > MAX_MESSAGE_SIZE {
             return Err(Error::TooLarge("message header length".into()));
         }
         Ok(Header { length, typ })
@@ -501,7 +501,7 @@ impl UpdateMessage {
 
 /// This data structure captures a network prefix as it's layed out in a BGP
 /// message. There is a prefix length followed by a variable number of bytes.
-/// Just enouhg bytes to express the prefix.
+/// Just enough bytes to express the prefix.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Prefix {
     pub length: u8,
@@ -557,7 +557,7 @@ impl std::str::FromStr for Prefix {
 }
 
 /// The BGP prefix format only contains enough bytes to describe the prefix
-/// so we need to be careful about tranfersing into fixed widht IP addresses.
+/// so we need to be careful about transferring into fixed width IP addresses.
 impl From<&Prefix> for rdb::Prefix4 {
     fn from(p: &Prefix) -> Self {
         let v = &p.value;
