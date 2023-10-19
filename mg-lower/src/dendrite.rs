@@ -134,7 +134,6 @@ pub(crate) fn db_route_to_dendrite_route(
             switch_port,
             link,
             nexthop: r.nexthop.into(),
-            vid: None,
         });
     }
 
