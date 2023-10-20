@@ -1,0 +1,25 @@
+[package]
+name = "mgd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mg-lower = { path = "../mg-lower", optional = true }
+mg-common = { path = "../mg-common" }
+bgp = { path = "../bgp" }
+rdb = { path = "../rdb" }
+clap.workspace = true
+colored.workspace = true
+dropshot.workspace = true
+schemars.workspace = true
+serde.workspace = true
+slog.workspace = true
+slog-async.workspace = true
+slog-envlogger.workspace = true
+slog-term.workspace = true
+tokio.workspace = true
+http.workspace = true
+thiserror.workspace = true
+
+[features]
+default = ["mg-lower"]

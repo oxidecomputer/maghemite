@@ -1,6 +1,6 @@
 #!/bin/bash
 #:
-#: name = "test"
+#: name = "test-ddm"
 #: variety = "basic"
 #: target = "helios-2.0"
 #: rust_toolchain = "stable"

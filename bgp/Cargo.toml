@@ -1,0 +1,23 @@
+[package]
+name = "bgp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rdb = { path = "../rdb" }
+nom.workspace = true
+num_enum.workspace = true
+slog.workspace = true
+slog-bunyan.workspace = true
+slog-async.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+schemars.workspace = true
+sled.workspace = true
+anyhow.workspace = true
+mg-common.workspace = true
+
+[dev-dependencies]
+pretty-hex.workspace = true
+pretty_assertions.workspace = true
+lazy_static.workspace = true

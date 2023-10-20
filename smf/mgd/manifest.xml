@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
 
-<service_bundle type='manifest' name='mg-ddm'>
+<service_bundle type='manifest' name='mgd'>
 
-<service name='oxide/mg-ddm' type='service' version='1'>
+<service name='oxide/mgd' type='service' version='1'>
   <create_default_instance enabled='false' />
   <dependency name='network' grouping='require_all' restart_on='none'
     type='service'>
@@ -11,20 +11,13 @@
   </dependency>
 
   <exec_method type='method' name='start'
-    exec='ctrun -l child -o noorphan,regent /opt/oxide/mg-ddm/pkg/ddm_method_script.sh &amp;'
+    exec='ctrun -l child -o noorphan,regent /opt/oxide/mgd/pkg/mgd_method_script.sh &amp;'
     timeout_seconds='0' />
   <exec_method type='method' name='stop' exec=':kill' timeout_seconds='0' />
 
   <property_group name='config' type='application'>
      <propval name='admin_host' type='astring' value='::1' />
-     <propval name='admin_port' type='count' value='8000' />
-     <propval name='mode' type='astring' value='server' />
-     <propval name='dendrite' type='boolean' value='false' />
-     <propval name='dpd_host' type='astring' value='' />
-     <propval name='dpd_port' type='astring' value='' />
-     <propval name='log' type='astring' value='info' />
-     <property name='interfaces' type='astring'>
-     </property>
+     <propval name='admin_port' type='count' value='4676' />
    </property_group>
 
   <property_group name='startd' type='framework'>
@@ -35,7 +28,7 @@
 
   <template>
     <common_name>
-      <loctext xml:lang='C'>Maghemite DDM Router</loctext>
+      <loctext xml:lang='C'>Maghemite Router Daemon</loctext>
     </common_name>
     <description>
       <loctext xml:lang='C'>Router</loctext>

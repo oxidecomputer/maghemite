@@ -13,13 +13,13 @@
 #:
 #: [[publish]]
 #: series = "image"
-#: name = "maghemite.tar"
-#: from_output = "/out/maghemite.tar"
+#: name = "mg-ddm-gz.tar"
+#: from_output = "/out/mg-ddm-gz.tar"
 #:
 #: [[publish]]
 #: series = "image"
-#: name = "maghemite.sha256.txt"
-#: from_output = "/out/maghemite.sha256.txt"
+#: name = "mg-ddm-gz.sha256.txt"
+#: from_output = "/out/mg-ddm-gz.sha256.txt"
 #:
 #: [[publish]]
 #: series = "image"
@@ -30,6 +30,16 @@
 #: series = "image"
 #: name = "mg-ddm.sha256.txt"
 #: from_output = "/out/mg-ddm.sha256.txt"
+#
+#: [[publish]]
+#: series = "image"
+#: name = "mgd.tar.gz"
+#: from_output = "/out/mgd.tar.gz"
+#:
+#: [[publish]]
+#: series = "image"
+#: name = "mgd.sha256.txt"
+#: from_output = "/out/mgd.sha256.txt"
 #:
 
 set -o errexit
@@ -40,22 +50,24 @@ cargo --version
 rustc --version
 
 banner build
-ptime -m cargo build --release --verbose -p ddmd -p ddmadm
+ptime -m cargo build --release --verbose -p ddmd -p ddmadm -p mgd -p mgadm
 
 banner image
 ptime -m cargo run -p mg-package
 
-banner contents
-tar tvfz out/maghemite.tar
+banner mg-ddm-gz contents
+tar tvfz out/mg-ddm-gz.tar
 
 banner copy
 pfexec mkdir -p /out
 pfexec chown "$UID" /out
-mv out/maghemite.tar /out/maghemite.tar
+mv out/mg-ddm-gz.tar /out/mg-ddm-gz.tar
 mv out/mg-ddm.tar.gz /out/mg-ddm.tar.gz
+mv out/mgd.tar.gz /out/mgd.tar.gz
 
 banner checksum
 cd /out
-digest -a sha256 maghemite.tar > maghemite.sha256.txt
+digest -a sha256 mg-ddm-gz.tar > mg-ddm-gz.sha256.txt
 digest -a sha256 mg-ddm.tar.gz > mg-ddm.sha256.txt
+digest -a sha256 mgd.tar.gz > mgd.sha256.txt
 

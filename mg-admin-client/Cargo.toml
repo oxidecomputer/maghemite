@@ -1,0 +1,15 @@
+[package]
+name = "mg-admin-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+slog.workspace = true
+anyhow.workspace = true
+percent-encoding.workspace = true
+reqwest.workspace = true
+progenitor.workspace = true
+rdb = { path = "../rdb" }
+bgp = { path = "../bgp" }

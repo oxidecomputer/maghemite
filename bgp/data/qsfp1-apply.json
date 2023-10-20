@@ -1,0 +1,22 @@
+{
+  "peer_group": "qsfp1",
+  "peers": [{
+    "asn": 47,
+    "host": "192.168.23.1:179",
+    "name": "outpost",
+    "hold_time": 6,
+    "idle_hold_time": 6,
+    "delay_open": 0,
+    "connect_retry": 5,
+    "keepalive": 2,
+    "resolution": 100,
+    "routes": [
+      {
+        "nexthop": "192.168.23.2",
+        "prefixes": [
+          { "value": "192.168.20.0", "length": 24 }
+        ]
+      }
+    ]
+  }]
+}
