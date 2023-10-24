@@ -44,7 +44,7 @@ banner "collect"
 get_artifact softnpu image 64beaff129b7f63a04a53dd5ed0ec09f012f5756 softnpu
 get_artifact sidecar-lite release d815d8e2b310de8a7461241d9f9f1b5c762e1e65 libsidecar_lite.so
 get_artifact sidecar-lite release d815d8e2b310de8a7461241d9f9f1b5c762e1e65 scadm
-get_artifact dendrite image 0ce25a813575912e8a95bee7720ffe9c3af0e7f9 dendrite-softnpu.tar.gz
+get_artifact dendrite image 350fb25d724578dd2b127499edcd57981d4bbff2 dendrite-softnpu.tar.gz
 
 pushd download
 chmod +x softnpu
