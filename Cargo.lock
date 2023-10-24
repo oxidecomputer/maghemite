@@ -109,7 +109,7 @@ checksum = "a4668cab20f66d8d020e1fbc0ebe47217433c1b6c8f2040faf858554e394ace6"
 [[package]]
 name = "api_identity"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#463cc1ae256a5e22b9726ae58ea8b651e81e3882"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0f51441b8fc5264ee6ab7f9118722b18e4a1198f"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -469,7 +469,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=main#0be6f25c7597cbe7dab04d72707ea2adf9b10f0a"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=common_ports#0ce25a813575912e8a95bee7720ffe9c3af0e7f9"
 dependencies = [
  "anyhow",
  "chrono",
@@ -520,6 +520,12 @@ dependencies = [
  "thiserror",
  "toml 0.7.8",
 ]
+
+[[package]]
+name = "crc16"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "338089f42c427b86394a5ee60ff321da23a5c89c9d89514c829687b26359fcff"
 
 [[package]]
 name = "crc32fast"
@@ -828,11 +834,12 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=main#0be6f25c7597cbe7dab04d72707ea2adf9b10f0a"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=common_ports#0ce25a813575912e8a95bee7720ffe9c3af0e7f9"
 dependencies = [
  "async-trait",
  "chrono",
  "common",
+ "crc16",
  "futures",
  "http",
  "progenitor",
@@ -849,7 +856,7 @@ dependencies = [
 [[package]]
 name = "dropshot"
 version = "0.9.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#bce91e92733616d6fa4da83c44a61b3eda8cf204"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#7bd2ce547ebf0b955b02236fe3fef0c52bf2fae4"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -895,7 +902,7 @@ dependencies = [
 [[package]]
 name = "dropshot_endpoint"
 version = "0.9.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#bce91e92733616d6fa4da83c44a61b3eda8cf204"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#7bd2ce547ebf0b955b02236fe3fef0c52bf2fae4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2079,7 +2086,7 @@ dependencies = [
 [[package]]
 name = "omicron-common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#463cc1ae256a5e22b9726ae58ea8b651e81e3882"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0f51441b8fc5264ee6ab7f9118722b18e4a1198f"
 dependencies = [
  "anyhow",
  "api_identity",
@@ -2159,9 +2166,9 @@ checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
 
 [[package]]
 name = "openapiv3"
-version = "1.0.3"
+version = "2.0.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75e56d5c441965b6425165b7e3223cc933ca469834f4a8b4786817a1f9dc4f13"
+checksum = "25316406f0191559189c56d99731b63130775de7284d98df5e976ce67882ca8a"
 dependencies = [
  "indexmap 2.0.2",
  "serde",
@@ -2215,7 +2222,7 @@ dependencies = [
 [[package]]
 name = "oximeter"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#463cc1ae256a5e22b9726ae58ea8b651e81e3882"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0f51441b8fc5264ee6ab7f9118722b18e4a1198f"
 dependencies = [
  "bytes",
  "chrono",
@@ -2233,7 +2240,7 @@ dependencies = [
 [[package]]
 name = "oximeter-macro-impl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#463cc1ae256a5e22b9726ae58ea8b651e81e3882"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0f51441b8fc5264ee6ab7f9118722b18e4a1198f"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -2548,7 +2555,7 @@ dependencies = [
 [[package]]
 name = "progenitor"
 version = "0.4.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#2708963c5f3394fd2ab28e50b0d3a071dc52dc28"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#a6bc0624803b9483983f03269533cc35db66a54b"
 dependencies = [
  "progenitor-client",
  "progenitor-impl",
@@ -2559,7 +2566,7 @@ dependencies = [
 [[package]]
 name = "progenitor-client"
 version = "0.4.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#2708963c5f3394fd2ab28e50b0d3a071dc52dc28"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#a6bc0624803b9483983f03269533cc35db66a54b"
 dependencies = [
  "bytes",
  "futures-core",
@@ -2573,7 +2580,7 @@ dependencies = [
 [[package]]
 name = "progenitor-impl"
 version = "0.4.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#2708963c5f3394fd2ab28e50b0d3a071dc52dc28"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#a6bc0624803b9483983f03269533cc35db66a54b"
 dependencies = [
  "getopts",
  "heck 0.4.1",
@@ -2595,7 +2602,7 @@ dependencies = [
 [[package]]
 name = "progenitor-macro"
 version = "0.4.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#2708963c5f3394fd2ab28e50b0d3a071dc52dc28"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#a6bc0624803b9483983f03269533cc35db66a54b"
 dependencies = [
  "openapiv3",
  "proc-macro2",
@@ -4011,7 +4018,7 @@ checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
 [[package]]
 name = "typify"
 version = "0.0.14"
-source = "git+https://github.com/oxidecomputer/typify#15e5da33a862c3bd03952e50d59eca009f73b52e"
+source = "git+https://github.com/oxidecomputer/typify#3ee46b53c872312e1fe7b8acd7776eb4ce066513"
 dependencies = [
  "typify-impl",
  "typify-macro",
@@ -4020,7 +4027,7 @@ dependencies = [
 [[package]]
 name = "typify-impl"
 version = "0.0.14"
-source = "git+https://github.com/oxidecomputer/typify#15e5da33a862c3bd03952e50d59eca009f73b52e"
+source = "git+https://github.com/oxidecomputer/typify#3ee46b53c872312e1fe7b8acd7776eb4ce066513"
 dependencies = [
  "heck 0.4.1",
  "log",
@@ -4037,7 +4044,7 @@ dependencies = [
 [[package]]
 name = "typify-macro"
 version = "0.0.14"
-source = "git+https://github.com/oxidecomputer/typify#15e5da33a862c3bd03952e50d59eca009f73b52e"
+source = "git+https://github.com/oxidecomputer/typify#3ee46b53c872312e1fe7b8acd7776eb4ce066513"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -1,6 +1,8 @@
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
 use dendrite_common::network::{Cidr, Ipv6Cidr};
+use dendrite_common::ports::PortId;
+use dendrite_common::ports::QsfpPort;
 use dpd_client::types;
 use dpd_client::Client;
 use dpd_client::ClientState;
@@ -8,8 +10,7 @@ use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
-use std::net::{IpAddr, Ipv6Addr};
-use std::str::FromStr;
+use std::net::IpAddr;
 use std::sync::Arc;
 
 const DDM_DPD_TAG: &str = "ddmd";
@@ -173,7 +174,7 @@ pub fn add_routes_dendrite(
             .strip_prefix("tfportrear")
             .and_then(|x| x.strip_suffix("_0"))
             .map(|x| x.trim())
-            .and_then(|x| x.parse::<usize>().ok())
+            .and_then(|x| x.parse::<u8>().ok())
         else {
             err!(log, ifname, "expected tfportrear");
             continue;
@@ -181,11 +182,8 @@ pub fn add_routes_dendrite(
 
         // TODO this assumes ddm only operates on rear ports, which will not be
         // true for multi-rack deployments.
-        let switch_port = match types::PortId::from_str(&format!(
-            "rear{}",
-            egress_port_num
-        )) {
-            Ok(swp) => swp,
+        let port_id = match QsfpPort::try_from(egress_port_num) {
+            Ok(qsfp) => PortId::Qsfp(qsfp),
             Err(e) => {
                 err!(log, ifname, "bad port name: {e}");
                 continue;
@@ -198,25 +196,29 @@ pub fn add_routes_dendrite(
             "adding route {} -> {} on port {:?}/{}",
             r.dest,
             r.gw,
-            switch_port,
+            port_id,
             0,
         );
 
         // TODO breakout considerations
-        let link = types::LinkId(0);
+        let link_id = types::LinkId(0);
 
-        let route = types::Route {
+        let target = types::Ipv6Route {
             tag: DDM_DPD_TAG.into(),
+            port_id,
+            link_id,
+            tgt_ip: gw,
+        };
+        let route_set = types::RouteSet {
             cidr: cidr.into(),
-            switch_port,
-            link,
-            nexthop: gw.into(),
+            target: types::RouteTarget::V6(target),
+            replace: false,
         };
 
         let client = client.clone();
 
         if let Err(e) =
-            rt.block_on(async move { client.route_ipv6_set(&route).await })
+            rt.block_on(async move { client.route_ipv6_set(&route_set).await })
         {
             err!(log, ifname, "dpd route create: {e}");
         }
@@ -315,36 +317,29 @@ pub fn get_routes_dendrite(
     let mut result = Vec::new();
 
     for r in routes {
-        let gw = match r.nexthop {
-            IpAddr::V6(addr) => addr.into(),
-            _ => Ipv6Addr::UNSPECIFIED.into(),
-        };
         let (dest, prefix_len) = match r.cidr {
             Cidr::V6(cidr) => (cidr.prefix.into(), cidr.prefix_len),
             _ => continue,
         };
 
-        let egress_port = match r.switch_port {
-            types::PortId::Rear(port) => {
-                let port = port.as_str();
-                match port["rear".len()..].parse() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        slog::error!(log, "invalid rear port {port}: {e:?}");
-                        continue;
-                    }
-                }
-            }
-            _ => continue,
-        };
+        for target in r.targets {
+            let t = match target {
+                types::RouteTarget::V6(route) => route,
+                _ => continue,
+            };
+            let egress_port = match t.port_id {
+                PortId::Rear(rear) => rear.as_u8(),
+                _ => continue,
+            };
 
-        result.push(Route {
-            dest,
-            prefix_len,
-            gw,
-            egress_port,
-            ifname: String::new(),
-        });
+            result.push(Route {
+                dest,
+                prefix_len,
+                gw: t.tgt_ip.into(),
+                egress_port: egress_port as u16,
+                ifname: String::new(),
+            });
+        }
     }
 
     Ok(result)
