@@ -55,7 +55,7 @@ tar -xzf dendrite-softnpu.tar.gz -C zones/dendrite
 popd
 
 banner "install"
-pkg info brand/sparse | grep -q installed
+pkg info brand/sparse | grep -qi installed
 if [[ $? != 0 ]]; then
     set -o errexit
     pfexec pkg install brand/sparse

@@ -2,7 +2,7 @@ use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
 use dendrite_common::network::{Cidr, Ipv6Cidr};
 use dendrite_common::ports::PortId;
-use dendrite_common::ports::QsfpPort;
+use dendrite_common::ports::RearPort;
 use dpd_client::types;
 use dpd_client::Client;
 use dpd_client::ClientState;
@@ -182,8 +182,8 @@ pub fn add_routes_dendrite(
 
         // TODO this assumes ddm only operates on rear ports, which will not be
         // true for multi-rack deployments.
-        let port_id = match QsfpPort::try_from(egress_port_num) {
-            Ok(qsfp) => PortId::Qsfp(qsfp),
+        let port_id = match RearPort::try_from(egress_port_num) {
+            Ok(rear) => PortId::Rear(rear),
             Err(e) => {
                 err!(log, ifname, "bad port name: {e}");
                 continue;
