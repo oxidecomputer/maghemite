@@ -211,7 +211,7 @@ pub fn add_routes_dendrite(
         };
         let route_set = types::RouteSet {
             cidr: cidr.into(),
-            target: types::RouteTarget::V6(target),
+            target: target.into(),
             replace: false,
         };
 
