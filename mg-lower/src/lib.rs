@@ -88,19 +88,29 @@ fn initialize(
 
     // get all imported routes from db
     let imported: HashSet<RouteHash> =
-        db_route_to_dendrite_route(db.get_imported4(), log, dpd)
-            .iter()
-            .map(|x| RouteHash(x.clone()))
-            .collect();
+        db_route_to_dendrite_route(db.get_imported4(), log, dpd);
 
     // get all routes created by mg-lower from dendrite
-    let active: HashSet<RouteHash> = rt
-        .block_on(async { dpd.route_ipv4_list(None, None).await })?
-        .items
-        .iter()
-        .filter(|x| x.tag == MG_LOWER_TAG)
-        .map(|x| RouteHash(x.clone()))
-        .collect();
+    let routes =
+        rt.block_on(async { dpd.route_ipv4_list(None, None).await })?;
+
+    let mut active: HashSet<RouteHash> = HashSet::new();
+    for route in &routes.items {
+        for target in &route.targets {
+            if let dpd_client::types::RouteTarget::V4(t) = target {
+                if t.tag == MG_LOWER_TAG {
+                    if let Ok(rh) = RouteHash::new(
+                        route.cidr,
+                        t.port_id,
+                        t.link_id,
+                        t.tgt_ip.into(),
+                    ) {
+                        active.insert(rh);
+                    }
+                }
+            }
+        }
+    }
 
     // determine what routes need to be added and deleted
     let to_add = imported.difference(&active);
@@ -124,18 +134,10 @@ fn handle_change(
         return initialize(db, log, dpd, rt.clone());
     }
     let to_add = change.import.added.clone().into_iter().collect();
-    let to_add: HashSet<RouteHash> =
-        db_route_to_dendrite_route(to_add, log, dpd)
-            .iter()
-            .map(|x| RouteHash(x.clone()))
-            .collect();
+    let to_add = db_route_to_dendrite_route(to_add, log, dpd);
 
     let to_del = change.import.removed.clone().into_iter().collect();
-    let to_del: HashSet<RouteHash> =
-        db_route_to_dendrite_route(to_del, log, dpd)
-            .iter()
-            .map(|x| RouteHash(x.clone()))
-            .collect();
+    let to_del = db_route_to_dendrite_route(to_del, log, dpd);
 
     update_dendrite(to_add.iter(), to_del.iter(), dpd, rt.clone(), log)?;
 
