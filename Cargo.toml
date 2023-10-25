@@ -79,10 +79,10 @@ mg-common = { path = "mg-common" }
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "common_ports"
+branch = "main"
 package = "dpd-client"
 
 [workspace.dependencies.dendrite-common]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "common_ports"
+branch = "main"
 package = "common"
