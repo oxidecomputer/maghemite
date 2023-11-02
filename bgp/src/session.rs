@@ -9,7 +9,7 @@ use crate::messages::{
 use crate::router::Router;
 use crate::{dbg, err, inf, wrn};
 use mg_common::{lock, read_lock, write_lock};
-use rdb::{Asn, Db, Prefix4, Route4Key};
+use rdb::{Asn, Db, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -724,6 +724,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         // Build a map of prefixes keyed by nexthop.
+        /*
         let mut m = BTreeMap::<Ipv4Addr, Vec<Prefix4>>::new();
         for o in originated {
             match m.get_mut(&o.nexthop) {
@@ -735,6 +736,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             }
         }
+        */
 
         // Ensure the router has a fanout entry for this peer.
         let mut fanout = write_lock!(self.fanout);
@@ -747,25 +749,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         );
         drop(fanout);
 
-        // Send a set of updates (one for each nexthop) to our peer with the
-        // prefixes this router is originating.
-        for (nexthop, prefixes) in m {
-            let mut path_attributes = self.router.base_attributes();
-            path_attributes
-                .push(PathAttributeValue::NextHop(nexthop.into()).into());
-            let mut update = UpdateMessage {
-                path_attributes,
-                ..Default::default()
-            };
-            for p in prefixes {
-                update.nlri.push(p.into());
-            }
-            self.send_keepalive(&pc.conn);
-            read_lock!(self.fanout).send_all(&update);
-            if let Err(e) = self.send_update(update, &pc.conn) {
-                err!(self; "sending update to peer failed {e}");
-                return self.exit_established(pc);
-            }
+        // Send an update to our peer with the prefixes this router is
+        // originating.
+        let mut update = UpdateMessage {
+            path_attributes: self.router.base_attributes(),
+            ..Default::default()
+        };
+        for p in originated {
+            update.nlri.push(p.into());
+        }
+        self.send_keepalive(&pc.conn);
+        read_lock!(self.fanout).send_all(&update);
+        if let Err(e) = self.send_update(update, &pc.conn) {
+            err!(self; "sending update to peer failed {e}");
+            return self.exit_established(pc);
         }
 
         // Transition to the established state.
@@ -932,9 +929,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Send an update message to the session peer.
     fn send_update(
         &self,
-        update: UpdateMessage,
+        mut update: UpdateMessage,
         conn: &Cnx,
     ) -> Result<(), Error> {
+        let nexthop = match conn.local() {
+            Some(sockaddr) => sockaddr.ip(),
+            None => {
+                wrn!(self; "connection has no local address");
+                return Err(Error::Disconnected);
+            }
+        };
+
+        update
+            .path_attributes
+            .push(PathAttributeValue::NextHop(nexthop).into());
+
         conn.send(update.into())
     }
 
@@ -974,9 +983,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             };
             for p in prefixes {
                 update.withdrawn.push(p.into());
-                if let Err(e) =
-                    self.db.remove_origin4(Route4Key { prefix: p, nexthop })
-                {
+                if let Err(e) = self.db.remove_origin4(p) {
                     err!(self; "failed to remove origin {p} from db {e}");
                 }
             }

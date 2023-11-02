@@ -13,9 +13,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
 use http::status::StatusCode;
-use rdb::{
-    Asn, BgpRouterInfo, PolicyAction, Prefix4, Route4ImportKey, Route4Key,
-};
+use rdb::{Asn, BgpRouterInfo, PolicyAction, Prefix4, Route4ImportKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{info, Logger};
@@ -145,9 +143,6 @@ pub struct AddExportPolicyRequest {
 pub struct Originate4Request {
     /// ASN of the router to originate from.
     pub asn: u32,
-
-    /// Nexthop to originate.
-    pub nexthop: Ipv4Addr,
 
     /// Set of prefixes to originate.
     pub prefixes: Vec<Prefix4>,
@@ -468,7 +463,7 @@ pub async fn originate4(
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
-        .originate4(rq.nexthop, prefixes)
+        .originate4(prefixes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
@@ -494,7 +489,7 @@ pub async fn withdraw4(
 pub async fn get_originated4(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<GetOriginated4Request>,
-) -> Result<HttpResponseOk<Vec<Route4Key>>, HttpError> {
+) -> Result<HttpResponseOk<Vec<Prefix4>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     let originated = get_router!(ctx, rq.asn)?
@@ -535,12 +530,6 @@ pub struct ApplyRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct BgpRoute {
-    pub nexthop: Ipv4Addr,
-    pub prefixes: Vec<Prefix4>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct BgpPeerConfig {
     pub asn: u32,
     pub host: SocketAddr,
@@ -551,7 +540,7 @@ pub struct BgpPeerConfig {
     pub connect_retry: u64,
     pub keepalive: u64,
     pub resolution: u64,
-    pub routes: Vec<BgpRoute>,
+    pub originate: Vec<Prefix4>,
 }
 
 #[endpoint { method = POST, path = "/bgp/apply" }]
@@ -672,12 +661,10 @@ pub async fn bgp_apply(
     }
 
     for peer in rq.peers {
-        for x in peer.routes {
-            let prefixes = x.prefixes.into_iter().map(Into::into).collect();
-            get_router!(ctx.context(), peer.asn)?
-                .originate4(x.nexthop, prefixes)
-                .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-        }
+        let prefixes = peer.originate.into_iter().map(Into::into).collect();
+        get_router!(ctx.context(), peer.asn)?
+            .originate4(prefixes)
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     }
 
     Ok(HttpResponseUpdatedNoContent())

@@ -187,10 +187,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Array_of_Route4Key",
+                  "title": "Array_of_Prefix4",
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Route4Key"
+                    "$ref": "#/components/schemas/Prefix4"
                   }
                 }
               }
@@ -358,18 +358,6 @@
     }
   },
   "components": {
-    "responses": {
-      "Error": {
-        "description": "Error",
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/Error"
-            }
-          }
-        }
-      }
-    },
     "schemas": {
       "AddNeighborRequest": {
         "type": "object",
@@ -489,16 +477,16 @@
           "name": {
             "type": "string"
           },
+          "originate": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prefix4"
+            }
+          },
           "resolution": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0
-          },
-          "routes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BgpRoute"
-            }
           }
         },
         "required": [
@@ -510,27 +498,8 @@
           "idle_hold_time",
           "keepalive",
           "name",
-          "resolution",
-          "routes"
-        ]
-      },
-      "BgpRoute": {
-        "type": "object",
-        "properties": {
-          "nexthop": {
-            "type": "string",
-            "format": "ipv4"
-          },
-          "prefixes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Prefix4"
-            }
-          }
-        },
-        "required": [
-          "nexthop",
-          "prefixes"
+          "originate",
+          "resolution"
         ]
       },
       "DeleteNeighborRequest": {
@@ -720,11 +689,6 @@
             "format": "uint32",
             "minimum": 0
           },
-          "nexthop": {
-            "description": "Nexthop to originate.",
-            "type": "string",
-            "format": "ipv4"
-          },
           "prefixes": {
             "description": "Set of prefixes to originate.",
             "type": "array",
@@ -735,7 +699,6 @@
         },
         "required": [
           "asn",
-          "nexthop",
           "prefixes"
         ]
       },
@@ -816,22 +779,6 @@
           "priority"
         ]
       },
-      "Route4Key": {
-        "type": "object",
-        "properties": {
-          "nexthop": {
-            "type": "string",
-            "format": "ipv4"
-          },
-          "prefix": {
-            "$ref": "#/components/schemas/Prefix4"
-          }
-        },
-        "required": [
-          "nexthop",
-          "prefix"
-        ]
-      },
       "RouterInfo": {
         "type": "object",
         "properties": {
@@ -883,6 +830,18 @@
           "nexthop",
           "prefixes"
         ]
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
       }
     }
   }

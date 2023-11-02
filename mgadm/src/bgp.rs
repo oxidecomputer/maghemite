@@ -84,9 +84,6 @@ pub struct Originate4 {
     /// Autonomous system number for the router to originated the prefixes from.
     pub asn: u32,
 
-    /// Nexthop to originate.
-    pub nexthop: Ipv4Addr,
-
     /// Set of prefixes to originate.
     pub prefixes: Vec<Prefix4>,
 }
@@ -280,11 +277,10 @@ async fn get_originated(c: Client, asn: u32) {
         .into_inner();
 
     let mut tw = TabWriter::new(stdout());
-    writeln!(&mut tw, "{}\t{}", "Prefix".dimmed(), "Nexthop".dimmed(),)
-        .unwrap();
+    writeln!(&mut tw, "{}", "Prefix".dimmed()).unwrap();
 
-    for route in &originated {
-        writeln!(&mut tw, "{}\t{}", route.prefix, route.nexthop).unwrap();
+    for prefix in &originated {
+        writeln!(&mut tw, "{}", prefix).unwrap();
     }
 
     tw.flush().unwrap();
@@ -303,7 +299,6 @@ async fn delete_neighbor(asn: u32, addr: IpAddr, c: Client) {
 async fn originate4(originate: Originate4, c: Client) {
     c.originate4(&types::Originate4Request {
         asn: originate.asn,
-        nexthop: originate.nexthop,
         prefixes: originate.prefixes.clone(),
     })
     .await

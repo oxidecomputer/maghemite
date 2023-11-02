@@ -7,6 +7,8 @@ use std::hash::{Hash, Hasher};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
+use crate::error::Error;
+
 #[derive(Copy, Clone, Eq, Serialize, Deserialize, JsonSchema, Debug)]
 pub struct Route4ImportKey {
     /// The destination prefix of the route.
@@ -119,6 +121,20 @@ impl Prefix4 {
         let mut buf: Vec<u8> = self.value.octets().into();
         buf.push(self.length);
         buf
+    }
+
+    pub fn from_db_key(v: &[u8]) -> Result<Self, Error> {
+        if v.len() < 5 {
+            Err(Error::DbKey(format!(
+                "buffer to short for prefix 4 key {} < 5",
+                v.len()
+            )))
+        } else {
+            Ok(Prefix4 {
+                value: Ipv4Addr::new(v[0], v[1], v[2], v[3]),
+                length: v[4],
+            })
+        }
     }
 }
 
@@ -256,18 +272,18 @@ impl ImportChangeSet {
 
 #[derive(Clone, Default)]
 pub struct OriginChangeSet {
-    pub added: HashSet<Route4Key>,
-    pub removed: HashSet<Route4Key>,
+    pub added: HashSet<Prefix4>,
+    pub removed: HashSet<Prefix4>,
 }
 
 impl OriginChangeSet {
-    pub fn added<V: Into<HashSet<Route4Key>>>(v: V) -> Self {
+    pub fn added<V: Into<HashSet<Prefix4>>>(v: V) -> Self {
         Self {
             added: v.into(),
             ..Default::default()
         }
     }
-    pub fn removed<V: Into<HashSet<Route4Key>>>(v: V) -> Self {
+    pub fn removed<V: Into<HashSet<Prefix4>>>(v: V) -> Self {
         Self {
             removed: v.into(),
             ..Default::default()

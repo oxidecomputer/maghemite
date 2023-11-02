@@ -201,6 +201,10 @@ impl BgpConnection for BgpConnectionChannel {
     fn peer(&self) -> SocketAddr {
         self.peer
     }
+
+    fn local(&self) -> Option<SocketAddr> {
+        Some(self.addr)
+    }
 }
 
 impl BgpConnectionChannel {

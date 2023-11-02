@@ -122,6 +122,25 @@ impl BgpConnection for BgpConnectionTcp {
     fn peer(&self) -> SocketAddr {
         self.peer
     }
+
+    fn local(&self) -> Option<SocketAddr> {
+        let result = match lock!(self.conn).as_ref() {
+            Some(conn) => conn.local_addr(),
+            None => return None,
+        };
+
+        let sockaddr = match result {
+            Ok(sa) => sa,
+            Err(e) => {
+                warn!(
+                    self.log,
+                    "failed to get local address for TCP connection: {e}"
+                );
+                return None;
+            }
+        };
+        Some(sockaddr)
+    }
 }
 
 impl Drop for BgpConnectionTcp {

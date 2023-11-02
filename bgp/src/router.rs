@@ -9,10 +9,9 @@ use crate::messages::{
 };
 use crate::session::{FsmEvent, NeighborInfo, SessionInfo, SessionRunner};
 use mg_common::{lock, read_lock, write_lock};
-use rdb::{Asn, Db, Prefix4, Route4Key};
+use rdb::{Asn, Db};
 use slog::Logger;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -185,25 +184,15 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    pub fn originate4(
-        &self,
-        nexthop: Ipv4Addr,
-        prefixes: Vec<Prefix>,
-    ) -> Result<(), Error> {
+    pub fn originate4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
         let mut update = UpdateMessage {
             path_attributes: self.base_attributes(),
             ..Default::default()
         };
-        update
-            .path_attributes
-            .push(PathAttributeValue::NextHop(nexthop.into()).into());
 
         for p in &prefixes {
             update.nlri.push(p.clone());
-            self.db.add_origin4(Route4Key {
-                prefix: p.into(),
-                nexthop,
-            })?;
+            self.db.add_origin4(p.into())?;
         }
 
         read_lock!(self.fanout).send_all(&update);
@@ -226,10 +215,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         for p in &prefixes {
             update.withdrawn.push(p.clone());
-            self.db.remove_origin4(Route4Key {
-                prefix: p.into(),
-                nexthop,
-            })?;
+            self.db.remove_origin4(p.into())?;
         }
 
         read_lock!(self.fanout).send_all(&update);
@@ -298,37 +284,16 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
     fn announce_all(&self) -> Result<(), Error> {
         let originated = self.db.get_originated4()?;
-        let mut by_nexthop: HashMap<Ipv4Addr, Vec<Prefix4>> = HashMap::new();
 
-        for route in &originated {
-            match by_nexthop.get_mut(&route.nexthop) {
-                Some(list) => {
-                    list.push(route.prefix);
-                }
-                None => {
-                    by_nexthop.insert(route.nexthop, vec![route.prefix]);
-                }
-            }
+        let mut update = UpdateMessage {
+            path_attributes: self.base_attributes(),
+            ..Default::default()
+        };
+        for p in &originated {
+            update.nlri.push((*p).into());
+            self.db.add_origin4(*p)?;
         }
-
-        for (nexthop, prefixes) in &by_nexthop {
-            let mut path_attributes = self.base_attributes();
-            path_attributes
-                .push(PathAttributeValue::NextHop((*nexthop).into()).into());
-
-            let mut update = UpdateMessage {
-                path_attributes: path_attributes.clone(),
-                ..Default::default()
-            };
-            for p in prefixes {
-                update.nlri.push((*p).into());
-                self.db.add_origin4(Route4Key {
-                    prefix: *p,
-                    nexthop: *nexthop,
-                })?;
-            }
-            read_lock!(self.fanout).send_all(&update);
-        }
+        read_lock!(self.fanout).send_all(&update);
 
         Ok(())
     }

@@ -91,8 +91,7 @@ fn test_basic_update() {
     let (r1, d1, r2, _d2) = two_router_test_setup("basic_update");
 
     // originate a prefix
-    r1.originate4(ip!("1.0.0.1"), vec![ip!("1.2.3.0/24")])
-        .expect("originate");
+    r1.originate4(vec![ip!("1.2.3.0/24")]).expect("originate");
 
     // once we reach established the originated routes should have propagated
     let r1_session = r1.get_session(ip!("2.0.0.1")).expect("get session one");
