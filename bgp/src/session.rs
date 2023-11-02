@@ -723,21 +723,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        // Build a map of prefixes keyed by nexthop.
-        /*
-        let mut m = BTreeMap::<Ipv4Addr, Vec<Prefix4>>::new();
-        for o in originated {
-            match m.get_mut(&o.nexthop) {
-                Some(ref mut prefixes) => {
-                    prefixes.push(o.prefix);
-                }
-                None => {
-                    m.insert(o.nexthop, vec![o.prefix]);
-                }
-            }
-        }
-        */
-
         // Ensure the router has a fanout entry for this peer.
         let mut fanout = write_lock!(self.fanout);
         fanout.add_egress(
@@ -1038,9 +1023,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.db.remove_nexthop4(k);
         }
 
+        let originated = match self.db.get_originated4() {
+            Ok(value) => value,
+            Err(e) => {
+                err!(self; "failed to get originated from db: {e}");
+                Vec::new()
+            }
+        };
+
         for n in &update.nlri {
+            let prefix = n.into();
+            // ignore prefixes we originate
+            if originated.contains(&prefix) {
+                continue;
+            }
             let k = rdb::Route4ImportKey {
-                prefix: n.into(),
+                prefix,
                 nexthop,
                 id,
                 priority,
