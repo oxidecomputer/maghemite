@@ -84,12 +84,12 @@ impl Db {
     }
 
     // TODO return previous value if this is an update.
-    pub fn add_origin4(&self, r: Route4Key) -> Result<(), Error> {
+    pub fn add_origin4(&self, p: Prefix4) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
-        tree.insert(r.db_key(), "")?;
+        tree.insert(p.db_key(), "")?;
         tree.flush()?;
         let g = self.generation.fetch_add(1, Ordering::SeqCst);
-        self.notify(ChangeSet::from_origin(OriginChangeSet::added([r]), g + 1));
+        self.notify(ChangeSet::from_origin(OriginChangeSet::added([p]), g + 1));
         Ok(())
     }
 
@@ -208,18 +208,18 @@ impl Db {
         Ok(result)
     }
 
-    pub fn remove_origin4(&self, r: Route4Key) -> Result<(), Error> {
+    pub fn remove_origin4(&self, p: Prefix4) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
-        tree.remove(r.db_key())?;
+        tree.remove(p.db_key())?;
         let g = self.generation.fetch_add(1, Ordering::SeqCst);
         self.notify(ChangeSet::from_origin(
-            OriginChangeSet::removed([r]),
+            OriginChangeSet::removed([p]),
             g + 1,
         ));
         Ok(())
     }
 
-    pub fn get_originated4(&self) -> Result<Vec<Route4Key>, Error> {
+    pub fn get_originated4(&self) -> Result<Vec<Prefix4>, Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         let result = tree
             .scan_prefix(vec![])
@@ -234,8 +234,8 @@ impl Db {
                         return None;
                     }
                 };
-                let key = String::from_utf8_lossy(&key);
-                Some(match key.parse() {
+                //let key = String::from_utf8_lossy(&key);
+                Some(match Prefix4::from_db_key(&key) {
                     Ok(item) => item,
                     Err(e) => {
                         error!(

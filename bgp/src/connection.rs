@@ -54,4 +54,7 @@ pub trait BgpConnection: Send + Clone {
 
     /// Return the socket address of the peer for this connection.
     fn peer(&self) -> SocketAddr;
+
+    // Return the local address being used for the connection.
+    fn local(&self) -> Option<SocketAddr>;
 }
