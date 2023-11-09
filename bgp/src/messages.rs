@@ -514,14 +514,14 @@ impl Prefix {
             return Err(Error::TooLarge("prefix too long".into()));
         }
         let mut buf = vec![self.length];
-        let n = (self.length as usize) >> 3;
+        let n = (self.length as usize).div_ceil(8);
         buf.extend_from_slice(&self.value[..n]);
         Ok(buf)
     }
 
     fn from_wire(input: &[u8]) -> Result<(&[u8], Prefix), Error> {
         let (input, len) = parse_u8(input)?;
-        let (input, value) = take(len >> 3)(input)?;
+        let (input, value) = take(len.div_ceil(8))(input)?;
         Ok((
             input,
             Prefix {
@@ -1461,6 +1461,16 @@ impl Capability {
             CapabilityCode::PrestandardRouteRefresh => {
                 //TODO handle for real
                 Ok((&input[len..], Capability::PrestandardRouteRefresh {}))
+            }
+
+            CapabilityCode::BGPExtendedMessage => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::BGPExtendedMessage {}))
+            }
+
+            CapabilityCode::LongLivedGracefulRestart => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::LongLivedGracefulRestart {}))
             }
 
             CapabilityCode::Experimental0 => Err(Error::Experimental),
