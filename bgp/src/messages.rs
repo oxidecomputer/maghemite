@@ -1410,8 +1410,6 @@ impl Capability {
         }
         let mut input = input;
 
-        println!("found cc: {code:?}");
-
         match code {
             CapabilityCode::MultiprotocolExtensions => {
                 let (input, afi) = be_u16(input)?;
@@ -1444,7 +1442,6 @@ impl Capability {
                         send_receive,
                     });
                     input = remaining;
-                    println!("to go {}", remaining.len());
                 }
                 Ok((input, Capability::AddPath { elements }))
             }
