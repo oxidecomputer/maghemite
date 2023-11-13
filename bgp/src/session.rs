@@ -7,7 +7,7 @@ use crate::messages::{
     PathAttributeValue, UpdateMessage,
 };
 use crate::router::Router;
-use crate::{dbg, err, inf, wrn};
+use crate::{dbg, err, inf, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db, Prefix4};
 use schemars::JsonSchema;
@@ -529,7 +529,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Err(e) =
             conn.connect(self.event_tx.clone(), self.clock.resolution)
         {
-            wrn!(self; "connect attempt failed: {e}");
+            wrn!(self; "initial connect attempt failed: {e}");
         }
         loop {
             // Check to see if a shutdown has been requested.
@@ -800,7 +800,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // We've received a keepliave from the peer, reset the hold timer
             // and re-enter the established state.
             FsmEvent::Message(Message::KeepAlive) => {
-                dbg!(self; "keepalive received");
+                trc!(self; "keepalive received");
                 self.clock.timers.hold_timer.reset();
                 FsmState::Established(pc)
             }
@@ -871,7 +871,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Send a keepalive message to the session peer.
     fn send_keepalive(&self, conn: &Cnx) {
-        dbg!(self; "sending keepalive");
+        trc!(self; "sending keepalive");
         if let Err(e) = conn.send(Message::KeepAlive) {
             err!(self; "failed to send keepalive {e}");
         }

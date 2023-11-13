@@ -6,7 +6,7 @@ use crate::messages::{
 };
 use crate::session::FsmEvent;
 use mg_common::lock;
-use slog::{debug, error, warn, Logger};
+use slog::{error, trace, warn, Logger};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
@@ -94,7 +94,7 @@ impl BgpConnection for BgpConnectionTcp {
                     timeout,
                     self.dropped.clone(),
                     self.log.clone(),
-                );
+                )?;
                 event_tx.send(FsmEvent::TcpConnectionConfirmed).map_err(
                     |e| {
                         Error::InternalCommunication(format!(
@@ -167,7 +167,7 @@ impl BgpConnectionTcp {
             Duration::from_millis(100),
             dropped.clone(),
             log.clone(),
-        );
+        )?;
         Ok(Self {
             peer,
             conn: Arc::new(Mutex::new(Some(conn))),
@@ -183,12 +183,9 @@ impl BgpConnectionTcp {
         timeout: Duration,
         dropped: Arc<AtomicBool>,
         log: Logger,
-    ) {
+    ) -> Result<(), Error> {
         if !timeout.is_zero() {
-            // Unwrap is OK here as this function only returns an error when a
-            // zero timeout is supplied.
-            conn.set_read_timeout(Some(timeout))
-                .unwrap_or_else(|_| panic!("set read timeout failed"));
+            conn.set_read_timeout(Some(timeout))?;
         }
 
         slog::info!(log, "spawning recv loop");
@@ -199,7 +196,7 @@ impl BgpConnectionTcp {
             }
             match Self::recv_msg(&mut conn, dropped.clone(), &log) {
                 Ok(msg) => {
-                    debug!(log, "[{peer}] recv: {msg:#?}");
+                    trace!(log, "[{peer}] recv: {msg:#?}");
                     if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
                         warn!(
                             log,
@@ -213,6 +210,8 @@ impl BgpConnectionTcp {
                 }
             }
         });
+
+        Ok(())
     }
 
     fn recv_header(
@@ -324,7 +323,7 @@ impl BgpConnectionTcp {
         log: &Logger,
         msg: Message,
     ) -> Result<(), Error> {
-        debug!(log, "sending {:#?}", msg);
+        trace!(log, "sending {:#?}", msg);
         let msg_buf = msg.to_wire()?;
         let header = Header {
             length: (msg_buf.len() + Header::WIRE_SIZE).try_into().map_err(
@@ -338,7 +337,7 @@ impl BgpConnectionTcp {
         };
         let mut buf = header.to_wire().to_vec();
         buf.extend_from_slice(&msg_buf);
-        debug!(log, "sending {:x?}", buf);
+        trace!(log, "sending {:x?}", buf);
         stream.write_all(&buf)?;
         Ok(())
     }

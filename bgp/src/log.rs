@@ -20,6 +20,18 @@ pub fn build_logger<W: Write + Send + 'static>(w: W) -> Logger {
 }
 
 #[macro_export]
+macro_rules! trc {
+    ($self:ident; $($args:tt)+) => {
+        slog::trace!(
+            $self.log,
+            "[{}] {}",
+            $self.neighbor.name,
+            format!($($args)+)
+        )
+    }
+}
+
+#[macro_export]
 macro_rules! dbg {
     ($self:ident; $($args:tt)+) => {
         slog::debug!(

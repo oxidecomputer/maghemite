@@ -514,14 +514,14 @@ impl Prefix {
             return Err(Error::TooLarge("prefix too long".into()));
         }
         let mut buf = vec![self.length];
-        let n = (self.length as usize) >> 3;
+        let n = (self.length as usize).div_ceil(8);
         buf.extend_from_slice(&self.value[..n]);
         Ok(buf)
     }
 
     fn from_wire(input: &[u8]) -> Result<(&[u8], Prefix), Error> {
         let (input, len) = parse_u8(input)?;
-        let (input, value) = take(len >> 3)(input)?;
+        let (input, value) = take(len.div_ceil(8))(input)?;
         Ok((
             input,
             Prefix {
@@ -1335,7 +1335,7 @@ pub enum Capability {
     PrestandardFqdn {},
 
     /// RFC 8810 (deprecated) TODO
-    PrestandardOpereationalMessage {},
+    PrestandardOperationalMessage {},
 
     /// RFC 8810
     Experimental {
@@ -1410,8 +1410,6 @@ impl Capability {
         }
         let mut input = input;
 
-        println!("found cc: {code:?}");
-
         match code {
             CapabilityCode::MultiprotocolExtensions => {
                 let (input, afi) = be_u16(input)?;
@@ -1444,7 +1442,6 @@ impl Capability {
                         send_receive,
                     });
                     input = remaining;
-                    println!("to go {}", remaining.len());
                 }
                 Ok((input, Capability::AddPath { elements }))
             }
@@ -1463,60 +1460,251 @@ impl Capability {
                 Ok((&input[len..], Capability::PrestandardRouteRefresh {}))
             }
 
-            CapabilityCode::Experimental0 => Err(Error::Experimental),
-            CapabilityCode::Experimental1 => Err(Error::Experimental),
-            CapabilityCode::Experimental2 => Err(Error::Experimental),
-            CapabilityCode::Experimental3 => Err(Error::Experimental),
-            CapabilityCode::Experimental4 => Err(Error::Experimental),
-            CapabilityCode::Experimental5 => Err(Error::Experimental),
-            CapabilityCode::Experimental6 => Err(Error::Experimental),
-            CapabilityCode::Experimental7 => Err(Error::Experimental),
-            CapabilityCode::Experimental8 => Err(Error::Experimental),
-            CapabilityCode::Experimental9 => Err(Error::Experimental),
-            CapabilityCode::Experimental10 => Err(Error::Experimental),
-            CapabilityCode::Experimental11 => Err(Error::Experimental),
-            CapabilityCode::Experimental12 => Err(Error::Experimental),
-            CapabilityCode::Experimental13 => Err(Error::Experimental),
-            CapabilityCode::Experimental14 => Err(Error::Experimental),
-            CapabilityCode::Experimental15 => Err(Error::Experimental),
-            CapabilityCode::Experimental16 => Err(Error::Experimental),
-            CapabilityCode::Experimental17 => Err(Error::Experimental),
-            CapabilityCode::Experimental18 => Err(Error::Experimental),
-            CapabilityCode::Experimental19 => Err(Error::Experimental),
-            CapabilityCode::Experimental20 => Err(Error::Experimental),
-            CapabilityCode::Experimental21 => Err(Error::Experimental),
-            CapabilityCode::Experimental22 => Err(Error::Experimental),
-            CapabilityCode::Experimental23 => Err(Error::Experimental),
-            CapabilityCode::Experimental24 => Err(Error::Experimental),
-            CapabilityCode::Experimental25 => Err(Error::Experimental),
-            CapabilityCode::Experimental26 => Err(Error::Experimental),
-            CapabilityCode::Experimental27 => Err(Error::Experimental),
-            CapabilityCode::Experimental28 => Err(Error::Experimental),
-            CapabilityCode::Experimental29 => Err(Error::Experimental),
-            CapabilityCode::Experimental30 => Err(Error::Experimental),
-            CapabilityCode::Experimental31 => Err(Error::Experimental),
-            CapabilityCode::Experimental32 => Err(Error::Experimental),
-            CapabilityCode::Experimental33 => Err(Error::Experimental),
-            CapabilityCode::Experimental34 => Err(Error::Experimental),
-            CapabilityCode::Experimental35 => Err(Error::Experimental),
-            CapabilityCode::Experimental36 => Err(Error::Experimental),
-            CapabilityCode::Experimental37 => Err(Error::Experimental),
-            CapabilityCode::Experimental38 => Err(Error::Experimental),
-            CapabilityCode::Experimental39 => Err(Error::Experimental),
-            CapabilityCode::Experimental40 => Err(Error::Experimental),
-            CapabilityCode::Experimental41 => Err(Error::Experimental),
-            CapabilityCode::Experimental42 => Err(Error::Experimental),
-            CapabilityCode::Experimental43 => Err(Error::Experimental),
-            CapabilityCode::Experimental44 => Err(Error::Experimental),
-            CapabilityCode::Experimental45 => Err(Error::Experimental),
-            CapabilityCode::Experimental46 => Err(Error::Experimental),
-            CapabilityCode::Experimental47 => Err(Error::Experimental),
-            CapabilityCode::Experimental48 => Err(Error::Experimental),
-            CapabilityCode::Experimental49 => Err(Error::Experimental),
-            CapabilityCode::Experimental50 => Err(Error::Experimental),
-            CapabilityCode::Experimental51 => Err(Error::Experimental),
-            CapabilityCode::Reserved => Err(Error::ReservedCapabilityCode),
-            x => Err(Error::UnsupportedCapabilityCode(x)),
+            CapabilityCode::BGPExtendedMessage => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::BGPExtendedMessage {}))
+            }
+
+            CapabilityCode::LongLivedGracefulRestart => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::LongLivedGracefulRestart {}))
+            }
+
+            CapabilityCode::MultipleRoutesToDestination => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::MultipleRoutesToDestination {}))
+            }
+
+            CapabilityCode::ExtendedNextHopEncoding => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::ExtendedNextHopEncoding {}))
+            }
+
+            CapabilityCode::OutboundRouteFiltering => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::OutboundRouteFiltering {}))
+            }
+
+            CapabilityCode::BgpSec => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::BgpSec {}))
+            }
+
+            CapabilityCode::MultipleLabels => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::MultipleLabels {}))
+            }
+
+            CapabilityCode::BgpRole => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::BgpRole {}))
+            }
+
+            CapabilityCode::DynamicCapability => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::DynamicCapability {}))
+            }
+
+            CapabilityCode::MultisessionBgp => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::MultisessionBgp {}))
+            }
+
+            CapabilityCode::RoutingPolicyDistribution => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::RoutingPolicyDistribution {}))
+            }
+
+            CapabilityCode::PrestandardOrfAndPd => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::PrestandardOrfAndPd {}))
+            }
+
+            CapabilityCode::PrestandardOutboundRouteFiltering => {
+                //TODO handle for real
+                Ok((
+                    &input[len..],
+                    Capability::PrestandardOutboundRouteFiltering {},
+                ))
+            }
+
+            CapabilityCode::PrestandardMultisession => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::PrestandardMultisession {}))
+            }
+
+            CapabilityCode::PrestandardFqdn => {
+                //TODO handle for real
+                Ok((&input[len..], Capability::PrestandardFqdn {}))
+            }
+
+            CapabilityCode::PrestandardOperationalMessage => {
+                //TODO handle for real
+                Ok((
+                    &input[len..],
+                    Capability::PrestandardOperationalMessage {},
+                ))
+            }
+
+            CapabilityCode::Experimental0 => {
+                Ok((&input[len..], Capability::Experimental { code: 0 }))
+            }
+            CapabilityCode::Experimental1 => {
+                Ok((&input[len..], Capability::Experimental { code: 1 }))
+            }
+            CapabilityCode::Experimental2 => {
+                Ok((&input[len..], Capability::Experimental { code: 2 }))
+            }
+            CapabilityCode::Experimental3 => {
+                Ok((&input[len..], Capability::Experimental { code: 3 }))
+            }
+            CapabilityCode::Experimental4 => {
+                Ok((&input[len..], Capability::Experimental { code: 4 }))
+            }
+            CapabilityCode::Experimental5 => {
+                Ok((&input[len..], Capability::Experimental { code: 5 }))
+            }
+            CapabilityCode::Experimental6 => {
+                Ok((&input[len..], Capability::Experimental { code: 6 }))
+            }
+            CapabilityCode::Experimental7 => {
+                Ok((&input[len..], Capability::Experimental { code: 7 }))
+            }
+            CapabilityCode::Experimental8 => {
+                Ok((&input[len..], Capability::Experimental { code: 8 }))
+            }
+            CapabilityCode::Experimental9 => {
+                Ok((&input[len..], Capability::Experimental { code: 9 }))
+            }
+            CapabilityCode::Experimental10 => {
+                Ok((&input[len..], Capability::Experimental { code: 10 }))
+            }
+            CapabilityCode::Experimental11 => {
+                Ok((&input[len..], Capability::Experimental { code: 11 }))
+            }
+            CapabilityCode::Experimental12 => {
+                Ok((&input[len..], Capability::Experimental { code: 12 }))
+            }
+            CapabilityCode::Experimental13 => {
+                Ok((&input[len..], Capability::Experimental { code: 13 }))
+            }
+            CapabilityCode::Experimental14 => {
+                Ok((&input[len..], Capability::Experimental { code: 14 }))
+            }
+            CapabilityCode::Experimental15 => {
+                Ok((&input[len..], Capability::Experimental { code: 15 }))
+            }
+            CapabilityCode::Experimental16 => {
+                Ok((&input[len..], Capability::Experimental { code: 16 }))
+            }
+            CapabilityCode::Experimental17 => {
+                Ok((&input[len..], Capability::Experimental { code: 17 }))
+            }
+            CapabilityCode::Experimental18 => {
+                Ok((&input[len..], Capability::Experimental { code: 18 }))
+            }
+            CapabilityCode::Experimental19 => {
+                Ok((&input[len..], Capability::Experimental { code: 19 }))
+            }
+            CapabilityCode::Experimental20 => {
+                Ok((&input[len..], Capability::Experimental { code: 20 }))
+            }
+            CapabilityCode::Experimental21 => {
+                Ok((&input[len..], Capability::Experimental { code: 21 }))
+            }
+            CapabilityCode::Experimental22 => {
+                Ok((&input[len..], Capability::Experimental { code: 22 }))
+            }
+            CapabilityCode::Experimental23 => {
+                Ok((&input[len..], Capability::Experimental { code: 23 }))
+            }
+            CapabilityCode::Experimental24 => {
+                Ok((&input[len..], Capability::Experimental { code: 24 }))
+            }
+            CapabilityCode::Experimental25 => {
+                Ok((&input[len..], Capability::Experimental { code: 25 }))
+            }
+            CapabilityCode::Experimental26 => {
+                Ok((&input[len..], Capability::Experimental { code: 26 }))
+            }
+            CapabilityCode::Experimental27 => {
+                Ok((&input[len..], Capability::Experimental { code: 27 }))
+            }
+            CapabilityCode::Experimental28 => {
+                Ok((&input[len..], Capability::Experimental { code: 28 }))
+            }
+            CapabilityCode::Experimental29 => {
+                Ok((&input[len..], Capability::Experimental { code: 29 }))
+            }
+            CapabilityCode::Experimental30 => {
+                Ok((&input[len..], Capability::Experimental { code: 30 }))
+            }
+            CapabilityCode::Experimental31 => {
+                Ok((&input[len..], Capability::Experimental { code: 31 }))
+            }
+            CapabilityCode::Experimental32 => {
+                Ok((&input[len..], Capability::Experimental { code: 32 }))
+            }
+            CapabilityCode::Experimental33 => {
+                Ok((&input[len..], Capability::Experimental { code: 33 }))
+            }
+            CapabilityCode::Experimental34 => {
+                Ok((&input[len..], Capability::Experimental { code: 34 }))
+            }
+            CapabilityCode::Experimental35 => {
+                Ok((&input[len..], Capability::Experimental { code: 35 }))
+            }
+            CapabilityCode::Experimental36 => {
+                Ok((&input[len..], Capability::Experimental { code: 36 }))
+            }
+            CapabilityCode::Experimental37 => {
+                Ok((&input[len..], Capability::Experimental { code: 37 }))
+            }
+            CapabilityCode::Experimental38 => {
+                Ok((&input[len..], Capability::Experimental { code: 38 }))
+            }
+            CapabilityCode::Experimental39 => {
+                Ok((&input[len..], Capability::Experimental { code: 39 }))
+            }
+            CapabilityCode::Experimental40 => {
+                Ok((&input[len..], Capability::Experimental { code: 40 }))
+            }
+            CapabilityCode::Experimental41 => {
+                Ok((&input[len..], Capability::Experimental { code: 41 }))
+            }
+            CapabilityCode::Experimental42 => {
+                Ok((&input[len..], Capability::Experimental { code: 42 }))
+            }
+            CapabilityCode::Experimental43 => {
+                Ok((&input[len..], Capability::Experimental { code: 43 }))
+            }
+            CapabilityCode::Experimental44 => {
+                Ok((&input[len..], Capability::Experimental { code: 44 }))
+            }
+            CapabilityCode::Experimental45 => {
+                Ok((&input[len..], Capability::Experimental { code: 45 }))
+            }
+            CapabilityCode::Experimental46 => {
+                Ok((&input[len..], Capability::Experimental { code: 46 }))
+            }
+            CapabilityCode::Experimental47 => {
+                Ok((&input[len..], Capability::Experimental { code: 47 }))
+            }
+            CapabilityCode::Experimental48 => {
+                Ok((&input[len..], Capability::Experimental { code: 48 }))
+            }
+            CapabilityCode::Experimental49 => {
+                Ok((&input[len..], Capability::Experimental { code: 49 }))
+            }
+            CapabilityCode::Experimental50 => {
+                Ok((&input[len..], Capability::Experimental { code: 50 }))
+            }
+            CapabilityCode::Experimental51 => {
+                Ok((&input[len..], Capability::Experimental { code: 51 }))
+            }
+            CapabilityCode::Reserved => {
+                Ok((&input[len..], Capability::Reserved { code: 0 }))
+            }
         }
     }
 }
@@ -1597,7 +1785,7 @@ pub enum CapabilityCode {
     PrestandardFqdn = 184,
 
     /// RFC 8810 (deprecated)
-    PrestandardOpereationalMessage = 185,
+    PrestandardOperationalMessage = 185,
 
     /// RFC 8810
     Experimental0 = 186,
