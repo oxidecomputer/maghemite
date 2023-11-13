@@ -2,6 +2,7 @@ use crate::connection::BgpConnection;
 use crate::session::FsmEvent;
 use mg_common::lock;
 use slog::{error, Logger};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn, JoinHandle};
@@ -12,6 +13,8 @@ pub struct Clock {
     pub resolution: Duration,
     pub timers: Arc<ClockTimers>,
     pub join_handle: Arc<JoinHandle<()>>,
+
+    shutdown: Arc<AtomicBool>,
 }
 
 pub struct ClockTimers {
@@ -44,6 +47,7 @@ impl Clock {
         s: Sender<FsmEvent<Cnx>>,
         log: Logger,
     ) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
         let timers = Arc::new(ClockTimers {
             connect_retry_timer: Timer::new(connect_retry_interval),
             keepalive_timer: Timer::new(keepalive_interval),
@@ -51,12 +55,18 @@ impl Clock {
             idle_hold_timer: Timer::new(idle_hold_interval),
             delay_open_timer: Timer::new(delay_open_interval),
         });
-        let join_handle =
-            Arc::new(Self::run(resolution, timers.clone(), s, log));
+        let join_handle = Arc::new(Self::run(
+            resolution,
+            timers.clone(),
+            s,
+            shutdown.clone(),
+            log,
+        ));
         Self {
             resolution,
             timers,
             join_handle,
+            shutdown,
         }
     }
 
@@ -64,9 +74,13 @@ impl Clock {
         resolution: Duration,
         timers: Arc<ClockTimers>,
         s: Sender<FsmEvent<Cnx>>,
+        shutdown: Arc<AtomicBool>,
         log: Logger,
     ) -> JoinHandle<()> {
         spawn(move || loop {
+            if shutdown.load(Ordering::Relaxed) {
+                return;
+            }
             Self::step_all(resolution, timers.clone(), s.clone(), log.clone());
             sleep(resolution);
         })
@@ -129,6 +143,12 @@ impl Clock {
             }
             t.reset();
         }
+    }
+}
+
+impl Drop for Clock {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
     }
 }
 
