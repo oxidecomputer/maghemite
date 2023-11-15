@@ -999,16 +999,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, id: u32) {
-        /*
-        let nexthop = match update.nexthop4() {
-            Some(nh) => nh,
-            None => {
-                wrn!(self; "update with no nexthop recieved {update:#?}");
-                return;
-            }
-        };
-        */
-
         let priority = if update.graceful_shutdown() {
             0
         } else {
@@ -1016,15 +1006,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         for w in &update.withdrawn {
-            /*
-            let k = rdb::Route4ImportKey {
-                prefix: w.into(),
-                nexthop,
-                id,
-                priority,
-            };
-            self.db.remove_nexthop4(k);
-            */
             self.db.remove_peer_prefix4(id, w.into());
         }
 
