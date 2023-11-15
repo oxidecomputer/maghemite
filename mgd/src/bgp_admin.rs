@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use slog::{info, Logger};
 use std::collections::{BTreeMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -152,9 +152,6 @@ pub struct Originate4Request {
 pub struct Withdraw4Request {
     /// ASN of the router to originate from.
     pub asn: u32,
-
-    /// Nexthop to originate.
-    pub nexthop: Ipv4Addr,
 
     /// Set of prefixes to originate.
     pub prefixes: Vec<Prefix4>,
@@ -479,7 +476,7 @@ pub async fn withdraw4(
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
-        .withdraw4(rq.nexthop, prefixes)
+        .withdraw4(prefixes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
