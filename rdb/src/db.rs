@@ -282,7 +282,12 @@ impl Db {
         }
     }
 
-    pub fn remove_peer_nexthop4(&self, id: u32) -> Vec<Route4ImportKey> {
+    pub fn remove_peer_prefix4(&self, id: u32, prefix: Prefix4) {
+        let mut imported = lock!(self.imported);
+        imported.retain(|x| !(x.id == id && prefix == prefix));
+    }
+
+    pub fn remove_peer_prefixes4(&self, id: u32) -> Vec<Route4ImportKey> {
         let mut imported = lock!(self.imported);
         //TODO do in one pass instead of two
         let result = imported.iter().filter(|x| x.id == id).copied().collect();
