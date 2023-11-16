@@ -12,8 +12,8 @@ use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db};
 use slog::Logger;
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 use std::net::SocketAddr;
-use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
@@ -200,18 +200,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    pub fn withdraw4(
-        &self,
-        nexthop: Ipv4Addr,
-        prefixes: Vec<Prefix>,
-    ) -> Result<(), Error> {
+    pub fn withdraw4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
         let mut update = UpdateMessage {
             path_attributes: self.base_attributes(),
             ..Default::default()
         };
-        update
-            .path_attributes
-            .push(PathAttributeValue::NextHop(nexthop.into()).into());
 
         for p in &prefixes {
             update.withdrawn.push(p.clone());

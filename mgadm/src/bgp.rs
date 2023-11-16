@@ -93,9 +93,6 @@ pub struct Withdraw4 {
     /// Autonomous system number for the router to originated the prefixes from.
     pub asn: u32,
 
-    /// Nexthop to originate.
-    pub nexthop: Ipv4Addr,
-
     /// Set of prefixes to originate.
     pub prefixes: Vec<Prefix4>,
 }
@@ -308,7 +305,6 @@ async fn originate4(originate: Originate4, c: Client) {
 async fn withdraw4(withdraw: Withdraw4, c: Client) {
     c.withdraw4(&types::Withdraw4Request {
         asn: withdraw.asn,
-        nexthop: withdraw.nexthop,
         prefixes: withdraw.prefixes.clone(),
     })
     .await

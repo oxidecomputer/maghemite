@@ -943,7 +943,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
 
         // remove peer prefixes from db
-        let withdraw = self.db.remove_peer_nexthop4(pc.id);
+        let withdraw = self.db.remove_peer_prefixes4(pc.id);
 
         // propagate a withdraw message through fanout
         let mut m = BTreeMap::<Ipv4Addr, Vec<Prefix4>>::new();
@@ -988,7 +988,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             );
             return;
         }
-        self.add_to_rib(&update, id);
+        self.update_rib(&update, id);
 
         // NOTE: for now we are only acting as an edge router. This means we
         //       do not redistribute announcements. If this changes, uncomment
@@ -998,15 +998,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Update this router's RIB based on an update message from a peer.
-    fn add_to_rib(&self, update: &UpdateMessage, id: u32) {
-        let nexthop = match update.nexthop4() {
-            Some(nh) => nh,
-            None => {
-                wrn!(self; "update with no nexthop recieved {update:#?}");
-                return;
-            }
-        };
-
+    fn update_rib(&self, update: &UpdateMessage, id: u32) {
         let priority = if update.graceful_shutdown() {
             0
         } else {
@@ -1014,13 +1006,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         for w in &update.withdrawn {
-            let k = rdb::Route4ImportKey {
-                prefix: w.into(),
-                nexthop,
-                id,
-                priority,
-            };
-            self.db.remove_nexthop4(k);
+            self.db.remove_peer_prefix4(id, w.into());
         }
 
         let originated = match self.db.get_originated4() {
@@ -1031,19 +1017,32 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        for n in &update.nlri {
-            let prefix = n.into();
-            // ignore prefixes we originate
-            if originated.contains(&prefix) {
-                continue;
-            }
-            let k = rdb::Route4ImportKey {
-                prefix,
-                nexthop,
-                id,
-                priority,
+        if !update.nlri.is_empty() {
+            let nexthop = match update.nexthop4() {
+                Some(nh) => nh,
+                None => {
+                    wrn!(
+                        self;
+                        "update with nlri entries and no nexthop recieved {update:#?}"
+                    );
+                    return;
+                }
             };
-            self.db.set_nexthop4(k);
+
+            for n in &update.nlri {
+                let prefix = n.into();
+                // ignore prefixes we originate
+                if originated.contains(&prefix) {
+                    continue;
+                }
+                let k = rdb::Route4ImportKey {
+                    prefix,
+                    nexthop,
+                    id,
+                    priority,
+                };
+                self.db.set_nexthop4(k);
+            }
         }
 
         //TODO(IPv6) iterate through MpReachNlri attributes for IPv6

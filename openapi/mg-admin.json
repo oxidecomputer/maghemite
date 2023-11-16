@@ -812,11 +812,6 @@
             "format": "uint32",
             "minimum": 0
           },
-          "nexthop": {
-            "description": "Nexthop to originate.",
-            "type": "string",
-            "format": "ipv4"
-          },
           "prefixes": {
             "description": "Set of prefixes to originate.",
             "type": "array",
@@ -827,7 +822,6 @@
         },
         "required": [
           "asn",
-          "nexthop",
           "prefixes"
         ]
       }
