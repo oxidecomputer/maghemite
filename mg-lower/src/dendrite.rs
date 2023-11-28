@@ -93,13 +93,21 @@ where
         }
     }
     for r in to_del {
+        let port_id = r.port_id;
+        let link_id = r.link_id;
+
         let cidr = match r.cidr {
             Cidr::V4(cidr) => cidr,
             Cidr::V6(_) => continue,
         };
-        if let Err(e) =
-            rt.block_on(async { dpd.route_ipv4_delete(&cidr).await })
-        {
+        let target = match r.nexthop {
+            IpAddr::V4(tgt_ip) => tgt_ip,
+            IpAddr::V6(_) => continue,
+        };
+        if let Err(e) = rt.block_on(async {
+            dpd.route_ipv4_delete_target(&cidr, &port_id, &link_id, &target)
+                .await
+        }) {
             error!(log, "failed to create route {:?}: {}", r, e);
             Err(e)?;
         }
