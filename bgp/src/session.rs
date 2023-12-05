@@ -3,8 +3,9 @@ use crate::connection::BgpConnection;
 use crate::error::Error;
 use crate::fanout::Fanout;
 use crate::messages::{
-    AddPathElement, Capability, Message, OpenMessage, OptionalParameter,
-    PathAttributeValue, UpdateMessage,
+    AddPathElement, Capability, ErrorCode, ErrorSubcode, Message,
+    NotificationMessage, OpenMessage, OptionalParameter, PathAttributeValue,
+    UpdateMessage,
 };
 use crate::router::Router;
 use crate::{dbg, err, inf, trc, wrn};
@@ -686,6 +687,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             FsmEvent::Message(Message::Open(om)) => om,
             FsmEvent::HoldTimerExpires => {
                 wrn!(self; "open sent: hold timer expired");
+                self.send_hold_timer_expired_notification(&conn);
                 return FsmState::Connect;
             }
             other => {
@@ -742,6 +744,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             FsmEvent::HoldTimerExpires => {
                 wrn!(self; "open sent: hold timer expired");
                 self.clock.timers.hold_timer.disable();
+                self.send_hold_timer_expired_notification(&pc.conn);
                 FsmState::Connect
             }
 
@@ -826,6 +829,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // state and restart the peer FSM from the connect state.
             FsmEvent::HoldTimerExpires => {
                 wrn!(self; "hold timer expired");
+                self.send_hold_timer_expired_notification(&pc.conn);
                 self.exit_established(pc)
             }
 
@@ -922,6 +926,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         trc!(self; "sending keepalive");
         if let Err(e) = conn.send(Message::KeepAlive) {
             err!(self; "failed to send keepalive {e}");
+        }
+    }
+
+    fn send_hold_timer_expired_notification(&self, conn: &Cnx) {
+        self.send_notification(
+            conn,
+            ErrorCode::HoldTimerExpired,
+            ErrorSubcode::HoldTime(0),
+        )
+    }
+
+    fn send_notification(
+        &self,
+        conn: &Cnx,
+        error_code: ErrorCode,
+        error_subcode: ErrorSubcode,
+    ) {
+        trc!(self; "sending notification {error_code:?}/{error_subcode:?}");
+        if let Err(e) = conn.send(Message::Notification(NotificationMessage {
+            error_code,
+            error_subcode,
+            data: Vec::new(),
+        })) {
+            err!(self; "failed to send notification {e}");
         }
     }
 
