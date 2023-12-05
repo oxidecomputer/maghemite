@@ -401,6 +401,9 @@
           "name": {
             "type": "string"
           },
+          "passive": {
+            "type": "boolean"
+          },
           "resolution": {
             "type": "integer",
             "format": "uint64",
@@ -417,6 +420,7 @@
           "idle_hold_time",
           "keepalive",
           "name",
+          "passive",
           "resolution"
         ]
       },
@@ -483,6 +487,9 @@
               "$ref": "#/components/schemas/Prefix4"
             }
           },
+          "passive": {
+            "type": "boolean"
+          },
           "resolution": {
             "type": "integer",
             "format": "uint64",
@@ -499,6 +506,7 @@
           "keepalive",
           "name",
           "originate",
+          "passive",
           "resolution"
         ]
       },

@@ -336,9 +336,9 @@ pub struct SessionInfo {
     pub remote_asn: Option<u32>,
 }
 
-impl SessionInfo {
-    pub fn new() -> Arc<Mutex<SessionInfo>> {
-        Arc::new(Mutex::new(SessionInfo {
+impl Default for SessionInfo {
+    fn default() -> Self {
+        SessionInfo {
             connect_retry_counter: 0,
             allow_automatic_start: false,
             allow_automatic_stop: false,
@@ -350,7 +350,13 @@ impl SessionInfo {
             send_notification_without_open: false,
             track_tcp_state: false,
             remote_asn: None,
-        }))
+        }
+    }
+}
+
+impl SessionInfo {
+    pub fn new() -> Arc<Mutex<SessionInfo>> {
+        Arc::new(Mutex::new(SessionInfo::default()))
     }
 }
 
@@ -510,7 +516,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // The only event we respond to in idle is a manual start.
         match event {
-            FsmEvent::ManualStart => FsmState::Connect,
+            FsmEvent::ManualStart => {
+                if lock!(self.session).passive_tcp_establishment {
+                    let conn = Cnx::new(
+                        self.bind_addr,
+                        self.neighbor.host,
+                        self.log.clone(),
+                    );
+                    FsmState::Active(conn)
+                } else {
+                    FsmState::Connect
+                }
+            }
             x => {
                 wrn!(self; "event {:?} not allowed in idle", x);
                 FsmState::Idle
@@ -566,6 +583,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.clock.timers.hold_timer.reset();
                     self.clock.timers.hold_timer.enable();
                     lock!(self.session).connect_retry_counter = 0;
+                    self.clock.timers.connect_retry_timer.disable();
                     return FsmState::OpenSent(accepted);
                 }
 
@@ -581,6 +599,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.clock.timers.hold_timer.reset();
                     self.clock.timers.hold_timer.enable();
                     lock!(self.session).connect_retry_counter = 0;
+                    self.clock.timers.connect_retry_timer.disable();
                     return FsmState::OpenSent(conn);
                 }
 
@@ -608,6 +627,25 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // an open message from the peer.
         let om = match event {
             FsmEvent::Message(Message::Open(om)) => om,
+            FsmEvent::ConnectRetryTimerExpires => {
+                inf!(self; "active: connect retry timer expired");
+                return FsmState::Connect;
+            }
+            // The underlying connection has accepted a TCP connection
+            // initiated by the peer.
+            FsmEvent::Connected(accepted) => {
+                inf!(self; "active: accepted connection from {}", accepted.peer());
+                self.clock.timers.connect_retry_timer.disable();
+                if let Err(e) = self.send_open(&accepted) {
+                    err!(self; "active: send open failed {e}");
+                    return FsmState::Connect;
+                }
+                self.clock.timers.hold_timer.reset();
+                self.clock.timers.hold_timer.enable();
+                lock!(self.session).connect_retry_counter = 0;
+                self.clock.timers.connect_retry_timer.disable();
+                return FsmState::OpenSent(accepted);
+            }
             other => {
                 wrn!(self;
                     "active: expected open message, received {:#?}, ignoring",
@@ -655,6 +693,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self;
                     "open sent: expected open, received {:#?}, ignoring", other
                 );
+                self.clock.timers.connect_retry_timer.enable();
                 return FsmState::Active(conn);
             }
         };
@@ -662,6 +701,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             wrn!(self; "failed to handle open message: {e}");
             //TODO send a notification to the peer letting them know we are
             //     rejecting the open message?
+            self.clock.timers.connect_retry_timer.enable();
             return FsmState::Active(conn);
         }
 
@@ -699,6 +739,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.clock.timers.keepalive_timer.disable();
                 FsmState::Connect
             }
+            FsmEvent::HoldTimerExpires => {
+                wrn!(self; "open sent: hold timer expired");
+                self.clock.timers.hold_timer.disable();
+                FsmState::Connect
+            }
 
             // An event we are not expecting, log it and re-enter this state.
             other => {
@@ -734,20 +779,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         );
         drop(fanout);
 
+        self.send_keepalive(&pc.conn);
+
         // Send an update to our peer with the prefixes this router is
         // originating.
-        let mut update = UpdateMessage {
-            path_attributes: self.router.base_attributes(),
-            ..Default::default()
-        };
-        for p in originated {
-            update.nlri.push(p.into());
-        }
-        self.send_keepalive(&pc.conn);
-        read_lock!(self.fanout).send_all(&update);
-        if let Err(e) = self.send_update(update, &pc.conn) {
-            err!(self; "sending update to peer failed {e}");
-            return self.exit_established(pc);
+        if !originated.is_empty() {
+            let mut update = UpdateMessage {
+                path_attributes: self.router.base_attributes(),
+                ..Default::default()
+            };
+            for p in originated {
+                update.nlri.push(p.into());
+            }
+            read_lock!(self.fanout).send_all(&update);
+            if let Err(e) = self.send_update(update, &pc.conn) {
+                err!(self; "sending update to peer failed {e}");
+                return self.exit_established(pc);
+            }
         }
 
         // Transition to the established state.

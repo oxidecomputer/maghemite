@@ -5,7 +5,7 @@ use bgp::{
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
     router::Router,
-    session::{FsmEvent, FsmStateKind},
+    session::{FsmEvent, FsmStateKind, SessionInfo},
     BGP_PORT,
 };
 use dropshot::{
@@ -77,6 +77,7 @@ pub struct AddNeighborRequest {
     pub keepalive: u64,
     pub resolution: u64,
     pub group: String,
+    pub passive: bool,
 }
 
 impl From<AddNeighborRequest> for PeerConfig {
@@ -110,6 +111,7 @@ impl AddNeighborRequest {
             connect_retry: rq.connect_retry,
             keepalive: rq.keepalive,
             resolution: rq.resolution,
+            passive: rq.passive,
             group: group.clone(),
         }
     }
@@ -365,11 +367,17 @@ async fn add_neighbor(
 
     let (event_tx, event_rx) = channel();
 
+    let info = SessionInfo {
+        passive_tcp_establishment: rq.passive,
+        ..Default::default()
+    };
+
     get_router!(&ctx, rq.asn)?.new_session(
         rq.clone().into(),
         DEFAULT_BGP_LISTEN,
         event_tx.clone(),
         event_rx,
+        info,
     )?;
 
     ctx.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
@@ -383,6 +391,7 @@ async fn add_neighbor(
         keepalive: rq.keepalive,
         resolution: rq.resolution,
         group: rq.group.clone(),
+        passive: rq.passive,
     })?;
 
     start_bgp_session(&event_tx)?;
@@ -431,11 +440,17 @@ pub(crate) fn ensure_neighbor(
 
     let (event_tx, event_rx) = channel();
 
+    let info = SessionInfo {
+        passive_tcp_establishment: rq.passive,
+        ..Default::default()
+    };
+
     match get_router!(&ctx, rq.asn)?.new_session(
         rq.into(),
         DEFAULT_BGP_LISTEN,
         event_tx.clone(),
         event_rx,
+        info,
     ) {
         Ok(_) => {}
         Err(bgp::error::Error::PeerExists) => {
@@ -538,6 +553,7 @@ pub struct BgpPeerConfig {
     pub keepalive: u64,
     pub resolution: u64,
     pub originate: Vec<Prefix4>,
+    pub passive: bool,
 }
 
 #[endpoint { method = POST, path = "/bgp/apply" }]

@@ -121,6 +121,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         bind_addr: SocketAddr,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
+        info: SessionInfo,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         let mut a2s = lock!(self.addr_to_session);
         if a2s.contains_key(&peer.host.ip()) {
@@ -141,7 +142,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             Duration::from_secs(peer.hold_time),
             Duration::from_secs(peer.idle_hold_time),
             Duration::from_secs(peer.delay_open),
-            SessionInfo::new(),
+            Arc::new(Mutex::new(info)),
             event_rx,
             event_tx.clone(),
             neighbor.clone(),

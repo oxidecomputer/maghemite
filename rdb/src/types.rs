@@ -334,4 +334,5 @@ pub struct BgpNeighborInfo {
     pub keepalive: u64,
     pub resolution: u64,
     pub group: String,
+    pub passive: bool,
 }

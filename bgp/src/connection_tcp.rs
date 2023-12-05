@@ -54,8 +54,18 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         >,
         _timeout: Duration, //TODO implement
     ) -> Result<BgpConnectionTcp, Error> {
-        let (conn, peer) = self.listener.accept()?;
-        match lock!(addr_to_session).get(&peer.ip()) {
+        let (conn, mut peer) = self.listener.accept()?;
+
+        let ip = match peer.ip() {
+            v6 @ IpAddr::V6(ip) => match ip.to_ipv4() {
+                Some(v4) => IpAddr::V4(v4),
+                None => v6,
+            },
+            v4 @ IpAddr::V4(_) => v4,
+        };
+        peer.set_ip(ip);
+
+        match lock!(addr_to_session).get(&ip) {
             Some(event_tx) => Ok(BgpConnectionTcp::with_conn(
                 self.addr,
                 peer,
@@ -63,7 +73,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                 event_tx.clone(),
                 log,
             )?),
-            None => Err(Error::UnknownPeer),
+            None => Err(Error::UnknownPeer(ip)),
         }
     }
 }

@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use num_enum::TryFromPrimitiveError;
 
 #[derive(thiserror::Error, Debug)]
@@ -110,8 +112,8 @@ pub enum Error {
     #[error("Attempt to send a message when not connected")]
     NotConnected,
 
-    #[error("Connection attempt from unknown peer")]
-    UnknownPeer,
+    #[error("Connection attempt from unknown peer: {0}")]
+    UnknownPeer(IpAddr),
 
     #[error("Session for peer already exists")]
     PeerExists,

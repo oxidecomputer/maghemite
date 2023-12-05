@@ -140,6 +140,7 @@ fn start_bgp_routers(
                 keepalive: nbr.keepalive,
                 resolution: nbr.resolution,
                 group: nbr.group.clone(),
+                passive: nbr.passive,
             },
         )
         .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
