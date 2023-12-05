@@ -427,29 +427,37 @@
       "ApplyRequest": {
         "type": "object",
         "properties": {
-          "peer_group": {
-            "type": "string"
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
           },
-          "peers": {
+          "originate": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/BgpPeerConfig"
+              "$ref": "#/components/schemas/Prefix4"
+            }
+          },
+          "peers": {
+            "description": "Lists of peers indexed by peer group.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/BgpPeerConfig"
+              }
             }
           }
         },
         "required": [
-          "peer_group",
+          "asn",
+          "originate",
           "peers"
         ]
       },
       "BgpPeerConfig": {
         "type": "object",
         "properties": {
-          "asn": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
           "connect_retry": {
             "type": "integer",
             "format": "uint64",
@@ -481,12 +489,6 @@
           "name": {
             "type": "string"
           },
-          "originate": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Prefix4"
-            }
-          },
           "passive": {
             "type": "boolean"
           },
@@ -497,7 +499,6 @@
           }
         },
         "required": [
-          "asn",
           "connect_retry",
           "delay_open",
           "hold_time",
@@ -505,7 +506,6 @@
           "idle_hold_time",
           "keepalive",
           "name",
-          "originate",
           "passive",
           "resolution"
         ]

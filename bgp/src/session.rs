@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
@@ -1007,6 +1007,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 wrn!(self; "connection has no local address");
                 return Err(Error::Disconnected);
             }
+        };
+
+        let nexthop = match nexthop {
+            v6 @ IpAddr::V6(ip) => match ip.to_ipv4() {
+                Some(v4) => IpAddr::V4(v4),
+                None => v6,
+            },
+            v4 @ IpAddr::V4(_) => v4,
         };
 
         update

@@ -196,7 +196,9 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             self.db.add_origin4(p.into())?;
         }
 
-        read_lock!(self.fanout).send_all(&update);
+        if !update.nlri.is_empty() {
+            read_lock!(self.fanout).send_all(&update);
+        }
 
         Ok(())
     }
@@ -212,7 +214,9 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             self.db.remove_origin4(p.into())?;
         }
 
-        read_lock!(self.fanout).send_all(&update);
+        if !update.withdrawn.is_empty() {
+            read_lock!(self.fanout).send_all(&update);
+        }
 
         Ok(())
     }
