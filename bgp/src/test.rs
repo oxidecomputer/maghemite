@@ -28,7 +28,7 @@ macro_rules! wait_for_eq {
         }
     };
     ($lhs:expr, $rhs:expr) => {
-        wait_for_eq!($lhs, $rhs, 1, 10);
+        wait_for_eq!($lhs, $rhs, 1, 30);
     };
 }
 
