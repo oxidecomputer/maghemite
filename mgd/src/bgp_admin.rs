@@ -536,11 +536,24 @@ pub async fn graceful_shutdown(
     Ok(HttpResponseUpdatedNoContent())
 }
 
+/// Apply changes to an ASN.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ApplyRequest {
+    /// ASN to apply changes to.
     pub asn: u32,
+    /// Complete set of prefixes to originate. Any active prefixes not in this
+    /// list will be removed. All prefixes in this list are ensured to be in
+    /// the originating set.
     pub originate: Vec<Prefix4>,
-    /// Lists of peers indexed by peer group.
+    /// Lists of peers indexed by peer group. Set's within a peer group key are
+    /// a total set. For example, the value
+    ///
+    /// ```text
+    /// {"foo": [a, b, d]}
+    /// ```
+    /// Means that the peer group "foo" only contains the peers `a`, `b` and
+    /// `d`. If there is a peer `c` currently in the peer group "foo", it will
+    /// be removed.
     pub peers: HashMap<String, Vec<BgpPeerConfig>>,
 }
 

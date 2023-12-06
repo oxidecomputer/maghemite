@@ -8,7 +8,7 @@ use crate::messages::{
     UpdateMessage,
 };
 use crate::router::Router;
-use crate::{dbg, err, inf, trc, wrn};
+use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db, Prefix4};
 use schemars::JsonSchema;
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
@@ -515,7 +515,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        // The only event we respond to in idle is a manual start.
         match event {
             FsmEvent::ManualStart => {
                 self.clock.timers.idle_hold_timer.enable();
@@ -641,11 +640,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // initiated by the peer.
             FsmEvent::Connected(accepted) => {
                 inf!(self; "active: accepted connection from {}", accepted.peer());
-                self.clock.timers.connect_retry_timer.disable();
                 if let Err(e) = self.send_open(&accepted) {
                     err!(self; "active: send open failed {e}");
                     return FsmState::Idle;
                 }
+                self.clock.timers.connect_retry_timer.disable();
                 self.clock.timers.hold_timer.reset();
                 self.clock.timers.hold_timer.enable();
                 lock!(self.session).connect_retry_counter = 0;
@@ -951,7 +950,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         error_code: ErrorCode,
         error_subcode: ErrorSubcode,
     ) {
-        trc!(self; "sending notification {error_code:?}/{error_subcode:?}");
+        inf!(self; "sending notification {error_code:?}/{error_subcode:?}");
         if let Err(e) = conn.send(Message::Notification(NotificationMessage {
             error_code,
             error_subcode,
@@ -1001,21 +1000,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         mut update: UpdateMessage,
         conn: &Cnx,
     ) -> Result<(), Error> {
-        let nexthop = match conn.local() {
+        let nexthop = to_canonical(match conn.local() {
             Some(sockaddr) => sockaddr.ip(),
             None => {
                 wrn!(self; "connection has no local address");
                 return Err(Error::Disconnected);
             }
-        };
-
-        let nexthop = match nexthop {
-            v6 @ IpAddr::V6(ip) => match ip.to_ipv4() {
-                Some(v4) => IpAddr::V4(v4),
-                None => v6,
-            },
-            v4 @ IpAddr::V4(_) => v4,
-        };
+        });
 
         update
             .path_attributes
