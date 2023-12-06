@@ -126,7 +126,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
                 event_tx.clone(),
                 log,
             )),
-            None => Err(Error::UnknownPeer),
+            None => Err(Error::UnknownPeer(peer.ip())),
         }
     }
 }

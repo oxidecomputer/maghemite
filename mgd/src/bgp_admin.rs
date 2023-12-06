@@ -4,8 +4,9 @@ use bgp::{
     config::{PeerConfig, RouterConfig},
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
+    messages::Prefix,
     router::Router,
-    session::{FsmEvent, FsmStateKind},
+    session::{FsmEvent, FsmStateKind, SessionInfo},
     BGP_PORT,
 };
 use dropshot::{
@@ -17,7 +18,7 @@ use rdb::{Asn, BgpRouterInfo, PolicyAction, Prefix4, Route4ImportKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{info, Logger};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::mpsc::channel;
@@ -77,6 +78,7 @@ pub struct AddNeighborRequest {
     pub keepalive: u64,
     pub resolution: u64,
     pub group: String,
+    pub passive: bool,
 }
 
 impl From<AddNeighborRequest> for PeerConfig {
@@ -110,6 +112,7 @@ impl AddNeighborRequest {
             connect_retry: rq.connect_retry,
             keepalive: rq.keepalive,
             resolution: rq.resolution,
+            passive: rq.passive,
             group: group.clone(),
         }
     }
@@ -365,11 +368,17 @@ async fn add_neighbor(
 
     let (event_tx, event_rx) = channel();
 
+    let info = SessionInfo {
+        passive_tcp_establishment: rq.passive,
+        ..Default::default()
+    };
+
     get_router!(&ctx, rq.asn)?.new_session(
         rq.clone().into(),
         DEFAULT_BGP_LISTEN,
         event_tx.clone(),
         event_rx,
+        info,
     )?;
 
     ctx.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
@@ -383,6 +392,7 @@ async fn add_neighbor(
         keepalive: rq.keepalive,
         resolution: rq.resolution,
         group: rq.group.clone(),
+        passive: rq.passive,
     })?;
 
     start_bgp_session(&event_tx)?;
@@ -431,11 +441,17 @@ pub(crate) fn ensure_neighbor(
 
     let (event_tx, event_rx) = channel();
 
+    let info = SessionInfo {
+        passive_tcp_establishment: rq.passive,
+        ..Default::default()
+    };
+
     match get_router!(&ctx, rq.asn)?.new_session(
         rq.into(),
         DEFAULT_BGP_LISTEN,
         event_tx.clone(),
         event_rx,
+        info,
     ) {
         Ok(_) => {}
         Err(bgp::error::Error::PeerExists) => {
@@ -520,15 +536,29 @@ pub async fn graceful_shutdown(
     Ok(HttpResponseUpdatedNoContent())
 }
 
+/// Apply changes to an ASN.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ApplyRequest {
-    pub peer_group: String,
-    pub peers: Vec<BgpPeerConfig>,
+    /// ASN to apply changes to.
+    pub asn: u32,
+    /// Complete set of prefixes to originate. Any active prefixes not in this
+    /// list will be removed. All prefixes in this list are ensured to be in
+    /// the originating set.
+    pub originate: Vec<Prefix4>,
+    /// Lists of peers indexed by peer group. Set's within a peer group key are
+    /// a total set. For example, the value
+    ///
+    /// ```text
+    /// {"foo": [a, b, d]}
+    /// ```
+    /// Means that the peer group "foo" only contains the peers `a`, `b` and
+    /// `d`. If there is a peer `c` currently in the peer group "foo", it will
+    /// be removed.
+    pub peers: HashMap<String, Vec<BgpPeerConfig>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct BgpPeerConfig {
-    pub asn: u32,
     pub host: SocketAddr,
     pub name: String,
     pub hold_time: u64,
@@ -537,7 +567,7 @@ pub struct BgpPeerConfig {
     pub connect_retry: u64,
     pub keepalive: u64,
     pub resolution: u64,
-    pub originate: Vec<Prefix4>,
+    pub passive: bool,
 }
 
 #[endpoint { method = POST, path = "/bgp/apply" }]
@@ -549,10 +579,6 @@ pub async fn bgp_apply(
     let rq = request.into_inner();
 
     info!(log, "apply: {rq:#?}");
-
-    let mut asns: Vec<u32> = rq.peers.iter().map(|x| x.asn).collect();
-    asns.sort();
-    asns.dedup();
 
     #[derive(Debug, Eq)]
     struct Nbr {
@@ -572,97 +598,122 @@ pub async fn bgp_apply(
         }
     }
 
-    let current: Vec<rdb::BgpNeighborInfo> = ctx
-        .context()
-        .db
-        .get_bgp_neighbors()
-        .map_err(Error::Db)?
-        .into_iter()
-        .filter(|x| x.group == rq.peer_group)
-        .collect();
+    for (group, peers) in &rq.peers {
+        let current: Vec<rdb::BgpNeighborInfo> = ctx
+            .context()
+            .db
+            .get_bgp_neighbors()
+            .map_err(Error::Db)?
+            .into_iter()
+            .filter(|x| &x.group == group)
+            .collect();
 
-    let current_nbr_addrs: HashSet<Nbr> = current
-        .iter()
-        .map(|x| Nbr {
-            addr: x.host.ip(),
-            asn: x.asn,
-        })
-        .collect();
-
-    let specified_nbr_addrs: HashSet<Nbr> = rq
-        .peers
-        .iter()
-        .map(|x| Nbr {
-            addr: x.host.ip(),
-            asn: x.asn,
-        })
-        .collect();
-
-    let to_delete = current_nbr_addrs.difference(&specified_nbr_addrs);
-    let to_add = specified_nbr_addrs.difference(&current_nbr_addrs);
-
-    info!(log, "adding {to_add:#?}");
-    info!(log, "removing {to_delete:#?}");
-
-    let mut nbr_config = Vec::new();
-    for nbr in to_add {
-        let cfg = rq
-            .peers
+        let current_nbr_addrs: HashSet<Nbr> = current
             .iter()
-            .find(|x| x.host.ip() == nbr.addr)
-            .ok_or(Error::NotFound(nbr.addr.to_string()))?;
-        nbr_config.push((nbr, cfg));
-    }
+            .map(|x| Nbr {
+                addr: x.host.ip(),
+                asn: x.asn,
+            })
+            .collect();
 
-    // TODO all the db modification that happens below needs to happen in a
-    // transaction.
+        let specified_nbr_addrs: HashSet<Nbr> = peers
+            .iter()
+            .map(|x| Nbr {
+                addr: x.host.ip(),
+                asn: rq.asn,
+            })
+            .collect();
 
-    for asn in asns {
+        let to_delete = current_nbr_addrs.difference(&specified_nbr_addrs);
+        let to_add = specified_nbr_addrs.difference(&current_nbr_addrs);
+
+        info!(log, "nbr: current {current:#?}");
+        info!(log, "nbr: adding {to_add:#?}");
+        info!(log, "nbr: removing {to_delete:#?}");
+
+        let mut nbr_config = Vec::new();
+        for nbr in to_add {
+            let cfg = peers
+                .iter()
+                .find(|x| x.host.ip() == nbr.addr)
+                .ok_or(Error::NotFound(nbr.addr.to_string()))?;
+            nbr_config.push((nbr, cfg));
+        }
+
+        // TODO all the db modification that happens below needs to happen in a
+        // transaction.
+
         ensure_router(
             ctx.context().clone(),
             NewRouterRequest {
-                asn,
-                id: asn,
+                asn: rq.asn,
+                id: rq.asn,
                 listen: DEFAULT_BGP_LISTEN.to_string(), //TODO as parameter
             },
         )
         .await?;
-    }
 
-    for (nbr, cfg) in nbr_config {
-        add_neighbor(
-            ctx.context().clone(),
-            AddNeighborRequest::from_bgp_peer_config(
-                nbr.asn,
-                rq.peer_group.clone(),
-                cfg.clone(),
-            ),
-            log.clone(),
-        )
-        .await?;
-    }
-
-    for nbr in to_delete {
-        remove_neighbor(ctx.context().clone(), nbr.asn, nbr.addr).await?;
-
-        let mut routers = lock!(ctx.context().bgp.router);
-        let mut remove = false;
-        if let Some(r) = routers.get(&nbr.asn) {
-            remove = lock!(r.sessions).is_empty();
+        for (nbr, cfg) in nbr_config {
+            add_neighbor(
+                ctx.context().clone(),
+                AddNeighborRequest::from_bgp_peer_config(
+                    nbr.asn,
+                    group.clone(),
+                    cfg.clone(),
+                ),
+                log.clone(),
+            )
+            .await?;
         }
-        if remove {
-            if let Some(r) = routers.remove(&nbr.asn) {
-                r.shutdown()
-            };
+
+        for nbr in to_delete {
+            remove_neighbor(ctx.context().clone(), nbr.asn, nbr.addr).await?;
+
+            let mut routers = lock!(ctx.context().bgp.router);
+            let mut remove = false;
+            if let Some(r) = routers.get(&nbr.asn) {
+                remove = lock!(r.sessions).is_empty();
+            }
+            if remove {
+                if let Some(r) = routers.remove(&nbr.asn) {
+                    r.shutdown()
+                };
+            }
         }
     }
 
-    for peer in rq.peers {
-        let prefixes = peer.originate.into_iter().map(Into::into).collect();
-        get_router!(ctx.context(), peer.asn)?
-            .originate4(prefixes)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-    }
+    let current_originate: HashSet<Prefix4> = ctx
+        .context()
+        .db
+        .get_originated4()
+        .map_err(Error::Db)?
+        .into_iter()
+        .collect();
+
+    let specified_originate: HashSet<Prefix4> =
+        rq.originate.iter().cloned().collect();
+
+    let to_delete = current_originate
+        .difference(&specified_originate)
+        .map(|x| (*x).into())
+        .collect();
+
+    let to_add: Vec<Prefix> = specified_originate
+        .difference(&current_originate)
+        .map(|x| (*x).into())
+        .collect();
+
+    info!(log, "origin: current {current_originate:#?}");
+    info!(log, "origin: adding {to_add:#?}");
+    info!(log, "origin: removing {to_delete:#?}");
+
+    get_router!(ctx.context(), rq.asn)?
+        .originate4(to_add)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    get_router!(ctx.context(), rq.asn)?
+        .withdraw4(to_delete)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
 }

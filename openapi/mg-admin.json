@@ -401,6 +401,9 @@
           "name": {
             "type": "string"
           },
+          "passive": {
+            "type": "boolean"
+          },
           "resolution": {
             "type": "integer",
             "format": "uint64",
@@ -417,28 +420,11 @@
           "idle_hold_time",
           "keepalive",
           "name",
+          "passive",
           "resolution"
         ]
       },
       "ApplyRequest": {
-        "type": "object",
-        "properties": {
-          "peer_group": {
-            "type": "string"
-          },
-          "peers": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BgpPeerConfig"
-            }
-          }
-        },
-        "required": [
-          "peer_group",
-          "peers"
-        ]
-      },
-      "BgpPeerConfig": {
         "type": "object",
         "properties": {
           "asn": {
@@ -446,6 +432,32 @@
             "format": "uint32",
             "minimum": 0
           },
+          "originate": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prefix4"
+            }
+          },
+          "peers": {
+            "description": "Lists of peers indexed by peer group.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/BgpPeerConfig"
+              }
+            }
+          }
+        },
+        "required": [
+          "asn",
+          "originate",
+          "peers"
+        ]
+      },
+      "BgpPeerConfig": {
+        "type": "object",
+        "properties": {
           "connect_retry": {
             "type": "integer",
             "format": "uint64",
@@ -477,11 +489,8 @@
           "name": {
             "type": "string"
           },
-          "originate": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Prefix4"
-            }
+          "passive": {
+            "type": "boolean"
           },
           "resolution": {
             "type": "integer",
@@ -490,7 +499,6 @@
           }
         },
         "required": [
-          "asn",
           "connect_retry",
           "delay_open",
           "hold_time",
@@ -498,7 +506,7 @@
           "idle_hold_time",
           "keepalive",
           "name",
-          "originate",
+          "passive",
           "resolution"
         ]
       },

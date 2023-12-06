@@ -1,6 +1,6 @@
 use crate::config::{PeerConfig, RouterConfig};
 use crate::connection_channel::{BgpConnectionChannel, BgpListenerChannel};
-use crate::session::FsmStateKind;
+use crate::session::{FsmStateKind, SessionInfo};
 use rdb::{Asn, Prefix4};
 use std::collections::BTreeMap;
 use std::sync::mpsc::channel;
@@ -28,7 +28,7 @@ macro_rules! wait_for_eq {
         }
     };
     ($lhs:expr, $rhs:expr) => {
-        wait_for_eq!($lhs, $rhs, 1, 10);
+        wait_for_eq!($lhs, $rhs, 1, 30);
     };
 }
 
@@ -57,7 +57,14 @@ macro_rules! sockaddr {
 
 #[test]
 fn test_basic_peering() {
-    let (r1, _d1, r2, d2) = two_router_test_setup("basic_peering");
+    let (r1, _d1, r2, d2) = two_router_test_setup(
+        "basic_peering",
+        Some(SessionInfo {
+            passive_tcp_establishment: true,
+            ..Default::default()
+        }),
+        None,
+    );
 
     let r1_session = r1.get_session(ip!("2.0.0.1")).expect("get session one");
     let r2_session = r2.get_session(ip!("1.0.0.1")).expect("get session two");
@@ -88,7 +95,7 @@ fn test_basic_peering() {
 
 #[test]
 fn test_basic_update() {
-    let (r1, d1, r2, _d2) = two_router_test_setup("basic_update");
+    let (r1, d1, r2, _d2) = two_router_test_setup("basic_update", None, None);
 
     // originate a prefix
     r1.originate4(vec![ip!("1.2.3.0/24")]).expect("originate");
@@ -114,6 +121,8 @@ fn test_basic_update() {
 
 fn two_router_test_setup(
     name: &str,
+    r1_info: Option<SessionInfo>,
+    r2_info: Option<SessionInfo>,
 ) -> (Arc<Router>, Arc<Dispatcher>, Arc<Router>, Arc<Dispatcher>) {
     let log = crate::log::init_file_logger(&format!("r1.{name}.log"));
 
@@ -164,6 +173,7 @@ fn two_router_test_setup(
         sockaddr!("1.0.0.1:179"),
         r1_event_tx.clone(),
         event_rx,
+        r1_info.unwrap_or_default(),
     )
     .expect("new session on router one");
 
@@ -197,7 +207,7 @@ fn two_router_test_setup(
         },
         log.clone(),
         db.clone(),
-        a2s1.clone(),
+        a2s2.clone(),
     ));
 
     r2.run();
@@ -220,6 +230,7 @@ fn two_router_test_setup(
         sockaddr!("2.0.0.1:179"),
         r2_event_tx.clone(),
         event_rx,
+        r2_info.unwrap_or_default(),
     )
     .expect("new session on router two");
 

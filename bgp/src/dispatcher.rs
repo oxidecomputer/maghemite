@@ -54,8 +54,8 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                 Err(crate::error::Error::Timeout) => {
                     continue;
                 }
-                Err(_e) => {
-                    //TODO log
+                Err(e) => {
+                    slog::error!(self.log, "accept error: {e}");
                     continue;
                 }
             };

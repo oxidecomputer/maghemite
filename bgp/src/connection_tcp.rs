@@ -5,6 +5,7 @@ use crate::messages::{
     OpenMessage, UpdateMessage,
 };
 use crate::session::FsmEvent;
+use crate::to_canonical;
 use mg_common::lock;
 use slog::{error, trace, warn, Logger};
 use std::collections::BTreeMap;
@@ -54,8 +55,12 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         >,
         _timeout: Duration, //TODO implement
     ) -> Result<BgpConnectionTcp, Error> {
-        let (conn, peer) = self.listener.accept()?;
-        match lock!(addr_to_session).get(&peer.ip()) {
+        let (conn, mut peer) = self.listener.accept()?;
+
+        let ip = to_canonical(peer.ip());
+        peer.set_ip(ip);
+
+        match lock!(addr_to_session).get(&ip) {
             Some(event_tx) => Ok(BgpConnectionTcp::with_conn(
                 self.addr,
                 peer,
@@ -63,7 +68,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                 event_tx.clone(),
                 log,
             )?),
-            None => Err(Error::UnknownPeer),
+            None => Err(Error::UnknownPeer(ip)),
         }
     }
 }

@@ -138,6 +138,10 @@ pub struct Neighbor {
     /// Blocking interval for message loops (ms).
     #[arg(long, default_value_t = 100)]
     resolution: u64,
+
+    /// Do not initiate connections, only accept them.
+    #[arg(long, default_value_t = false)]
+    passive_connection: bool,
 }
 
 impl From<Neighbor> for types::AddNeighborRequest {
@@ -153,6 +157,7 @@ impl From<Neighbor> for types::AddNeighborRequest {
             delay_open: n.delay_open_time,
             resolution: n.resolution,
             group: n.group,
+            passive: n.passive_connection,
         }
     }
 }

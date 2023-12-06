@@ -3,11 +3,12 @@ use crate::connection::BgpConnection;
 use crate::error::Error;
 use crate::fanout::Fanout;
 use crate::messages::{
-    AddPathElement, Capability, Message, OpenMessage, OptionalParameter,
-    PathAttributeValue, UpdateMessage,
+    AddPathElement, Capability, ErrorCode, ErrorSubcode, Message,
+    NotificationMessage, OpenMessage, OptionalParameter, PathAttributeValue,
+    UpdateMessage,
 };
 use crate::router::Router;
-use crate::{dbg, err, inf, trc, wrn};
+use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db, Prefix4};
 use schemars::JsonSchema;
@@ -274,7 +275,7 @@ impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
             Self::DelayOpenTimerExpires => {
                 write!(f, "delay open timer expires")
             }
-            Self::IdleHoldTimerExpires => write!(f, "idle hold timeer expires"),
+            Self::IdleHoldTimerExpires => write!(f, "idle hold timer expires"),
             Self::TcpConnectionValid => write!(f, "tcp connection valid"),
             Self::TcpConnectionInvalid => write!(f, "tcp connection invalid"),
             Self::TcpConnectionAcked => write!(f, "tcp connection acked"),
@@ -336,9 +337,9 @@ pub struct SessionInfo {
     pub remote_asn: Option<u32>,
 }
 
-impl SessionInfo {
-    pub fn new() -> Arc<Mutex<SessionInfo>> {
-        Arc::new(Mutex::new(SessionInfo {
+impl Default for SessionInfo {
+    fn default() -> Self {
+        SessionInfo {
             connect_retry_counter: 0,
             allow_automatic_start: false,
             allow_automatic_stop: false,
@@ -350,7 +351,13 @@ impl SessionInfo {
             send_notification_without_open: false,
             track_tcp_state: false,
             remote_asn: None,
-        }))
+        }
+    }
+}
+
+impl SessionInfo {
+    pub fn new() -> Arc<Mutex<SessionInfo>> {
+        Arc::new(Mutex::new(SessionInfo::default()))
     }
 }
 
@@ -508,9 +515,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        // The only event we respond to in idle is a manual start.
         match event {
-            FsmEvent::ManualStart => FsmState::Connect,
+            FsmEvent::ManualStart => {
+                self.clock.timers.idle_hold_timer.enable();
+                if lock!(self.session).passive_tcp_establishment {
+                    let conn = Cnx::new(
+                        self.bind_addr,
+                        self.neighbor.host,
+                        self.log.clone(),
+                    );
+                    FsmState::Active(conn)
+                } else {
+                    FsmState::Connect
+                }
+            }
+            FsmEvent::IdleHoldTimerExpires => {
+                inf!(self; "idle hold time expire, attempting connect");
+                FsmState::Connect
+            }
             x => {
                 wrn!(self; "event {:?} not allowed in idle", x);
                 FsmState::Idle
@@ -561,11 +583,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.clock.timers.connect_retry_timer.disable();
                     if let Err(e) = self.send_open(&accepted) {
                         err!(self; "send open failed {e}");
-                        return FsmState::Connect;
+                        return FsmState::Idle;
                     }
                     self.clock.timers.hold_timer.reset();
                     self.clock.timers.hold_timer.enable();
                     lock!(self.session).connect_retry_counter = 0;
+                    self.clock.timers.connect_retry_timer.disable();
                     return FsmState::OpenSent(accepted);
                 }
 
@@ -576,11 +599,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.clock.timers.connect_retry_timer.disable();
                     if let Err(e) = self.send_open(&conn) {
                         err!(self; "send open failed {e}");
-                        return FsmState::Connect;
+                        return FsmState::Idle;
                     }
                     self.clock.timers.hold_timer.reset();
                     self.clock.timers.hold_timer.enable();
                     lock!(self.session).connect_retry_counter = 0;
+                    self.clock.timers.connect_retry_timer.disable();
                     return FsmState::OpenSent(conn);
                 }
 
@@ -608,6 +632,26 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // an open message from the peer.
         let om = match event {
             FsmEvent::Message(Message::Open(om)) => om,
+            FsmEvent::ConnectRetryTimerExpires => {
+                inf!(self; "active: connect retry timer expired");
+                return FsmState::Idle;
+            }
+            // The underlying connection has accepted a TCP connection
+            // initiated by the peer.
+            FsmEvent::Connected(accepted) => {
+                inf!(self; "active: accepted connection from {}", accepted.peer());
+                if let Err(e) = self.send_open(&accepted) {
+                    err!(self; "active: send open failed {e}");
+                    return FsmState::Idle;
+                }
+                self.clock.timers.connect_retry_timer.disable();
+                self.clock.timers.hold_timer.reset();
+                self.clock.timers.hold_timer.enable();
+                lock!(self.session).connect_retry_counter = 0;
+                self.clock.timers.connect_retry_timer.disable();
+                return FsmState::OpenSent(accepted);
+            }
+            FsmEvent::IdleHoldTimerExpires => return FsmState::Active(conn),
             other => {
                 wrn!(self;
                     "active: expected open message, received {:#?}, ignoring",
@@ -626,7 +670,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // to open confirm.
         if let Err(e) = self.send_open(&conn) {
             err!(self; "send open failed {e}");
-            return FsmState::Connect;
+            return FsmState::Idle;
         }
         self.send_keepalive(&conn);
         FsmState::OpenConfirm(PeerConnection { conn, id: om.id })
@@ -648,13 +692,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             FsmEvent::Message(Message::Open(om)) => om,
             FsmEvent::HoldTimerExpires => {
                 wrn!(self; "open sent: hold timer expired");
-                return FsmState::Connect;
+                self.send_hold_timer_expired_notification(&conn);
+                return FsmState::Idle;
             }
             other => {
                 wrn!(
                     self;
                     "open sent: expected open, received {:#?}, ignoring", other
                 );
+                self.clock.timers.connect_retry_timer.enable();
                 return FsmState::Active(conn);
             }
         };
@@ -662,6 +708,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             wrn!(self; "failed to handle open message: {e}");
             //TODO send a notification to the peer letting them know we are
             //     rejecting the open message?
+            self.clock.timers.connect_retry_timer.enable();
             return FsmState::Active(conn);
         }
 
@@ -697,7 +744,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 lock!(self.session).connect_retry_counter += 1;
                 self.clock.timers.hold_timer.disable();
                 self.clock.timers.keepalive_timer.disable();
-                FsmState::Connect
+                FsmState::Idle
+            }
+            FsmEvent::HoldTimerExpires => {
+                wrn!(self; "open sent: hold timer expired");
+                self.clock.timers.hold_timer.disable();
+                self.send_hold_timer_expired_notification(&pc.conn);
+                FsmState::Idle
             }
 
             // An event we are not expecting, log it and re-enter this state.
@@ -734,20 +787,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         );
         drop(fanout);
 
+        self.send_keepalive(&pc.conn);
+
         // Send an update to our peer with the prefixes this router is
         // originating.
-        let mut update = UpdateMessage {
-            path_attributes: self.router.base_attributes(),
-            ..Default::default()
-        };
-        for p in originated {
-            update.nlri.push(p.into());
-        }
-        self.send_keepalive(&pc.conn);
-        read_lock!(self.fanout).send_all(&update);
-        if let Err(e) = self.send_update(update, &pc.conn) {
-            err!(self; "sending update to peer failed {e}");
-            return self.exit_established(pc);
+        if !originated.is_empty() {
+            let mut update = UpdateMessage {
+                path_attributes: self.router.base_attributes(),
+                ..Default::default()
+            };
+            for p in originated {
+                update.nlri.push(p.into());
+            }
+            read_lock!(self.fanout).send_all(&update);
+            if let Err(e) = self.send_update(update, &pc.conn) {
+                err!(self; "sending update to peer failed {e}");
+                return self.exit_established(pc);
+            }
         }
 
         // Transition to the established state.
@@ -778,6 +834,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // state and restart the peer FSM from the connect state.
             FsmEvent::HoldTimerExpires => {
                 wrn!(self; "hold timer expired");
+                self.send_hold_timer_expired_notification(&pc.conn);
                 self.exit_established(pc)
             }
 
@@ -823,6 +880,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
                 FsmState::Established(pc)
             }
+
+            FsmEvent::IdleHoldTimerExpires => FsmState::Established(pc),
 
             // Some unexpeted event, log and re-enter established.
             e => {
@@ -877,6 +936,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
+    fn send_hold_timer_expired_notification(&self, conn: &Cnx) {
+        self.send_notification(
+            conn,
+            ErrorCode::HoldTimerExpired,
+            ErrorSubcode::HoldTime(0),
+        )
+    }
+
+    fn send_notification(
+        &self,
+        conn: &Cnx,
+        error_code: ErrorCode,
+        error_subcode: ErrorSubcode,
+    ) {
+        inf!(self; "sending notification {error_code:?}/{error_subcode:?}");
+        if let Err(e) = conn.send(Message::Notification(NotificationMessage {
+            error_code,
+            error_subcode,
+            data: Vec::new(),
+        })) {
+            err!(self; "failed to send notification {e}");
+        }
+    }
+
     /// Send an open message to the session peer.
     fn send_open(&self, conn: &Cnx) -> Result<(), Error> {
         let mut msg = match self.asn {
@@ -917,13 +1000,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         mut update: UpdateMessage,
         conn: &Cnx,
     ) -> Result<(), Error> {
-        let nexthop = match conn.local() {
+        let nexthop = to_canonical(match conn.local() {
             Some(sockaddr) => sockaddr.ip(),
             None => {
                 wrn!(self; "connection has no local address");
                 return Err(Error::Disconnected);
             }
-        };
+        });
 
         update
             .path_attributes
@@ -975,7 +1058,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             read_lock!(self.fanout).send_all(&update);
         }
 
-        FsmState::Connect
+        FsmState::Idle
     }
 
     /// Apply an update by adding it to our RIB.
