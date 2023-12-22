@@ -1,16 +1,4 @@
 #!/bin/bash
-#:
-#: name = "test-ddm"
-#: variety = "basic"
-#: target = "helios-2.0"
-#: rust_toolchain = "stable"
-#: output_rules = [
-#:   "/work/*.log",
-#: ]
-#: access_repos = [
-#:   "oxidecomputer/dendrite",
-#: ]
-#:
 
 function cleanup {
     pfexec chown -R `id -un`:`id -gn` .
@@ -64,26 +52,5 @@ fi
 set -o errexit
 set -o pipefail
 
-banner "test"
-cargo build --bin ddmd --bin ddmadm
+banner "build"
 cargo build --release --bin ddmd --bin ddmadm
-
-#
-# trio tests
-#
-
-banner trio debug
-pfexec cargo test -p mg-tests test_trio -- --nocapture
-
-banner trio release
-pfexec cargo test --release -p mg-tests test_trio -- --nocapture
-
-#
-# quartest tests
-#
-
-banner quartet debug
-pfexec cargo test -p mg-tests test_quartet -- --nocapture
-
-banner quartet release
-pfexec cargo test --release -p mg-tests test_quartet -- --nocapture
