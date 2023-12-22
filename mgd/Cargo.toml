@@ -15,7 +15,6 @@ schemars.workspace = true
 serde.workspace = true
 slog.workspace = true
 slog-async.workspace = true
-slog-envlogger.workspace = true
 slog-term.workspace = true
 tokio.workspace = true
 http.workspace = true
