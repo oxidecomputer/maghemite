@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! This is the Maghemite external networking lower half. Its responsible for
 //! synchronizing information in a routing information base onto an underlying
 //! routing platform. The only platform currently supported is Dendrite.
