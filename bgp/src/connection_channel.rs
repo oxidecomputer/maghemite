@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 /// This file contains code for testing purposes only. Note that it's only
 /// included in `lib.rs` with a `#[cfg(test)]` guard. The purpose of the
 /// code in this file is to implement BgpListener and BgpConnection such that
