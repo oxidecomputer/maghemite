@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
+use omicron_zone_package::target::Target;
 use std::fs::create_dir_all;
 use std::path::Path;
 
@@ -14,7 +15,9 @@ async fn main() -> Result<()> {
     create_dir_all(output_dir)?;
 
     for (name, package) in cfg.packages {
-        package.create(&name, output_dir).await?;
+        package
+            .create_for_target(&Target::default(), &name, output_dir)
+            .await?;
     }
 
     Ok(())
