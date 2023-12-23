@@ -50,7 +50,7 @@ serde = { version = "1.0.150", features = ["derive"] }
 hostname = "0.3.1"
 thiserror = "1.0.37"
 dropshot = { git = "https://github.com/oxidecomputer/dropshot", branch = "main" }
-schemars = { version = "0.8.0", features = [ "uuid" ] }
+schemars = { version = "0.8.16", features = [ "uuid" ] }
 tokio = { version = "1.21", features = ["full"] }
 serde_repr = "0.1.9"
 anyhow = "1.0.67"
