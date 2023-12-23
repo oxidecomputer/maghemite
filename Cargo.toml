@@ -53,7 +53,7 @@ dropshot = { git = "https://github.com/oxidecomputer/dropshot", branch = "main" 
 schemars = { version = "0.8.0", features = [ "uuid" ] }
 tokio = { version = "1.21", features = ["full"] }
 serde_repr = "0.1.9"
-anyhow = "1.0.67"
+anyhow = "1.0.76"
 hyper = "0.14.23"
 serde_json = "1.0.89"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
