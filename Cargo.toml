@@ -63,7 +63,7 @@ progenitor = { git = "https://github.com/oxidecomputer/progenitor", branch = "ma
 clap = { version = "4.2.5", features = ["derive", "unstable-styles"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "2.0.0"
-ctrlc = { version = "3.2.4", features = ["termination"] }
+ctrlc = { version = "3.4.2", features = ["termination"] }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anstyle = "1.0.0"
 nom = "7.1.1"
