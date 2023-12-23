@@ -65,7 +65,7 @@ tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "2.0.0"
 ctrlc = { version = "3.2.4", features = ["termination"] }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
-anstyle = "1.0.0"
+anstyle = "1.0.4"
 nom = "7.1.1"
 num_enum = "0.5.7"
 pretty-hex = "0.3.0"
