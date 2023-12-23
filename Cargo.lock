@@ -236,7 +236,7 @@ dependencies = [
  "mg-common",
  "nom",
  "num_enum",
- "pretty-hex 0.3.0",
+ "pretty-hex 0.4.1",
  "pretty_assertions",
  "rdb",
  "schemars",
@@ -2425,9 +2425,9 @@ checksum = "bc5c99d529f0d30937f6f4b8a86d988047327bb88d04d2c4afc356de74722131"
 
 [[package]]
 name = "pretty-hex"
-version = "0.3.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6fa0831dd7cc608c38a5e323422a0077678fa5744aa2be4ad91c4ece8eec8d5"
+checksum = "bbc83ee4a840062f368f9096d80077a9841ec117e17e7f700df81958f1451254"
 
 [[package]]
 name = "pretty_assertions"
