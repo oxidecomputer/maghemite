@@ -24,7 +24,6 @@ members = [
     "ddmadm",
     "ddmd",
     "ddm-admin-client",
-    "console",
     "package",
     "util",
     "mg-ddm-verify",
