@@ -235,8 +235,8 @@ dependencies = [
  "lazy_static",
  "mg-common",
  "nom",
- "num_enum",
- "pretty-hex 0.3.0",
+ "num_enum 0.7.1",
+ "pretty-hex 0.4.1",
  "pretty_assertions",
  "rdb",
  "schemars",
@@ -630,7 +630,7 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "slog",
- "socket2 0.4.10",
+ "socket2 0.5.5",
  "thiserror",
  "tokio",
 ]
@@ -752,7 +752,7 @@ source = "git+https://github.com/oxidecomputer/dlpi-sys#1d587ea98cf2d36f1b1624b0
 dependencies = [
  "libc",
  "libdlpi-sys",
- "num_enum",
+ "num_enum 0.5.11",
  "pretty-hex 0.2.1",
  "thiserror",
  "tokio",
@@ -1569,7 +1569,7 @@ dependencies = [
  "colored",
  "dlpi",
  "libc",
- "num_enum",
+ "num_enum 0.5.11",
  "nvpair",
  "nvpair-sys",
  "rusty-doors",
@@ -1922,7 +1922,16 @@ version = "0.5.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f646caf906c20226733ed5b1374287eb97e3c2a5c227ce668c1f2ce20ae57c9"
 dependencies = [
- "num_enum_derive",
+ "num_enum_derive 0.5.11",
+]
+
+[[package]]
+name = "num_enum"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "683751d591e6d81200c39fb0d1032608b77724f34114db54f571ff1317b337c0"
+dependencies = [
+ "num_enum_derive 0.7.1",
 ]
 
 [[package]]
@@ -1935,6 +1944,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "num_enum_derive"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c11e44798ad209ccdd91fc192f0526a369a01234f7373e1b141c96d7cee4f0e"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.42",
 ]
 
 [[package]]
@@ -2359,9 +2380,9 @@ checksum = "bc5c99d529f0d30937f6f4b8a86d988047327bb88d04d2c4afc356de74722131"
 
 [[package]]
 name = "pretty-hex"
-version = "0.3.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6fa0831dd7cc608c38a5e323422a0077678fa5744aa2be4ad91c4ece8eec8d5"
+checksum = "bbc83ee4a840062f368f9096d80077a9841ec117e17e7f700df81958f1451254"
 
 [[package]]
 name = "pretty_assertions"
@@ -4074,7 +4095,7 @@ dependencies = [
  "slog-async",
  "slog-envlogger",
  "slog-term",
- "socket2 0.4.10",
+ "socket2 0.5.5",
 ]
 
 [[package]]
