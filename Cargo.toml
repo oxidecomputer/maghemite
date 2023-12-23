@@ -62,7 +62,7 @@ reqwest = { version = "0.11", features = ["json", "stream", "rustls-tls"] }
 progenitor = { git = "https://github.com/oxidecomputer/progenitor", branch = "main" }
 clap = { version = "4.2.5", features = ["derive", "unstable-styles"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
-colored = "2.0.0"
+colored = "2.1.0"
 ctrlc = { version = "3.2.4", features = ["termination"] }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anstyle = "1.0.0"
