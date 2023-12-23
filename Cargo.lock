@@ -110,7 +110,7 @@ checksum = "59d2a3357dde987206219e78ecfbbb6e8dad06cbb65292758d3270e6254f7355"
 [[package]]
 name = "api_identity"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#a2cef18d7b735580bc8963103b2f0e4e30fd9885"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#709493b9adcec358fbdf9c3f5025698c589bd1df"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -2043,7 +2043,7 @@ dependencies = [
 [[package]]
 name = "omicron-common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#a2cef18d7b735580bc8963103b2f0e4e30fd9885"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#709493b9adcec358fbdf9c3f5025698c589bd1df"
 dependencies = [
  "anyhow",
  "api_identity",
@@ -2170,7 +2170,7 @@ dependencies = [
 [[package]]
 name = "oximeter"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#a2cef18d7b735580bc8963103b2f0e4e30fd9885"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#709493b9adcec358fbdf9c3f5025698c589bd1df"
 dependencies = [
  "bytes",
  "chrono",
@@ -2190,7 +2190,7 @@ dependencies = [
 [[package]]
 name = "oximeter-macro-impl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#a2cef18d7b735580bc8963103b2f0e4e30fd9885"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#709493b9adcec358fbdf9c3f5025698c589bd1df"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
