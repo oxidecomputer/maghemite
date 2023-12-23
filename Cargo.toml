@@ -48,7 +48,7 @@ socket2 = { version = "0.4.7", features = ["all"] }
 ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.150", features = ["derive"] }
 hostname = "0.3.1"
-thiserror = "1.0.37"
+thiserror = "1.0.51"
 dropshot = { git = "https://github.com/oxidecomputer/dropshot", branch = "main" }
 schemars = { version = "0.8.0", features = [ "uuid" ] }
 tokio = { version = "1.21", features = ["full"] }
