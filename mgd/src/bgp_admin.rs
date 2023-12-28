@@ -726,8 +726,8 @@ fn start_bgp_session<Cnx: BgpConnection>(
     event_tx: &Sender<FsmEvent<Cnx>>,
 ) -> Result<(), Error> {
     event_tx.send(FsmEvent::ManualStart).map_err(|e| {
-        Error::InternalCommunicationError(format!(
-            "failed to start bgp session {e}",
-        ))
+        Error::InternalCommunication(
+            format!("failed to start bgp session {e}",),
+        )
     })
 }
