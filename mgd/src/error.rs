@@ -20,7 +20,7 @@ pub enum Error {
     Bgp(#[from] bgp::error::Error),
 
     #[error("internal communication error: {0}")]
-    InternalCommunicationError(String),
+    InternalCommunication(String),
 }
 
 impl From<Error> for HttpError {
@@ -38,7 +38,7 @@ impl From<Error> for HttpError {
                 ),
                 _ => Self::for_internal_error(value.to_string()),
             },
-            Error::InternalCommunicationError(_) => {
+            Error::InternalCommunication(_) => {
                 Self::for_internal_error(value.to_string())
             }
         }
