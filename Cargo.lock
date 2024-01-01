@@ -809,7 +809,7 @@ dependencies = [
  "hyper",
  "indexmap 2.1.0",
  "multer",
- "openapiv3",
+ "openapiv3 2.0.0",
  "paste",
  "percent-encoding",
  "proc-macro2",
@@ -2060,6 +2060,17 @@ checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
 
 [[package]]
 name = "openapiv3"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33b83630305ecc3355e998ddd2f926f98aae8e105eb42652174a58757851ba47"
+dependencies = [
+ "indexmap 1.9.3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "openapiv3"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc02deea53ffe807708244e5914f6b099ad7015a207ee24317c22112e17d9c5c"
@@ -2439,8 +2450,9 @@ dependencies = [
 
 [[package]]
 name = "progenitor"
-version = "0.5.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#4625065afd3c4334ce967be4ba3986d348e1dd9f"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6bbc8ce914d3f8a92a0ce3672f404c54f8ba9be7c5b463c55b18fef1e27a6a1"
 dependencies = [
  "progenitor-client",
  "progenitor-impl",
@@ -2450,8 +2462,9 @@ dependencies = [
 
 [[package]]
 name = "progenitor-client"
-version = "0.5.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#4625065afd3c4334ce967be4ba3986d348e1dd9f"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "648c8dced6814c4461a95861c15db29a89c9281ad611cfbd5c9d513a829f4185"
 dependencies = [
  "bytes",
  "futures-core",
@@ -2464,14 +2477,15 @@ dependencies = [
 
 [[package]]
 name = "progenitor-impl"
-version = "0.5.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#4625065afd3c4334ce967be4ba3986d348e1dd9f"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad265c228b93e425e4fe66ca1c46b64fcefc37c59dba2d70d1c88642fd7b3645"
 dependencies = [
  "getopts",
  "heck 0.4.1",
  "http 0.2.11",
- "indexmap 2.1.0",
- "openapiv3",
+ "indexmap 1.9.3",
+ "openapiv3 1.0.4",
  "proc-macro2",
  "quote",
  "regex",
@@ -2486,10 +2500,11 @@ dependencies = [
 
 [[package]]
 name = "progenitor-macro"
-version = "0.5.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#4625065afd3c4334ce967be4ba3986d348e1dd9f"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1e915ef620ea017c3031b09ba82e1723b03a4d121deba314bb2b9a0ec185856"
 dependencies = [
- "openapiv3",
+ "openapiv3 1.0.4",
  "proc-macro2",
  "progenitor-impl",
  "quote",
@@ -3910,8 +3925,9 @@ checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
 
 [[package]]
 name = "typify"
-version = "0.0.15"
-source = "git+https://github.com/oxidecomputer/typify#7ceddf6644356819d1c829deb7a160197c4d0493"
+version = "0.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2e3b707a653e2915a2fc2c4ee96a3d30b9554b9435eb4cc8b5c6c74bbdd3044"
 dependencies = [
  "typify-impl",
  "typify-macro",
@@ -3919,8 +3935,9 @@ dependencies = [
 
 [[package]]
 name = "typify-impl"
-version = "0.0.15"
-source = "git+https://github.com/oxidecomputer/typify#7ceddf6644356819d1c829deb7a160197c4d0493"
+version = "0.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d9c752192779f666e4c868672dee56a652b82c08032c7e9d23f6a845b282298"
 dependencies = [
  "heck 0.4.1",
  "log",
@@ -3936,8 +3953,9 @@ dependencies = [
 
 [[package]]
 name = "typify-macro"
-version = "0.0.15"
-source = "git+https://github.com/oxidecomputer/typify#7ceddf6644356819d1c829deb7a160197c4d0493"
+version = "0.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a14defd554507e72a2bb93cd081c8b374cfed43b3d986b141ad3839d9fd6986b"
 dependencies = [
  "proc-macro2",
  "quote",
