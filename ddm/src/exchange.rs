@@ -17,9 +17,7 @@
 //! of a ddm router is defined in the state machine implementation in sm.rs.
 //!
 
-use crate::db::{
-    IpPrefix, Ipv6Prefix, Route, RouterKind, TunnelOrigin, TunnelRoute,
-};
+use crate::db::{Ipv6Prefix, Route, RouterKind, TunnelOrigin, TunnelRoute};
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
 use dropshot::endpoint;
@@ -87,7 +85,7 @@ impl Update {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct PullResponse {
     pub underlay: Option<HashSet<PathVector>>,
-    pub tunnel: Option<HashSet<TunnelVector>>,
+    pub tunnel: Option<HashSet<TunnelOrigin>>,
 }
 
 #[derive(
@@ -117,54 +115,47 @@ impl UnderlayUpdate {
             ..Default::default()
         }
     }
+    pub fn with_path_element(&self, element: String) -> Self {
+        Self {
+            announce: self
+                .announce
+                .iter()
+                .map(|x| {
+                    let mut pv = x.clone();
+                    pv.path.push(element.clone());
+                    pv
+                })
+                .collect(),
+            withdraw: self
+                .withdraw
+                .iter()
+                .map(|x| {
+                    let mut pv = x.clone();
+                    pv.path.push(element.clone());
+                    pv
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct TunnelUpdate {
-    pub announce: HashSet<TunnelVector>,
-    pub withdraw: HashSet<TunnelVector>,
+    pub announce: HashSet<TunnelOrigin>,
+    pub withdraw: HashSet<TunnelOrigin>,
 }
 
 impl TunnelUpdate {
-    pub fn announce(prefixes: HashSet<TunnelVector>) -> Self {
+    pub fn announce(prefixes: HashSet<TunnelOrigin>) -> Self {
         Self {
             announce: prefixes,
             ..Default::default()
         }
     }
-    pub fn withdraw(prefixes: HashSet<TunnelVector>) -> Self {
+    pub fn withdraw(prefixes: HashSet<TunnelOrigin>) -> Self {
         Self {
             withdraw: prefixes,
             ..Default::default()
-        }
-    }
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
-)]
-pub struct TunnelVector {
-    pub overlay_prefix: IpPrefix,
-    pub boundary_addr: Ipv6Addr,
-    pub vni: u32,
-}
-
-impl From<crate::db::TunnelRoute> for TunnelVector {
-    fn from(x: crate::db::TunnelRoute) -> Self {
-        Self {
-            overlay_prefix: x.overlay_prefix,
-            boundary_addr: x.boundary_addr,
-            vni: x.vni,
-        }
-    }
-}
-
-impl From<crate::db::TunnelOrigin> for TunnelVector {
-    fn from(x: crate::db::TunnelOrigin) -> Self {
-        Self {
-            overlay_prefix: x.overlay_prefix,
-            boundary_addr: x.boundary_addr,
-            vni: x.vni,
         }
     }
 }
@@ -440,11 +431,7 @@ async fn pull_handler(
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let tv = TunnelVector {
-                overlay_prefix: route.overlay_prefix,
-                boundary_addr: route.boundary_addr,
-                vni: route.vni,
-            };
+            let tv = route.origin.clone();
             tunnel.insert(tv);
         }
     }
@@ -456,7 +443,7 @@ async fn pull_handler(
         underlay.insert(pv);
     }
     for prefix in &db.originated_tunnel {
-        let tv = TunnelVector {
+        let tv = TunnelOrigin {
             overlay_prefix: prefix.overlay_prefix,
             boundary_addr: prefix.boundary_addr,
             vni: prefix.vni,
@@ -497,26 +484,10 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
             ctx.ctx.event_channels.len()
         );
 
-        let underlay = update.underlay.as_ref().map(|update| UnderlayUpdate {
-            announce: update
-                .announce
-                .iter()
-                .map(|x| {
-                    let mut pv = x.clone();
-                    pv.path.push(ctx.ctx.hostname.clone());
-                    pv
-                })
-                .collect(),
-            withdraw: update
-                .withdraw
-                .iter()
-                .map(|x| {
-                    let mut pv = x.clone();
-                    pv.path.push(ctx.ctx.hostname.clone());
-                    pv
-                })
-                .collect(),
-        });
+        let underlay = update
+            .underlay
+            .as_ref()
+            .map(|update| update.with_path_element(ctx.ctx.hostname.clone()));
 
         let push = Update {
             underlay,
@@ -536,9 +507,11 @@ fn handle_tunnel_update(update: &TunnelUpdate, ctx: &HandlerContext) {
 
     for x in &update.announce {
         import.insert(TunnelRoute {
-            overlay_prefix: x.overlay_prefix,
-            boundary_addr: x.boundary_addr,
-            vni: x.vni,
+            origin: TunnelOrigin {
+                overlay_prefix: x.overlay_prefix,
+                boundary_addr: x.boundary_addr,
+                vni: x.vni,
+            },
             nexthop: ctx.peer,
         });
     }
@@ -558,9 +531,11 @@ fn handle_tunnel_update(update: &TunnelUpdate, ctx: &HandlerContext) {
 
     for x in &update.withdraw {
         remove.insert(TunnelRoute {
-            overlay_prefix: x.overlay_prefix,
-            boundary_addr: x.boundary_addr,
-            vni: x.vni,
+            origin: TunnelOrigin {
+                overlay_prefix: x.overlay_prefix,
+                boundary_addr: x.boundary_addr,
+                vni: x.vni,
+            },
             nexthop: ctx.peer,
         });
     }

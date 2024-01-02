@@ -48,16 +48,16 @@ enum SubCommand {
     WithdrawPrefixes(Prefixes),
 
     /// Get the tunnel endpoints a DDM router knows about.
-    GetTunnelEndpoints,
+    TunnelImported,
 
     /// Get the tunnel endpoints a DDM router has originated.
-    GetOriginatedTunnelEndpoints,
+    TunnelOriginated,
 
     /// Advertise prefixes from a DDM router.
-    AdvertiseTunnelEndpoint(TunnelEndpoint),
+    TunnelAdvertise(TunnelEndpoint),
 
     /// Withdraw prefixes from a DDM router.
-    WithdrawTunnelEndpoint(TunnelEndpoint),
+    TunnelWithdraw(TunnelEndpoint),
 
     /// Sync prefix information from peers.
     Sync,
@@ -190,7 +190,7 @@ async fn run() -> Result<()> {
             }
             client.withdraw_prefixes(&prefixes).await?;
         }
-        SubCommand::GetTunnelEndpoints => {
+        SubCommand::TunnelImported => {
             let msg = client.get_tunnel_endpoints().await?;
             let mut tw = TabWriter::new(stdout());
             writeln!(
@@ -204,15 +204,15 @@ async fn run() -> Result<()> {
                 writeln!(
                     &mut tw,
                     "{}/{}\t{}\t{}",
-                    endpoint.overlay_prefix.addr(),
-                    endpoint.overlay_prefix.length(),
-                    endpoint.boundary_addr,
-                    endpoint.vni,
+                    endpoint.origin.overlay_prefix.addr(),
+                    endpoint.origin.overlay_prefix.length(),
+                    endpoint.origin.boundary_addr,
+                    endpoint.origin.vni,
                 )?;
             }
             tw.flush()?;
         }
-        SubCommand::GetOriginatedTunnelEndpoints => {
+        SubCommand::TunnelOriginated => {
             let msg = client.get_originated_tunnel_endpoints().await?;
             let mut tw = TabWriter::new(stdout());
             writeln!(
@@ -234,7 +234,7 @@ async fn run() -> Result<()> {
             }
             tw.flush()?;
         }
-        SubCommand::AdvertiseTunnelEndpoint(ep) => {
+        SubCommand::TunnelAdvertise(ep) => {
             client
                 .advertise_tunnel_endpoints(&vec![types::TunnelOrigin {
                     overlay_prefix: ep.overlay_prefix,
@@ -243,7 +243,7 @@ async fn run() -> Result<()> {
                 }])
                 .await?;
         }
-        SubCommand::WithdrawTunnelEndpoint(ep) => {
+        SubCommand::TunnelWithdraw(ep) => {
             client
                 .withdraw_tunnel_endpoints(&vec![types::TunnelOrigin {
                     overlay_prefix: ep.overlay_prefix,

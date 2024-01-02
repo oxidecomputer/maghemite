@@ -99,7 +99,10 @@ async fn expire_peer(
     let ctx = ctx.context().lock().unwrap();
 
     for e in &ctx.event_channels {
-        e.send(Event::Admin(AdminEvent::Expire(addr))).unwrap(); //TODO unwrap
+        e.send(Event::Admin(AdminEvent::Expire(addr)))
+            .map_err(|e| {
+                HttpError::for_internal_error(format!("admin event send: {e}"))
+            })?;
     }
 
     Ok(HttpResponseUpdatedNoContent())
@@ -175,7 +178,9 @@ async fn advertise_prefixes(
         e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
             prefixes.clone(),
         ))))
-        .unwrap(); //TODO(unwrap)
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("admin event send: {e}"))
+        })?;
     }
 
     Ok(HttpResponseUpdatedNoContent())
@@ -194,7 +199,9 @@ async fn advertise_tunnel_endpoints(
         e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
             endpoints.clone(),
         ))))
-        .unwrap(); //TODO(unwrap)
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("admin event send: {e}"))
+        })?;
     }
 
     Ok(HttpResponseUpdatedNoContent())
@@ -213,7 +220,9 @@ async fn withdraw_prefixes(
         e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
             prefixes.clone(),
         ))))
-        .unwrap(); //TODO(unwrap)
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("admin event send: {e}"))
+        })?;
     }
 
     Ok(HttpResponseUpdatedNoContent())
@@ -232,7 +241,9 @@ async fn withdraw_tunnel_endpoints(
         e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
             endpoints.clone(),
         ))))
-        .unwrap(); //TODO(unwrap)
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("admin event send: {e}"))
+        })?;
     }
 
     Ok(HttpResponseUpdatedNoContent())
@@ -245,7 +256,9 @@ async fn sync(
     let ctx = ctx.context().lock().unwrap();
 
     for e in &ctx.event_channels {
-        e.send(Event::Admin(AdminEvent::Sync)).unwrap(); //TODO(unwrap)
+        e.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
+            HttpError::for_internal_error(format!("admin event send: {e}"))
+        })?;
     }
 
     Ok(HttpResponseUpdatedNoContent())

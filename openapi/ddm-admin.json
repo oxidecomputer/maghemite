@@ -312,18 +312,6 @@
     }
   },
   "components": {
-    "responses": {
-      "Error": {
-        "description": "Error",
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/Error"
-            }
-          }
-        }
-      }
-    },
     "schemas": {
       "Error": {
         "description": "Error information from a response.",
@@ -490,29 +478,30 @@
       "TunnelRoute": {
         "type": "object",
         "properties": {
-          "boundary_addr": {
-            "type": "string",
-            "format": "ipv6"
-          },
           "nexthop": {
             "type": "string",
             "format": "ipv6"
           },
-          "overlay_prefix": {
-            "$ref": "#/components/schemas/IpPrefix"
-          },
-          "vni": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
+          "origin": {
+            "$ref": "#/components/schemas/TunnelOrigin"
           }
         },
         "required": [
-          "boundary_addr",
           "nexthop",
-          "overlay_prefix",
-          "vni"
+          "origin"
         ]
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
       }
     }
   }

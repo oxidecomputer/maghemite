@@ -247,11 +247,11 @@ pub fn add_tunnel_routes(
             log,
             ifname,
             "adding tunnel route {} -[{}]-> {}",
-            r.overlay_prefix,
-            r.vni,
-            r.boundary_addr,
+            r.origin.overlay_prefix,
+            r.origin.vni,
+            r.origin.boundary_addr,
         );
-        let vip = match r.overlay_prefix {
+        let vip = match r.origin.overlay_prefix {
             crate::db::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
                 Ipv4PrefixLen::new(p.len).unwrap(),
@@ -262,8 +262,8 @@ pub fn add_tunnel_routes(
             )),
         };
         let tep = TunnelEndpoint {
-            ip: r.boundary_addr.into(),
-            vni: Vni::new(r.vni).unwrap(),
+            ip: r.origin.boundary_addr.into(),
+            vni: Vni::new(r.origin.vni).unwrap(),
         };
         let req = SetVirt2BoundaryReq { vip, tep };
         hdl.set_v2b(&req)?;
@@ -287,11 +287,11 @@ pub fn remove_tunnel_routes(
             log,
             ifname,
             "adding tunnel route {} -[{}]-> {}",
-            r.overlay_prefix,
-            r.vni,
-            r.boundary_addr,
+            r.origin.overlay_prefix,
+            r.origin.vni,
+            r.origin.boundary_addr,
         );
-        let vip = match r.overlay_prefix {
+        let vip = match r.origin.overlay_prefix {
             crate::db::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
                 Ipv4PrefixLen::new(p.len).unwrap(),

@@ -115,20 +115,23 @@ impl Db {
         nexthop: Ipv6Addr,
     ) -> (HashSet<Route>, HashSet<TunnelRoute>) {
         let mut data = self.data.lock().unwrap();
+        // Routes are generally held in sets to prevent duplication and provide
+        // handy set-algebra operations.
         let mut removed = HashSet::new();
-        let mut tnl_removed = HashSet::new();
         for x in &data.imported {
             if x.nexthop == nexthop {
                 removed.insert(x.clone());
             }
         }
+        for x in &removed {
+            data.imported.remove(x);
+        }
+
+        let mut tnl_removed = HashSet::new();
         for x in &data.imported_tunnel {
             if x.nexthop == nexthop {
                 tnl_removed.insert(x.clone());
             }
-        }
-        for x in &removed {
-            data.imported.remove(x);
         }
         for x in &tnl_removed {
             data.imported_tunnel.remove(x);
@@ -252,9 +255,7 @@ impl std::str::FromStr for Ipv6Prefix {
     Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct TunnelRoute {
-    pub overlay_prefix: IpPrefix,
-    pub boundary_addr: Ipv6Addr,
-    pub vni: u32,
+    pub origin: TunnelOrigin,
 
     // The nexthop is only used to associate the route with a peer allowing us
     // to remove the route if the peer expires. It does not influence what goes
@@ -270,6 +271,16 @@ pub struct TunnelOrigin {
     pub overlay_prefix: IpPrefix,
     pub boundary_addr: Ipv6Addr,
     pub vni: u32,
+}
+
+impl From<crate::db::TunnelRoute> for TunnelOrigin {
+    fn from(x: crate::db::TunnelRoute) -> Self {
+        Self {
+            overlay_prefix: x.origin.overlay_prefix,
+            boundary_addr: x.origin.boundary_addr,
+            vni: x.origin.vni,
+        }
+    }
 }
 
 #[derive(
