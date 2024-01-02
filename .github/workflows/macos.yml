@@ -1,0 +1,23 @@
+name: mgd on macOS
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [ opened, synchronize, reopened ]
+
+jobs:
+  mgd-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # TODO: seems like we'd want to pull version from rust-toolchain.toml
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build mgd
+        run: cargo build --bin mgd --no-default-features --release
+      - name: Store binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mgd
+          path: target/release/mgd
