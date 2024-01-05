@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::bgp_admin;
+use crate::{bgp_admin, static_admin};
 use bgp_admin::BgpContext;
 use dropshot::{ApiDescription, ConfigDropshot, HttpServerStarter};
 use rdb::Db;
@@ -59,6 +59,8 @@ macro_rules! register {
 
 pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     let mut api = ApiDescription::new();
+
+    // bgp
     register!(api, bgp_admin::get_routers);
     register!(api, bgp_admin::new_router);
     register!(api, bgp_admin::ensure_router_handler);
@@ -72,6 +74,12 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     register!(api, bgp_admin::get_imported4);
     register!(api, bgp_admin::bgp_apply);
     register!(api, bgp_admin::graceful_shutdown);
+
+    // static
+    register!(api, static_admin::static_add_v4_route);
+    register!(api, static_admin::static_remove_v4_route);
+    register!(api, static_admin::static_list_v4_routes);
+
     api
 }
 

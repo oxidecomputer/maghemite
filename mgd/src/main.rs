@@ -18,6 +18,7 @@ use std::thread::spawn;
 mod admin;
 mod bgp_admin;
 mod error;
+mod static_admin;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None, styles = oxide_cli_style())]
