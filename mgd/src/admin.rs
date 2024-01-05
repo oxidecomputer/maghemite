@@ -9,11 +9,12 @@ use rdb::Db;
 use slog::o;
 use slog::{error, info, warn, Logger};
 use std::fs::File;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
 pub struct HandlerContext {
+    pub tep: Ipv6Addr, // tunnel endpoint address
     pub bgp: BgpContext,
     pub log: Logger,
     pub data_dir: String,

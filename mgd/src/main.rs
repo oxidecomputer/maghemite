@@ -51,6 +51,10 @@ struct RunArgs {
     /// Where to store the local database
     #[arg(long, default_value = "/var/run")]
     data_dir: String,
+
+    /// Tunnel address
+    #[arg(long)]
+    tep: Ipv6Addr,
 }
 
 #[tokio::main]
@@ -70,6 +74,7 @@ async fn run(args: RunArgs) {
         .expect("open datastore file");
 
     let context = Arc::new(HandlerContext {
+        tep: args.tep,
         log: log.clone(),
         bgp,
         data_dir: args.data_dir.clone(),

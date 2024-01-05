@@ -313,7 +313,7 @@ pub(crate) fn add_router(
         let log = ctx.log.clone();
         let db = db.clone();
         std::thread::spawn(move || {
-            mg_lower::run(db, log, rt);
+            mg_lower::run(ctx.tep, db, log, rt);
         });
     }
 

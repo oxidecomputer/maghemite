@@ -10,15 +10,22 @@ use crate::dendrite::{
     db_route_to_dendrite_route, new_dpd_client, update_dendrite, RouteHash,
 };
 use crate::error::Error;
+use ddm::{
+    add_tunnel_routes, new_ddm_client, remove_tunnel_routes,
+    update_tunnel_endpoints,
+};
+use ddm_admin_client::Client as DdmClient;
 use dpd_client::Client as DpdClient;
 use rdb::{ChangeSet, Db};
 use slog::{error, info, Logger};
 use std::collections::HashSet;
+use std::net::Ipv6Addr;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
 
+mod ddm;
 mod dendrite;
 mod error;
 
@@ -32,7 +39,12 @@ const MG_LOWER_TAG: &str = "mg-lower";
 /// moving foward. The loop runs on the calling thread, so callers are
 /// responsible for running this function in a separate thread if asynchronous
 /// execution is required.
-pub fn run(db: Db, log: Logger, rt: Arc<tokio::runtime::Handle>) {
+pub fn run(
+    tep: Ipv6Addr, //tunnel endpoint address
+    db: Db,
+    log: Logger,
+    rt: Arc<tokio::runtime::Handle>,
+) {
     loop {
         let (tx, rx) = channel();
 
@@ -42,25 +54,29 @@ pub fn run(db: Db, log: Logger, rt: Arc<tokio::runtime::Handle>) {
 
         // initialize the underlying router with the current state
         let dpd = new_dpd_client(&log);
-        let mut generation = match initialize(&db, &log, &dpd, rt.clone()) {
-            Ok(gen) => gen,
-            Err(e) => {
-                error!(log, "initializing failed: {e}");
-                info!(log, "restarting sync loop in one second");
-                sleep(Duration::from_secs(1));
-                continue;
-            }
-        };
+        let ddm = new_ddm_client(&log);
+        let mut generation =
+            match initialize(tep, &db, &log, &dpd, &ddm, rt.clone()) {
+                Ok(gen) => gen,
+                Err(e) => {
+                    error!(log, "initializing failed: {e}");
+                    info!(log, "restarting sync loop in one second");
+                    sleep(Duration::from_secs(1));
+                    continue;
+                }
+            };
 
         // handle any changes that occur
         loop {
             match rx.recv() {
                 Ok(change) => {
                     generation = match handle_change(
+                        tep,
                         &db,
                         change,
                         &log,
                         &dpd,
+                        &ddm,
                         generation,
                         rt.clone(),
                     ) {
@@ -83,16 +99,23 @@ pub fn run(db: Db, log: Logger, rt: Arc<tokio::runtime::Handle>) {
 /// Initialize the underlying platform with a complete set of routes from the
 /// RIB.
 fn initialize(
+    tep: Ipv6Addr, // tunnel endpoint address
     db: &Db,
     log: &Logger,
     dpd: &DpdClient,
+    ddm: &DdmClient,
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<u64, Error> {
     let generation = db.generation();
 
+    let db_imported = db.get_imported4();
+
+    // announce tunnel endpoints via ddm
+    update_tunnel_endpoints(tep, ddm, &db_imported, rt.clone(), log);
+
     // get all imported routes from db
     let imported: HashSet<RouteHash> =
-        db_route_to_dendrite_route(db.get_imported4(), log, dpd);
+        db_route_to_dendrite_route(db_imported, log, dpd);
 
     // get all routes created by mg-lower from dendrite
     let routes =
@@ -126,21 +149,28 @@ fn initialize(
 }
 
 /// Synchronize a change set from the RIB to the underlying platform.
+#[allow(clippy::too_many_arguments)]
 fn handle_change(
+    tep: Ipv6Addr, // tunnel endpoint address
     db: &Db,
     change: ChangeSet,
     log: &Logger,
     dpd: &DpdClient,
+    ddm: &DdmClient,
     generation: u64,
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<u64, Error> {
     if change.generation > generation + 1 {
-        return initialize(db, log, dpd, rt.clone());
+        return initialize(tep, db, log, dpd, ddm, rt.clone());
     }
-    let to_add = change.import.added.clone().into_iter().collect();
+    let to_add: Vec<rdb::Route4ImportKey> =
+        change.import.added.clone().into_iter().collect();
+    add_tunnel_routes(tep, ddm, &to_add, rt.clone(), log);
     let to_add = db_route_to_dendrite_route(to_add, log, dpd);
 
-    let to_del = change.import.removed.clone().into_iter().collect();
+    let to_del: Vec<rdb::Route4ImportKey> =
+        change.import.removed.clone().into_iter().collect();
+    remove_tunnel_routes(tep, ddm, &to_del, rt.clone(), log);
     let to_del = db_route_to_dendrite_route(to_del, log, dpd);
 
     update_dendrite(to_add.iter(), to_del.iter(), dpd, rt.clone(), log)?;

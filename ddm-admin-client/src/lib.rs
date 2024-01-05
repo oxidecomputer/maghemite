@@ -3,6 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub use ddm::db::IpPrefix;
+pub use ddm::db::Ipv4Prefix;
+pub use ddm::db::Ipv6Prefix;
+pub use ddm::db::TunnelOrigin;
 
 progenitor::generate_api!(
     spec = "../openapi/ddm-admin.json",
@@ -19,5 +22,8 @@ progenitor::generate_api!(
     }),
     replace = {
         IpPrefix = ddm::db::IpPrefix,
+        Ipv4Prefix = ddm::db::Ipv4Prefix,
+        Ipv6Prefix = ddm::db::Ipv6Prefix,
+        TunnelOrigin = ddm::db::TunnelOrigin,
     }
 );

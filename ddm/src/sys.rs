@@ -13,10 +13,11 @@ use dpd_client::Client;
 use dpd_client::ClientState;
 use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
 use opte_ioctl::OpteHdl;
+use oxide_vpc::api::TunnelEndpoint;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -232,6 +233,29 @@ pub fn add_routes_dendrite(
     }
 }
 
+fn tunnel_route_update_map(
+    routes: &HashSet<TunnelRoute>,
+) -> HashMap<crate::db::IpPrefix, Vec<TunnelEndpoint>> {
+    let mut m: HashMap<crate::db::IpPrefix, Vec<TunnelEndpoint>> =
+        HashMap::new();
+    for r in routes {
+        let pfx = r.origin.overlay_prefix;
+        let tep = TunnelEndpoint {
+            ip: r.origin.boundary_addr.into(),
+            vni: oxide_vpc::api::Vni::new(r.origin.vni).unwrap(),
+        };
+        match m.get_mut(&pfx) {
+            Some(entry) => {
+                entry.push(tep);
+            }
+            None => {
+                m.insert(pfx, vec![tep]);
+            }
+        }
+    }
+    m
+}
+
 pub fn add_tunnel_routes(
     log: &Logger,
     ifname: &str,
@@ -239,19 +263,22 @@ pub fn add_tunnel_routes(
 ) -> Result<(), opte_ioctl::Error> {
     use oxide_vpc::api::{
         IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr, Ipv6PrefixLen,
-        SetVirt2BoundaryReq, TunnelEndpoint, Vni,
+        SetVirt2BoundaryReq,
     };
     let hdl = OpteHdl::open(OpteHdl::XDE_CTL)?;
-    for r in routes {
-        inf!(
-            log,
-            ifname,
-            "adding tunnel route {} -[{}]-> {}",
-            r.origin.overlay_prefix,
-            r.origin.vni,
-            r.origin.boundary_addr,
-        );
-        let vip = match r.origin.overlay_prefix {
+
+    for (pfx, tep) in tunnel_route_update_map(routes) {
+        for t in &tep {
+            inf!(
+                log,
+                ifname,
+                "adding tunnel route {} -[{}]-> {}",
+                pfx,
+                t.vni,
+                t.ip,
+            );
+        }
+        let vip = match pfx {
             crate::db::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
                 Ipv4PrefixLen::new(p.len).unwrap(),
@@ -260,10 +287,6 @@ pub fn add_tunnel_routes(
                 p.addr.into(),
                 Ipv6PrefixLen::new(p.len).unwrap(),
             )),
-        };
-        let tep = TunnelEndpoint {
-            ip: r.origin.boundary_addr.into(),
-            vni: Vni::new(r.origin.vni).unwrap(),
         };
         let req = SetVirt2BoundaryReq { vip, tep };
         hdl.set_v2b(&req)?;
@@ -282,16 +305,18 @@ pub fn remove_tunnel_routes(
         Ipv6PrefixLen,
     };
     let hdl = OpteHdl::open(OpteHdl::XDE_CTL)?;
-    for r in routes {
-        inf!(
-            log,
-            ifname,
-            "adding tunnel route {} -[{}]-> {}",
-            r.origin.overlay_prefix,
-            r.origin.vni,
-            r.origin.boundary_addr,
-        );
-        let vip = match r.origin.overlay_prefix {
+    for (pfx, tep) in tunnel_route_update_map(routes) {
+        for t in &tep {
+            inf!(
+                log,
+                ifname,
+                "removing tunnel route {} -[{}]-> {}",
+                pfx,
+                t.vni,
+                t.ip,
+            );
+        }
+        let vip = match pfx {
             crate::db::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
                 Ipv4PrefixLen::new(p.len).unwrap(),
@@ -301,7 +326,7 @@ pub fn remove_tunnel_routes(
                 Ipv6PrefixLen::new(p.len).unwrap(),
             )),
         };
-        let req = ClearVirt2BoundaryReq { vip };
+        let req = ClearVirt2BoundaryReq { vip, tep };
         hdl.clear_v2b(&req)?;
     }
 

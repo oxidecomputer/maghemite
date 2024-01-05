@@ -5,8 +5,7 @@
 use anyhow::Result;
 use clap::Parser;
 use colored::*;
-use ddm::db::{IpPrefix, Ipv6Prefix};
-use ddm_admin_client::types;
+use ddm::db::{IpPrefix, Ipv6Prefix, TunnelOrigin};
 use ddm_admin_client::Client;
 use mg_common::cli::oxide_cli_style;
 use slog::{Drain, Logger};
@@ -171,9 +170,9 @@ async fn run() -> Result<()> {
             tw.flush()?;
         }
         SubCommand::AdvertisePrefixes(ac) => {
-            let mut prefixes: Vec<types::Ipv6Prefix> = Vec::new();
+            let mut prefixes: Vec<Ipv6Prefix> = Vec::new();
             for p in ac.prefixes {
-                prefixes.push(types::Ipv6Prefix {
+                prefixes.push(Ipv6Prefix {
                     addr: p.addr,
                     len: p.len,
                 });
@@ -181,9 +180,9 @@ async fn run() -> Result<()> {
             client.advertise_prefixes(&prefixes).await?;
         }
         SubCommand::WithdrawPrefixes(ac) => {
-            let mut prefixes: Vec<types::Ipv6Prefix> = Vec::new();
+            let mut prefixes: Vec<Ipv6Prefix> = Vec::new();
             for p in ac.prefixes {
-                prefixes.push(types::Ipv6Prefix {
+                prefixes.push(Ipv6Prefix {
                     addr: p.addr,
                     len: p.len,
                 });
@@ -236,7 +235,7 @@ async fn run() -> Result<()> {
         }
         SubCommand::TunnelAdvertise(ep) => {
             client
-                .advertise_tunnel_endpoints(&vec![types::TunnelOrigin {
+                .advertise_tunnel_endpoints(&vec![TunnelOrigin {
                     overlay_prefix: ep.overlay_prefix,
                     boundary_addr: ep.boundary_addr,
                     vni: ep.vni,
@@ -245,7 +244,7 @@ async fn run() -> Result<()> {
         }
         SubCommand::TunnelWithdraw(ep) => {
             client
-                .withdraw_tunnel_endpoints(&vec![types::TunnelOrigin {
+                .withdraw_tunnel_endpoints(&vec![TunnelOrigin {
                     overlay_prefix: ep.overlay_prefix,
                     boundary_addr: ep.boundary_addr,
                     vni: ep.vni,
