@@ -42,7 +42,7 @@ slog = { version = "2.7.0", features = ["max_level_trace"] }
 slog-term = "2.9"
 slog-envlogger = "2.2"
 slog-async = "2.8"
-slog-bunyan = "2.4"
+slog-bunyan = "2.5"
 socket2 = { version = "0.5", features = ["all"] }
 ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0", features = ["derive"] }
