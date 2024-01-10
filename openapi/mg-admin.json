@@ -355,6 +355,77 @@
           }
         }
       }
+    },
+    "/static/route4": {
+      "get": {
+        "operationId": "static_list_v4_routes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaticRoute4List"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "static_add_v4_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddStaticRoute4Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "static_remove_v4_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteStaticRoute4Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -424,22 +495,36 @@
           "resolution"
         ]
       },
+      "AddStaticRoute4Request": {
+        "type": "object",
+        "properties": {
+          "routes": {
+            "$ref": "#/components/schemas/StaticRoute4List"
+          }
+        },
+        "required": [
+          "routes"
+        ]
+      },
       "ApplyRequest": {
+        "description": "Apply changes to an ASN.",
         "type": "object",
         "properties": {
           "asn": {
+            "description": "ASN to apply changes to.",
             "type": "integer",
             "format": "uint32",
             "minimum": 0
           },
           "originate": {
+            "description": "Complete set of prefixes to originate. Any active prefixes not in this list will be removed. All prefixes in this list are ensured to be in the originating set.",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Prefix4"
             }
           },
           "peers": {
-            "description": "Lists of peers indexed by peer group.",
+            "description": "Lists of peers indexed by peer group. Set's within a peer group key are a total set. For example, the value\n\n```text {\"foo\": [a, b, d]} ``` Means that the peer group \"foo\" only contains the peers `a`, `b` and `d`. If there is a peer `c` currently in the peer group \"foo\", it will be removed.",
             "type": "object",
             "additionalProperties": {
               "type": "array",
@@ -540,6 +625,17 @@
         },
         "required": [
           "asn"
+        ]
+      },
+      "DeleteStaticRoute4Request": {
+        "type": "object",
+        "properties": {
+          "routes": {
+            "$ref": "#/components/schemas/StaticRoute4List"
+          }
+        },
+        "required": [
+          "routes"
         ]
       },
       "Error": {
@@ -809,6 +905,36 @@
           "asn",
           "graceful_shutdown",
           "peers"
+        ]
+      },
+      "StaticRoute4": {
+        "type": "object",
+        "properties": {
+          "nexthop": {
+            "type": "string",
+            "format": "ipv4"
+          },
+          "prefix": {
+            "$ref": "#/components/schemas/Prefix4"
+          }
+        },
+        "required": [
+          "nexthop",
+          "prefix"
+        ]
+      },
+      "StaticRoute4List": {
+        "type": "object",
+        "properties": {
+          "list": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaticRoute4"
+            }
+          }
+        },
+        "required": [
+          "list"
         ]
       },
       "Withdraw4Request": {
