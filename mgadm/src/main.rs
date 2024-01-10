@@ -11,6 +11,7 @@ use slog::Logger;
 use std::net::{IpAddr, SocketAddr};
 
 mod bgp;
+mod static_routing;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None, styles = oxide_cli_style())]
@@ -29,8 +30,13 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// BGP management commands.
     #[command(subcommand)]
     Bgp(bgp::Commands),
+
+    /// Static routing management commands.
+    #[command(subcommand)]
+    Static(static_routing::Commands),
 }
 
 #[tokio::main]
@@ -45,6 +51,9 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Bgp(command) => bgp::commands(command, client).await?,
+        Commands::Static(command) => {
+            static_routing::commands(command, client).await?
+        }
     }
     Ok(())
 }

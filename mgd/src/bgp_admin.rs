@@ -307,16 +307,6 @@ pub(crate) fn add_router(
 
     router.run();
 
-    #[cfg(feature = "default")]
-    {
-        let rt = Arc::new(tokio::runtime::Handle::current());
-        let log = ctx.log.clone();
-        let db = db.clone();
-        std::thread::spawn(move || {
-            mg_lower::run(ctx.tep, db, log, rt);
-        });
-    }
-
     routers.insert(rq.asn, router);
     db.add_bgp_router(
         rq.asn,

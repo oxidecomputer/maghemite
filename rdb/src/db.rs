@@ -12,7 +12,7 @@
 use crate::error::Error;
 use crate::types::*;
 use mg_common::{lock, read_lock, write_lock};
-use slog::{error, Logger};
+use slog::{error, info, Logger};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -271,8 +271,18 @@ impl Db {
         lock!(self.imported).replace(r);
         let after = self.effective_set_for_prefix4(r.prefix);
 
-        if let Some(change_set) = self.import_route_change_set(before, after) {
+        if let Some(change_set) = self.import_route_change_set(&before, &after)
+        {
+            info!(
+                self.log,
+                "sending notification for change set {:#?}", change_set,
+            );
             self.notify(change_set);
+        } else {
+            info!(
+                self.log,
+                "no effective change for {:#?} -> {:#?}", before, after
+            );
         }
     }
 
@@ -281,7 +291,8 @@ impl Db {
         lock!(self.imported).remove(&r);
         let after = self.effective_set_for_prefix4(r.prefix);
 
-        if let Some(change_set) = self.import_route_change_set(before, after) {
+        if let Some(change_set) = self.import_route_change_set(&before, &after)
+        {
             self.notify(change_set);
         }
     }
@@ -342,20 +353,20 @@ impl Db {
     /// bumping the RIB generation number if there are changes.
     fn import_route_change_set(
         &self,
-        before: HashSet<Route4ImportKey>,
-        after: HashSet<Route4ImportKey>,
+        before: &HashSet<Route4ImportKey>,
+        after: &HashSet<Route4ImportKey>,
     ) -> Option<ChangeSet> {
         let added: HashSet<Route4ImportKey> =
-            after.difference(&before).copied().collect();
+            after.difference(before).copied().collect();
 
         let removed: HashSet<Route4ImportKey> =
-            before.difference(&after).copied().collect();
-
-        let gen = self.generation.fetch_add(1, Ordering::SeqCst);
+            before.difference(after).copied().collect();
 
         if added.is_empty() && removed.is_empty() {
             return None;
         }
+
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst);
 
         Some(ChangeSet::from_import(
             ImportChangeSet { added, removed },

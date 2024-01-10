@@ -82,6 +82,17 @@ async fn run(args: RunArgs) {
         db: db.clone(),
     });
 
+    #[cfg(feature = "default")]
+    {
+        let rt = Arc::new(tokio::runtime::Handle::current());
+        let ctx = context.clone();
+        let log = log.clone();
+        let db = ctx.db.clone();
+        std::thread::spawn(move || {
+            mg_lower::run(ctx.tep, db, log, rt);
+        });
+    }
+
     start_bgp_routers(
         context.clone(),
         db.get_bgp_routers()

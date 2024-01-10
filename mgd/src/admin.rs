@@ -28,7 +28,6 @@ pub fn start_server(
     context: Arc<HandlerContext>,
 ) -> Result<JoinHandle<()>, String> {
     let sa = SocketAddr::new(addr, port);
-
     let ds_config = ConfigDropshot {
         bind_address: sa,
         ..Default::default()

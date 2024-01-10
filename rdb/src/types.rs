@@ -253,7 +253,7 @@ pub struct Policy {
     pub priority: u16,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct ImportChangeSet {
     pub added: HashSet<Route4ImportKey>,
     pub removed: HashSet<Route4ImportKey>,
@@ -274,7 +274,7 @@ impl ImportChangeSet {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct OriginChangeSet {
     pub added: HashSet<Prefix4>,
     pub removed: HashSet<Prefix4>,
@@ -295,7 +295,7 @@ impl OriginChangeSet {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct ChangeSet {
     pub generation: u64,
     pub import: ImportChangeSet,

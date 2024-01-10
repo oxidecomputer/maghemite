@@ -56,7 +56,7 @@ pub fn run(
         let dpd = new_dpd_client(&log);
         let ddm = new_ddm_client(&log);
         let mut generation =
-            match initialize(tep, &db, &log, &dpd, &ddm, rt.clone()) {
+            match full_sync(tep, &db, &log, &dpd, &ddm, rt.clone()) {
                 Ok(gen) => gen,
                 Err(e) => {
                     error!(log, "initializing failed: {e}");
@@ -68,7 +68,7 @@ pub fn run(
 
         // handle any changes that occur
         loop {
-            match rx.recv() {
+            match rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(change) => {
                     generation = match handle_change(
                         tep,
@@ -88,17 +88,32 @@ pub fn run(
                         }
                     }
                 }
-                Err(e) => {
-                    error!(log, "mg-lower watch rx: {e}");
+                // if we've not received updates in the timeout interval, to a
+                // full sync in case something has changed out from under us.
+                Err(_) => {
+                    generation =
+                        match full_sync(tep, &db, &log, &dpd, &ddm, rt.clone())
+                        {
+                            Ok(gen) => gen,
+                            Err(e) => {
+                                error!(log, "initializing failed: {e}");
+                                info!(
+                                    log,
+                                    "restarting sync loop in one second"
+                                );
+                                sleep(Duration::from_secs(1));
+                                continue;
+                            }
+                        }
                 }
             }
         }
     }
 }
 
-/// Initialize the underlying platform with a complete set of routes from the
+/// Synchronize the underlying platforms with a complete set of routes from the
 /// RIB.
-fn initialize(
+fn full_sync(
     tep: Ipv6Addr, // tunnel endpoint address
     db: &Db,
     log: &Logger,
@@ -160,8 +175,15 @@ fn handle_change(
     generation: u64,
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<u64, Error> {
+    info!(
+        log,
+        "mg-lower: handling rib change generation {} -> {}",
+        generation,
+        change.generation
+    );
+
     if change.generation > generation + 1 {
-        return initialize(tep, db, log, dpd, ddm, rt.clone());
+        return full_sync(tep, db, log, dpd, ddm, rt.clone());
     }
     let to_add: Vec<rdb::Route4ImportKey> =
         change.import.added.clone().into_iter().collect();

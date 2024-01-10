@@ -39,7 +39,7 @@ impl From<StaticRoute4> for Route4ImportKey {
             prefix: val.prefix,
             nexthop: val.nexthop,
             id: 0,
-            priority: 0,
+            priority: 100,
         }
     }
 }
