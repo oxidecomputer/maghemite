@@ -14,7 +14,7 @@ use crate::types::*;
 use mg_common::{lock, read_lock, write_lock};
 use slog::{error, info, Logger};
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
@@ -30,6 +30,12 @@ const BGP_ROUTER: &str = "bgp_router";
 /// The handle used to open a persistent key-value tree for BGP neighbor
 /// information.
 const BGP_NEIGHBOR: &str = "bgp_neighbor";
+
+/// The handle used to open a persistent key-value tree for settings
+/// information.
+const SETTINGS: &str = "settings";
+/// Key used in settings tree for tunnel endpoint setting
+const TEP_KEY: &str = "tep";
 
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
@@ -372,5 +378,29 @@ impl Db {
             ImportChangeSet { added, removed },
             gen,
         ))
+    }
+
+    pub fn get_tep_addr(&self) -> Result<Option<Ipv6Addr>, Error> {
+        let tree = self.persistent.open_tree(SETTINGS)?;
+        let result = tree.get(TEP_KEY)?;
+        let value = match result {
+            Some(value) => value,
+            None => return Ok(None),
+        };
+        let octets: [u8; 16] = (*value).try_into().map_err(|_| {
+            Error::DbValue(format!(
+                "rdb: tep length error exepcted 16 bytes found {}",
+                value.len(),
+            ))
+        })?;
+
+        Ok(Some(Ipv6Addr::from(octets)))
+    }
+
+    pub fn set_tep_addr(&self, addr: Ipv6Addr) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(SETTINGS)?;
+        let key = addr.octets();
+        tree.insert(TEP_KEY, &key)?;
+        Ok(())
     }
 }

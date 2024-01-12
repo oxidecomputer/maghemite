@@ -71,13 +71,7 @@ async fn run(args: RunArgs) {
     let db = rdb::Db::new(&format!("{}/rdb", args.data_dir), log.clone())
         .expect("open datastore file");
 
-    // creat the randomized ULA fdxx:xxxx:xxxx:xxxx::1 as a tunnel endpoint
-    let mut rng = rand::thread_rng();
-    let mut r = [0u8; 7];
-    r.try_fill(&mut rng).unwrap();
-    let tep_ula = Ipv6Addr::from([
-        0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
-    ]);
+    let tep_ula = get_tunnel_endpoint_ula(&db);
 
     let context = Arc::new(HandlerContext {
         tep: tep_ula,
@@ -171,4 +165,22 @@ fn start_bgp_routers(
         )
         .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
     }
+}
+
+fn get_tunnel_endpoint_ula(db: &rdb::Db) -> Ipv6Addr {
+    if let Some(addr) = db.get_tep_addr().unwrap() {
+        return addr;
+    }
+
+    // creat the randomized ULA fdxx:xxxx:xxxx:xxxx::1 as a tunnel endpoint
+    let mut rng = rand::thread_rng();
+    let mut r = [0u8; 7];
+    r.try_fill(&mut rng).unwrap();
+    let tep_ula = Ipv6Addr::from([
+        0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
+    ]);
+
+    db.set_tep_addr(tep_ula).unwrap();
+
+    tep_ula
 }
