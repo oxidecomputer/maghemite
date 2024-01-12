@@ -18,7 +18,6 @@
   <property_group name='config' type='application'>
      <propval name='admin_host' type='astring' value='::1' />
      <propval name='admin_port' type='count' value='4676' />
-     <propval name='tep' type='astring' value='fd00:99::1' />
    </property_group>
 
   <property_group name='startd' type='framework'>

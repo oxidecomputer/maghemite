@@ -8,6 +8,7 @@ use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use bgp::log::init_logger;
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
+use rand::Fill;
 use rdb::{BgpNeighborInfo, BgpRouterInfo};
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap};
@@ -52,10 +53,6 @@ struct RunArgs {
     /// Where to store the local database
     #[arg(long, default_value = "/var/run")]
     data_dir: String,
-
-    /// Tunnel address
-    #[arg(long)]
-    tep: Ipv6Addr,
 }
 
 #[tokio::main]
@@ -74,8 +71,16 @@ async fn run(args: RunArgs) {
     let db = rdb::Db::new(&format!("{}/rdb", args.data_dir), log.clone())
         .expect("open datastore file");
 
+    // creat the randomized ULA fdxx:xxxx:xxxx:xxxx::1 as a tunnel endpoint
+    let mut rng = rand::thread_rng();
+    let mut r = [0u8; 7];
+    r.try_fill(&mut rng).unwrap();
+    let tep_ula = Ipv6Addr::from([
+        0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
+    ]);
+
     let context = Arc::new(HandlerContext {
-        tep: args.tep,
+        tep: tep_ula,
         log: log.clone(),
         bgp,
         data_dir: args.data_dir.clone(),

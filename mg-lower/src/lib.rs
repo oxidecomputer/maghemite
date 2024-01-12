@@ -15,6 +15,7 @@ use ddm::{
     update_tunnel_endpoints,
 };
 use ddm_admin_client::Client as DdmClient;
+use dendrite::ensure_tep_addr;
 use dpd_client::Client as DpdClient;
 use rdb::{ChangeSet, Db};
 use slog::{error, info, Logger};
@@ -124,6 +125,8 @@ fn full_sync(
     let generation = db.generation();
 
     let db_imported = db.get_imported4();
+
+    ensure_tep_addr(tep, dpd, rt.clone(), log);
 
     // announce tunnel endpoints via ddm
     update_tunnel_endpoints(tep, ddm, &db_imported, rt.clone(), log);
