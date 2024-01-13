@@ -1467,7 +1467,7 @@ dependencies = [
 [[package]]
 name = "illumos-sys-hdrs"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#71eb2d3519b9904ee4a6e6fff819e23a92fcce6e"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#73d4669ea213d0b7aca35c4babb6fd09ed51d29e"
 
 [[package]]
 name = "indexmap"
@@ -1560,7 +1560,7 @@ dependencies = [
 [[package]]
 name = "kstat-macro"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#71eb2d3519b9904ee4a6e6fff819e23a92fcce6e"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#73d4669ea213d0b7aca35c4babb6fd09ed51d29e"
 dependencies = [
  "quote",
  "syn 2.0.48",
@@ -2230,7 +2230,7 @@ dependencies = [
 [[package]]
 name = "opte"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#71eb2d3519b9904ee4a6e6fff819e23a92fcce6e"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#73d4669ea213d0b7aca35c4babb6fd09ed51d29e"
 dependencies = [
  "cfg-if",
  "dyn-clone",
@@ -2246,7 +2246,7 @@ dependencies = [
 [[package]]
 name = "opte-api"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#71eb2d3519b9904ee4a6e6fff819e23a92fcce6e"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#73d4669ea213d0b7aca35c4babb6fd09ed51d29e"
 dependencies = [
  "illumos-sys-hdrs",
  "ipnetwork",
@@ -2258,7 +2258,7 @@ dependencies = [
 [[package]]
 name = "opte-ioctl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#71eb2d3519b9904ee4a6e6fff819e23a92fcce6e"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#73d4669ea213d0b7aca35c4babb6fd09ed51d29e"
 dependencies = [
  "libc",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
@@ -2272,7 +2272,7 @@ dependencies = [
 [[package]]
 name = "oxide-vpc"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#71eb2d3519b9904ee4a6e6fff819e23a92fcce6e"
+source = "git+https://github.com/oxidecomputer/opte?branch=boundary-services-overlay-flow-pinning#73d4669ea213d0b7aca35c4babb6fd09ed51d29e"
 dependencies = [
  "cfg-if",
  "illumos-sys-hdrs",
