@@ -66,7 +66,10 @@ pub async fn static_add_v4_route(
         .map(Into::into)
         .collect();
     for r in routes {
-        ctx.context().db.set_nexthop4(r);
+        ctx.context()
+            .db
+            .set_nexthop4(r, true)
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     }
     Ok(HttpResponseUpdatedNoContent())
 }

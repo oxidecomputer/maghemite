@@ -100,6 +100,8 @@ async fn run(args: RunArgs) {
             .expect("get BGP neighbors from data store"),
     );
 
+    initialize_static_routes(&db);
+
     let j = admin::start_server(
         log.clone(),
         args.admin_addr,
@@ -164,6 +166,17 @@ fn start_bgp_routers(
             },
         )
         .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
+    }
+}
+
+fn initialize_static_routes(db: &rdb::Db) {
+    let routes = db
+        .get_static4()
+        .expect("failed to get static routes from db");
+    for route in &routes {
+        db.set_nexthop4(*route, false).unwrap_or_else(|e| {
+            panic!("failed to initialize static route {route:#?}: {e}")
+        });
     }
 }
 
