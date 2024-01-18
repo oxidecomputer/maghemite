@@ -15,9 +15,8 @@ use dropshot::TypedBody;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{error, warn, Logger};
-use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
-use std::mem::MaybeUninit;
+use std::net::UdpSocket;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -139,17 +138,6 @@ pub(crate) fn channel(
     peer: IpAddr,
     log: Logger,
 ) -> Result<bidi::Endpoint<(IpAddr, packet::Control)>> {
-    /*XXX
-    let domain = if listen.is_ipv4() {
-        Domain::IPV4
-    } else {
-        Domain::IPV6
-    };
-    let sk = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
-    let sa = SocketAddr::new(listen, BFD_MULTIHOP_PORT).into();
-    sk.bind(&sa)?;
-    */
-
     let (local, remote) = bidi::channel();
 
     let sk = dispatcher.lock().unwrap().ensure(
@@ -158,7 +146,6 @@ pub(crate) fn channel(
         remote.tx,
         log.clone(),
     )?;
-    //XXX ingress(peer, remote.tx, sk.try_clone()?, log.clone());
     egress(remote.rx, sk, log.clone());
 
     Ok(local)
@@ -166,7 +153,7 @@ pub(crate) fn channel(
 
 /// Run an egress handler, taking BFD control packets from a session and sending
 /// the out to the peer over UDP.
-fn egress(rx: Receiver<(IpAddr, packet::Control)>, sk: Socket, log: Logger) {
+fn egress(rx: Receiver<(IpAddr, packet::Control)>, sk: UdpSocket, log: Logger) {
     spawn(move || loop {
         let (addr, pkt) = match rx.recv() {
             Ok(result) => result,
@@ -175,70 +162,11 @@ fn egress(rx: Receiver<(IpAddr, packet::Control)>, sk: Socket, log: Logger) {
                 break;
             }
         };
-        let sa = SocketAddr::new(addr, BFD_MULTIHOP_PORT).into();
-        if let Err(e) = sk.send_to(&pkt.to_bytes(), &sa) {
+        let sa = SocketAddr::new(addr, BFD_MULTIHOP_PORT);
+        if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
             error!(log, "udp send: {e}");
         }
     });
-}
-
-/// Run an ingress handler, taking BFD control packets from a remote peer over
-/// UDP and sending them to the local peer sesion for handling.
-/* XXX
-fn ingress(
-    peer: IpAddr,
-    tx: Sender<(IpAddr, packet::Control)>,
-    sk: Socket, //TODO change to rx: Receiver<(IpAddr, packet::Control)> from dispatcher
-    log: Logger,
-) {
-    spawn(move || loop {
-        //TODO figure out real bound
-        let mut buf = [MaybeUninit::new(0); 1024];
-
-        let (n, sa) = match sk.recv_from(&mut buf) {
-            Err(e) => {
-                error!(log, "udp recv: {e}");
-                continue;
-            }
-            Ok((n, sa)) => (n, sa.as_socket().unwrap()),
-        };
-
-        if sa.ip() != peer {
-            warn!(
-                log,
-                "udp message not from peer {} != {peer}, dropping",
-                sa.ip(),
-            );
-            continue;
-        }
-
-        // TODO: perhaps we don't need to use the socket2 crate here - this is
-        // all pretty bog-standard UDP. Should probably switch to the UDP
-        // machinery in the standard library.
-        let ibuf = unsafe { &u8_slice_assume_init_ref(&buf)[..n] };
-
-        let pkt = match packet::Control::wrap(ibuf) {
-            Ok(pkt) => pkt,
-            Err(e) => {
-                error!(log, "parse control packet: {e}");
-                continue;
-            }
-        };
-
-        if let Err(e) = tx.send((sa.ip(), pkt)) {
-            warn!(log, "udp ingress channel closed: {e}");
-            break;
-        }
-    });
-}
-*/
-//TODO trade for `MaybeUninit::slice_assume_init_ref` when it becomes available
-//in stable Rust.
-#[inline(always)]
-pub(crate) const unsafe fn u8_slice_assume_init_ref(
-    slice: &[MaybeUninit<u8>],
-) -> &[u8] {
-    unsafe { &*(slice as *const [MaybeUninit<u8>] as *const [u8]) }
 }
 
 type Sessions = HashMap<IpAddr, Sender<(IpAddr, packet::Control)>>;
@@ -248,7 +176,7 @@ pub(crate) struct Dispatcher {
     // remote address -> session sender
     sessions: Arc<RwLock<Sessions>>,
     // local address -> listener thread
-    listeners: HashMap<IpAddr, (Socket, JoinHandle<()>)>,
+    listeners: HashMap<IpAddr, (UdpSocket, JoinHandle<()>)>,
 }
 
 impl Dispatcher {
@@ -258,22 +186,16 @@ impl Dispatcher {
         remote: IpAddr,
         sender: Sender<(IpAddr, packet::Control)>,
         log: Logger,
-    ) -> Result<Socket> {
+    ) -> Result<UdpSocket> {
         self.sessions.write().unwrap().insert(remote, sender);
         if let Some((sk, _)) = self.listeners.get(&local) {
             return Ok(sk.try_clone()?);
         }
 
         let sessions = self.sessions.clone();
-        let domain = if local.is_ipv4() {
-            Domain::IPV4
-        } else {
-            Domain::IPV6
-        };
-        let sk = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+        let sa = SocketAddr::new(local, BFD_MULTIHOP_PORT);
+        let sk = UdpSocket::bind(sa)?;
         let skl = sk.try_clone()?;
-        let sa = SocketAddr::new(local, BFD_MULTIHOP_PORT).into();
-        sk.bind(&sa)?; //TODO
 
         self.listeners.insert(
             local,
@@ -286,17 +208,18 @@ impl Dispatcher {
         Ok(sk)
     }
 
-    fn listen(sk: Socket, sessions: Arc<RwLock<Sessions>>, log: Logger) {
+    fn listen(sk: UdpSocket, sessions: Arc<RwLock<Sessions>>, log: Logger) {
         loop {
-            //TODO figure out real bound
-            let mut buf = [MaybeUninit::new(0); 1024];
+            // Maximum length of a BFD packet is on the order of 100 bytes (RFC
+            // 5880).
+            let mut buf = [0; 1024];
 
             let (n, sa) = match sk.recv_from(&mut buf) {
                 Err(e) => {
                     error!(log, "udp recv: {e}");
                     continue;
                 }
-                Ok((n, sa)) => (n, sa.as_socket().unwrap()),
+                Ok((n, sa)) => (n, sa),
             };
 
             let guard = sessions.read().unwrap();
@@ -308,12 +231,7 @@ impl Dispatcher {
                 }
             };
 
-            // TODO: perhaps we don't need to use the socket2 crate here - this is
-            // all pretty bog-standard UDP. Should probably switch to the UDP
-            // machinery in the standard library.
-            let ibuf = unsafe { &u8_slice_assume_init_ref(&buf)[..n] };
-
-            let pkt = match packet::Control::wrap(ibuf) {
+            let pkt = match packet::Control::wrap(&buf[..n]) {
                 Ok(pkt) => pkt,
                 Err(e) => {
                     error!(log, "parse control packet: {e}");

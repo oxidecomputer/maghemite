@@ -1882,7 +1882,6 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-term",
- "socket2 0.5.5",
  "thiserror",
  "tokio",
 ]
