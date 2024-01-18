@@ -22,7 +22,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use std::thread::spawn;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 /// Context for Dropshot requests.
@@ -30,11 +32,15 @@ use std::time::Duration;
 pub struct BfdContext {
     /// The underlying deamon being run.
     daemon: Arc<Mutex<Daemon>>,
+    dispatcher: Arc<Mutex<Dispatcher>>,
 }
 
 impl BfdContext {
-    pub fn new(daemon: Arc<Mutex<Daemon>>) -> Self {
-        Self { daemon }
+    pub fn new(log: Logger) -> Self {
+        Self {
+            daemon: Arc::new(Mutex::new(Daemon::new(log.clone()))),
+            dispatcher: Arc::new(Mutex::new(Dispatcher::default())),
+        }
     }
 }
 
@@ -79,6 +85,7 @@ pub(crate) async fn add_peer(
     request: TypedBody<AddBfdPeerRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let mut daemon = ctx.context().bfd.daemon.lock().unwrap();
+    let dispatcher = ctx.context().bfd.dispatcher.clone();
     let db = ctx.context().db.clone();
     let rq = request.into_inner();
 
@@ -86,10 +93,12 @@ pub(crate) async fn add_peer(
         return Ok(HttpResponseUpdatedNoContent {});
     }
 
-    let ch = channel(rq.listen, rq.peer, ctx.log.clone()).map_err(|e| {
-        error!(ctx.log, "udp channel: {e}");
-        HttpError::for_internal_error(e.to_string())
-    })?;
+    let ch = channel(dispatcher, rq.listen, rq.peer, ctx.log.clone()).map_err(
+        |e| {
+            error!(ctx.log, "udp channel: {e}");
+            HttpError::for_internal_error(e.to_string())
+        },
+    )?;
 
     let timeout = Duration::from_micros(rq.required_rx);
     daemon.add_peer(rq.peer, timeout, rq.detection_threshold, ch, db);
@@ -125,10 +134,12 @@ const BFD_MULTIHOP_PORT: u16 = 4784;
 /// Create a bidirectional chennel linking a peer session to an underlying BFD
 /// session over UDP.
 pub(crate) fn channel(
+    dispatcher: Arc<Mutex<Dispatcher>>,
     listen: IpAddr,
     peer: IpAddr,
     log: Logger,
 ) -> Result<bidi::Endpoint<(IpAddr, packet::Control)>> {
+    /*XXX
     let domain = if listen.is_ipv4() {
         Domain::IPV4
     } else {
@@ -137,10 +148,17 @@ pub(crate) fn channel(
     let sk = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
     let sa = SocketAddr::new(listen, BFD_MULTIHOP_PORT).into();
     sk.bind(&sa)?;
+    */
 
     let (local, remote) = bidi::channel();
 
-    ingress(peer, remote.tx, sk.try_clone()?, log.clone());
+    let sk = dispatcher.lock().unwrap().ensure(
+        listen,
+        peer,
+        remote.tx,
+        log.clone(),
+    )?;
+    //XXX ingress(peer, remote.tx, sk.try_clone()?, log.clone());
     egress(remote.rx, sk, log.clone());
 
     Ok(local)
@@ -166,10 +184,11 @@ fn egress(rx: Receiver<(IpAddr, packet::Control)>, sk: Socket, log: Logger) {
 
 /// Run an ingress handler, taking BFD control packets from a remote peer over
 /// UDP and sending them to the local peer sesion for handling.
+/* XXX
 fn ingress(
     peer: IpAddr,
     tx: Sender<(IpAddr, packet::Control)>,
-    sk: Socket,
+    sk: Socket, //TODO change to rx: Receiver<(IpAddr, packet::Control)> from dispatcher
     log: Logger,
 ) {
     spawn(move || loop {
@@ -212,7 +231,7 @@ fn ingress(
         }
     });
 }
-
+*/
 //TODO trade for `MaybeUninit::slice_assume_init_ref` when it becomes available
 //in stable Rust.
 #[inline(always)]
@@ -220,4 +239,92 @@ pub(crate) const unsafe fn u8_slice_assume_init_ref(
     slice: &[MaybeUninit<u8>],
 ) -> &[u8] {
     unsafe { &*(slice as *const [MaybeUninit<u8>] as *const [u8]) }
+}
+
+type Sessions = HashMap<IpAddr, Sender<(IpAddr, packet::Control)>>;
+
+#[derive(Default)]
+pub(crate) struct Dispatcher {
+    // remote address -> session sender
+    sessions: Arc<RwLock<Sessions>>,
+    // local address -> listener thread
+    listeners: HashMap<IpAddr, (Socket, JoinHandle<()>)>,
+}
+
+impl Dispatcher {
+    fn ensure(
+        &mut self,
+        local: IpAddr,
+        remote: IpAddr,
+        sender: Sender<(IpAddr, packet::Control)>,
+        log: Logger,
+    ) -> Result<Socket> {
+        self.sessions.write().unwrap().insert(remote, sender);
+        if let Some((sk, _)) = self.listeners.get(&local) {
+            return Ok(sk.try_clone()?);
+        }
+
+        let sessions = self.sessions.clone();
+        let domain = if local.is_ipv4() {
+            Domain::IPV4
+        } else {
+            Domain::IPV6
+        };
+        let sk = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+        let skl = sk.try_clone()?;
+        let sa = SocketAddr::new(local, BFD_MULTIHOP_PORT).into();
+        sk.bind(&sa)?; //TODO
+
+        self.listeners.insert(
+            local,
+            (
+                sk.try_clone()?,
+                spawn(move || Self::listen(skl, sessions, log)),
+            ),
+        );
+
+        Ok(sk)
+    }
+
+    fn listen(sk: Socket, sessions: Arc<RwLock<Sessions>>, log: Logger) {
+        loop {
+            //TODO figure out real bound
+            let mut buf = [MaybeUninit::new(0); 1024];
+
+            let (n, sa) = match sk.recv_from(&mut buf) {
+                Err(e) => {
+                    error!(log, "udp recv: {e}");
+                    continue;
+                }
+                Ok((n, sa)) => (n, sa.as_socket().unwrap()),
+            };
+
+            let guard = sessions.read().unwrap();
+            let tx = match guard.get(&sa.ip()) {
+                Some(tx) => tx,
+                None => {
+                    warn!(log, "unknown peer {}, dropping", sa.ip(),);
+                    continue;
+                }
+            };
+
+            // TODO: perhaps we don't need to use the socket2 crate here - this is
+            // all pretty bog-standard UDP. Should probably switch to the UDP
+            // machinery in the standard library.
+            let ibuf = unsafe { &u8_slice_assume_init_ref(&buf)[..n] };
+
+            let pkt = match packet::Control::wrap(ibuf) {
+                Ok(pkt) => pkt,
+                Err(e) => {
+                    error!(log, "parse control packet: {e}");
+                    continue;
+                }
+            };
+
+            if let Err(e) = tx.send((sa.ip(), pkt)) {
+                warn!(log, "udp ingress channel closed: {e}");
+                break;
+            }
+        }
+    }
 }

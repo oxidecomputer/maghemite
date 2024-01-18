@@ -74,8 +74,7 @@ async fn run(args: RunArgs) {
         .expect("open datastore file");
 
     let tep_ula = get_tunnel_endpoint_ula(&db);
-    let bfd =
-        BfdContext::new(Arc::new(Mutex::new(bfd::Daemon::new(log.clone()))));
+    let bfd = BfdContext::new(log.clone());
 
     let context = Arc::new(HandlerContext {
         tep: tep_ula,
