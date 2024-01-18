@@ -28,6 +28,14 @@ pub struct Route4ImportKey {
     pub priority: u64,
 }
 
+impl Route4ImportKey {
+    pub fn with_priority(&self, priority: u64) -> Self {
+        let mut x = *self;
+        x.priority = priority;
+        x
+    }
+}
+
 impl Hash for Route4ImportKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.prefix.hash(state);

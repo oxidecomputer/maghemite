@@ -3,7 +3,7 @@ use crate::{
     PeerState,
 };
 use anyhow::{anyhow, Result};
-use slog::Logger;
+use slog::{warn, Logger};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -74,6 +74,7 @@ impl StateMachine {
     pub fn run(
         &mut self,
         mut endpoint: bidi::Endpoint<(IpAddr, packet::Control)>,
+        db: rdb::Db,
     ) {
         let state = self.state.clone();
         let log = self.log.clone();
@@ -102,6 +103,7 @@ impl StateMachine {
                 local,
                 remote.clone(),
                 kill_switch.clone(),
+                db.clone(),
             ) {
                 Ok(result) => result,
                 Err(_) => break,
@@ -206,6 +208,7 @@ trait State: Sync + Send {
         local: PeerInfo,
         remote: Arc<Mutex<PeerInfo>>,
         kill_switch: Arc<AtomicBool>,
+        db: rdb::Db,
     ) -> Result<(Box<dyn State>, BfdEndpoint)>;
 
     /// Return the `PeerState` associated with the implementor of this trait.
@@ -275,7 +278,17 @@ impl State for Down {
         local: PeerInfo,
         remote: Arc<Mutex<PeerInfo>>,
         kill_switch: Arc<AtomicBool>,
+        db: rdb::Db,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
+        match self.peer {
+            IpAddr::V4(addr) => db.disable_nexthop4(addr),
+            IpAddr::V6(addr) => {
+                warn!(
+                    self.log,
+                    "{addr} is down but active mode ipv6 not implemented yet"
+                )
+            }
+        }
         loop {
             // Get an incoming message
             let (_addr, msg) = recv!(self, endpoint, local, remote);
@@ -338,6 +351,7 @@ impl State for Init {
         local: PeerInfo,
         remote: Arc<Mutex<PeerInfo>>,
         kill_switch: Arc<AtomicBool>,
+        _db: rdb::Db,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
         loop {
             // Get an incoming message
@@ -399,7 +413,17 @@ impl State for Up {
         local: PeerInfo,
         remote: Arc<Mutex<PeerInfo>>,
         kill_switch: Arc<AtomicBool>,
+        db: rdb::Db,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
+        match self.peer {
+            IpAddr::V4(addr) => db.enable_nexthop4(addr),
+            IpAddr::V6(addr) => {
+                warn!(
+                    self.log,
+                    "{addr} is up but active mode ipv6 not implemented yet"
+                )
+            }
+        }
         loop {
             // Get an incoming message
             let (_addr, msg) = recv!(self, endpoint, local, remote);

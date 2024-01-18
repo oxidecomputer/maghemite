@@ -79,6 +79,7 @@ pub(crate) async fn add_peer(
     request: TypedBody<AddBfdPeerRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let mut daemon = ctx.context().bfd.daemon.lock().unwrap();
+    let db = ctx.context().db.clone();
     let rq = request.into_inner();
 
     if daemon.sessions.get(&rq.peer).is_some() {
@@ -91,7 +92,7 @@ pub(crate) async fn add_peer(
     })?;
 
     let timeout = Duration::from_micros(rq.required_rx);
-    daemon.add_peer(rq.peer, timeout, rq.detection_threshold, ch);
+    daemon.add_peer(rq.peer, timeout, rq.detection_threshold, ch, db);
 
     Ok(HttpResponseUpdatedNoContent {})
 }

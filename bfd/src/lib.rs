@@ -37,6 +37,7 @@ impl Daemon {
         required_rx: Duration,
         detection_multiplier: u8,
         endpoint: bidi::Endpoint<(IpAddr, packet::Control)>,
+        db: rdb::Db,
     ) {
         if self.sessions.contains_key(&addr) {
             return;
@@ -48,6 +49,7 @@ impl Daemon {
                 endpoint,
                 required_rx,
                 detection_multiplier,
+                db,
                 self.log.clone(),
             ),
         );
@@ -77,11 +79,12 @@ impl Session {
         ep: bidi::Endpoint<(IpAddr, packet::Control)>,
         required_rx: Duration,
         detection_multiplier: u8,
+        db: rdb::Db,
         log: Logger,
     ) -> Self {
         let mut sm =
             StateMachine::new(addr, required_rx, detection_multiplier, log);
-        sm.run(ep);
+        sm.run(ep, db);
         Session { sm }
     }
 }
@@ -262,12 +265,14 @@ mod test {
 
     #[test]
     fn test_new_daemon() -> anyhow::Result<()> {
+        let db = rdb::Db::new("/tmp/bfd_new_daemon.db", test_logger()).unwrap();
+
         let mut daemon = Daemon::new(test_logger());
         assert_eq!(daemon.sessions.len(), 0);
 
         let (a, _b) = bidi::channel();
         let p1_addr = ip("203.0.113.10");
-        daemon.add_peer(p1_addr, Duration::from_secs(5), 3, a);
+        daemon.add_peer(p1_addr, Duration::from_secs(5), 3, a, db);
         assert_eq!(daemon.peer_state(p1_addr), Some(PeerState::Down));
 
         Ok(())
@@ -275,6 +280,8 @@ mod test {
 
     #[test]
     fn test_protocol_basics() -> anyhow::Result<()> {
+        let db = rdb::Db::new("/tmp/bfd_new_daemon.db", test_logger()).unwrap();
+
         let mut net = Network::default();
 
         let addr1 = ip("203.0.113.10");
@@ -282,12 +289,12 @@ mod test {
 
         let mut d1 = Daemon::new(test_logger());
         let (a, b) = bidi::channel();
-        d1.add_peer(addr1, Duration::from_secs(5), 3, a);
+        d1.add_peer(addr1, Duration::from_secs(5), 3, a, db.clone());
         net.register(addr2, b);
 
         let mut d2 = Daemon::new(test_logger());
         let (a, b) = bidi::channel();
-        d2.add_peer(addr2, Duration::from_secs(5), 3, a);
+        d2.add_peer(addr2, Duration::from_secs(5), 3, a, db);
         net.register(addr1, b);
 
         net.run();

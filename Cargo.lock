@@ -235,6 +235,7 @@ dependencies = [
  "num_enum 0.7.2",
  "pretty_assertions",
  "rand",
+ "rdb",
  "schemars",
  "serde",
  "slog",

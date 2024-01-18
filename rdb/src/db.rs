@@ -10,14 +10,14 @@
 //! Volatile information is stored in in-memory data structures such as hash
 //! sets.
 use crate::error::Error;
-use crate::types::*;
+use crate::{types::*, DEFAULT_ROUTE_PRIORITY};
 use mg_common::{lock, read_lock, write_lock};
 use slog::{error, info, Logger};
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr, Ipv4Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 /// The handle used to open a persistent key-value tree for BGP origin
 /// information.
@@ -287,9 +287,10 @@ impl Db {
             tree.insert(key.as_str(), "")?;
         }
 
-        let before = self.effective_set_for_prefix4(r.prefix);
-        lock!(self.imported).replace(r);
-        let after = self.effective_set_for_prefix4(r.prefix);
+        let mut imported = lock!(self.imported);
+        let before = Self::effective_set_for_prefix4(&imported, r.prefix);
+        imported.replace(r);
+        let after = Self::effective_set_for_prefix4(&imported, r.prefix);
 
         if let Some(change_set) = self.import_route_change_set(&before, &after)
         {
@@ -340,10 +341,55 @@ impl Db {
             .collect())
     }
 
+    pub fn disable_nexthop4(&self, addr: Ipv4Addr) {
+        let mut imported = lock!(self.imported);
+        let changed: Vec<Route4ImportKey> = imported
+            .iter()
+            .cloned()
+            .filter(|x| x.nexthop == addr && x.priority != 0)
+            .map(|x| x.with_priority(0))
+            .collect();
+
+        for x in changed {
+            let before = Self::effective_set_for_prefix4(&imported, x.prefix);
+            imported.replace(x);
+            let after = Self::effective_set_for_prefix4(&imported, x.prefix);
+            if let Some(change_set) =
+                self.import_route_change_set(&before, &after)
+            {
+                self.notify(change_set);
+            }
+        }
+    }
+
+    pub fn enable_nexthop4(&self, addr: Ipv4Addr) {
+        let mut imported = lock!(self.imported);
+        let changed: Vec<Route4ImportKey> = imported
+            .iter()
+            .cloned()
+            .filter(|x| {
+                x.nexthop == addr && x.priority != DEFAULT_ROUTE_PRIORITY
+            })
+            .map(|x| x.with_priority(DEFAULT_ROUTE_PRIORITY))
+            .collect();
+
+        for x in changed {
+            let before = Self::effective_set_for_prefix4(&imported, x.prefix);
+            imported.replace(x);
+            let after = Self::effective_set_for_prefix4(&imported, x.prefix);
+            if let Some(change_set) =
+                self.import_route_change_set(&before, &after)
+            {
+                self.notify(change_set);
+            }
+        }
+    }
+
     pub fn remove_nexthop4(&self, r: Route4ImportKey) {
-        let before = self.effective_set_for_prefix4(r.prefix);
-        lock!(self.imported).remove(&r);
-        let after = self.effective_set_for_prefix4(r.prefix);
+        let mut imported = lock!(self.imported);
+        let before = Self::effective_set_for_prefix4(&imported, r.prefix);
+        imported.remove(&r);
+        let after = Self::effective_set_for_prefix4(&imported, r.prefix);
 
         if let Some(change_set) = self.import_route_change_set(&before, &after)
         {
@@ -380,10 +426,9 @@ impl Db {
     ///      case the effective set is only the active routes.
     ///
     fn effective_set_for_prefix4(
-        &self,
+        imported: &MutexGuard<HashSet<Route4ImportKey>>,
         prefix: Prefix4,
     ) -> HashSet<Route4ImportKey> {
-        let imported = lock!(self.imported);
         let full: HashSet<Route4ImportKey> = imported
             .iter()
             .filter(|x| x.prefix == prefix)

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+rdb = { path = "../rdb" }
 slog.workspace = true
 slog-bunyan.workspace = true
 slog-async.workspace = true
