@@ -240,52 +240,6 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-bunyan",
- "thiserror",
-]
-
-[[package]]
-name = "bfd-client"
-version = "0.1.0"
-dependencies = [
- "progenitor",
- "reqwest",
- "serde",
- "slog",
-]
-
-[[package]]
-name = "bfdadm"
-version = "0.1.0"
-dependencies = [
- "anstyle",
- "anyhow",
- "bfd-client",
- "clap",
- "colored",
- "slog",
- "slog-async",
- "slog-envlogger",
- "slog-term",
- "tabwriter",
- "tokio",
-]
-
-[[package]]
-name = "bfdd"
-version = "0.1.0"
-dependencies = [
- "anstyle",
- "anyhow",
- "bfd",
- "clap",
- "dropshot",
- "schemars",
- "serde",
- "slog",
- "slog-async",
- "slog-bunyan",
- "socket2 0.5.5",
- "tokio",
 ]
 
 [[package]]
@@ -1911,6 +1865,8 @@ dependencies = [
 name = "mgd"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "bfd",
  "bgp",
  "clap",
  "colored",
@@ -1925,6 +1881,7 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-term",
+ "socket2 0.5.5",
  "thiserror",
  "tokio",
 ]

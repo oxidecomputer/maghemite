@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
+use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use bgp::log::init_logger;
@@ -17,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 
 mod admin;
+mod bfd_admin;
 mod bgp_admin;
 mod error;
 mod static_admin;
@@ -72,11 +74,14 @@ async fn run(args: RunArgs) {
         .expect("open datastore file");
 
     let tep_ula = get_tunnel_endpoint_ula(&db);
+    let bfd =
+        BfdContext::new(Arc::new(Mutex::new(bfd::Daemon::new(log.clone()))));
 
     let context = Arc::new(HandlerContext {
         tep: tep_ula,
         log: log.clone(),
         bgp,
+        bfd,
         data_dir: args.data_dir.clone(),
         db: db.clone(),
     });
