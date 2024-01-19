@@ -46,7 +46,7 @@ impl BfdContext {
 /// Get all the peers and their associated BFD state. Peers are identified by IP
 /// address.
 #[endpoint { method = GET, path = "/bfd/peers" }]
-pub(crate) async fn get_peers(
+pub(crate) async fn get_bfd_peers(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerState>>, HttpError> {
     let result = ctx
@@ -79,7 +79,7 @@ pub struct AddBfdPeerRequest {
 /// Add a new peer to the daemon. A session for the specified peer will start
 /// immediately.
 #[endpoint { method = PUT, path = "/bfd/peers" }]
-pub(crate) async fn add_peer(
+pub(crate) async fn add_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddBfdPeerRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -115,7 +115,7 @@ struct DeleteBfdPeerPathParams {
 /// Remove the specified peer from the daemon. The associated peer session will
 /// be stopped immediately.
 #[endpoint { method = DELETE, path = "/bfd/peers/{addr}" }]
-pub(crate) async fn remove_peer(
+pub(crate) async fn remove_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
     params: Path<DeleteBfdPeerPathParams>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {

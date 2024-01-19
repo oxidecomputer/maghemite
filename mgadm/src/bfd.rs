@@ -37,7 +37,7 @@ pub enum Commands {
 pub async fn commands(command: Commands, client: Client) -> Result<()> {
     match command {
         Commands::GetPeers => {
-            let msg = client.get_peers().await?;
+            let msg = client.get_bfd_peers().await?;
             let mut tw = TabWriter::new(std::io::stdout());
             writeln!(
                 &mut tw,
@@ -57,7 +57,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             detection_threshold,
         } => {
             client
-                .add_peer(&AddBfdPeerRequest {
+                .add_bfd_peer(&AddBfdPeerRequest {
                     peer,
                     listen,
                     required_rx,
@@ -66,7 +66,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                 .await?;
         }
         Commands::RemovePeer { peer } => {
-            client.remove_peer(&peer).await?;
+            client.remove_bfd_peer(&peer).await?;
         }
     }
 

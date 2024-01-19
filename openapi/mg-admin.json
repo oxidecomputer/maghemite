@@ -9,7 +9,7 @@
       "get": {
         "summary": "Get all the peers and their associated BFD state. Peers are identified by IP",
         "description": "address.",
-        "operationId": "get_peers",
+        "operationId": "get_bfd_peers",
         "responses": {
           "200": {
             "description": "successful operation",
@@ -36,7 +36,7 @@
       "put": {
         "summary": "Add a new peer to the daemon. A session for the specified peer will start",
         "description": "immediately.",
-        "operationId": "add_peer",
+        "operationId": "add_bfd_peer",
         "requestBody": {
           "content": {
             "application/json": {
@@ -64,7 +64,7 @@
       "delete": {
         "summary": "Remove the specified peer from the daemon. The associated peer session will",
         "description": "be stopped immediately.",
-        "operationId": "remove_peer",
+        "operationId": "remove_bfd_peer",
         "parameters": [
           {
             "in": "path",
@@ -952,7 +952,7 @@
         "description": "The possible peer states. See the `State` trait implementations `Down`, `Init`, and `Up` for detailed semantics.",
         "oneOf": [
           {
-            "description": "A stable down state. Non-responsive to incomming messages.",
+            "description": "A stable down state. Non-responsive to incoming messages.",
             "type": "string",
             "enum": [
               "AdminDown"

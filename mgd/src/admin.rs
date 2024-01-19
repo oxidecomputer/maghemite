@@ -82,10 +82,9 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     register!(api, static_admin::static_list_v4_routes);
 
     // bfd
-    register!(api, bfd_admin::get_peers);
-    register!(api, bfd_admin::add_peer);
-    register!(api, bfd_admin::remove_peer);
-
+    register!(api, bfd_admin::get_bfd_peers);
+    register!(api, bfd_admin::add_bfd_peer);
+    register!(api, bfd_admin::remove_bfd_peer);
     api
 }
 
