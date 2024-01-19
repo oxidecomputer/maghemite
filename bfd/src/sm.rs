@@ -1,6 +1,11 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+use crate::err;
+use crate::packet::Control;
 use crate::{
-    bidi, inf, packet, recv, trc, util::update_peer_info, wrn, PeerInfo,
-    PeerState,
+    bidi, inf, packet, trc, util::update_peer_info, wrn, PeerInfo, PeerState,
 };
 use anyhow::{anyhow, Result};
 use slog::{warn, Logger};
@@ -13,7 +18,9 @@ use std::thread::spawn;
 use std::time::Duration;
 
 /// This state machine implements the BFD state machine. The following is taken
-/// directly from RFC 5880
+/// directly from RFC 5880. The arrows indicate the state machine transition
+/// that is taken when a packet containing the peer state on the label is
+/// received.
 ///
 /// ```text
 ///                             +--+
@@ -184,7 +191,7 @@ impl StateMachine {
 
 /// A type alias for a bidirectional endpoint transporting BFD control messages
 /// and target IP addresses.
-type BfdEndpoint = bidi::Endpoint<(IpAddr, packet::Control)>;
+pub(crate) type BfdEndpoint = bidi::Endpoint<(IpAddr, packet::Control)>;
 
 /// A helper object to make delayed loop implementations less error prone.
 struct DeferredDelay(Duration);
@@ -197,8 +204,20 @@ impl Drop for DeferredDelay {
     }
 }
 
+pub enum RecvResult {
+    MessageFrom((IpAddr, Control)),
+    TransitionTo(Box<dyn State>),
+}
+
+//TODO consider using a `State` enum instead of identical structs that
+//     implement a `State` trait. This could be similar to how BGP is
+//     implemented or we could even look into a unified state machine
+//     framework for Maghemite protocol implementations in general.
+//
+//     https://github.com/oxidecomputer/maghemite/issues/153
+
 /// All BFD states must implement the state trait.
-trait State: Sync + Send {
+pub(crate) trait State: Sync + Send {
     /// Run the BFD state. This involves listening for messages on the provide
     /// endpoint, responding to peers accordingly and making the appropriate
     /// state transition when necessary by returning a new State implementation.
@@ -213,6 +232,8 @@ trait State: Sync + Send {
 
     /// Return the `PeerState` associated with the implementor of this trait.
     fn state(&self) -> PeerState;
+
+    fn peer(&self) -> IpAddr;
 
     /// State trait implementors should call this fuction in response to poll
     /// packets. It will send an appropriate BFD control packet in response with
@@ -242,6 +263,51 @@ trait State: Sync + Send {
             wrn!(log, state, peer; "send: {}", e);
         }
     }
+
+    fn recv(
+        &self,
+        endpoint: &BfdEndpoint,
+        local: PeerInfo,
+        remote: &Arc<Mutex<PeerInfo>>,
+        log: Logger,
+    ) -> Result<RecvResult> {
+        match endpoint.rx.recv_timeout(
+            local.required_min_rx * local.detection_multiplier.into(),
+        ) {
+            Ok((addr, msg)) => {
+                trc!(log, self.state(), self.peer(); "recv: {:?}", msg);
+
+                update_peer_info(remote, &msg);
+
+                if msg.poll() {
+                    self.send_poll_response(
+                        self.peer(),
+                        local,
+                        remote.clone(),
+                        endpoint.tx.clone(),
+                        log.clone(),
+                    );
+                }
+
+                Ok(RecvResult::MessageFrom((addr, msg)))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                wrn!(log, self.state(), self.peer(); "timeout expired");
+                let next = Down::new(self.peer(), log.clone());
+                Ok(RecvResult::TransitionTo(Box::new(next)))
+            }
+            Err(e) => {
+                err!(
+                    log,
+                    self.state(),
+                    self.peer();
+                    "recv: {}, exiting recieve loop",
+                    e
+                );
+                Err(anyhow::anyhow!("recv channel closed"))
+            }
+        }
+    }
 }
 
 /// The BFD down state. The following is taken verbatim from the RFC.
@@ -265,7 +331,7 @@ pub struct Down {
 }
 
 impl Down {
-    fn new(peer: IpAddr, log: Logger) -> Self {
+    pub(crate) fn new(peer: IpAddr, log: Logger) -> Self {
         Self { peer, log }
     }
 }
@@ -291,7 +357,13 @@ impl State for Down {
         }
         loop {
             // Get an incoming message
-            let (_addr, msg) = recv!(self, endpoint, local, remote);
+            let (_addr, msg) =
+                match self.recv(&endpoint, local, &remote, self.log.clone())? {
+                    RecvResult::MessageFrom((addr, control)) => (addr, control),
+                    RecvResult::TransitionTo(state) => {
+                        return Ok((state, endpoint))
+                    }
+                };
 
             if kill_switch.load(Ordering::Relaxed) {
                 return Err(anyhow!("killed"));
@@ -318,6 +390,10 @@ impl State for Down {
 
     fn state(&self) -> PeerState {
         PeerState::Down
+    }
+
+    fn peer(&self) -> IpAddr {
+        self.peer
     }
 }
 
@@ -355,7 +431,13 @@ impl State for Init {
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
         loop {
             // Get an incoming message
-            let (_addr, msg) = recv!(self, endpoint, local, remote);
+            let (_addr, msg) =
+                match self.recv(&endpoint, local, &remote, self.log.clone())? {
+                    RecvResult::MessageFrom((addr, control)) => (addr, control),
+                    RecvResult::TransitionTo(state) => {
+                        return Ok((state, endpoint))
+                    }
+                };
 
             if kill_switch.load(Ordering::Relaxed) {
                 return Err(anyhow!("killed"));
@@ -383,9 +465,13 @@ impl State for Init {
     fn state(&self) -> PeerState {
         PeerState::Init
     }
+
+    fn peer(&self) -> IpAddr {
+        self.peer
+    }
 }
 
-/// The BFD up state. The following is take verbatim from the RFC.
+/// The BFD up state. The following is taken verbatim from the RFC.
 ///
 /// > Up state means that the BFD session has successfully been
 /// > established, and implies that connectivity between the systems is
@@ -426,7 +512,13 @@ impl State for Up {
         }
         loop {
             // Get an incoming message
-            let (_addr, msg) = recv!(self, endpoint, local, remote);
+            let (_addr, msg) =
+                match self.recv(&endpoint, local, &remote, self.log.clone())? {
+                    RecvResult::MessageFrom((addr, control)) => (addr, control),
+                    RecvResult::TransitionTo(state) => {
+                        return Ok((state, endpoint))
+                    }
+                };
 
             if kill_switch.load(Ordering::Relaxed) {
                 return Err(anyhow!("killed"));
@@ -450,5 +542,9 @@ impl State for Up {
 
     fn state(&self) -> PeerState {
         PeerState::Up
+    }
+
+    fn peer(&self) -> IpAddr {
+        self.peer
     }
 }

@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 use num_enum::TryFromPrimitive;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -96,9 +100,8 @@ pub struct PeerInfo {
     /// packets.
     pub desired_min_tx: Duration,
 
-    /// The interval at which the peer must receive BFD control packets. If this
-    /// interval is not maintained within the detection multiplier, the peer may
-    /// consider the session down.
+    /// This is the minimum interval, in microseconds, between received
+    /// BFD Control packets that this system is capable of supporting,
     pub required_min_rx: Duration,
 
     /// A unique identifer for the peer.
@@ -161,7 +164,7 @@ impl PeerInfo {
 )]
 #[repr(u8)]
 pub enum PeerState {
-    /// A stable down state. Non-responsive to incomming messages.
+    /// A stable down state. Non-responsive to incoming messages.
     AdminDown = 0,
 
     /// The initial state.

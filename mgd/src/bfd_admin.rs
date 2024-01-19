@@ -105,7 +105,7 @@ pub(crate) async fn add_peer(
     Ok(HttpResponseUpdatedNoContent {})
 }
 
-/// Request to remove a peer form the daemon.
+/// Request to remove a peer from the daemon.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 struct DeleteBfdPeerPathParams {
     /// Address of the peer to remove.
@@ -130,7 +130,7 @@ pub(crate) async fn remove_peer(
 /// Port to be used for BFD multihop per RFC 5883.
 const BFD_MULTIHOP_PORT: u16 = 4784;
 
-/// Create a bidirectional chennel linking a peer session to an underlying BFD
+/// Create a bidirectional channel linking a peer session to an underlying BFD
 /// session over UDP.
 pub(crate) fn channel(
     dispatcher: Arc<Mutex<Dispatcher>>,
@@ -140,12 +140,18 @@ pub(crate) fn channel(
 ) -> Result<bidi::Endpoint<(IpAddr, packet::Control)>> {
     let (local, remote) = bidi::channel();
 
+    // Ensure there is a dispatcher thread for this listening address and a
+    // corresponding entry in the dispatcher table to send messages from `peer`
+    // to the appropriate session via `remote.tx`.
     let sk = dispatcher.lock().unwrap().ensure(
         listen,
         peer,
         remote.tx,
         log.clone(),
     )?;
+
+    // Spawn an egress thread to take packets from the session and send them
+    // out a UDP socket.
     egress(remote.rx, sk, log.clone());
 
     Ok(local)

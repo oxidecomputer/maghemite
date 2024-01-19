@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 use std::sync::mpsc::{self, Receiver, Sender};
 
 /// A combined mpsc sender/receiver.
@@ -12,7 +16,7 @@ impl<T> Endpoint<T> {
     }
 }
 
-/// Analsgous to std::sync::mpsc::channel for bidirectional endpoints.
+/// Analogous to std::sync::mpsc::channel for bidirectional endpoints.
 pub fn channel<T>() -> (Endpoint<T>, Endpoint<T>) {
     let (tx_a, rx_b) = mpsc::channel();
     let (tx_b, rx_a) = mpsc::channel();

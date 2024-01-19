@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 use crate::PeerState;
 use anyhow::{anyhow, Result};
 
@@ -62,7 +66,7 @@ pub struct Control {
 
     /// This field contains both the status and flag values.
     ///
-    /// The statis is the current BFD session state as seen by the transmitting
+    /// The status is the current BFD session state as seen by the transmitting
     /// system. It's values are:
     ///
     /// 0. AdminDown

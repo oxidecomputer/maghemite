@@ -1,4 +1,11 @@
 #!/bin/vbash
+# This is a testing configuration for the open source firewall platform vyos.
+# It's included here as simple example of an external BFD implementation that
+# should interoperate with ours out of the box.
+#
+# https://vyos.io/
+#
+# Note that vyos uses FRR under the hood for its BFD implementation.
 
 source /opt/vyatta/etc/functions/script-template
 

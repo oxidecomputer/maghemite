@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 use crate::{packet, PeerInfo};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,10 +20,10 @@ macro_rules! trc {
     ($self:ident; $($args:tt)+) => {
         slog::trace!(
             $self.log,
-            "[{:?}][{}] {}",
-            $self.state(),
-            $self.peer,
-            format!($($args)+)
+            "{}",
+            format!($($args)+);
+            "state" => format_args!("{:?}", $self.state()),
+            "peer" => format_args!("{}", $self.peer),
         )
     }
 }
@@ -29,19 +33,19 @@ macro_rules! dbg {
     ($log:expr, $state:expr, $peer:expr; $($args:tt)+) => {
         slog::debug!(
             $log,
-            "[{:?}][{}] {}",
-            $state,
-            $peer,
-            format!($($args)+)
+            "{}",
+            format!($($args)+);
+            "state" => format_args!("{:?}", $self.state()),
+            "peer" => format_args!("{}", $self.peer),
         )
     };
     ($self:ident; $($args:tt)+) => {
         slog::debug!(
             $self.log,
-            "[{:?}][{}] {}",
-            $self.state(),
-            $self.peer,
-            format!($($args)+)
+            "{}",
+            format!($($args)+),
+            "state" => format_args!("{:?}", $self.state()),
+            "peer" => format_args!("{}", $self.peer),
         )
     }
 }
@@ -51,19 +55,19 @@ macro_rules! inf {
     ($log:expr, $state:expr, $peer:expr; $($args:tt)+) => {
         slog::info!(
             $log,
-            "[{:?}][{}] {}",
-            $state,
-            $peer,
-            format!($($args)+)
+            "{}",
+            format!($($args)+);
+            "state" => format_args!("{:?}", $state),
+            "peer" => format_args!("{}", $peer),
         )
     };
     ($self:ident; $($args:tt)+) => {
         slog::info!(
             $self.log,
-            "[{:?}][{}] {}",
-            $self.state(),
-            $self.peer,
-            format!($($args)+)
+            "{}",
+            format!($($args)+);
+            "state" => format_args!("{:?}", $self.state()),
+            "peer" => format_args!("{}", $self.peer),
         )
     }
 }
@@ -73,19 +77,19 @@ macro_rules! wrn {
     ($log:expr, $state:expr, $peer:expr; $($args:tt)+) => {
         slog::warn!(
             $log,
-            "[{:?}][{}] {}",
-            $state,
-            $peer,
-            format!($($args)+)
+            "{}",
+            format!($($args)+);
+            "state" => format_args!("{:?}", $state),
+            "peer" => format_args!("{}", $peer),
         )
     };
     ($self:ident; $($args:tt)+) => {
         slog::warn!(
             $self.log,
-            "[{:?}][{}] {}",
-            $self.state(),
-            $self.peer,
-            format!($($args)+)
+            "{}",
+            format!($($args)+);
+            "state" => format_args!("{:?}", $self.state()),
+            "peer" => format_args!("{}", $self.peer),
         )
     };
 }
@@ -104,48 +108,11 @@ macro_rules! err {
     ($self:ident; $($args:tt)+) => {
         slog::error!(
             $self.log,
-            "[{:?}][{}] {}",
-            $self.state(),
-            $self.peer,
-            format!($($args)+)
+            "{}",
+            format!($($args)+);
+            "state" => format_args!("{:?}", $self.state()),
+            "peer" => format_args!("{}", $self.peer),
         )
-    }
-}
-
-#[macro_export]
-macro_rules! recv {
-    ($self:ident, $endpoint:expr, $local:expr, $remote:expr) => {
-
-        match $endpoint.rx.recv_timeout(
-            $local.required_min_rx * $local.detection_multiplier.into()
-        ) {
-            Ok((addr, msg)) => {
-                trc!($self; "recv: {:?}", msg);
-
-                update_peer_info(&$remote, &msg);
-
-                if msg.poll() {
-                    $self.send_poll_response(
-                        $self.peer,
-                        $local,
-                        $remote.clone(),
-                        $endpoint.tx.clone(),
-                        $self.log.clone(),
-                    );
-                }
-
-                (addr, msg)
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    wrn!($self; "timeout expired");
-                    let next = Down::new($self.peer, $self.log.clone());
-                    return Ok((Box::new(next), $endpoint));
-            }
-            Err(e) => {
-                $crate::err!($self; "recv: {}, exiting recieve loop", e);
-                return Err(anyhow::anyhow!("recv channel closed"));
-            }
-        }
     }
 }
 
