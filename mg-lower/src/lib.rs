@@ -89,7 +89,7 @@ pub fn run(
                         }
                     }
                 }
-                // if we've not received updates in the timeout interval, to a
+                // if we've not received updates in the timeout interval, do a
                 // full sync in case something has changed out from under us.
                 Err(_) => {
                     generation =

@@ -221,6 +221,12 @@ pub struct Ipv6Prefix {
     pub len: u8,
 }
 
+impl std::fmt::Display for Ipv6Prefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.addr, self.len)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum Ipv6PrefixParseError {
     #[error("expected CIDR representation <addr>/<mask>")]
@@ -258,7 +264,7 @@ pub struct TunnelRoute {
     // The nexthop is only used to associate the route with a peer allowing us
     // to remove the route if the peer expires. It does not influence what goes
     // into the underlaying underlay routing platform. Tunnel routes only
-    // influence the state of the unerlying encapsulation service.
+    // influence the state of the underlying encapsulation service.
     pub nexthop: Ipv6Addr,
 }
 
@@ -299,6 +305,12 @@ pub struct Ipv4Prefix {
     pub len: u8,
 }
 
+impl std::fmt::Display for Ipv4Prefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.addr, self.len)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum Ipv4PrefixParseError {
     #[error("expected CIDR representation <addr>/<mask>")]
@@ -335,6 +347,15 @@ pub enum IpPrefix {
     V6(Ipv6Prefix),
 }
 
+impl std::fmt::Display for IpPrefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::V4(p) => p.fmt(f),
+            Self::V6(p) => p.fmt(f),
+        }
+    }
+}
+
 impl IpPrefix {
     pub fn addr(&self) -> IpAddr {
         match self {
@@ -347,15 +368,6 @@ impl IpPrefix {
         match self {
             Self::V4(s) => s.len,
             Self::V6(s) => s.len,
-        }
-    }
-}
-
-impl std::fmt::Display for IpPrefix {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::V4(s) => write!(f, "{}/{}", s.addr, s.len),
-            Self::V6(s) => write!(f, "{}/{}", s.addr, s.len),
         }
     }
 }

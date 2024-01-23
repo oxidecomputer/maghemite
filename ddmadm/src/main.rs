@@ -150,11 +150,8 @@ async fn run() -> Result<()> {
                     let strpath = pv.path.join(" ");
                     writeln!(
                         &mut tw,
-                        "{}/{}\t{}\t{}",
-                        pv.destination.addr,
-                        pv.destination.len,
-                        nexthop,
-                        strpath,
+                        "{}\t{}\t{}",
+                        pv.destination, nexthop, strpath,
                     )?;
                 }
             }
@@ -165,7 +162,7 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(&mut tw, "{}", "Prefix".dimmed(),)?;
             for prefix in msg.into_inner() {
-                writeln!(&mut tw, "{}/{}", prefix.addr, prefix.len,)?;
+                writeln!(&mut tw, "{}", prefix)?;
             }
             tw.flush()?;
         }
@@ -202,9 +199,8 @@ async fn run() -> Result<()> {
             for endpoint in msg.into_inner() {
                 writeln!(
                     &mut tw,
-                    "{}/{}\t{}\t{}",
-                    endpoint.origin.overlay_prefix.addr(),
-                    endpoint.origin.overlay_prefix.length(),
+                    "{}\t{}\t{}",
+                    endpoint.origin.overlay_prefix,
                     endpoint.origin.boundary_addr,
                     endpoint.origin.vni,
                 )?;
@@ -224,9 +220,8 @@ async fn run() -> Result<()> {
             for endpoint in msg.into_inner() {
                 writeln!(
                     &mut tw,
-                    "{}/{}\t{}\t{}",
-                    endpoint.overlay_prefix.addr(),
-                    endpoint.overlay_prefix.length(),
+                    "{}\t{}\t{}",
+                    endpoint.overlay_prefix,
                     endpoint.boundary_addr,
                     endpoint.vni,
                 )?;

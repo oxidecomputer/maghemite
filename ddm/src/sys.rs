@@ -289,7 +289,9 @@ pub fn add_tunnel_routes(
             )),
         };
         let req = SetVirt2BoundaryReq { vip, tep };
-        hdl.set_v2b(&req)?;
+        if let Err(e) = hdl.set_v2b(&req) {
+            err!(log, ifname, "failed to set v2p route: {:?}: {}", req, e);
+        }
     }
 
     Ok(())
@@ -327,7 +329,9 @@ pub fn remove_tunnel_routes(
             )),
         };
         let req = ClearVirt2BoundaryReq { vip, tep };
-        hdl.clear_v2b(&req)?;
+        if let Err(e) = hdl.clear_v2b(&req) {
+            err!(log, ifname, "failed to clear v2p route: {:?}: {}", req, e);
+        }
     }
 
     Ok(())

@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
+use bgp::session::DEFAULT_ROUTE_PRIORITY;
 use dropshot::{
     endpoint, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
@@ -38,8 +39,12 @@ impl From<StaticRoute4> for Route4ImportKey {
         Route4ImportKey {
             prefix: val.prefix,
             nexthop: val.nexthop,
+            // Having an ID of zero indicates this entry did not come from BGP.
+            // TODO: this could likely be done in a more rust-y way, or just
+            //       have a cleaner data structure organization.
             id: 0,
-            priority: 100,
+            //
+            priority: DEFAULT_ROUTE_PRIORITY,
         }
     }
 }

@@ -65,8 +65,8 @@ impl From<UnderlayUpdate> for Update {
 impl From<TunnelUpdate> for Update {
     fn from(t: TunnelUpdate) -> Self {
         Update {
-            tunnel: Some(t),
             underlay: None,
+            tunnel: Some(t),
         }
     }
 }

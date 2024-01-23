@@ -65,7 +65,7 @@ pub(crate) fn ensure_tep_addr(
         .await
     }) {
         if e.status() != Some(StatusCode::CONFLICT) {
-            warn!(log, "failed to ensure TEP address on ASIC: {e}");
+            warn!(log, "failed to ensure TEP address {tep} on ASIC: {e}");
         }
     }
 }
