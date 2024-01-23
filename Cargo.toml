@@ -79,11 +79,11 @@ mg-common = { path = "mg-common" }
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-branch = "boundary-services-overlay-flow-pinning"
+branch = "master"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-branch = "boundary-services-overlay-flow-pinning"
+branch = "master"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
