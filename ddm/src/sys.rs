@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::db::TunnelRoute;
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
 use dendrite_common::network::{Cidr, Ipv6Cidr};
@@ -11,9 +12,12 @@ use dpd_client::types;
 use dpd_client::Client;
 use dpd_client::ClientState;
 use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
+use opte_ioctl::OpteHdl;
+use oxide_vpc::api::TunnelEndpoint;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -101,7 +105,7 @@ impl From<Route> for IpPrefix {
     }
 }
 
-pub fn add_routes(
+pub fn add_underlay_routes(
     log: &Logger,
     config: &Config,
     routes: Vec<Route>,
@@ -229,7 +233,111 @@ pub fn add_routes_dendrite(
     }
 }
 
-pub fn remove_routes(
+fn tunnel_route_update_map(
+    routes: &HashSet<TunnelRoute>,
+) -> HashMap<crate::db::IpPrefix, Vec<TunnelEndpoint>> {
+    let mut m: HashMap<crate::db::IpPrefix, Vec<TunnelEndpoint>> =
+        HashMap::new();
+    for r in routes {
+        let pfx = r.origin.overlay_prefix;
+        let tep = TunnelEndpoint {
+            ip: r.origin.boundary_addr.into(),
+            vni: oxide_vpc::api::Vni::new(r.origin.vni).unwrap(),
+        };
+        match m.get_mut(&pfx) {
+            Some(entry) => {
+                entry.push(tep);
+            }
+            None => {
+                m.insert(pfx, vec![tep]);
+            }
+        }
+    }
+    m
+}
+
+pub fn add_tunnel_routes(
+    log: &Logger,
+    ifname: &str,
+    routes: &HashSet<TunnelRoute>,
+) -> Result<(), opte_ioctl::Error> {
+    use oxide_vpc::api::{
+        IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr, Ipv6PrefixLen,
+        SetVirt2BoundaryReq,
+    };
+    let hdl = OpteHdl::open(OpteHdl::XDE_CTL)?;
+
+    for (pfx, tep) in tunnel_route_update_map(routes) {
+        for t in &tep {
+            inf!(
+                log,
+                ifname,
+                "adding tunnel route {} -[{}]-> {}",
+                pfx,
+                t.vni,
+                t.ip,
+            );
+        }
+        let vip = match pfx {
+            crate::db::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
+                p.addr.into(),
+                Ipv4PrefixLen::new(p.len).unwrap(),
+            )),
+            crate::db::IpPrefix::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
+                p.addr.into(),
+                Ipv6PrefixLen::new(p.len).unwrap(),
+            )),
+        };
+        let req = SetVirt2BoundaryReq { vip, tep };
+        if let Err(e) = hdl.set_v2b(&req) {
+            err!(log, ifname, "failed to set v2p route: {:?}: {}", req, e);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn remove_tunnel_routes(
+    log: &Logger,
+    ifname: &str,
+    routes: &HashSet<TunnelRoute>,
+) -> Result<(), opte_ioctl::Error> {
+    use oxide_vpc::api::{
+        ClearVirt2BoundaryReq, IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr,
+        Ipv6PrefixLen,
+    };
+    let hdl = OpteHdl::open(OpteHdl::XDE_CTL)?;
+    for (pfx, tep) in tunnel_route_update_map(routes) {
+        for t in &tep {
+            inf!(
+                log,
+                ifname,
+                "removing tunnel route {} -[{}]-> {}",
+                pfx,
+                t.vni,
+                t.ip,
+            );
+        }
+        let vip = match pfx {
+            crate::db::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
+                p.addr.into(),
+                Ipv4PrefixLen::new(p.len).unwrap(),
+            )),
+            crate::db::IpPrefix::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
+                p.addr.into(),
+                Ipv6PrefixLen::new(p.len).unwrap(),
+            )),
+        };
+        let req = ClearVirt2BoundaryReq { vip, tep };
+        if let Err(e) = hdl.clear_v2b(&req) {
+            err!(log, ifname, "failed to clear v2p route: {:?}: {}", req, e);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn remove_underlay_routes(
     log: &Logger,
     ifname: &str,
     dpd: &Option<DpdConfig>,

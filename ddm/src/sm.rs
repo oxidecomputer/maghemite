@@ -2,10 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
-
-use crate::db::{Db, Ipv6Prefix, RouterKind};
-use crate::exchange::PathVector;
+use crate::db::{Db, Ipv6Prefix, RouterKind, TunnelOrigin};
+use crate::exchange::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use libnet::get_ipaddr_info;
 use slog::Logger;
@@ -22,10 +20,10 @@ use thiserror::Error;
 #[derive(Debug)]
 pub enum AdminEvent {
     /// Announce a set of IPv6 prefixes
-    Announce(HashSet<Ipv6Prefix>),
+    Announce(PrefixSet),
 
     /// Withdraw a set of IPv6 prefixes
-    Withdraw(HashSet<Ipv6Prefix>),
+    Withdraw(PrefixSet),
 
     /// Expire the peer at the specified address
     Expire(Ipv6Addr),
@@ -34,15 +32,15 @@ pub enum AdminEvent {
     Sync,
 }
 
-#[derive(Debug, Clone)]
-pub struct Push {
-    pub announce: HashSet<PathVector>,
-    pub withdraw: HashSet<PathVector>,
+#[derive(Debug)]
+pub enum PrefixSet {
+    Underlay(HashSet<Ipv6Prefix>),
+    Tunnel(HashSet<TunnelOrigin>),
 }
 
 #[derive(Debug)]
 pub enum PeerEvent {
-    Push(Push),
+    Push(Update),
 }
 
 #[derive(Debug)]
@@ -416,20 +414,33 @@ impl Exchange {
     ) {
         exchange_thread.abort();
         self.ctx.db.remove_peer(self.ctx.config.if_index);
-        let to_remove = self.ctx.db.remove_nexthop_routes(self.peer);
+        let (to_remove, to_remove_tnl) =
+            self.ctx.db.remove_nexthop_routes(self.peer);
         let mut routes: Vec<crate::sys::Route> = Vec::new();
         for x in &to_remove {
             let mut r: crate::sys::Route = x.clone().into();
             r.ifname = self.ctx.config.if_name.clone();
             routes.push(r);
         }
-        crate::sys::remove_routes(
+        crate::sys::remove_underlay_routes(
             &self.log,
             &self.ctx.config.if_name,
             &self.ctx.config.dpd,
             routes,
             &self.ctx.rt,
         );
+        if let Err(e) = crate::sys::remove_tunnel_routes(
+            &self.log,
+            &self.ctx.config.if_name,
+            &to_remove_tnl,
+        ) {
+            err!(
+                self.log,
+                self.ctx.config.if_name,
+                "failed to remove tunnel routes: {:#?} {e}",
+                to_remove_tnl
+            );
+        }
         // if we're a transit router propagate withdraws for the
         // expired peer.
         if self.ctx.config.kind == RouterKind::Transit {
@@ -439,21 +450,34 @@ impl Exchange {
                 "redistributing expire to {} peers",
                 self.ctx.event_channels.len()
             );
-            let pv = to_remove
-                .iter()
-                .map(|x| PathVector {
-                    destination: x.destination,
-                    path: {
-                        let mut ps = x.path.clone();
-                        ps.push(self.ctx.hostname.clone());
-                        ps
-                    },
-                })
-                .collect();
-            let push = Push {
-                announce: HashSet::new(),
-                withdraw: pv,
+
+            let underlay = if to_remove.is_empty() {
+                None
+            } else {
+                Some(UnderlayUpdate::withdraw(
+                    to_remove
+                        .iter()
+                        .map(|x| PathVector {
+                            destination: x.destination,
+                            path: {
+                                let mut ps = x.path.clone();
+                                ps.push(self.ctx.hostname.clone());
+                                ps
+                            },
+                        })
+                        .collect(),
+                ))
             };
+
+            let tunnel = if to_remove_tnl.is_empty() {
+                None
+            } else {
+                Some(TunnelUpdate::withdraw(
+                    to_remove_tnl.iter().cloned().map(Into::into).collect(),
+                ))
+            };
+
+            let push = Update { underlay, tunnel };
             for ec in &self.ctx.event_channels {
                 ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
             }
@@ -511,7 +535,9 @@ impl State for Exchange {
                 }
             };
             match e {
-                Event::Admin(AdminEvent::Announce(prefixes)) => {
+                Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
+                    prefixes,
+                ))) => {
                     let pv: HashSet<PathVector> = prefixes
                         .iter()
                         .map(|x| PathVector {
@@ -519,7 +545,7 @@ impl State for Exchange {
                             path: vec![self.ctx.hostname.clone()],
                         })
                         .collect();
-                    if let Err(e) = crate::exchange::announce(
+                    if let Err(e) = crate::exchange::announce_underlay(
                         self.ctx.config.clone(),
                         pv,
                         self.peer,
@@ -548,7 +574,42 @@ impl State for Exchange {
                         );
                     }
                 }
-                Event::Admin(AdminEvent::Withdraw(prefixes)) => {
+                Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
+                    endpoints,
+                ))) => {
+                    let tv: HashSet<TunnelOrigin> = endpoints.clone();
+                    if let Err(e) = crate::exchange::announce_tunnel(
+                        self.ctx.config.clone(),
+                        tv,
+                        self.peer,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) {
+                        err!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "announce tunnel: {}",
+                            e,
+                        );
+                        wrn!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "expiring peer {} due to failed tunnel announce",
+                            self.peer,
+                        );
+                        self.expire_peer(&exchange_thread, &pull_stop);
+                        return (
+                            Box::new(Solicit::new(
+                                self.ctx.clone(),
+                                self.log.clone(),
+                            )),
+                            event,
+                        );
+                    }
+                }
+                Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
+                    prefixes,
+                ))) => {
                     let pv: HashSet<PathVector> = prefixes
                         .iter()
                         .map(|x| PathVector {
@@ -556,7 +617,7 @@ impl State for Exchange {
                             path: vec![self.ctx.hostname.clone()],
                         })
                         .collect();
-                    if let Err(e) = crate::exchange::withdraw(
+                    if let Err(e) = crate::exchange::withdraw_underlay(
                         self.ctx.config.clone(),
                         pv,
                         self.peer,
@@ -573,6 +634,39 @@ impl State for Exchange {
                             self.log,
                             self.ctx.config.if_name,
                             "expiring peer {} due to failed withdraw",
+                            self.peer,
+                        );
+                        self.expire_peer(&exchange_thread, &pull_stop);
+                        return (
+                            Box::new(Solicit::new(
+                                self.ctx.clone(),
+                                self.log.clone(),
+                            )),
+                            event,
+                        );
+                    }
+                }
+                Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(
+                    endpoints,
+                ))) => {
+                    let tv: HashSet<TunnelOrigin> = endpoints.clone();
+                    if let Err(e) = crate::exchange::withdraw_tunnel(
+                        self.ctx.config.clone(),
+                        tv,
+                        self.peer,
+                        self.ctx.rt.clone(),
+                        self.log.clone(),
+                    ) {
+                        err!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "withdraw tunnel: {}",
+                            e,
+                        );
+                        wrn!(
+                            self.log,
+                            self.ctx.config.if_name,
+                            "expiring peer {} due to failed tunnel withdraw",
                             self.peer,
                         );
                         self.expire_peer(&exchange_thread, &pull_stop);
@@ -618,72 +712,75 @@ impl State for Exchange {
                         );
                     }
                 }
-                Event::Peer(PeerEvent::Push(push)) => {
+                // TODO tunnel
+                Event::Peer(PeerEvent::Push(update)) => {
                     inf!(
                         self.log,
                         self.ctx.config.if_name,
                         "push from {}: {:#?}",
                         self.peer,
-                        push,
+                        update,
                     );
-                    if !push.announce.is_empty() {
-                        if let Err(e) = crate::exchange::announce(
-                            self.ctx.config.clone(),
-                            push.announce,
-                            self.peer,
-                            self.ctx.rt.clone(),
-                            self.log.clone(),
-                        ) {
-                            err!(
-                                self.log,
-                                self.ctx.config.if_name,
-                                "announce: {}",
-                                e,
-                            );
-                            wrn!(
-                                self.log,
-                                self.ctx.config.if_name,
-                                "expiring peer {} due to failed announce",
+                    if let Some(push) = update.underlay {
+                        if !push.announce.is_empty() {
+                            if let Err(e) = crate::exchange::announce_underlay(
+                                self.ctx.config.clone(),
+                                push.announce,
                                 self.peer,
-                            );
-                            self.expire_peer(&exchange_thread, &pull_stop);
-                            return (
-                                Box::new(Solicit::new(
-                                    self.ctx.clone(),
-                                    self.log.clone(),
-                                )),
-                                event,
-                            );
+                                self.ctx.rt.clone(),
+                                self.log.clone(),
+                            ) {
+                                err!(
+                                    self.log,
+                                    self.ctx.config.if_name,
+                                    "announce: {}",
+                                    e,
+                                );
+                                wrn!(
+                                    self.log,
+                                    self.ctx.config.if_name,
+                                    "expiring peer {} due to failed announce",
+                                    self.peer,
+                                );
+                                self.expire_peer(&exchange_thread, &pull_stop);
+                                return (
+                                    Box::new(Solicit::new(
+                                        self.ctx.clone(),
+                                        self.log.clone(),
+                                    )),
+                                    event,
+                                );
+                            }
                         }
-                    }
-                    if !push.withdraw.is_empty() {
-                        if let Err(e) = crate::exchange::withdraw(
-                            self.ctx.config.clone(),
-                            push.withdraw,
-                            self.peer,
-                            self.ctx.rt.clone(),
-                            self.log.clone(),
-                        ) {
-                            err!(
-                                self.log,
-                                self.ctx.config.if_name,
-                                "withdraw: {}",
-                                e,
-                            );
-                            wrn!(
-                                self.log,
-                                self.ctx.config.if_name,
-                                "expiring peer {} due to failed withdraw",
+                        if !push.withdraw.is_empty() {
+                            if let Err(e) = crate::exchange::withdraw_underlay(
+                                self.ctx.config.clone(),
+                                push.withdraw,
                                 self.peer,
-                            );
-                            self.expire_peer(&exchange_thread, &pull_stop);
-                            return (
-                                Box::new(Solicit::new(
-                                    self.ctx.clone(),
-                                    self.log.clone(),
-                                )),
-                                event,
-                            );
+                                self.ctx.rt.clone(),
+                                self.log.clone(),
+                            ) {
+                                err!(
+                                    self.log,
+                                    self.ctx.config.if_name,
+                                    "withdraw: {}",
+                                    e,
+                                );
+                                wrn!(
+                                    self.log,
+                                    self.ctx.config.if_name,
+                                    "expiring peer {} due to failed withdraw",
+                                    self.peer,
+                                );
+                                self.expire_peer(&exchange_thread, &pull_stop);
+                                return (
+                                    Box::new(Solicit::new(
+                                        self.ctx.clone(),
+                                        self.log.clone(),
+                                    )),
+                                    event,
+                                );
+                            }
                         }
                     }
                 }

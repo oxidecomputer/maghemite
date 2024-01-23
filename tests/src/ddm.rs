@@ -3,8 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::{anyhow, Result};
-use ddm_admin_client::types::Ipv6Prefix;
-use ddm_admin_client::Client;
+use ddm_admin_client::{Client, Ipv6Prefix, TunnelOrigin};
 use slog::{Drain, Logger};
 use std::env;
 use std::net::Ipv6Addr;
@@ -518,6 +517,63 @@ async fn run_trio_tests(
 
     println!("redundant advertise passed");
 
+    wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
+
+    t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
+        overlay_prefix: "203.0.113.0/24".parse().unwrap(),
+        boundary_addr: "fd00:1701::1".parse().unwrap(),
+        vni: 47,
+    }])
+    .await?;
+
+    wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 1);
+    wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
+    wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
+    wait_for_eq!(tunnel_endpoint_count(&s2).await?, 1);
+
+    println!("tunnel endpoint advertise passed");
+
+    // redudant advertise should not change things
+
+    t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
+        overlay_prefix: "203.0.113.0/24".parse().unwrap(),
+        boundary_addr: "fd00:1701::1".parse().unwrap(),
+        vni: 47,
+    }])
+    .await?;
+
+    sleep(Duration::from_secs(5));
+
+    wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 1);
+    wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
+    wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
+    wait_for_eq!(tunnel_endpoint_count(&s2).await?, 1);
+
+    println!("redundant tunnel endpoint advertise passed");
+
+    zs1.stop_router()?;
+    sleep(Duration::from_secs(5));
+    zs1.start_router()?;
+    sleep(Duration::from_secs(5));
+    let s1 = Client::new("http://10.0.0.1:8000", log.clone());
+    wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
+
+    println!("tunnel router restart passed");
+
+    t1.withdraw_tunnel_endpoints(&vec![TunnelOrigin {
+        overlay_prefix: "203.0.113.0/24".parse().unwrap(),
+        boundary_addr: "fd00:1701::1".parse().unwrap(),
+        vni: 47,
+    }])
+    .await?;
+
+    wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
+    wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
+    wait_for_eq!(tunnel_endpoint_count(&s1).await?, 0);
+    wait_for_eq!(tunnel_endpoint_count(&s2).await?, 0);
+
+    println!("tunnel endpoint withdraw passed");
+
     Ok(())
 }
 
@@ -693,6 +749,14 @@ async fn prefix_count(c: &Client) -> Result<usize> {
         .values()
         .map(|x| x.len())
         .sum::<usize>())
+}
+
+async fn tunnel_endpoint_count(c: &Client) -> Result<usize> {
+    Ok(c.get_tunnel_endpoints().await?.len())
+}
+
+async fn tunnel_originated_endpoint_count(c: &Client) -> Result<usize> {
+    Ok(c.get_originated_tunnel_endpoints().await?.len())
 }
 
 fn init_logger() -> Logger {

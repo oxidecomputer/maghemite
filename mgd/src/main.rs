@@ -8,6 +8,7 @@ use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use bgp::log::init_logger;
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
+use rand::Fill;
 use rdb::{BgpNeighborInfo, BgpRouterInfo};
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap};
@@ -18,6 +19,7 @@ use std::thread::spawn;
 mod admin;
 mod bgp_admin;
 mod error;
+mod static_admin;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None, styles = oxide_cli_style())]
@@ -69,12 +71,26 @@ async fn run(args: RunArgs) {
     let db = rdb::Db::new(&format!("{}/rdb", args.data_dir), log.clone())
         .expect("open datastore file");
 
+    let tep_ula = get_tunnel_endpoint_ula(&db);
+
     let context = Arc::new(HandlerContext {
+        tep: tep_ula,
         log: log.clone(),
         bgp,
         data_dir: args.data_dir.clone(),
         db: db.clone(),
     });
+
+    #[cfg(feature = "default")]
+    {
+        let rt = Arc::new(tokio::runtime::Handle::current());
+        let ctx = context.clone();
+        let log = log.clone();
+        let db = ctx.db.clone();
+        std::thread::spawn(move || {
+            mg_lower::run(ctx.tep, db, log, rt);
+        });
+    }
 
     start_bgp_routers(
         context.clone(),
@@ -83,6 +99,8 @@ async fn run(args: RunArgs) {
         db.get_bgp_neighbors()
             .expect("get BGP neighbors from data store"),
     );
+
+    initialize_static_routes(&db);
 
     let j = admin::start_server(
         log.clone(),
@@ -149,4 +167,33 @@ fn start_bgp_routers(
         )
         .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
     }
+}
+
+fn initialize_static_routes(db: &rdb::Db) {
+    let routes = db
+        .get_static4()
+        .expect("failed to get static routes from db");
+    for route in &routes {
+        db.set_nexthop4(*route, false).unwrap_or_else(|e| {
+            panic!("failed to initialize static route {route:#?}: {e}")
+        });
+    }
+}
+
+fn get_tunnel_endpoint_ula(db: &rdb::Db) -> Ipv6Addr {
+    if let Some(addr) = db.get_tep_addr().unwrap() {
+        return addr;
+    }
+
+    // creat the randomized ULA fdxx:xxxx:xxxx:xxxx::1 as a tunnel endpoint
+    let mut rng = rand::thread_rng();
+    let mut r = [0u8; 7];
+    r.try_fill(&mut rng).unwrap();
+    let tep_ula = Ipv6Addr::from([
+        0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
+    ]);
+
+    db.set_tep_addr(tep_ula).unwrap();
+
+    tep_ula
 }

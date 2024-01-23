@@ -2,18 +2,19 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::bgp_admin;
+use crate::{bgp_admin, static_admin};
 use bgp_admin::BgpContext;
 use dropshot::{ApiDescription, ConfigDropshot, HttpServerStarter};
 use rdb::Db;
 use slog::o;
 use slog::{error, info, warn, Logger};
 use std::fs::File;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
 pub struct HandlerContext {
+    pub tep: Ipv6Addr, // tunnel endpoint address
     pub bgp: BgpContext,
     pub log: Logger,
     pub data_dir: String,
@@ -27,7 +28,6 @@ pub fn start_server(
     context: Arc<HandlerContext>,
 ) -> Result<JoinHandle<()>, String> {
     let sa = SocketAddr::new(addr, port);
-
     let ds_config = ConfigDropshot {
         bind_address: sa,
         ..Default::default()
@@ -58,6 +58,8 @@ macro_rules! register {
 
 pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     let mut api = ApiDescription::new();
+
+    // bgp
     register!(api, bgp_admin::get_routers);
     register!(api, bgp_admin::new_router);
     register!(api, bgp_admin::ensure_router_handler);
@@ -71,6 +73,12 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     register!(api, bgp_admin::get_imported4);
     register!(api, bgp_admin::bgp_apply);
     register!(api, bgp_admin::graceful_shutdown);
+
+    // static
+    register!(api, static_admin::static_add_v4_route);
+    register!(api, static_admin::static_remove_v4_route);
+    register!(api, static_admin::static_list_v4_routes);
+
     api
 }
 

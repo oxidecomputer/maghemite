@@ -6,7 +6,7 @@ use clap::Parser;
 use ddm::db::{Db, RouterKind};
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
 use ddm::sys::Route;
-use slog::{Drain, Logger};
+use slog::{error, Drain, Logger};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -172,10 +172,25 @@ fn termination_handler(
             .await
             .expect("error setting termination handler");
         const SIGTERM_EXIT: i32 = 130;
+
         let imported = db.imported();
         let routes: Vec<Route> =
             imported.iter().map(|x| (x.clone()).into()).collect();
-        ddm::sys::remove_routes(&log, "shutdown-all", &dendrite, routes, &rt);
+        ddm::sys::remove_underlay_routes(
+            &log,
+            "shutdown-all",
+            &dendrite,
+            routes,
+            &rt,
+        );
+
+        let imported_tnl = db.imported_tunnel();
+        if let Err(e) =
+            ddm::sys::remove_tunnel_routes(&log, "shutdown-all", &imported_tnl)
+        {
+            error!(log, "shutdown tunnel routes: {e}");
+        }
+
         std::process::exit(SIGTERM_EXIT);
     });
 }

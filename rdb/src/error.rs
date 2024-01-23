@@ -12,4 +12,7 @@ pub enum Error {
 
     #[error("db key error{0}")]
     DbKey(String),
+
+    #[error("db value error{0}")]
+    DbValue(String),
 }

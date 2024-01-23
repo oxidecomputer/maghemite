@@ -9,13 +9,15 @@ use dendrite_common::ports::PortId;
 use dendrite_common::ports::QsfpPort;
 use dpd_client::types;
 use dpd_client::Client as DpdClient;
+use http::status::StatusCode;
 use libnet::{get_route, IpPrefix, Ipv4Prefix};
 use rdb::Route4ImportKey;
+use slog::warn;
 use slog::{error, Logger};
-
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::net::IpAddr;
+use std::net::Ipv6Addr;
 use std::sync::Arc;
 
 const TFPORT_QSFP_DEVICE_PREFIX: &str = "tfportqsfp";
@@ -45,6 +47,25 @@ impl RouteHash {
                 })
             }
             _ => Err("mismatched subnet and target"),
+        }
+    }
+}
+
+pub(crate) fn ensure_tep_addr(
+    tep: Ipv6Addr,
+    dpd: &DpdClient,
+    rt: Arc<tokio::runtime::Handle>,
+    log: &Logger,
+) {
+    if let Err(e) = rt.block_on(async {
+        dpd.loopback_ipv6_create(&types::Ipv6Entry {
+            tag: MG_LOWER_TAG.into(),
+            addr: tep,
+        })
+        .await
+    }) {
+        if e.status() != Some(StatusCode::CONFLICT) {
+            warn!(log, "failed to ensure TEP address {tep} on ASIC: {e}");
         }
     }
 }

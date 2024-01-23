@@ -2,13 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
-
 use schemars::{JsonSchema, JsonSchema_repr};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::collections::{HashMap, HashSet};
-use std::net::{AddrParseError, Ipv6Addr};
+use std::net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr};
 use std::num::ParseIntError;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
@@ -23,6 +21,8 @@ pub struct DbData {
     pub peers: HashMap<u32, PeerInfo>,
     pub imported: HashSet<Route>,
     pub originated: HashSet<Ipv6Prefix>,
+    pub imported_tunnel: HashSet<TunnelRoute>,
+    pub originated_tunnel: HashSet<TunnelOrigin>,
 }
 
 unsafe impl Sync for Db {}
@@ -41,8 +41,16 @@ impl Db {
         self.data.lock().unwrap().imported.clone()
     }
 
+    pub fn imported_tunnel(&self) -> HashSet<TunnelRoute> {
+        self.data.lock().unwrap().imported_tunnel.clone()
+    }
+
     pub fn import(&self, r: &HashSet<Route>) {
         self.data.lock().unwrap().imported.extend(r.clone());
+    }
+
+    pub fn import_tunnel(&self, r: &HashSet<TunnelRoute>) {
+        self.data.lock().unwrap().imported_tunnel.extend(r.clone());
     }
 
     pub fn delete_import(&self, r: &HashSet<Route>) {
@@ -52,17 +60,42 @@ impl Db {
         }
     }
 
+    pub fn delete_import_tunnel(&self, r: &HashSet<TunnelRoute>) {
+        let imported = &mut self.data.lock().unwrap().imported_tunnel;
+        for x in r {
+            imported.remove(x);
+        }
+    }
+
     pub fn originate(&self, p: &HashSet<Ipv6Prefix>) {
         self.data.lock().unwrap().originated.extend(p);
+    }
+
+    pub fn originate_tunnel(&self, p: &HashSet<TunnelOrigin>) {
+        self.data
+            .lock()
+            .unwrap()
+            .originated_tunnel
+            .extend(p.clone());
     }
 
     pub fn originated(&self) -> HashSet<Ipv6Prefix> {
         self.data.lock().unwrap().originated.clone()
     }
 
+    pub fn originated_tunnel(&self) -> HashSet<TunnelOrigin> {
+        self.data.lock().unwrap().originated_tunnel.clone()
+    }
+
     pub fn withdraw(&self, p: &HashSet<Ipv6Prefix>) {
         for prefix in p {
             self.data.lock().unwrap().originated.remove(prefix);
+        }
+    }
+
+    pub fn withdraw_tunnel(&self, p: &HashSet<TunnelOrigin>) {
+        for prefix in p {
+            self.data.lock().unwrap().originated_tunnel.remove(prefix);
         }
     }
 
@@ -75,8 +108,13 @@ impl Db {
         }
     }
 
-    pub fn remove_nexthop_routes(&self, nexthop: Ipv6Addr) -> HashSet<Route> {
+    pub fn remove_nexthop_routes(
+        &self,
+        nexthop: Ipv6Addr,
+    ) -> (HashSet<Route>, HashSet<TunnelRoute>) {
         let mut data = self.data.lock().unwrap();
+        // Routes are generally held in sets to prevent duplication and provide
+        // handy set-algebra operations.
         let mut removed = HashSet::new();
         for x in &data.imported {
             if x.nexthop == nexthop {
@@ -86,7 +124,17 @@ impl Db {
         for x in &removed {
             data.imported.remove(x);
         }
-        removed
+
+        let mut tnl_removed = HashSet::new();
+        for x in &data.imported_tunnel {
+            if x.nexthop == nexthop {
+                tnl_removed.insert(x.clone());
+            }
+        }
+        for x in &tnl_removed {
+            data.imported_tunnel.remove(x);
+        }
+        (removed, tnl_removed)
     }
 
     pub fn remove_peer(&self, index: u32) {
@@ -173,6 +221,12 @@ pub struct Ipv6Prefix {
     pub len: u8,
 }
 
+impl std::fmt::Display for Ipv6Prefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.addr, self.len)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum Ipv6PrefixParseError {
     #[error("expected CIDR representation <addr>/<mask>")]
@@ -204,9 +258,136 @@ impl std::str::FromStr for Ipv6Prefix {
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
+pub struct TunnelRoute {
+    pub origin: TunnelOrigin,
+
+    // The nexthop is only used to associate the route with a peer allowing us
+    // to remove the route if the peer expires. It does not influence what goes
+    // into the underlaying underlay routing platform. Tunnel routes only
+    // influence the state of the underlying encapsulation service.
+    pub nexthop: Ipv6Addr,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+)]
+pub struct TunnelOrigin {
+    pub overlay_prefix: IpPrefix,
+    pub boundary_addr: Ipv6Addr,
+    pub vni: u32,
+}
+
+impl From<crate::db::TunnelRoute> for TunnelOrigin {
+    fn from(x: crate::db::TunnelRoute) -> Self {
+        Self {
+            overlay_prefix: x.origin.overlay_prefix,
+            boundary_addr: x.origin.boundary_addr,
+            vni: x.origin.vni,
+        }
+    }
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub struct Route {
     pub destination: Ipv6Prefix,
     pub nexthop: Ipv6Addr,
     pub ifname: String,
     pub path: Vec<String>,
+}
+
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+)]
+pub struct Ipv4Prefix {
+    pub addr: Ipv4Addr,
+    pub len: u8,
+}
+
+impl std::fmt::Display for Ipv4Prefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.addr, self.len)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum Ipv4PrefixParseError {
+    #[error("expected CIDR representation <addr>/<mask>")]
+    Cidr,
+
+    #[error("address parse error: {0}")]
+    Addr(#[from] AddrParseError),
+
+    #[error("mask parse error: {0}")]
+    Mask(#[from] ParseIntError),
+}
+
+impl std::str::FromStr for Ipv4Prefix {
+    type Err = Ipv4PrefixParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() < 2 {
+            return Err(Ipv4PrefixParseError::Cidr);
+        }
+
+        Ok(Ipv4Prefix {
+            addr: Ipv4Addr::from_str(parts[0])?,
+            len: u8::from_str(parts[1])?,
+        })
+    }
+}
+
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+)]
+pub enum IpPrefix {
+    V4(Ipv4Prefix),
+    V6(Ipv6Prefix),
+}
+
+impl std::fmt::Display for IpPrefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::V4(p) => p.fmt(f),
+            Self::V6(p) => p.fmt(f),
+        }
+    }
+}
+
+impl IpPrefix {
+    pub fn addr(&self) -> IpAddr {
+        match self {
+            Self::V4(s) => s.addr.into(),
+            Self::V6(s) => s.addr.into(),
+        }
+    }
+
+    pub fn length(&self) -> u8 {
+        match self {
+            Self::V4(s) => s.len,
+            Self::V6(s) => s.len,
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum IpPrefixParseError {
+    #[error("v4 address parse error: {0}")]
+    V4(#[from] Ipv4PrefixParseError),
+
+    #[error("v4 address parse error: {0}")]
+    V6(#[from] Ipv6PrefixParseError),
+}
+
+impl std::str::FromStr for IpPrefix {
+    type Err = IpPrefixParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(result) = Ipv4Prefix::from_str(s) {
+            return Ok(IpPrefix::V4(result));
+        }
+        Ok(IpPrefix::V6(Ipv6Prefix::from_str(s)?))
+    }
 }

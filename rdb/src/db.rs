@@ -12,9 +12,9 @@
 use crate::error::Error;
 use crate::types::*;
 use mg_common::{lock, read_lock, write_lock};
-use slog::{error, Logger};
+use slog::{error, info, Logger};
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
@@ -30,6 +30,16 @@ const BGP_ROUTER: &str = "bgp_router";
 /// The handle used to open a persistent key-value tree for BGP neighbor
 /// information.
 const BGP_NEIGHBOR: &str = "bgp_neighbor";
+
+/// The handle used to open a persistent key-value tree for settings
+/// information.
+const SETTINGS: &str = "settings";
+
+/// The handle used to open a persistent key-value tree for static routes.
+const STATIC4_ROUTES: &str = "static4_routes";
+
+/// Key used in settings tree for tunnel endpoint setting
+const TEP_KEY: &str = "tep";
 
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
@@ -266,14 +276,68 @@ impl Db {
         lock!(self.imported).clone().into_iter().collect()
     }
 
-    pub fn set_nexthop4(&self, r: Route4ImportKey) {
+    pub fn set_nexthop4(
+        &self,
+        r: Route4ImportKey,
+        is_static: bool,
+    ) -> Result<(), Error> {
+        if is_static {
+            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+            let key = serde_json::to_string(&r)?;
+            tree.insert(key.as_str(), "")?;
+        }
+
         let before = self.effective_set_for_prefix4(r.prefix);
         lock!(self.imported).replace(r);
         let after = self.effective_set_for_prefix4(r.prefix);
 
-        if let Some(change_set) = self.import_route_change_set(before, after) {
+        if let Some(change_set) = self.import_route_change_set(&before, &after)
+        {
+            info!(
+                self.log,
+                "sending notification for change set {:#?}", change_set,
+            );
             self.notify(change_set);
+        } else {
+            info!(
+                self.log,
+                "no effective change for {:#?} -> {:#?}", before, after
+            );
         }
+
+        Ok(())
+    }
+
+    pub fn get_static4(&self) -> Result<Vec<Route4ImportKey>, Error> {
+        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+        Ok(tree
+            .scan_prefix(vec![])
+            .filter_map(|item| {
+                let (key, _) = match item {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error fetching static route entry: {e}"
+                        );
+                        return None;
+                    }
+                };
+
+                let key = String::from_utf8_lossy(&key);
+                let rkey: Route4ImportKey = match serde_json::from_str(&key) {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error parsing static router entry: {e}"
+                        );
+                        return None;
+                    }
+                };
+                Some(rkey)
+            })
+            .collect())
     }
 
     pub fn remove_nexthop4(&self, r: Route4ImportKey) {
@@ -281,7 +345,8 @@ impl Db {
         lock!(self.imported).remove(&r);
         let after = self.effective_set_for_prefix4(r.prefix);
 
-        if let Some(change_set) = self.import_route_change_set(before, after) {
+        if let Some(change_set) = self.import_route_change_set(&before, &after)
+        {
             self.notify(change_set);
         }
     }
@@ -342,24 +407,48 @@ impl Db {
     /// bumping the RIB generation number if there are changes.
     fn import_route_change_set(
         &self,
-        before: HashSet<Route4ImportKey>,
-        after: HashSet<Route4ImportKey>,
+        before: &HashSet<Route4ImportKey>,
+        after: &HashSet<Route4ImportKey>,
     ) -> Option<ChangeSet> {
         let added: HashSet<Route4ImportKey> =
-            after.difference(&before).copied().collect();
+            after.difference(before).copied().collect();
 
         let removed: HashSet<Route4ImportKey> =
-            before.difference(&after).copied().collect();
-
-        let gen = self.generation.fetch_add(1, Ordering::SeqCst);
+            before.difference(after).copied().collect();
 
         if added.is_empty() && removed.is_empty() {
             return None;
         }
 
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst);
+
         Some(ChangeSet::from_import(
             ImportChangeSet { added, removed },
             gen,
         ))
+    }
+
+    pub fn get_tep_addr(&self) -> Result<Option<Ipv6Addr>, Error> {
+        let tree = self.persistent.open_tree(SETTINGS)?;
+        let result = tree.get(TEP_KEY)?;
+        let value = match result {
+            Some(value) => value,
+            None => return Ok(None),
+        };
+        let octets: [u8; 16] = (*value).try_into().map_err(|_| {
+            Error::DbValue(format!(
+                "rdb: tep length error exepcted 16 bytes found {}",
+                value.len(),
+            ))
+        })?;
+
+        Ok(Some(Ipv6Addr::from(octets)))
+    }
+
+    pub fn set_tep_addr(&self, addr: Ipv6Addr) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(SETTINGS)?;
+        let key = addr.octets();
+        tree.insert(TEP_KEY, &key)?;
+        Ok(())
     }
 }

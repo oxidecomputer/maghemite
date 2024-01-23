@@ -33,6 +33,34 @@
         }
       }
     },
+    "/originated_tunnel_endpoints": {
+      "get": {
+        "operationId": "get_originated_tunnel_endpoints",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_TunnelOrigin",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TunnelOrigin"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/peers": {
       "get": {
         "operationId": "get_peers",
@@ -193,21 +221,97 @@
           }
         }
       }
-    }
-  },
-  "components": {
-    "responses": {
-      "Error": {
-        "description": "Error",
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/Error"
+    },
+    "/tunnel_endpoint": {
+      "put": {
+        "operationId": "advertise_tunnel_endpoints",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_TunnelOrigin",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TunnelOrigin"
+                },
+                "uniqueItems": true
+              }
             }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "withdraw_tunnel_endpoints",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Set_of_TunnelOrigin",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TunnelOrigin"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
     },
+    "/tunnel_endpoints": {
+      "get": {
+        "operationId": "get_tunnel_endpoints",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Set_of_TunnelRoute",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TunnelRoute"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
     "schemas": {
       "Error": {
         "description": "Error information from a response.",
@@ -226,6 +330,52 @@
         "required": [
           "message",
           "request_id"
+        ]
+      },
+      "IpPrefix": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "V4": {
+                "$ref": "#/components/schemas/Ipv4Prefix"
+              }
+            },
+            "required": [
+              "V4"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "V6": {
+                "$ref": "#/components/schemas/Ipv6Prefix"
+              }
+            },
+            "required": [
+              "V6"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Ipv4Prefix": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ipv4"
+          },
+          "len": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "addr",
+          "len"
         ]
       },
       "Ipv6Prefix": {
@@ -302,6 +452,56 @@
           0,
           1
         ]
+      },
+      "TunnelOrigin": {
+        "type": "object",
+        "properties": {
+          "boundary_addr": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "overlay_prefix": {
+            "$ref": "#/components/schemas/IpPrefix"
+          },
+          "vni": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "boundary_addr",
+          "overlay_prefix",
+          "vni"
+        ]
+      },
+      "TunnelRoute": {
+        "type": "object",
+        "properties": {
+          "nexthop": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/TunnelOrigin"
+          }
+        },
+        "required": [
+          "nexthop",
+          "origin"
+        ]
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
       }
     }
   }

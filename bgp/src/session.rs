@@ -1128,7 +1128,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     id,
                     priority,
                 };
-                self.db.set_nexthop4(k);
+                if let Err(e) = self.db.set_nexthop4(k, false) {
+                    err!(self; "failed to set nexthop {k:#?}: {e}");
+                }
             }
         }
 

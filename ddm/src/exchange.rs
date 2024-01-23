@@ -2,8 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
-
 //! This file implements the ddm router prefix exchange mechanisms. These
 //! mechanisms are responsible for announcing and withdrawing prefix sets to and
 //! from peers.
@@ -17,7 +15,7 @@
 //! of a ddm router is defined in the state machine implementation in sm.rs.
 //!
 
-use crate::db::{Ipv6Prefix, Route, RouterKind};
+use crate::db::{Ipv6Prefix, Route, RouterKind, TunnelOrigin, TunnelRoute};
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
 use dropshot::endpoint;
@@ -49,6 +47,45 @@ pub struct HandlerContext {
     log: Logger,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct Update {
+    pub underlay: Option<UnderlayUpdate>,
+    pub tunnel: Option<TunnelUpdate>,
+}
+
+impl From<UnderlayUpdate> for Update {
+    fn from(u: UnderlayUpdate) -> Self {
+        Update {
+            underlay: Some(u),
+            tunnel: None,
+        }
+    }
+}
+
+impl From<TunnelUpdate> for Update {
+    fn from(t: TunnelUpdate) -> Self {
+        Update {
+            underlay: None,
+            tunnel: Some(t),
+        }
+    }
+}
+
+impl Update {
+    fn announce(pr: PullResponse) -> Self {
+        Self {
+            underlay: pr.underlay.map(UnderlayUpdate::announce),
+            tunnel: pr.tunnel.map(TunnelUpdate::announce),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct PullResponse {
+    pub underlay: Option<HashSet<PathVector>>,
+    pub tunnel: Option<HashSet<TunnelOrigin>>,
+}
+
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
 )]
@@ -58,19 +95,62 @@ pub struct PathVector {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-struct Update {
+pub struct UnderlayUpdate {
     pub announce: HashSet<PathVector>,
     pub withdraw: HashSet<PathVector>,
 }
 
-impl Update {
-    fn announce(prefixes: HashSet<PathVector>) -> Self {
+impl UnderlayUpdate {
+    pub fn announce(prefixes: HashSet<PathVector>) -> Self {
         Self {
             announce: prefixes,
             ..Default::default()
         }
     }
-    fn withdraw(prefixes: HashSet<PathVector>) -> Self {
+    pub fn withdraw(prefixes: HashSet<PathVector>) -> Self {
+        Self {
+            withdraw: prefixes,
+            ..Default::default()
+        }
+    }
+    pub fn with_path_element(&self, element: String) -> Self {
+        Self {
+            announce: self
+                .announce
+                .iter()
+                .map(|x| {
+                    let mut pv = x.clone();
+                    pv.path.push(element.clone());
+                    pv
+                })
+                .collect(),
+            withdraw: self
+                .withdraw
+                .iter()
+                .map(|x| {
+                    let mut pv = x.clone();
+                    pv.path.push(element.clone());
+                    pv
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct TunnelUpdate {
+    pub announce: HashSet<TunnelOrigin>,
+    pub withdraw: HashSet<TunnelOrigin>,
+}
+
+impl TunnelUpdate {
+    pub fn announce(prefixes: HashSet<TunnelOrigin>) -> Self {
+        Self {
+            announce: prefixes,
+            ..Default::default()
+        }
+    }
+    pub fn withdraw(prefixes: HashSet<TunnelOrigin>) -> Self {
         Self {
             withdraw: prefixes,
             ..Default::default()
@@ -90,33 +170,57 @@ pub enum ExchangeError {
     Timeout(#[from] tokio::time::error::Elapsed),
 }
 
-pub(crate) fn announce(
+pub(crate) fn announce_underlay(
     config: Config,
     prefixes: HashSet<PathVector>,
     addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = Update::announce(prefixes);
-    send_update(config, update, addr, rt, log)
+    let update = UnderlayUpdate::announce(prefixes);
+    send_update(config, update.into(), addr, rt, log)
 }
 
-pub(crate) fn withdraw(
+pub(crate) fn announce_tunnel(
+    config: Config,
+    endpoints: HashSet<TunnelOrigin>,
+    addr: Ipv6Addr,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let update =
+        TunnelUpdate::announce(endpoints.into_iter().map(Into::into).collect());
+    send_update(config, update.into(), addr, rt, log)
+}
+
+pub(crate) fn withdraw_underlay(
     config: Config,
     prefixes: HashSet<PathVector>,
     addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update = Update::withdraw(prefixes);
-    send_update(config, update, addr, rt, log)
+    let update = UnderlayUpdate::withdraw(prefixes);
+    send_update(config, update.into(), addr, rt, log)
+}
+
+pub(crate) fn withdraw_tunnel(
+    config: Config,
+    endpoints: HashSet<TunnelOrigin>,
+    addr: Ipv6Addr,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let update =
+        TunnelUpdate::withdraw(endpoints.into_iter().map(Into::into).collect());
+    send_update(config, update.into(), addr, rt, log)
 }
 
 pub(crate) fn do_pull(
     ctx: &SmContext,
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
-) -> Result<HashSet<PathVector>, ExchangeError> {
+) -> Result<PullResponse, ExchangeError> {
     let uri = format!(
         "http://[{}%{}]:{}/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
@@ -154,9 +258,9 @@ pub(crate) fn pull(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let pv: HashSet<PathVector> = do_pull(&ctx, &addr, &rt)?;
+    let pr: PullResponse = do_pull(&ctx, &addr, &rt)?;
 
-    let update = Update::announce(pv);
+    let update = Update::announce(pr);
 
     let hctx = HandlerContext {
         ctx,
@@ -295,7 +399,7 @@ async fn push_handler(
 #[endpoint { method = GET, path = "/pull" }]
 async fn pull_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-) -> Result<HttpResponseOk<HashSet<PathVector>>, HttpError> {
+) -> Result<HttpResponseOk<PullResponse>, HttpError> {
     let ctx = ctx.context().lock().await.clone();
 
     let db = tokio::task::spawn_blocking(move || ctx.ctx.db.dump())
@@ -304,7 +408,9 @@ async fn pull_handler(
             HttpError::for_internal_error(format!("spawn db dump thread {}", e))
         })?;
 
-    let mut prefixes = HashSet::new();
+    let mut underlay = HashSet::new();
+    let mut tunnel = HashSet::new();
+
     // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
         for route in &db.imported {
@@ -317,7 +423,14 @@ async fn pull_handler(
                 path: route.path.clone(),
             };
             pv.path.push(ctx.ctx.hostname.clone());
-            prefixes.insert(pv);
+            underlay.insert(pv);
+        }
+        for route in &db.imported_tunnel {
+            if route.nexthop == ctx.peer {
+                continue;
+            }
+            let tv = route.origin.clone();
+            tunnel.insert(tv);
         }
     }
     for prefix in &db.originated {
@@ -325,16 +438,125 @@ async fn pull_handler(
             destination: *prefix,
             path: vec![ctx.ctx.hostname.clone()],
         };
-        prefixes.insert(pv);
+        underlay.insert(pv);
+    }
+    for prefix in &db.originated_tunnel {
+        let tv = TunnelOrigin {
+            overlay_prefix: prefix.overlay_prefix,
+            boundary_addr: prefix.boundary_addr,
+            vni: prefix.vni,
+        };
+        tunnel.insert(tv);
     }
 
-    Ok(HttpResponseOk(prefixes))
+    Ok(HttpResponseOk(PullResponse {
+        underlay: if underlay.is_empty() {
+            None
+        } else {
+            Some(underlay)
+        },
+        tunnel: if tunnel.is_empty() {
+            None
+        } else {
+            Some(tunnel)
+        },
+    }))
 }
 
 fn handle_update(update: &Update, ctx: &HandlerContext) {
+    if let Some(underlay_update) = &update.underlay {
+        handle_underlay_update(underlay_update, ctx);
+    }
+
+    if let Some(tunnel_update) = &update.tunnel {
+        handle_tunnel_update(tunnel_update, ctx);
+    }
+
+    // distribute updates
+
+    if ctx.ctx.config.kind == RouterKind::Transit {
+        dbg!(
+            ctx.log,
+            ctx.ctx.config.if_name,
+            "redistributing update to {} peers",
+            ctx.ctx.event_channels.len()
+        );
+
+        let underlay = update
+            .underlay
+            .as_ref()
+            .map(|update| update.with_path_element(ctx.ctx.hostname.clone()));
+
+        let push = Update {
+            underlay,
+            tunnel: update.tunnel.clone(),
+        };
+
+        for ec in &ctx.ctx.event_channels {
+            ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
+        }
+    }
+}
+
+fn handle_tunnel_update(update: &TunnelUpdate, ctx: &HandlerContext) {
+    let mut import = HashSet::new();
+    let mut remove = HashSet::new();
+    let db = &ctx.ctx.db;
+
+    for x in &update.announce {
+        import.insert(TunnelRoute {
+            origin: TunnelOrigin {
+                overlay_prefix: x.overlay_prefix,
+                boundary_addr: x.boundary_addr,
+                vni: x.vni,
+            },
+            nexthop: ctx.peer,
+        });
+    }
+    db.import_tunnel(&import);
+    if let Err(e) = crate::sys::add_tunnel_routes(
+        &ctx.log,
+        &ctx.ctx.config.if_name,
+        &import,
+    ) {
+        err!(
+            ctx.log,
+            ctx.ctx.config.if_name,
+            "add tunnel routes: {e}: {:#?}",
+            import,
+        )
+    }
+
+    for x in &update.withdraw {
+        remove.insert(TunnelRoute {
+            origin: TunnelOrigin {
+                overlay_prefix: x.overlay_prefix,
+                boundary_addr: x.boundary_addr,
+                vni: x.vni,
+            },
+            nexthop: ctx.peer,
+        });
+    }
+    db.delete_import_tunnel(&remove);
+    if let Err(e) = crate::sys::remove_tunnel_routes(
+        &ctx.log,
+        &ctx.ctx.config.if_name,
+        &remove,
+    ) {
+        err!(
+            ctx.log,
+            ctx.ctx.config.if_name,
+            "remove tunnel routes: {e}: {:#?}",
+            import,
+        )
+    }
+}
+
+fn handle_underlay_update(update: &UnderlayUpdate, ctx: &HandlerContext) {
     let mut import = HashSet::new();
     let mut add = Vec::new();
     let db = &ctx.ctx.db;
+
     for prefix in &update.announce {
         import.insert(Route {
             destination: prefix.destination,
@@ -351,7 +573,12 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
         add.push(r);
     }
     db.import(&import);
-    crate::sys::add_routes(&ctx.log, &ctx.ctx.config, add, &ctx.ctx.rt);
+    crate::sys::add_underlay_routes(
+        &ctx.log,
+        &ctx.ctx.config,
+        add,
+        &ctx.ctx.rt,
+    );
 
     let mut withdraw = HashSet::new();
     for prefix in &update.withdraw {
@@ -384,45 +611,11 @@ fn handle_update(update: &Update, ctx: &HandlerContext) {
             del.push(r);
         }
     }
-    crate::sys::remove_routes(
+    crate::sys::remove_underlay_routes(
         &ctx.log,
         &ctx.ctx.config.if_name,
         &ctx.ctx.config.dpd,
         del,
         &ctx.ctx.rt,
     );
-
-    // distribute updates
-
-    if ctx.ctx.config.kind == RouterKind::Transit {
-        dbg!(
-            ctx.log,
-            ctx.ctx.config.if_name,
-            "redistributing update to {} peers",
-            ctx.ctx.event_channels.len()
-        );
-        let push = crate::sm::Push {
-            announce: update
-                .announce
-                .iter()
-                .map(|x| {
-                    let mut pv = x.clone();
-                    pv.path.push(ctx.ctx.hostname.clone());
-                    pv
-                })
-                .collect(),
-            withdraw: update
-                .withdraw
-                .iter()
-                .map(|x| {
-                    let mut pv = x.clone();
-                    pv.path.push(ctx.ctx.hostname.clone());
-                    pv
-                })
-                .collect(),
-        };
-        for ec in &ctx.ctx.event_channels {
-            ec.send(Event::Peer(PeerEvent::Push(push.clone()))).unwrap();
-        }
-    }
 }

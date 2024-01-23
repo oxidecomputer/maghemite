@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+ddm-admin-client = { path = "../ddm-admin-client" }
 rdb = { path = "../rdb" }
 anyhow.workspace = true
 dpd-client.workspace = true
@@ -12,3 +13,4 @@ slog.workspace = true
 libnet.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
+http.workspace = true

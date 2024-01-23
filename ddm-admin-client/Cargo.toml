@@ -10,3 +10,4 @@ slog = "2.7"
 percent-encoding.workspace = true
 reqwest.workspace = true
 progenitor.workspace = true
+ddm = { path = "../ddm" }
