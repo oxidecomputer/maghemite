@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{bgp_admin, static_admin, bfd_admin};
+use crate::{bfd_admin, bgp_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp_admin::BgpContext;
 use dropshot::{ApiDescription, ConfigDropshot, HttpServerStarter};

@@ -14,8 +14,8 @@ use crate::messages::{
 use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
-use rdb::{Asn, Db, Prefix4};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
+use rdb::{Asn, Db, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;

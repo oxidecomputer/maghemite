@@ -14,7 +14,7 @@ use crate::{types::*, DEFAULT_ROUTE_PRIORITY};
 use mg_common::{lock, read_lock, write_lock};
 use slog::{error, info, Logger};
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv6Addr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
