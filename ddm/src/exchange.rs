@@ -166,8 +166,14 @@ pub enum ExchangeError {
     #[error("hyper error: {0}")]
     Hyper(#[from] hyper::Error),
 
+    #[error("hyper http error: {0}")]
+    HyperHttp(#[from] hyper::http::Error),
+
     #[error("timeout error: {0}")]
     Timeout(#[from] tokio::time::error::Elapsed),
+
+    #[error("json error: {0}")]
+    SerdeJson(#[from] serde_json::Error),
 }
 
 pub(crate) fn announce_underlay(
@@ -229,8 +235,7 @@ pub(crate) fn do_pull(
     let req = hyper::Request::builder()
         .method(hyper::Method::GET)
         .uri(&uri)
-        .body(hyper::Body::empty())
-        .unwrap(); //TODO unwrap
+        .body(hyper::Body::empty())?;
 
     let resp = client.request(req);
 
@@ -249,7 +254,7 @@ pub(crate) fn do_pull(
         }
     })?;
 
-    Ok(serde_json::from_slice(&body).unwrap()) //TODO unwrap
+    Ok(serde_json::from_slice(&body)?)
 }
 
 pub(crate) fn pull(
@@ -279,7 +284,7 @@ fn send_update(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let payload = serde_json::to_string(&update).unwrap(); //TODO unwrap
+    let payload = serde_json::to_string(&update)?;
     let uri = format!(
         "http://[{}%{}]:{}/push",
         addr, config.if_index, config.exchange_port,
@@ -289,8 +294,7 @@ fn send_update(
     let req = hyper::Request::builder()
         .method(hyper::Method::PUT)
         .uri(&uri)
-        .body(hyper::Body::from(payload))
-        .unwrap(); //TODO unwrap
+        .body(hyper::Body::from(payload))?;
 
     let resp = client.request(req);
 
