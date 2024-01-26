@@ -30,6 +30,7 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use hyper::body::Bytes;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -273,6 +274,27 @@ pub(crate) fn do_pull(
         "http://[{}%{}]:{}/v2/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
     );
+    let body = do_pull_common(uri, rt)?;
+    Ok(serde_json::from_slice(&body)?)
+}
+
+pub(crate) fn do_pull_v1(
+    ctx: &SmContext,
+    addr: &Ipv6Addr,
+    rt: &Arc<tokio::runtime::Handle>,
+) -> Result<HashSet<PathVector>, ExchangeError> {
+    let uri = format!(
+        "http://[{}%{}]:{}/pull",
+        addr, ctx.config.if_index, ctx.config.exchange_port,
+    );
+    let body = do_pull_common(uri, rt)?;
+    Ok(serde_json::from_slice(&body)?)
+}
+
+fn do_pull_common(
+    uri: String,
+    rt: &Arc<tokio::runtime::Handle>,
+) -> Result<Bytes, ExchangeError> {
     let client = hyper::Client::new();
     let req = hyper::Request::builder()
         .method(hyper::Method::GET)
@@ -296,43 +318,7 @@ pub(crate) fn do_pull(
         }
     })?;
 
-    Ok(serde_json::from_slice(&body)?)
-}
-
-pub(crate) fn do_pull_v1(
-    ctx: &SmContext,
-    addr: &Ipv6Addr,
-    rt: &Arc<tokio::runtime::Handle>,
-) -> Result<HashSet<PathVector>, ExchangeError> {
-    let uri = format!(
-        "http://[{}%{}]:{}/pull",
-        addr, ctx.config.if_index, ctx.config.exchange_port,
-    );
-    let client = hyper::Client::new();
-    let req = hyper::Request::builder()
-        .method(hyper::Method::GET)
-        .uri(&uri)
-        .body(hyper::Body::empty())
-        .unwrap(); //TODO unwrap
-
-    let resp = client.request(req);
-
-    let body = rt.block_on(async move {
-        match timeout(Duration::from_millis(250), resp).await {
-            Ok(response) => match response {
-                Ok(data) => {
-                    match hyper::body::to_bytes(data.into_body()).await {
-                        Ok(data) => Ok(data),
-                        Err(e) => Err(ExchangeError::Hyper(e)),
-                    }
-                }
-                Err(e) => Err(ExchangeError::Hyper(e)),
-            },
-            Err(e) => Err(ExchangeError::Timeout(e)),
-        }
-    })?;
-
-    Ok(serde_json::from_slice(&body).unwrap()) //TODO unwrap
+    Ok(body)
 }
 
 pub(crate) fn pull(
@@ -385,32 +371,7 @@ fn send_update_v2(
         "http://[{}%{}]:{}/v2/push",
         addr, config.if_index, config.exchange_port,
     );
-
-    let client = hyper::Client::new();
-    let req = hyper::Request::builder()
-        .method(hyper::Method::PUT)
-        .uri(&uri)
-        .body(hyper::Body::from(payload))?;
-
-    let resp = client.request(req);
-
-    rt.block_on(async move {
-        match timeout(Duration::from_millis(config.exchange_timeout), resp)
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                err!(
-                    log,
-                    config.if_name,
-                    "peer request timeout to {}: {}",
-                    uri,
-                    e,
-                );
-                Err(e.into())
-            }
-        }
-    })
+    send_update_common(uri, payload, config, rt, log)
 }
 
 fn send_update_v1(
@@ -420,18 +381,26 @@ fn send_update_v1(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let payload = serde_json::to_string(&update).unwrap(); //TODO unwrap
+    let payload = serde_json::to_string(&update)?;
     let uri = format!(
         "http://[{}%{}]:{}/push",
         addr, config.if_index, config.exchange_port,
     );
+    send_update_common(uri, payload, config, rt, log)
+}
 
+fn send_update_common(
+    uri: String,
+    payload: String,
+    config: Config,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
     let client = hyper::Client::new();
     let req = hyper::Request::builder()
         .method(hyper::Method::PUT)
         .uri(&uri)
-        .body(hyper::Body::from(payload))
-        .unwrap(); //TODO unwrap
+        .body(hyper::Body::from(payload))?;
 
     let resp = client.request(req);
 
@@ -525,19 +494,9 @@ async fn push_handler_v1(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<UpdateV1>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().await.clone();
     let update_v1 = request.into_inner();
     let update = Update::from(update_v1);
-
-    tokio::task::spawn_blocking(move || {
-        handle_update(&update, &ctx);
-    })
-    .await
-    .map_err(|e| {
-        HttpError::for_internal_error(format!("spawn update thread {}", e))
-    })?;
-
-    Ok(HttpResponseUpdatedNoContent())
+    push_handler_common(ctx, update).await
 }
 
 #[endpoint { method = PUT, path = "/v2/push" }]
@@ -545,9 +504,15 @@ async fn push_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<Update>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().await.clone();
     let update = request.into_inner();
+    push_handler_common(ctx, update).await
+}
 
+async fn push_handler_common(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    update: Update,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context().lock().await.clone();
     tokio::task::spawn_blocking(move || {
         handle_update(&update, &ctx);
     })
