@@ -1,6 +1,6 @@
 #!/bin/bash
 #:
-#: name = "test-ddm-trio"
+#: name = "test-ddm-trio-v1-server"
 #: variety = "basic"
 #: target = "helios-2.0"
 #: rust_toolchain = "stable"
@@ -19,4 +19,4 @@ source .github/buildomat/test-ddm-common.sh
 #
 
 banner "trio"
-pfexec cargo test --release -p mg-tests test_trio_v2 -- --nocapture
+pfexec cargo test --release -p mg-tests test_trio_v1_server -- --nocapture

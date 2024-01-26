@@ -97,6 +97,7 @@ struct RouterZone<'a> {
     zone: Zone,
     transit: bool,
     testname: String,
+    v1: bool,
 }
 
 impl<'a> RouterZone<'a> {
@@ -105,8 +106,9 @@ impl<'a> RouterZone<'a> {
         zfs: &'a Zfs,
         mgmt: &'a str,
         rtr_ifx: &[&'a str],
+        v1: bool,
     ) -> Result<Self> {
-        Self::new(name, zfs, mgmt, rtr_ifx, false, "")
+        Self::new(name, zfs, mgmt, rtr_ifx, false, "", v1)
     }
 
     fn transit(
@@ -115,8 +117,9 @@ impl<'a> RouterZone<'a> {
         mgmt: &'a str,
         rtr_ifx: &[&'a str],
         testname: &str,
+        v1: bool,
     ) -> Result<Self> {
-        Self::new(name, zfs, mgmt, rtr_ifx, true, testname)
+        Self::new(name, zfs, mgmt, rtr_ifx, true, testname, v1)
     }
 
     fn new(
@@ -126,6 +129,7 @@ impl<'a> RouterZone<'a> {
         rtr_ifx: &[&'a str],
         transit: bool,
         testname: &str,
+        v1: bool,
     ) -> Result<Self> {
         let mut ifx = vec![mgmt];
         ifx.extend_from_slice(rtr_ifx);
@@ -145,6 +149,7 @@ impl<'a> RouterZone<'a> {
             zone,
             transit,
             testname: testname.into(),
+            v1,
         })
     }
 
@@ -158,6 +163,21 @@ impl<'a> RouterZone<'a> {
             .map(|x| format!("-a {}/v6", x))
             .collect::<Vec<String>>()
             .join(" ");
+
+        let ddm = if self.v1 { "/opt/ddmd-v1" } else { "/opt/ddmd" };
+
+        if self.v1 {
+            self.zfs.copy_workspace_to_zone(
+                &self.zone.name,
+                "download/ddmd-v1",
+                "opt/",
+            )?;
+            self.zfs.copy_workspace_to_zone(
+                &self.zone.name,
+                "download/ddmadm-v1",
+                "opt/",
+            )?;
+        }
 
         if self.transit {
             self.zone.zexec("svcadm enable dendrite")?;
@@ -182,14 +202,14 @@ impl<'a> RouterZone<'a> {
             sleep(Duration::from_secs(10));
             self.zone.zexec("svcadm enable tfport")?;
             self.zone.zexec(&format!(
-                "{} /opt/ddmd --kind transit --dendrite {} &> /opt/ddmd.log &",
+                "{} {ddm} --kind transit --dendrite {} &> /opt/ddmd.log &",
                 "RUST_LOG=trace RUST_BACKTRACE=1", addrs
             ))?;
 
             self.zone.zexec("ipadm")?;
         } else {
             self.zone.zexec(&format!(
-                "{} /opt/ddmd --kind server {} &> /opt/ddmd.log &",
+                "{} {ddm} --kind server {} &> /opt/ddmd.log &",
                 "RUST_LOG=trace RUST_BACKTRACE=1", addrs
             ))?;
         }
@@ -306,7 +326,21 @@ macro_rules! run_topo {
 }
 
 #[tokio::test]
-async fn test_trio() -> Result<()> {
+async fn test_trio_v2() -> Result<()> {
+    test_trio(false, false).await
+}
+
+#[tokio::test]
+async fn test_trio_v1_server() -> Result<()> {
+    test_trio(true, false).await
+}
+
+#[tokio::test]
+async fn test_trio_v1_transit() -> Result<()> {
+    test_trio(false, true).await
+}
+
+async fn test_trio(v1_server: bool, v1_transit: bool) -> Result<()> {
     // A trio. Two server routers and one transit router.
     //
     //                                                    sled1
@@ -322,7 +356,6 @@ async fn test_trio() -> Result<()> {
     //     '-----------'     '-----------------'   '-| sl1 |  | mg3 |-*
     //                                               '-----'  '-----'
     //                                                 '----------'
-
     let sl0_sw0 = SimnetLink::new("sl0", "sw0")?;
     let sl1_sw1 = SimnetLink::new("sl1", "sw1")?;
     let tf0_sr0 = SimnetLink::new("tfportrear0_0", "sr0")?;
@@ -352,9 +385,21 @@ async fn test_trio() -> Result<()> {
     )?;
 
     println!("start zone s1");
-    let s1 = RouterZone::server("s1.trio", &zfs, &mg2.name, &[&sl0_sw0.end_a])?;
+    let s1 = RouterZone::server(
+        "s1.trio",
+        &zfs,
+        &mg2.name,
+        &[&sl0_sw0.end_a],
+        v1_server,
+    )?;
     println!("start zone s2");
-    let s2 = RouterZone::server("s2.trio", &zfs, &mg3.name, &[&sl1_sw1.end_a])?;
+    let s2 = RouterZone::server(
+        "s2.trio",
+        &zfs,
+        &mg3.name,
+        &[&sl1_sw1.end_a],
+        v1_server,
+    )?;
     println!("start zone t1");
     let t1 = RouterZone::transit(
         "t1.trio",
@@ -362,6 +407,7 @@ async fn test_trio() -> Result<()> {
         &mg1.name,
         &[&tf0_sr0.end_a, &tf1_sr1.end_a],
         "trio",
+        v1_transit,
     )?;
 
     println!("waiting for zones to come up");
@@ -517,62 +563,64 @@ async fn run_trio_tests(
 
     println!("redundant advertise passed");
 
-    wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
+    if !(zt1.v1 || zs1.v1 || zs2.v1) {
+        wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
 
-    t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
-        overlay_prefix: "203.0.113.0/24".parse().unwrap(),
-        boundary_addr: "fd00:1701::1".parse().unwrap(),
-        vni: 47,
-    }])
-    .await?;
+        t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
+            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
+            boundary_addr: "fd00:1701::1".parse().unwrap(),
+            vni: 47,
+        }])
+        .await?;
 
-    wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 1);
-    wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
-    wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
-    wait_for_eq!(tunnel_endpoint_count(&s2).await?, 1);
+        wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 1);
+        wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
+        wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
+        wait_for_eq!(tunnel_endpoint_count(&s2).await?, 1);
 
-    println!("tunnel endpoint advertise passed");
+        println!("tunnel endpoint advertise passed");
 
-    // redudant advertise should not change things
+        // redudant advertise should not change things
 
-    t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
-        overlay_prefix: "203.0.113.0/24".parse().unwrap(),
-        boundary_addr: "fd00:1701::1".parse().unwrap(),
-        vni: 47,
-    }])
-    .await?;
+        t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
+            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
+            boundary_addr: "fd00:1701::1".parse().unwrap(),
+            vni: 47,
+        }])
+        .await?;
 
-    sleep(Duration::from_secs(5));
+        sleep(Duration::from_secs(5));
 
-    wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 1);
-    wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
-    wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
-    wait_for_eq!(tunnel_endpoint_count(&s2).await?, 1);
+        wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 1);
+        wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
+        wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
+        wait_for_eq!(tunnel_endpoint_count(&s2).await?, 1);
 
-    println!("redundant tunnel endpoint advertise passed");
+        println!("redundant tunnel endpoint advertise passed");
 
-    zs1.stop_router()?;
-    sleep(Duration::from_secs(5));
-    zs1.start_router()?;
-    sleep(Duration::from_secs(5));
-    let s1 = Client::new("http://10.0.0.1:8000", log.clone());
-    wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
+        zs1.stop_router()?;
+        sleep(Duration::from_secs(5));
+        zs1.start_router()?;
+        sleep(Duration::from_secs(5));
+        let s1 = Client::new("http://10.0.0.1:8000", log.clone());
+        wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
 
-    println!("tunnel router restart passed");
+        println!("tunnel router restart passed");
 
-    t1.withdraw_tunnel_endpoints(&vec![TunnelOrigin {
-        overlay_prefix: "203.0.113.0/24".parse().unwrap(),
-        boundary_addr: "fd00:1701::1".parse().unwrap(),
-        vni: 47,
-    }])
-    .await?;
+        t1.withdraw_tunnel_endpoints(&vec![TunnelOrigin {
+            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
+            boundary_addr: "fd00:1701::1".parse().unwrap(),
+            vni: 47,
+        }])
+        .await?;
 
-    wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
-    wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
-    wait_for_eq!(tunnel_endpoint_count(&s1).await?, 0);
-    wait_for_eq!(tunnel_endpoint_count(&s2).await?, 0);
+        wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
+        wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
+        wait_for_eq!(tunnel_endpoint_count(&s1).await?, 0);
+        wait_for_eq!(tunnel_endpoint_count(&s2).await?, 0);
 
-    println!("tunnel endpoint withdraw passed");
+        println!("tunnel endpoint withdraw passed");
+    }
 
     Ok(())
 }
@@ -637,14 +685,29 @@ async fn test_quartet() -> Result<()> {
     )?;
 
     println!("start zone s1");
-    let s1 =
-        RouterZone::server("s1.quartet", &zfs, &mgs1.name, &[&sl0_sw0.end_a])?;
+    let s1 = RouterZone::server(
+        "s1.quartet",
+        &zfs,
+        &mgs1.name,
+        &[&sl0_sw0.end_a],
+        false,
+    )?;
     println!("start zone s2");
-    let s2 =
-        RouterZone::server("s2.quartet", &zfs, &mgs2.name, &[&sl1_sw1.end_a])?;
+    let s2 = RouterZone::server(
+        "s2.quartet",
+        &zfs,
+        &mgs2.name,
+        &[&sl1_sw1.end_a],
+        false,
+    )?;
     println!("start zone s3");
-    let s3 =
-        RouterZone::server("s3.quartet", &zfs, &mgs3.name, &[&sl2_sw2.end_a])?;
+    let s3 = RouterZone::server(
+        "s3.quartet",
+        &zfs,
+        &mgs3.name,
+        &[&sl2_sw2.end_a],
+        false,
+    )?;
     println!("start zone t1");
     let t1 = RouterZone::transit(
         "t1.quartet",
@@ -652,6 +715,7 @@ async fn test_quartet() -> Result<()> {
         &mgt1.name,
         &[&tf0_sr0.end_a, &tf1_sr1.end_a, &tf2_sr2.end_a],
         "quartet",
+        false,
     )?;
 
     println!("waiting for zones to come up");
