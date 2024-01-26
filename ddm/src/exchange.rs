@@ -16,6 +16,7 @@
 //!
 
 use crate::db::{Ipv6Prefix, Route, RouterKind, TunnelOrigin, TunnelRoute};
+use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
 use dropshot::endpoint;
@@ -48,9 +49,37 @@ pub struct HandlerContext {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct UpdateV1 {
+    pub announce: HashSet<PathVector>,
+    pub withdraw: HashSet<PathVector>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct Update {
     pub underlay: Option<UnderlayUpdate>,
     pub tunnel: Option<TunnelUpdate>,
+}
+
+impl From<UpdateV1> for Update {
+    fn from(value: UpdateV1) -> Self {
+        Update {
+            tunnel: None,
+            underlay: Some(UnderlayUpdate {
+                announce: value.announce,
+                withdraw: value.withdraw,
+            }),
+        }
+    }
+}
+
+impl From<Update> for UpdateV1 {
+    fn from(value: Update) -> Self {
+        let (announce, withdraw) = match value.underlay {
+            Some(underlay) => (underlay.announce, underlay.withdraw),
+            None => (HashSet::new(), HashSet::new()),
+        };
+        UpdateV1 { announce, withdraw }
+    }
 }
 
 impl From<UnderlayUpdate> for Update {
@@ -84,6 +113,15 @@ impl Update {
 pub struct PullResponse {
     pub underlay: Option<HashSet<PathVector>>,
     pub tunnel: Option<HashSet<TunnelOrigin>>,
+}
+
+impl From<HashSet<PathVector>> for PullResponse {
+    fn from(value: HashSet<PathVector>) -> Self {
+        PullResponse {
+            underlay: Some(value),
+            tunnel: None,
+        }
+    }
 }
 
 #[derive(
@@ -180,46 +218,50 @@ pub(crate) fn announce_underlay(
     config: Config,
     prefixes: HashSet<PathVector>,
     addr: Ipv6Addr,
+    version: Version,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = UnderlayUpdate::announce(prefixes);
-    send_update(config, update.into(), addr, rt, log)
+    send_update(config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn announce_tunnel(
     config: Config,
     endpoints: HashSet<TunnelOrigin>,
     addr: Ipv6Addr,
+    version: Version,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update =
         TunnelUpdate::announce(endpoints.into_iter().map(Into::into).collect());
-    send_update(config, update.into(), addr, rt, log)
+    send_update(config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn withdraw_underlay(
     config: Config,
     prefixes: HashSet<PathVector>,
     addr: Ipv6Addr,
+    version: Version,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = UnderlayUpdate::withdraw(prefixes);
-    send_update(config, update.into(), addr, rt, log)
+    send_update(config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn withdraw_tunnel(
     config: Config,
     endpoints: HashSet<TunnelOrigin>,
     addr: Ipv6Addr,
+    version: Version,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update =
         TunnelUpdate::withdraw(endpoints.into_iter().map(Into::into).collect());
-    send_update(config, update.into(), addr, rt, log)
+    send_update(config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn do_pull(
@@ -228,7 +270,7 @@ pub(crate) fn do_pull(
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<PullResponse, ExchangeError> {
     let uri = format!(
-        "http://[{}%{}]:{}/pull",
+        "http://[{}%{}]:{}/v2/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
     );
     let client = hyper::Client::new();
@@ -257,13 +299,53 @@ pub(crate) fn do_pull(
     Ok(serde_json::from_slice(&body)?)
 }
 
+pub(crate) fn do_pull_v1(
+    ctx: &SmContext,
+    addr: &Ipv6Addr,
+    rt: &Arc<tokio::runtime::Handle>,
+) -> Result<HashSet<PathVector>, ExchangeError> {
+    let uri = format!(
+        "http://[{}%{}]:{}/pull",
+        addr, ctx.config.if_index, ctx.config.exchange_port,
+    );
+    let client = hyper::Client::new();
+    let req = hyper::Request::builder()
+        .method(hyper::Method::GET)
+        .uri(&uri)
+        .body(hyper::Body::empty())
+        .unwrap(); //TODO unwrap
+
+    let resp = client.request(req);
+
+    let body = rt.block_on(async move {
+        match timeout(Duration::from_millis(250), resp).await {
+            Ok(response) => match response {
+                Ok(data) => {
+                    match hyper::body::to_bytes(data.into_body()).await {
+                        Ok(data) => Ok(data),
+                        Err(e) => Err(ExchangeError::Hyper(e)),
+                    }
+                }
+                Err(e) => Err(ExchangeError::Hyper(e)),
+            },
+            Err(e) => Err(ExchangeError::Timeout(e)),
+        }
+    })?;
+
+    Ok(serde_json::from_slice(&body).unwrap()) //TODO unwrap
+}
+
 pub(crate) fn pull(
     ctx: SmContext,
     addr: Ipv6Addr,
+    version: Version,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let pr: PullResponse = do_pull(&ctx, &addr, &rt)?;
+    let pr: PullResponse = match version {
+        Version::V1 => do_pull_v1(&ctx, &addr, &rt)?.into(),
+        Version::V2 => do_pull(&ctx, &addr, &rt)?,
+    };
 
     let update = Update::announce(pr);
 
@@ -281,10 +363,64 @@ fn send_update(
     config: Config,
     update: Update,
     addr: Ipv6Addr,
+    version: Version,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    match version {
+        Version::V1 => send_update_v1(config, update.into(), addr, rt, log),
+        Version::V2 => send_update_v2(config, update, addr, rt, log),
+    }
+}
+
+fn send_update_v2(
+    config: Config,
+    update: Update,
+    addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update)?;
+    let uri = format!(
+        "http://[{}%{}]:{}/v2/push",
+        addr, config.if_index, config.exchange_port,
+    );
+
+    let client = hyper::Client::new();
+    let req = hyper::Request::builder()
+        .method(hyper::Method::PUT)
+        .uri(&uri)
+        .body(hyper::Body::from(payload))?;
+
+    let resp = client.request(req);
+
+    rt.block_on(async move {
+        match timeout(Duration::from_millis(config.exchange_timeout), resp)
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                err!(
+                    log,
+                    config.if_name,
+                    "peer request timeout to {}: {}",
+                    uri,
+                    e,
+                );
+                Err(e.into())
+            }
+        }
+    })
+}
+
+fn send_update_v1(
+    config: Config,
+    update: UpdateV1,
+    addr: Ipv6Addr,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<(), ExchangeError> {
+    let payload = serde_json::to_string(&update).unwrap(); //TODO unwrap
     let uri = format!(
         "http://[{}%{}]:{}/push",
         addr, config.if_index, config.exchange_port,
@@ -294,7 +430,8 @@ fn send_update(
     let req = hyper::Request::builder()
         .method(hyper::Method::PUT)
         .uri(&uri)
-        .body(hyper::Body::from(payload))?;
+        .body(hyper::Body::from(payload))
+        .unwrap(); //TODO unwrap
 
     let resp = client.request(req);
 
@@ -376,12 +513,34 @@ pub fn handler(
 pub fn api_description(
 ) -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, String> {
     let mut api = ApiDescription::new();
+    api.register(push_handler_v1)?;
     api.register(push_handler)?;
+    api.register(pull_handler_v1)?;
     api.register(pull_handler)?;
     Ok(api)
 }
 
 #[endpoint { method = PUT, path = "/push" }]
+async fn push_handler_v1(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    request: TypedBody<UpdateV1>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context().lock().await.clone();
+    let update_v1 = request.into_inner();
+    let update = Update::from(update_v1);
+
+    tokio::task::spawn_blocking(move || {
+        handle_update(&update, &ctx);
+    })
+    .await
+    .map_err(|e| {
+        HttpError::for_internal_error(format!("spawn update thread {}", e))
+    })?;
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = PUT, path = "/v2/push" }]
 async fn push_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<Update>,
@@ -401,6 +560,45 @@ async fn push_handler(
 }
 
 #[endpoint { method = GET, path = "/pull" }]
+async fn pull_handler_v1(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<HashSet<PathVector>>, HttpError> {
+    let ctx = ctx.context().lock().await.clone();
+
+    let db = tokio::task::spawn_blocking(move || ctx.ctx.db.dump())
+        .await
+        .map_err(|e| {
+            HttpError::for_internal_error(format!("spawn db dump thread {}", e))
+        })?;
+
+    let mut prefixes = HashSet::new();
+    // Only transit routers redistribute prefixes
+    if ctx.ctx.config.kind == RouterKind::Transit {
+        for route in &db.imported {
+            // dont redistribute prefixes to their originators
+            if route.nexthop == ctx.peer {
+                continue;
+            }
+            let mut pv = PathVector {
+                destination: route.destination,
+                path: route.path.clone(),
+            };
+            pv.path.push(ctx.ctx.hostname.clone());
+            prefixes.insert(pv);
+        }
+    }
+    for prefix in &db.originated {
+        let pv = PathVector {
+            destination: *prefix,
+            path: vec![ctx.ctx.hostname.clone()],
+        };
+        prefixes.insert(pv);
+    }
+
+    Ok(HttpResponseOk(prefixes))
+}
+
+#[endpoint { method = GET, path = "/v2/pull" }]
 async fn pull_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<PullResponse>, HttpError> {

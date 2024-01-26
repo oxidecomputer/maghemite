@@ -103,9 +103,15 @@ use thiserror::Error;
 
 const DDM_MADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xdd);
 const DDM_PORT: u16 = 0xddd;
-const VERSION_1: u8 = 1;
 const SOLICIT: u8 = 1;
 const ADVERTISE: u8 = 1 << 1;
+
+#[derive(Debug, Copy, Clone)]
+#[repr(u8)]
+pub enum Version {
+    V1 = 1,
+    V2 = 2,
+}
 
 #[derive(Error, Debug)]
 pub enum DiscoveryError {
@@ -128,7 +134,7 @@ pub struct DiscoveryPacket {
 impl DiscoveryPacket {
     pub fn new_solicitation(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: VERSION_1,
+            version: Version::V2 as u8,
             flags: SOLICIT,
             hostname,
             kind,
@@ -136,7 +142,7 @@ impl DiscoveryPacket {
     }
     pub fn new_advertisement(hostname: String, kind: RouterKind) -> Self {
         Self {
-            version: VERSION_1,
+            version: Version::V2 as u8,
             flags: ADVERTISE,
             hostname,
             kind,
@@ -365,7 +371,7 @@ fn handle_msg(ctx: &HandlerContext, msg: DiscoveryPacket, sender: &Ipv6Addr) {
         handle_solicitation(ctx, sender, msg.hostname.clone());
     }
     if msg.is_advertisement() {
-        handle_advertisement(ctx, sender, msg.hostname, msg.kind);
+        handle_advertisement(ctx, sender, msg.hostname, msg.kind, msg.version);
     }
 }
 
@@ -386,8 +392,23 @@ fn handle_advertisement(
     sender: &Ipv6Addr,
     hostname: String,
     kind: RouterKind,
+    version: u8,
 ) {
     trc!(&ctx.log, ctx.config.if_name, "advert from {}", &hostname);
+
+    let version = match version {
+        1 => Version::V1,
+        2 => Version::V2,
+        x => {
+            err!(
+                ctx.log,
+                ctx.config.if_name,
+                "unknown protocol version {}, known versions are: 1, 2",
+                x
+            );
+            return;
+        }
+    };
 
     let mut guard = match ctx.nbr.write() {
         Ok(nbr) => nbr,
@@ -444,12 +465,15 @@ fn handle_advertisement(
         },
     );
     if updated {
-        emit_nbr_update(ctx, sender);
+        emit_nbr_update(ctx, sender, version);
     }
 }
 
-fn emit_nbr_update(ctx: &HandlerContext, addr: &Ipv6Addr) {
-    if let Err(e) = ctx.event.send(NeighborEvent::Advertise(*addr).into()) {
+fn emit_nbr_update(ctx: &HandlerContext, addr: &Ipv6Addr, version: Version) {
+    if let Err(e) = ctx
+        .event
+        .send(NeighborEvent::Advertise((*addr, version)).into())
+    {
         err!(ctx.log, ctx.config.if_name, "send nbr event: {}", e);
     }
 }
