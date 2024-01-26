@@ -398,7 +398,7 @@ fn handle_advertisement(
 
     // TODO: version negotiation
     //
-    // Things currently work because ddm v1 one does no version checking at all.
+// Things currently work because ddm v1 does no version checking at all.
     // So ddm v2 speakers can send out discovery packets with the version set to
     // 2, and ddm v1 speakers can send out discovery packets with the version
     // set to 1, and as long a v2 router speaks version 1 after discovering a v1
