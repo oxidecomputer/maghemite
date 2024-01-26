@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::db::{Db, Ipv6Prefix, RouterKind, TunnelOrigin};
+use crate::discovery::Version;
 use crate::exchange::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use libnet::get_ipaddr_info;
@@ -45,7 +46,7 @@ pub enum PeerEvent {
 
 #[derive(Debug)]
 pub enum NeighborEvent {
-    Advertise(Ipv6Addr),
+    Advertise((Ipv6Addr, Version)),
     SolicitFail,
     Expire,
 }
@@ -293,7 +294,7 @@ impl State for Solicit {
                 }
             };
             match e {
-                Event::Neighbor(NeighborEvent::Advertise(addr)) => {
+                Event::Neighbor(NeighborEvent::Advertise((addr, version))) => {
                     dbg!(
                         self.log,
                         self.ctx.config.if_name,
@@ -303,6 +304,7 @@ impl State for Solicit {
                         Box::new(Exchange::new(
                             self.ctx.clone(),
                             addr,
+                            version,
                             self.log.clone(),
                         )),
                         event,
@@ -343,18 +345,30 @@ impl State for Solicit {
 
 pub struct Exchange {
     pub peer: Ipv6Addr,
+    version: Version,
     ctx: SmContext,
     log: Logger,
 }
 
 impl Exchange {
-    fn new(ctx: SmContext, peer: Ipv6Addr, log: Logger) -> Self {
-        Self { ctx, peer, log }
+    fn new(
+        ctx: SmContext,
+        peer: Ipv6Addr,
+        version: Version,
+        log: Logger,
+    ) -> Self {
+        Self {
+            ctx,
+            peer,
+            version,
+            log,
+        }
     }
 
     fn initial_pull(&self, stop: Arc<AtomicBool>) {
         let ctx = self.ctx.clone();
         let peer = self.peer;
+        let version = self.version;
         let rt = self.ctx.rt.clone();
         let log = self.log.clone();
         let interval = self.ctx.config.solicit_interval;
@@ -364,6 +378,7 @@ impl Exchange {
             while let Err(e) = crate::exchange::pull(
                 ctx.clone(),
                 peer,
+                version,
                 rt.clone(),
                 log.clone(),
             ) {
@@ -549,6 +564,7 @@ impl State for Exchange {
                         self.ctx.config.clone(),
                         pv,
                         self.peer,
+                        self.version,
                         self.ctx.rt.clone(),
                         self.log.clone(),
                     ) {
@@ -582,6 +598,7 @@ impl State for Exchange {
                         self.ctx.config.clone(),
                         tv,
                         self.peer,
+                        self.version,
                         self.ctx.rt.clone(),
                         self.log.clone(),
                     ) {
@@ -621,6 +638,7 @@ impl State for Exchange {
                         self.ctx.config.clone(),
                         pv,
                         self.peer,
+                        self.version,
                         self.ctx.rt.clone(),
                         self.log.clone(),
                     ) {
@@ -654,6 +672,7 @@ impl State for Exchange {
                         self.ctx.config.clone(),
                         tv,
                         self.peer,
+                        self.version,
                         self.ctx.rt.clone(),
                         self.log.clone(),
                     ) {
@@ -701,6 +720,7 @@ impl State for Exchange {
                     if let Err(e) = crate::exchange::pull(
                         self.ctx.clone(),
                         self.peer,
+                        self.version,
                         self.ctx.rt.clone(),
                         self.log.clone(),
                     ) {
@@ -727,6 +747,7 @@ impl State for Exchange {
                                 self.ctx.config.clone(),
                                 push.announce,
                                 self.peer,
+                                self.version,
                                 self.ctx.rt.clone(),
                                 self.log.clone(),
                             ) {
@@ -757,6 +778,7 @@ impl State for Exchange {
                                 self.ctx.config.clone(),
                                 push.withdraw,
                                 self.peer,
+                                self.version,
                                 self.ctx.rt.clone(),
                                 self.log.clone(),
                             ) {
@@ -813,8 +835,9 @@ impl State for Exchange {
                         event,
                     );
                 }
-                Event::Neighbor(NeighborEvent::Advertise(addr)) => {
-                    self.peer = addr
+                Event::Neighbor(NeighborEvent::Advertise((addr, version))) => {
+                    self.peer = addr;
+                    self.version = version;
                 }
             }
         }
