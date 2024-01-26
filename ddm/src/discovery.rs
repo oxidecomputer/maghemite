@@ -396,6 +396,16 @@ fn handle_advertisement(
 ) {
     trc!(&ctx.log, ctx.config.if_name, "advert from {}", &hostname);
 
+    // TODO: version negotiation
+    //
+    // Things currently work because ddm v1 one does no version checking at all.
+    // So ddm v2 speakers can send out discovery packets with the version set to
+    // 2, and ddm v1 speakers can send out discovery packets with the version
+    // set to 1, and as long a v2 router speaks version 1 after discovering a v1
+    // peer, things will work. However, this will not work for version 3. So we
+    // need to implement version negotiation. This would also not work for
+    // changes in the discovery protocol, if we were to have changes there. So
+    // we need to come up with a general way for both protocols to evolve.
     let version = match version {
         1 => Version::V1,
         2 => Version::V2,
