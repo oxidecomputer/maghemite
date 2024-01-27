@@ -63,6 +63,12 @@ pub(crate) async fn get_bfd_peers(
     Ok(HttpResponseOk(result))
 }
 
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
+pub(crate) enum SessionMode {
+    SingleHop,
+    MultiHop,
+}
+
 /// Request to add a peer to the daemon.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AddBfdPeerRequest {
@@ -74,6 +80,8 @@ pub struct AddBfdPeerRequest {
     pub required_rx: u64,
     /// Detection threshold for connectivity as a multipler to required_rx
     pub detection_threshold: u8,
+    /// Mode is single-hop (RFC 5881) or multi-hop (RFC 5883).
+    pub mode: SessionMode,
 }
 
 /// Add a new peer to the daemon. A session for the specified peer will start
@@ -92,12 +100,27 @@ pub(crate) async fn add_bfd_peer(
         return Ok(HttpResponseUpdatedNoContent {});
     }
 
-    let ch = channel(dispatcher, rq.listen, rq.peer, ctx.log.clone()).map_err(
-        |e| {
-            error!(ctx.log, "udp channel: {e}");
-            HttpError::for_internal_error(e.to_string())
-        },
-    )?;
+    let (src_port, dst_port) = match rq.mode {
+        SessionMode::SingleHop => {
+            let offset: u16 =
+                (daemon.sessions.len() % usize::from(u16::MAX)) as u16;
+            (BFD_SINGLEHOP_SOURCE_PORT_BEGIN + offset, BFD_SINGLEHOP_PORT)
+        }
+        SessionMode::MultiHop => (0, BFD_MULTIHOP_PORT),
+    };
+
+    let ch = channel(
+        dispatcher,
+        rq.listen,
+        rq.peer,
+        src_port,
+        dst_port,
+        ctx.log.clone(),
+    )
+    .map_err(|e| {
+        error!(ctx.log, "udp channel: {e}");
+        HttpError::for_internal_error(e.to_string())
+    })?;
 
     let timeout = Duration::from_micros(rq.required_rx);
     daemon.add_peer(rq.peer, timeout, rq.detection_threshold, ch, db);
@@ -129,6 +152,9 @@ pub(crate) async fn remove_bfd_peer(
 
 /// Port to be used for BFD multihop per RFC 5883.
 const BFD_MULTIHOP_PORT: u16 = 4784;
+/// Port to be used for BFD single per RFC 5881.
+const BFD_SINGLEHOP_PORT: u16 = 3784;
+const BFD_SINGLEHOP_SOURCE_PORT_BEGIN: u16 = 49152;
 
 /// Create a bidirectional channel linking a peer session to an underlying BFD
 /// session over UDP.
@@ -136,6 +162,8 @@ pub(crate) fn channel(
     dispatcher: Arc<Mutex<Dispatcher>>,
     listen: IpAddr,
     peer: IpAddr,
+    src_port: u16,
+    dst_port: u16,
     log: Logger,
 ) -> Result<bidi::Endpoint<(IpAddr, packet::Control)>> {
     let (local, remote) = bidi::channel();
@@ -143,23 +171,30 @@ pub(crate) fn channel(
     // Ensure there is a dispatcher thread for this listening address and a
     // corresponding entry in the dispatcher table to send messages from `peer`
     // to the appropriate session via `remote.tx`.
-    let sk = dispatcher.lock().unwrap().ensure(
+    dispatcher.lock().unwrap().ensure(
         listen,
         peer,
         remote.tx,
+        dst_port,
         log.clone(),
     )?;
 
     // Spawn an egress thread to take packets from the session and send them
     // out a UDP socket.
-    egress(remote.rx, sk, log.clone());
+    egress(remote.rx, listen, src_port, dst_port, log.clone());
 
     Ok(local)
 }
 
 /// Run an egress handler, taking BFD control packets from a session and sending
 /// the out to the peer over UDP.
-fn egress(rx: Receiver<(IpAddr, packet::Control)>, sk: UdpSocket, log: Logger) {
+fn egress(
+    rx: Receiver<(IpAddr, packet::Control)>,
+    local: IpAddr,
+    src_port: u16,
+    dst_port: u16,
+    log: Logger,
+) {
     spawn(move || loop {
         let (addr, pkt) = match rx.recv() {
             Ok(result) => result,
@@ -168,7 +203,16 @@ fn egress(rx: Receiver<(IpAddr, packet::Control)>, sk: UdpSocket, log: Logger) {
                 break;
             }
         };
-        let sa = SocketAddr::new(addr, BFD_MULTIHOP_PORT);
+
+        let sk = match UdpSocket::bind(SocketAddr::new(local, src_port)) {
+            Err(e) => {
+                error!(log, "failed to create tx socket: {e}");
+                continue;
+            }
+            Ok(sk) => sk,
+        };
+
+        let sa = SocketAddr::new(addr, dst_port);
         if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
             error!(log, "udp send: {e}");
         }
@@ -191,6 +235,7 @@ impl Dispatcher {
         local: IpAddr,
         remote: IpAddr,
         sender: Sender<(IpAddr, packet::Control)>,
+        port: u16,
         log: Logger,
     ) -> Result<UdpSocket> {
         self.sessions.write().unwrap().insert(remote, sender);
@@ -199,7 +244,7 @@ impl Dispatcher {
         }
 
         let sessions = self.sessions.clone();
-        let sa = SocketAddr::new(local, BFD_MULTIHOP_PORT);
+        let sa = SocketAddr::new(local, port);
         let sk = UdpSocket::bind(sa)?;
         let skl = sk.try_clone()?;
 

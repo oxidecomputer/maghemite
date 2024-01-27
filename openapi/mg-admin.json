@@ -530,6 +530,14 @@
             "type": "string",
             "format": "ip"
           },
+          "mode": {
+            "description": "Mode is single-hop (RFC 5881) or multi-hop (RFC 5883).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SessionMode"
+              }
+            ]
+          },
           "peer": {
             "description": "Address of the peer to add.",
             "type": "string",
@@ -545,6 +553,7 @@
         "required": [
           "detection_threshold",
           "listen",
+          "mode",
           "peer",
           "required_rx"
         ]
@@ -1057,6 +1066,13 @@
           "asn",
           "graceful_shutdown",
           "peers"
+        ]
+      },
+      "SessionMode": {
+        "type": "string",
+        "enum": [
+          "SingleHop",
+          "MultiHop"
         ]
       },
       "StaticRoute4": {

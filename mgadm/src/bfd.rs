@@ -3,12 +3,21 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use colored::Colorize;
-use mg_admin_client::{types::AddBfdPeerRequest, Client};
+use mg_admin_client::{
+    types::{AddBfdPeerRequest, SessionMode},
+    Client,
+};
 use std::io::Write;
 use std::net::IpAddr;
 use tabwriter::TabWriter;
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum Mode {
+    SingleHop,
+    MultiHop,
+}
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -25,6 +34,8 @@ pub enum Commands {
         required_rx: u64,
         /// Detection threshold for connectivity as a multipler to required_rx
         detection_threshold: u8,
+        /// Session mode is either single-hop or multi-hop
+        mode: Mode,
     },
 
     /// Remove a peer.
@@ -55,6 +66,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             listen,
             required_rx,
             detection_threshold,
+            mode,
         } => {
             client
                 .add_bfd_peer(&AddBfdPeerRequest {
@@ -62,6 +74,10 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                     listen,
                     required_rx,
                     detection_threshold,
+                    mode: match mode {
+                        Mode::SingleHop => SessionMode::SingleHop,
+                        Mode::MultiHop => SessionMode::MultiHop,
+                    },
                 })
                 .await?;
         }
