@@ -4,7 +4,7 @@
 
 use ddm_admin_client::{Client, Ipv6Prefix, TunnelOrigin};
 use rdb::Route4ImportKey;
-use slog::{error, Logger};
+use slog::{error, info, Logger};
 use std::{collections::HashSet, net::Ipv6Addr, sync::Arc};
 
 const BOUNDARY_SERVICES_VNI: u32 = 99;
@@ -29,8 +29,11 @@ pub(crate) fn update_tunnel_endpoints(
     .into_iter()
     .collect();
 
-    let target: HashSet<TunnelOrigin> =
-        routes.iter().map(|x| route_to_tunnel(tep, x)).collect();
+    let target: HashSet<TunnelOrigin> = routes
+        .iter()
+        .filter(|x| x.priority > 0)
+        .map(|x| route_to_tunnel(tep, x))
+        .collect();
 
     let to_add = target.difference(&current);
     let to_remove = current.difference(&target);
@@ -103,8 +106,11 @@ pub(crate) fn add_tunnel_endpoints<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) {
+    let routes: Vec<TunnelOrigin> = routes.cloned().collect();
+    if routes.is_empty() {
+        return;
+    }
     ensure_tep_underlay_origin(client, tep, rt, log);
-    let routes = routes.cloned().collect();
     let resp =
         rt.block_on(async { client.advertise_tunnel_endpoints(&routes).await });
     if let Err(e) = resp {
@@ -136,8 +142,9 @@ pub(crate) fn remove_tunnel_endpoints<
     let routes = routes.cloned().collect();
     let resp =
         rt.block_on(async { client.withdraw_tunnel_endpoints(&routes).await });
-    if let Err(e) = resp {
-        error!(log, "withdraw tunnel endpoints: {e}");
+    match resp {
+        Err(e) => error!(log, "withdraw tunnel endpoints: {e}"),
+        Ok(_) => info!(log, "withdrew tunnel endpoints: {:#?}", routes),
     }
 }
 

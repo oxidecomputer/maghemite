@@ -68,6 +68,18 @@ struct Watcher {
     sender: Sender<ChangeSet>,
 }
 
+/// Describes a set of routes as either active or inactive.
+#[derive(Debug, Clone)]
+pub enum EffectiveRouteSet {
+    /// The routes in the contained set are active with priority greater than
+    /// zero.
+    Active(HashSet<Route4ImportKey>),
+
+    /// The routes in the contained set are inactive with a priority equal to
+    /// zero.
+    Inactive(HashSet<Route4ImportKey>),
+}
+
 //TODO we need bulk operations with atomic semantics here.
 impl Db {
     /// Create a new routing database that stores persistent data at `path`.
@@ -428,7 +440,7 @@ impl Db {
     fn effective_set_for_prefix4(
         imported: &MutexGuard<HashSet<Route4ImportKey>>,
         prefix: Prefix4,
-    ) -> HashSet<Route4ImportKey> {
+    ) -> EffectiveRouteSet {
         let full: HashSet<Route4ImportKey> = imported
             .iter()
             .filter(|x| x.prefix == prefix)
@@ -442,9 +454,9 @@ impl Db {
             full.iter().filter(|x| x.priority > 0).copied().collect();
 
         match (active.len(), shutdown.len()) {
-            (0, _) => shutdown,
-            (_, 0) => active,
-            _ => active,
+            (0, _) => EffectiveRouteSet::Inactive(shutdown),
+            (_, 0) => EffectiveRouteSet::Active(active),
+            _ => EffectiveRouteSet::Active(active),
         }
     }
 
@@ -452,25 +464,56 @@ impl Db {
     /// bumping the RIB generation number if there are changes.
     fn import_route_change_set(
         &self,
-        before: &HashSet<Route4ImportKey>,
-        after: &HashSet<Route4ImportKey>,
+        before: &EffectiveRouteSet,
+        after: &EffectiveRouteSet,
     ) -> Option<ChangeSet> {
-        let added: HashSet<Route4ImportKey> =
-            after.difference(before).copied().collect();
-
-        let removed: HashSet<Route4ImportKey> =
-            before.difference(after).copied().collect();
-
-        if added.is_empty() && removed.is_empty() {
-            return None;
-        }
-
         let gen = self.generation.fetch_add(1, Ordering::SeqCst);
+        match (before, after) {
+            (
+                EffectiveRouteSet::Active(before),
+                EffectiveRouteSet::Active(after),
+            ) => {
+                let added: HashSet<Route4ImportKey> =
+                    after.difference(before).copied().collect();
 
-        Some(ChangeSet::from_import(
-            ImportChangeSet { added, removed },
-            gen,
-        ))
+                let removed: HashSet<Route4ImportKey> =
+                    before.difference(after).copied().collect();
+
+                if added.is_empty() && removed.is_empty() {
+                    return None;
+                }
+
+                Some(ChangeSet::from_import(
+                    ImportChangeSet { added, removed },
+                    gen,
+                ))
+            }
+            (
+                EffectiveRouteSet::Active(before),
+                EffectiveRouteSet::Inactive(_after),
+            ) => Some(ChangeSet::from_import(
+                ImportChangeSet {
+                    removed: before.clone(),
+                    ..Default::default()
+                },
+                gen,
+            )),
+            (
+                EffectiveRouteSet::Inactive(_before),
+                EffectiveRouteSet::Active(after),
+            ) => Some(ChangeSet::from_import(
+                ImportChangeSet {
+                    added: after.clone(),
+                    ..Default::default()
+                },
+                gen,
+            )),
+
+            (
+                EffectiveRouteSet::Inactive(_before),
+                EffectiveRouteSet::Inactive(_after),
+            ) => None,
+        }
     }
 
     pub fn get_tep_addr(&self) -> Result<Option<Ipv6Addr>, Error> {
@@ -494,6 +537,7 @@ impl Db {
         let tree = self.persistent.open_tree(SETTINGS)?;
         let key = addr.octets();
         tree.insert(TEP_KEY, &key)?;
+        tree.flush()?;
         Ok(())
     }
 }

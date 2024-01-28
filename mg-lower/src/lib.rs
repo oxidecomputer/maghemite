@@ -180,9 +180,10 @@ fn handle_change(
 ) -> Result<u64, Error> {
     info!(
         log,
-        "mg-lower: handling rib change generation {} -> {}",
+        "mg-lower: handling rib change generation {} -> {}: {:#?}",
         generation,
-        change.generation
+        change.generation,
+        change,
     );
 
     if change.generation > generation + 1 {
