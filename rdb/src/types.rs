@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 use crate::error::Error;
@@ -347,4 +347,24 @@ pub struct BgpNeighborInfo {
     pub resolution: u64,
     pub group: String,
     pub passive: bool,
+}
+
+#[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct BfdPeerConfig {
+    /// Address of the peer to add.
+    pub peer: IpAddr,
+    /// Address to listen on for control messages from the peer.
+    pub listen: IpAddr,
+    /// Acceptable time between control messages in microseconds.
+    pub required_rx: u64,
+    /// Detection threshold for connectivity as a multipler to required_rx
+    pub detection_threshold: u8,
+    /// Mode is single-hop (RFC 5881) or multi-hop (RFC 5883).
+    pub mode: SessionMode,
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum SessionMode {
+    SingleHop,
+    MultiHop,
 }

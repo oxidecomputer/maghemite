@@ -4,7 +4,7 @@
 
 use crate::admin::HandlerContext;
 use anyhow::Result;
-use bfd::{bidi, packet, Daemon, PeerState};
+use bfd::{bidi, packet, BfdPeerState, Daemon};
 use dropshot::endpoint;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
@@ -12,10 +12,13 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use rdb::BfdPeerConfig;
+use rdb::SessionMode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use slog::{error, warn, Logger};
+use slog::{debug, error, warn, Logger};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::net::UdpSocket;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::mpsc::{Receiver, Sender};
@@ -38,9 +41,15 @@ impl BfdContext {
     pub fn new(log: Logger) -> Self {
         Self {
             daemon: Arc::new(Mutex::new(Daemon::new(log.clone()))),
-            dispatcher: Arc::new(Mutex::new(Dispatcher::default())),
+            dispatcher: Arc::new(Mutex::new(Dispatcher::new(log))),
         }
     }
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BfdPeerInfo {
+    config: BfdPeerConfig,
+    state: BfdPeerState,
 }
 
 /// Get all the peers and their associated BFD state. Peers are identified by IP
@@ -48,40 +57,42 @@ impl BfdContext {
 #[endpoint { method = GET, path = "/bfd/peers" }]
 pub(crate) async fn get_bfd_peers(
     ctx: RequestContext<Arc<HandlerContext>>,
-) -> Result<HttpResponseOk<HashMap<IpAddr, PeerState>>, HttpError> {
-    let result = ctx
-        .context()
-        .bfd
-        .daemon
-        .lock()
-        .unwrap()
-        .sessions
-        .iter()
-        .map(|(addr, session)| (*addr, session.sm.current()))
-        .collect();
+) -> Result<HttpResponseOk<Vec<BfdPeerInfo>>, HttpError> {
+    let mut result = Vec::new();
+    for (addr, session) in
+        ctx.context().bfd.daemon.lock().unwrap().sessions.iter()
+    {
+        result.push(BfdPeerInfo {
+            config: BfdPeerConfig {
+                peer: *addr,
+                required_rx: session
+                    .sm
+                    .required_rx()
+                    .as_micros()
+                    .try_into()
+                    .map_err(|_| {
+                        HttpError::for_internal_error(String::from(
+                            "required rx overflow",
+                        ))
+                    })?,
+                detection_threshold: session.sm.detection_multiplier(),
+                listen: ctx
+                    .context()
+                    .bfd
+                    .dispatcher
+                    .lock()
+                    .unwrap()
+                    .listen_addr_for_peer(addr)
+                    .ok_or(HttpError::for_internal_error(format!(
+                        "no listener for {addr}"
+                    )))?,
+                mode: session.mode,
+            },
+            state: session.sm.current(),
+        });
+    }
 
     Ok(HttpResponseOk(result))
-}
-
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
-pub(crate) enum SessionMode {
-    SingleHop,
-    MultiHop,
-}
-
-/// Request to add a peer to the daemon.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-pub struct AddBfdPeerRequest {
-    /// Address of the peer to add.
-    pub peer: IpAddr,
-    /// Address to listen on for control messages from the peer.
-    pub listen: IpAddr,
-    /// Acceptable time between control messages in microseconds.
-    pub required_rx: u64,
-    /// Detection threshold for connectivity as a multipler to required_rx
-    pub detection_threshold: u8,
-    /// Mode is single-hop (RFC 5881) or multi-hop (RFC 5883).
-    pub mode: SessionMode,
 }
 
 /// Add a new peer to the daemon. A session for the specified peer will start
@@ -89,15 +100,22 @@ pub struct AddBfdPeerRequest {
 #[endpoint { method = PUT, path = "/bfd/peers" }]
 pub(crate) async fn add_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AddBfdPeerRequest>,
+    request: TypedBody<BfdPeerConfig>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let mut daemon = ctx.context().bfd.daemon.lock().unwrap();
-    let dispatcher = ctx.context().bfd.dispatcher.clone();
-    let db = ctx.context().db.clone();
-    let rq = request.into_inner();
+    add_peer(ctx.context().clone(), request.into_inner())?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub(crate) fn add_peer(
+    ctx: Arc<HandlerContext>,
+    rq: BfdPeerConfig,
+) -> Result<(), HttpError> {
+    let mut daemon = ctx.bfd.daemon.lock().unwrap();
+    let dispatcher = ctx.bfd.dispatcher.clone();
+    let db = ctx.db.clone();
 
     if daemon.sessions.get(&rq.peer).is_some() {
-        return Ok(HttpResponseUpdatedNoContent {});
+        return Ok(());
     }
 
     let (src_port, dst_port) = match rq.mode {
@@ -123,9 +141,9 @@ pub(crate) async fn add_bfd_peer(
     })?;
 
     let timeout = Duration::from_micros(rq.required_rx);
-    daemon.add_peer(rq.peer, timeout, rq.detection_threshold, ch, db);
+    daemon.add_peer(rq.peer, timeout, rq.detection_threshold, rq.mode, ch, db);
 
-    Ok(HttpResponseUpdatedNoContent {})
+    Ok(())
 }
 
 /// Request to remove a peer from the daemon.
@@ -221,15 +239,43 @@ fn egress(
 
 type Sessions = HashMap<IpAddr, Sender<(IpAddr, packet::Control)>>;
 
-#[derive(Default)]
+#[derive(Debug)]
+struct Listener {
+    sk: UdpSocket,
+    #[allow(dead_code)]
+    handle: JoinHandle<()>,
+    peers: HashSet<IpAddr>,
+}
+
 pub(crate) struct Dispatcher {
     // remote address -> session sender
     sessions: Arc<RwLock<Sessions>>,
     // local address -> listener thread
-    listeners: HashMap<IpAddr, (UdpSocket, JoinHandle<()>)>,
+    listeners: HashMap<IpAddr, Listener>,
+
+    log: Logger,
 }
 
 impl Dispatcher {
+    pub fn new(log: Logger) -> Self {
+        Self {
+            sessions: Arc::new(RwLock::new(Sessions::default())),
+            listeners: HashMap::new(),
+            log,
+        }
+    }
+    pub fn listen_addr_for_peer(&self, peer: &IpAddr) -> Option<IpAddr> {
+        for (addr, listener) in &self.listeners {
+            for lpeer in &listener.peers {
+                if lpeer == peer {
+                    return Some(*addr);
+                }
+            }
+        }
+        debug!(self.log, "listeners: {:#?}", self.listeners);
+        None
+    }
+
     fn ensure(
         &mut self,
         local: IpAddr,
@@ -239,24 +285,27 @@ impl Dispatcher {
         log: Logger,
     ) -> Result<UdpSocket> {
         self.sessions.write().unwrap().insert(remote, sender);
-        if let Some((sk, _)) = self.listeners.get(&local) {
-            return Ok(sk.try_clone()?);
+        if let Some(ref mut listener) = self.listeners.get_mut(&local) {
+            listener.peers.insert(remote);
+            Ok(listener.sk.try_clone()?)
+        } else {
+            let sessions = self.sessions.clone();
+            let sa = SocketAddr::new(local, port);
+            let sk = UdpSocket::bind(sa)?;
+            let skl = sk.try_clone()?;
+            let mut peers = HashSet::new();
+            peers.insert(remote);
+
+            self.listeners.insert(
+                local,
+                Listener {
+                    sk: sk.try_clone()?,
+                    handle: spawn(move || Self::listen(skl, sessions, log)),
+                    peers,
+                },
+            );
+            Ok(sk)
         }
-
-        let sessions = self.sessions.clone();
-        let sa = SocketAddr::new(local, port);
-        let sk = UdpSocket::bind(sa)?;
-        let skl = sk.try_clone()?;
-
-        self.listeners.insert(
-            local,
-            (
-                sk.try_clone()?,
-                spawn(move || Self::listen(skl, sessions, log)),
-            ),
-        );
-
-        Ok(sk)
     }
 
     fn listen(sk: UdpSocket, sessions: Arc<RwLock<Sessions>>, log: Logger) {

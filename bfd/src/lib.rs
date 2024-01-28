@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use num_enum::TryFromPrimitive;
+use rdb::SessionMode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -37,22 +38,24 @@ impl Daemon {
     /// when added.
     pub fn add_peer(
         &mut self,
-        addr: IpAddr,
+        peer: IpAddr,
         required_rx: Duration,
         detection_multiplier: u8,
+        mode: SessionMode,
         endpoint: bidi::Endpoint<(IpAddr, packet::Control)>,
         db: rdb::Db,
     ) {
-        if self.sessions.contains_key(&addr) {
+        if self.sessions.contains_key(&peer) {
             return;
         }
         self.sessions.insert(
-            addr,
+            peer,
             Session::new(
-                addr,
+                peer,
                 endpoint,
                 required_rx,
                 detection_multiplier,
+                mode,
                 db,
                 self.log.clone(),
             ),
@@ -65,7 +68,7 @@ impl Daemon {
     }
 
     /// Get the state for a peer identified by its IP address.
-    pub fn peer_state(&self, addr: IpAddr) -> Option<PeerState> {
+    pub fn peer_state(&self, addr: IpAddr) -> Option<BfdPeerState> {
         self.sessions.get(&addr).map(|s| s.sm.current())
     }
 }
@@ -73,6 +76,7 @@ impl Daemon {
 /// A session holds a BFD state machine for a particular peer.
 pub struct Session {
     pub sm: StateMachine,
+    pub mode: SessionMode,
 }
 
 impl Session {
@@ -83,13 +87,14 @@ impl Session {
         ep: bidi::Endpoint<(IpAddr, packet::Control)>,
         required_rx: Duration,
         detection_multiplier: u8,
+        mode: SessionMode,
         db: rdb::Db,
         log: Logger,
     ) -> Self {
         let mut sm =
             StateMachine::new(addr, required_rx, detection_multiplier, log);
         sm.run(ep, db);
-        Session { sm }
+        Session { sm, mode }
     }
 }
 
@@ -163,7 +168,7 @@ impl PeerInfo {
     Deserialize,
 )]
 #[repr(u8)]
-pub enum PeerState {
+pub enum BfdPeerState {
     /// A stable down state. Non-responsive to incoming messages.
     AdminDown = 0,
 
@@ -275,8 +280,15 @@ mod test {
 
         let (a, _b) = bidi::channel();
         let p1_addr = ip("203.0.113.10");
-        daemon.add_peer(p1_addr, Duration::from_secs(5), 3, a, db);
-        assert_eq!(daemon.peer_state(p1_addr), Some(PeerState::Down));
+        daemon.add_peer(
+            p1_addr,
+            Duration::from_secs(5),
+            3,
+            SessionMode::MultiHop,
+            a,
+            db,
+        );
+        assert_eq!(daemon.peer_state(p1_addr), Some(BfdPeerState::Down));
 
         Ok(())
     }
@@ -292,20 +304,34 @@ mod test {
 
         let mut d1 = Daemon::new(test_logger());
         let (a, b) = bidi::channel();
-        d1.add_peer(addr1, Duration::from_secs(5), 3, a, db.clone());
+        d1.add_peer(
+            addr1,
+            Duration::from_secs(5),
+            3,
+            SessionMode::MultiHop,
+            a,
+            db.clone(),
+        );
         net.register(addr2, b);
 
         let mut d2 = Daemon::new(test_logger());
         let (a, b) = bidi::channel();
-        d2.add_peer(addr2, Duration::from_secs(5), 3, a, db);
+        d2.add_peer(
+            addr2,
+            Duration::from_secs(5),
+            3,
+            SessionMode::MultiHop,
+            a,
+            db,
+        );
         net.register(addr1, b);
 
         net.run();
 
         sleep(Duration::from_secs(10));
 
-        assert_eq!(d1.peer_state(addr1), Some(PeerState::Up));
-        assert_eq!(d2.peer_state(addr2), Some(PeerState::Up));
+        assert_eq!(d1.peer_state(addr1), Some(BfdPeerState::Up));
+        assert_eq!(d2.peer_state(addr2), Some(BfdPeerState::Up));
 
         Ok(())
     }

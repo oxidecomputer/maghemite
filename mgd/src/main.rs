@@ -10,7 +10,7 @@ use bgp::log::init_logger;
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
 use rand::Fill;
-use rdb::{BgpNeighborInfo, BgpRouterInfo};
+use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv6Addr};
@@ -104,6 +104,12 @@ async fn run(args: RunArgs) {
             .expect("get BGP neighbors from data store"),
     );
 
+    start_bfd_sessions(
+        context.clone(),
+        db.get_bfd_neighbors()
+            .expect("get BFD neighbors from data store"),
+    );
+
     initialize_static_routes(&db);
 
     let j = admin::start_server(
@@ -136,7 +142,7 @@ fn start_bgp_routers(
     routers: HashMap<u32, BgpRouterInfo>,
     neighbors: Vec<BgpNeighborInfo>,
 ) {
-    slog::info!(context.log, "routers: {:#?}", routers);
+    slog::info!(context.log, "bgp routers: {:#?}", routers);
     let mut guard = context.bgp.router.lock().expect("lock bgp routers");
     for (asn, info) in routers {
         bgp_admin::add_router(
@@ -170,6 +176,17 @@ fn start_bgp_routers(
             },
         )
         .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
+    }
+}
+
+fn start_bfd_sessions(
+    context: Arc<HandlerContext>,
+    configs: Vec<BfdPeerConfig>,
+) {
+    slog::info!(context.log, "bfd peers: {:#?}", configs);
+    for config in configs {
+        bfd_admin::add_peer(context.clone(), config)
+            .unwrap_or_else(|e| panic!("failed to add bfd peer {e}"));
     }
 }
 

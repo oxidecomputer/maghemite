@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 use colored::Colorize;
 use mg_admin_client::{
-    types::{AddBfdPeerRequest, SessionMode},
+    types::{BfdPeerConfig, SessionMode},
     Client,
 };
 use std::io::Write;
@@ -52,12 +52,25 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let mut tw = TabWriter::new(std::io::stdout());
             writeln!(
                 &mut tw,
-                "{}\t{}",
-                "Addresss".dimmed(),
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                "Peer".dimmed(),
+                "Listen".dimmed(),
+                "Required Rx".dimmed(),
+                "Detection Threshold".dimmed(),
+                "Mode".dimmed(),
                 "Status".dimmed(),
             )?;
-            for (addr, status) in &msg.into_inner() {
-                writeln!(&mut tw, "{}\t{:?}", addr, status,)?;
+            for info in &msg.into_inner() {
+                writeln!(
+                    &mut tw,
+                    "{}\t{}\t{}\t{}\t{:?}\t{:?}",
+                    info.config.peer,
+                    info.config.listen,
+                    info.config.required_rx,
+                    info.config.detection_threshold,
+                    info.config.mode,
+                    info.state,
+                )?;
             }
             tw.flush()?;
         }
@@ -69,7 +82,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             mode,
         } => {
             client
-                .add_bfd_peer(&AddBfdPeerRequest {
+                .add_bfd_peer(&BfdPeerConfig {
                     peer,
                     listen,
                     required_rx,

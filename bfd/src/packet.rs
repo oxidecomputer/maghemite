@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::PeerState;
+use crate::BfdPeerState;
 use anyhow::{anyhow, Result};
 
 // Control packet flags.
@@ -159,7 +159,7 @@ impl Default for Control {
             // per the RFC, version is always 1
             vers_diag: 1 << 5,
             // default state machine state is down
-            flags: PeerState::Down.wire_format(),
+            flags: BfdPeerState::Down.wire_format(),
             // default to detection threshold multipler of 3
             detect_mult: 3,
             // 24 is sans auth, if using auth recompute
@@ -211,14 +211,14 @@ impl Control {
     /// Get the state from the control packet.
     pub fn state(&self) -> State {
         let status = (self.flags & 0b11000000) >> 6;
-        match PeerState::try_from(status) {
+        match BfdPeerState::try_from(status) {
             Ok(s) => State::Peer(s),
             Err(_) => State::Unknown(status),
         }
     }
 
     /// Set control packet state.
-    pub fn set_state(&mut self, ps: PeerState) {
+    pub fn set_state(&mut self, ps: BfdPeerState) {
         self.flags = (self.flags & 0b00111111) | ((ps as u8) << 6);
     }
 
@@ -313,13 +313,13 @@ impl Control {
     }
 }
 
-/// A wrapper for PeerState that can handle unknown states.
+/// A wrapper for BfdPeerState that can handle unknown states.
 pub enum State {
-    Peer(PeerState),
+    Peer(BfdPeerState),
     Unknown(u8),
 }
 
-impl crate::PeerState {
+impl crate::BfdPeerState {
     /// A helper function to transition between enumm and wire representations
     /// for peer states.
     fn wire_format(&self) -> u8 {

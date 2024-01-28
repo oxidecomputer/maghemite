@@ -41,6 +41,10 @@ const STATIC4_ROUTES: &str = "static4_routes";
 /// Key used in settings tree for tunnel endpoint setting
 const TEP_KEY: &str = "tep";
 
+/// The handle used to open a persistent key-value tree for BFD neighbor
+/// information.
+const BFD_NEIGHBOR: &str = "bfd_neighbor";
+
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
 #[derive(Clone)]
@@ -234,6 +238,52 @@ impl Db {
         Ok(result)
     }
 
+    pub fn add_bfd_neighbor(&self, cfg: BfdPeerConfig) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
+        let key = cfg.peer.to_string();
+        let value = serde_json::to_string(&cfg)?;
+        tree.insert(key.as_str(), value.as_str())?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn remove_bfd_neighbor(&self, addr: IpAddr) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
+        let key = addr.to_string();
+        tree.remove(key)?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn get_bfd_neighbors(&self) -> Result<Vec<BfdPeerConfig>, Error> {
+        let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
+        let result = tree
+            .scan_prefix(vec![])
+            .filter_map(|item| {
+                let (_key, value) = match item {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(self.log, "db: error fetching bfd entry: {e}");
+                        return None;
+                    }
+                };
+                let value = String::from_utf8_lossy(&value);
+                let value: BfdPeerConfig = match serde_json::from_str(&value) {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error parsing bfd neighbor entry value: {e}"
+                        );
+                        return None;
+                    }
+                };
+                Some(value)
+            })
+            .collect();
+        Ok(result)
+    }
+
     pub fn remove_origin4(&self, p: Prefix4) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         tree.remove(p.db_key())?;
@@ -297,6 +347,7 @@ impl Db {
             let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
             let key = serde_json::to_string(&r)?;
             tree.insert(key.as_str(), "")?;
+            tree.flush()?;
         }
 
         let mut imported = lock!(self.imported);

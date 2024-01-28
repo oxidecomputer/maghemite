@@ -5,7 +5,7 @@
 use crate::err;
 use crate::packet::Control;
 use crate::{
-    bidi, inf, packet, trc, util::update_peer_info, wrn, PeerInfo, PeerState,
+    bidi, inf, packet, trc, util::update_peer_info, wrn, BfdPeerState, PeerInfo,
 };
 use anyhow::{anyhow, Result};
 use slog::{warn, Logger};
@@ -126,7 +126,7 @@ impl StateMachine {
     }
 
     /// Get the current state of this state machine.
-    pub fn current(&self) -> PeerState {
+    pub fn current(&self) -> BfdPeerState {
         self.state.read().unwrap().state()
     }
 
@@ -187,6 +187,14 @@ impl StateMachine {
             }
         });
     }
+
+    pub fn required_rx(&self) -> Duration {
+        self.required_rx
+    }
+
+    pub fn detection_multiplier(&self) -> u8 {
+        self.detection_multiplier
+    }
 }
 
 /// A type alias for a bidirectional endpoint transporting BFD control messages
@@ -230,8 +238,8 @@ pub(crate) trait State: Sync + Send {
         db: rdb::Db,
     ) -> Result<(Box<dyn State>, BfdEndpoint)>;
 
-    /// Return the `PeerState` associated with the implementor of this trait.
-    fn state(&self) -> PeerState;
+    /// Return the `BfdPeerState` associated with the implementor of this trait.
+    fn state(&self) -> BfdPeerState;
 
     fn peer(&self) -> IpAddr;
 
@@ -372,11 +380,11 @@ impl State for Down {
             // Transition to the appropriate next state.
             use packet::State;
             match msg.state() {
-                State::Peer(PeerState::Down) => {
+                State::Peer(BfdPeerState::Down) => {
                     let next = Init::new(self.peer, self.log.clone());
                     return Ok((Box::new(next), endpoint));
                 }
-                State::Peer(PeerState::Init) => {
+                State::Peer(BfdPeerState::Init) => {
                     let next = Up::new(self.peer, self.log.clone());
                     return Ok((Box::new(next), endpoint));
                 }
@@ -388,8 +396,8 @@ impl State for Down {
         }
     }
 
-    fn state(&self) -> PeerState {
-        PeerState::Down
+    fn state(&self) -> BfdPeerState {
+        BfdPeerState::Down
     }
 
     fn peer(&self) -> IpAddr {
@@ -446,11 +454,11 @@ impl State for Init {
             // Transition to the appropriate next state.
             use packet::State;
             match msg.state() {
-                State::Peer(PeerState::AdminDown) => {
+                State::Peer(BfdPeerState::AdminDown) => {
                     let next = Down::new(self.peer, self.log.clone());
                     return Ok((Box::new(next), endpoint));
                 }
-                State::Peer(PeerState::Down) => {}
+                State::Peer(BfdPeerState::Down) => {}
                 State::Peer(_) => {
                     let next = Up::new(self.peer, self.log.clone());
                     return Ok((Box::new(next), endpoint));
@@ -462,8 +470,8 @@ impl State for Init {
         }
     }
 
-    fn state(&self) -> PeerState {
-        PeerState::Init
+    fn state(&self) -> BfdPeerState {
+        BfdPeerState::Init
     }
 
     fn peer(&self) -> IpAddr {
@@ -527,8 +535,8 @@ impl State for Up {
             // Transition to the appropriate next state.
             use packet::State;
             match msg.state() {
-                State::Peer(PeerState::AdminDown)
-                | State::Peer(PeerState::Down) => {
+                State::Peer(BfdPeerState::AdminDown)
+                | State::Peer(BfdPeerState::Down) => {
                     let next = Down::new(self.peer, self.log.clone());
                     return Ok((Box::new(next), endpoint));
                 }
@@ -540,8 +548,8 @@ impl State for Up {
         }
     }
 
-    fn state(&self) -> PeerState {
-        PeerState::Up
+    fn state(&self) -> BfdPeerState {
+        BfdPeerState::Up
     }
 
     fn peer(&self) -> IpAddr {

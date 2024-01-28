@@ -16,10 +16,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Map_of_PeerState",
-                  "type": "object",
-                  "additionalProperties": {
-                    "$ref": "#/components/schemas/PeerState"
+                  "title": "Array_of_BfdPeerInfo",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BfdPeerInfo"
                   }
                 }
               }
@@ -41,7 +41,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AddBfdPeerRequest"
+                "$ref": "#/components/schemas/BfdPeerConfig"
               }
             }
           },
@@ -515,49 +515,6 @@
   },
   "components": {
     "schemas": {
-      "AddBfdPeerRequest": {
-        "description": "Request to add a peer to the daemon.",
-        "type": "object",
-        "properties": {
-          "detection_threshold": {
-            "description": "Detection threshold for connectivity as a multipler to required_rx",
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0
-          },
-          "listen": {
-            "description": "Address to listen on for control messages from the peer.",
-            "type": "string",
-            "format": "ip"
-          },
-          "mode": {
-            "description": "Mode is single-hop (RFC 5881) or multi-hop (RFC 5883).",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SessionMode"
-              }
-            ]
-          },
-          "peer": {
-            "description": "Address of the peer to add.",
-            "type": "string",
-            "format": "ip"
-          },
-          "required_rx": {
-            "description": "Acceptable time between control messages in microseconds.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "detection_threshold",
-          "listen",
-          "mode",
-          "peer",
-          "required_rx"
-        ]
-      },
       "AddNeighborRequest": {
         "type": "object",
         "properties": {
@@ -666,6 +623,96 @@
           "asn",
           "originate",
           "peers"
+        ]
+      },
+      "BfdPeerConfig": {
+        "type": "object",
+        "properties": {
+          "detection_threshold": {
+            "description": "Detection threshold for connectivity as a multipler to required_rx",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "listen": {
+            "description": "Address to listen on for control messages from the peer.",
+            "type": "string",
+            "format": "ip"
+          },
+          "mode": {
+            "description": "Mode is single-hop (RFC 5881) or multi-hop (RFC 5883).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SessionMode"
+              }
+            ]
+          },
+          "peer": {
+            "description": "Address of the peer to add.",
+            "type": "string",
+            "format": "ip"
+          },
+          "required_rx": {
+            "description": "Acceptable time between control messages in microseconds.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "detection_threshold",
+          "listen",
+          "mode",
+          "peer",
+          "required_rx"
+        ]
+      },
+      "BfdPeerInfo": {
+        "type": "object",
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/BfdPeerConfig"
+          },
+          "state": {
+            "$ref": "#/components/schemas/BfdPeerState"
+          }
+        },
+        "required": [
+          "config",
+          "state"
+        ]
+      },
+      "BfdPeerState": {
+        "description": "The possible peer states. See the `State` trait implementations `Down`, `Init`, and `Up` for detailed semantics.",
+        "oneOf": [
+          {
+            "description": "A stable down state. Non-responsive to incoming messages.",
+            "type": "string",
+            "enum": [
+              "AdminDown"
+            ]
+          },
+          {
+            "description": "The initial state.",
+            "type": "string",
+            "enum": [
+              "Down"
+            ]
+          },
+          {
+            "description": "The peer has detected a remote peer in the down state.",
+            "type": "string",
+            "enum": [
+              "Init"
+            ]
+          },
+          {
+            "description": "The peer has detected a remote peer in the up or init state while in the init state.",
+            "type": "string",
+            "enum": [
+              "Up"
+            ]
+          }
         ]
       },
       "BgpPeerConfig": {
@@ -955,39 +1002,6 @@
         "required": [
           "duration_millis",
           "state"
-        ]
-      },
-      "PeerState": {
-        "description": "The possible peer states. See the `State` trait implementations `Down`, `Init`, and `Up` for detailed semantics.",
-        "oneOf": [
-          {
-            "description": "A stable down state. Non-responsive to incoming messages.",
-            "type": "string",
-            "enum": [
-              "AdminDown"
-            ]
-          },
-          {
-            "description": "The initial state.",
-            "type": "string",
-            "enum": [
-              "Down"
-            ]
-          },
-          {
-            "description": "The peer has detected a remote peer in the down state.",
-            "type": "string",
-            "enum": [
-              "Init"
-            ]
-          },
-          {
-            "description": "The peer has detected a remote peer in the up or init state while in the init state.",
-            "type": "string",
-            "enum": [
-              "Up"
-            ]
-          }
         ]
       },
       "Prefix4": {
