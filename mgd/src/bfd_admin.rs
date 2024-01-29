@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::UdpSocket;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -165,6 +166,17 @@ pub(crate) async fn remove_bfd_peer(
 
     daemon.remove_peer(rq.addr);
 
+    ctx.context()
+        .bfd
+        .dispatcher
+        .lock()
+        .unwrap()
+        .remove(rq.addr)
+        .map_err(|e| {
+            error!(ctx.log, "failed to remove listener for {}: {e}", rq.addr);
+            HttpError::for_internal_error(e.to_string())
+        })?;
+
     Ok(HttpResponseUpdatedNoContent {})
 }
 
@@ -245,6 +257,7 @@ struct Listener {
     #[allow(dead_code)]
     handle: JoinHandle<()>,
     peers: HashSet<IpAddr>,
+    kill_switch: Arc<AtomicBool>,
 }
 
 pub(crate) struct Dispatcher {
@@ -292,24 +305,56 @@ impl Dispatcher {
             let sessions = self.sessions.clone();
             let sa = SocketAddr::new(local, port);
             let sk = UdpSocket::bind(sa)?;
+            sk.set_read_timeout(Some(Duration::from_secs(1)))?;
             let skl = sk.try_clone()?;
             let mut peers = HashSet::new();
             peers.insert(remote);
+
+            let kill_switch = Arc::new(AtomicBool::new(false));
+            let ks = kill_switch.clone();
 
             self.listeners.insert(
                 local,
                 Listener {
                     sk: sk.try_clone()?,
-                    handle: spawn(move || Self::listen(skl, sessions, log)),
+                    handle: spawn(move || Self::listen(skl, sessions, ks, log)),
                     peers,
+                    kill_switch,
                 },
             );
             Ok(sk)
         }
     }
 
-    fn listen(sk: UdpSocket, sessions: Arc<RwLock<Sessions>>, log: Logger) {
+    fn remove(&mut self, peer: IpAddr) -> Result<()> {
+        let mut to_remove = Vec::new();
+        for (local, listener) in &mut self.listeners {
+            if listener.peers.contains(&peer) {
+                listener.peers.remove(&peer);
+                if listener.peers.is_empty() {
+                    listener
+                        .kill_switch
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    to_remove.push(*local);
+                }
+            }
+        }
+        for x in &to_remove {
+            self.listeners.remove(x);
+        }
+        Ok(())
+    }
+
+    fn listen(
+        sk: UdpSocket,
+        sessions: Arc<RwLock<Sessions>>,
+        kill_switch: Arc<AtomicBool>,
+        log: Logger,
+    ) {
         loop {
+            if kill_switch.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
             // Maximum length of a BFD packet is on the order of 100 bytes (RFC
             // 5880).
             let mut buf = [0; 1024];
