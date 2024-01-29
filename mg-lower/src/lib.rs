@@ -126,7 +126,7 @@ fn full_sync(
 
     let db_imported = db.get_imported4();
 
-    ensure_tep_addr(tep, dpd, rt.clone(), log);
+    ensure_tep_addr(tep, dpd, rt.clone())?;
 
     // announce tunnel endpoints via ddm
     update_tunnel_endpoints(tep, ddm, &db_imported, rt.clone(), log);
