@@ -91,7 +91,7 @@ impl StateMachine {
         );
         let remote = Arc::new(Mutex::new(PeerInfo::default()));
 
-        // Span a thread that runs the send loop for this state machine. This
+        // Spawn a thread that runs the send loop for this state machine. This
         // loop is responsible for sending out unsolicited periodic control
         // packets.
         self.send_loop(endpoint.tx.clone(), local, remote.clone());
