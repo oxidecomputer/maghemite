@@ -9,9 +9,10 @@ use dendrite_common::ports::PortId;
 use dendrite_common::ports::QsfpPort;
 use dpd_client::types;
 use dpd_client::Client as DpdClient;
+use http::StatusCode;
 use libnet::{get_route, IpPrefix, Ipv4Prefix};
 use rdb::Route4ImportKey;
-use slog::{error, Logger};
+use slog::{error, warn, Logger};
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::net::IpAddr;
@@ -53,18 +54,19 @@ pub(crate) fn ensure_tep_addr(
     tep: Ipv6Addr,
     dpd: &DpdClient,
     rt: Arc<tokio::runtime::Handle>,
-) -> Result<(), Error> {
-    rt.block_on(async {
-        let addrs = dpd.loopback_ipv6_list().await?.into_inner();
-        if !addrs.iter().any(|x| x.addr == tep) {
-            dpd.loopback_ipv6_create(&types::Ipv6Entry {
-                tag: MG_LOWER_TAG.into(),
-                addr: tep,
-            })
-            .await?;
+    log: &Logger,
+) {
+    if let Err(e) = rt.block_on(async {
+        dpd.loopback_ipv6_create(&types::Ipv6Entry {
+            tag: MG_LOWER_TAG.into(),
+            addr: tep,
+        })
+        .await
+    }) {
+        if e.status() != Some(StatusCode::CONFLICT) {
+            warn!(log, "failed to ensure TEP address {tep} on ASIC: {e}");
         }
-        Ok(())
-    })
+    }
 }
 
 /// Perform a set of route additions and deletions via the Dendrite API.

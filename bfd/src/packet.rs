@@ -67,7 +67,7 @@ pub struct Control {
     /// This field contains both the status and flag values.
     ///
     /// The status is the current BFD session state as seen by the transmitting
-    /// system. It's values are:
+    /// system. Its values are:
     ///
     /// 0. AdminDown
     /// 1. Down
@@ -175,8 +175,8 @@ impl Default for Control {
 }
 
 impl Control {
-    /// Wrap an array of bytes as a `Control`.
-    pub fn wrap(d: &[u8]) -> Result<Self> {
+    /// Deserialize an array of bytes as a `Control`.
+    pub fn from_bytes(d: &[u8]) -> Result<Self> {
         if d.len() < 24 {
             return Err(anyhow!("control packet too small"));
         }

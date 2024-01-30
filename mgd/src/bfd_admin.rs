@@ -376,7 +376,7 @@ impl Dispatcher {
                 }
             };
 
-            let pkt = match packet::Control::wrap(&buf[..n]) {
+            let pkt = match packet::Control::from_bytes(&buf[..n]) {
                 Ok(pkt) => pkt,
                 Err(e) => {
                     error!(log, "parse control packet: {e}");

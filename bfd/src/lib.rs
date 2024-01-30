@@ -6,7 +6,7 @@ use num_enum::TryFromPrimitive;
 use rdb::SessionMode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use slog::Logger;
+use slog::{warn, Logger};
 use sm::StateMachine;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -46,6 +46,9 @@ impl Daemon {
         db: rdb::Db,
     ) {
         if self.sessions.contains_key(&peer) {
+            warn!(self.log, "attempt to add peer that already exists";
+                "peer" => format!("{:#?}", peer)
+            );
             return;
         }
         self.sessions.insert(
@@ -105,11 +108,15 @@ pub struct PeerInfo {
     /// packets.
     pub desired_min_tx: Duration,
 
-    /// This is the minimum interval, in microseconds, between received
-    /// BFD Control packets that this system is capable of supporting,
+    /// This is the minimum interval between received BFD Control packets that
+    /// this system is capable of supporting.
     pub required_min_rx: Duration,
 
-    /// A unique identifer for the peer.
+    /// A unique identifer for the peer. This structure is used to keep track
+    /// of remote peer information as well as our own. The remote peer
+    /// generates their own discriminator. When a peer state machine is first
+    /// started, we generate our discriminator with
+    /// `PeerInfo::with_random_discriminator`
     pub discriminator: u32,
 
     /// Whether or not the peer is requesting demand mode. This means
@@ -155,7 +162,8 @@ impl PeerInfo {
 }
 
 /// The possible peer states. See the `State` trait implementations `Down`,
-/// `Init`, and `Up` for detailed semantics.
+/// `Init`, and `Up` for detailed semantics. Data representation is u8 as
+/// this enum is used as a part of the BFD wire protocol.
 #[derive(
     Default,
     PartialEq,

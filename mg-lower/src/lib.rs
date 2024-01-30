@@ -130,7 +130,7 @@ fn full_sync(
         .filter(|x| x.priority > 0)
         .collect();
 
-    ensure_tep_addr(tep, dpd, rt.clone())?;
+    ensure_tep_addr(tep, dpd, rt.clone(), log);
 
     // announce tunnel endpoints via ddm
     update_tunnel_endpoints(tep, ddm, &db_imported, rt.clone(), log);
