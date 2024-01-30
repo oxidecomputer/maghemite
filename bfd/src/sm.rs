@@ -77,32 +77,50 @@ impl StateMachine {
     }
 
     /// Run the state machine, transitioning from state to state based on
-    /// incoming control packets.
+    /// incoming control packets. Endpoint is a channel from a connection
+    /// dispatcher that sends control packets to this state machine based
+    /// on peer address and BFD discriminator.
     pub fn run(
         &mut self,
-        mut endpoint: bidi::Endpoint<(IpAddr, packet::Control)>,
+        endpoint: bidi::Endpoint<(IpAddr, packet::Control)>,
         db: rdb::Db,
     ) {
-        let state = self.state.clone();
-        let log = self.log.clone();
         let local = PeerInfo::with_random_discriminator(
             self.required_rx,
             self.detection_multiplier,
         );
         let remote = Arc::new(Mutex::new(PeerInfo::default()));
+
+        // Span a thread that runs the send loop for this state machine. This
+        // loop is responsible for sending out unsolicited periodic control
+        // packets.
+        self.send_loop(endpoint.tx.clone(), local, remote.clone());
+
+        // Spawn a thread that runs the receive loop. This loop is responsible
+        // for handling packets from the connection dispatcher.
+        self.recv_loop(endpoint, db, local, remote.clone());
+    }
+
+    /// Get the current state of this state machine.
+    pub fn current(&self) -> BfdPeerState {
+        self.state.read().unwrap().state()
+    }
+
+    /// Spawn a thread that runs the receive loop. This loop is responsible
+    /// for handling packets from the connection dispatcher. This handler
+    /// determines what BFD state we are in and delegates handling of the
+    /// packet to that state's handler.
+    fn recv_loop(
+        &self,
+        mut endpoint: bidi::Endpoint<(IpAddr, packet::Control)>,
+        db: rdb::Db,
+        local: PeerInfo,
+        remote: Arc<Mutex<PeerInfo>>,
+    ) {
+        let state = self.state.clone();
         let peer = self.peer;
         let kill_switch = self.kill_switch.clone();
-
-        Self::send(
-            state.clone(),
-            peer,
-            endpoint.tx.clone(),
-            local,
-            remote.clone(),
-            kill_switch.clone(),
-            log.clone(),
-        );
-
+        let log = self.log.clone();
         spawn(move || loop {
             let prev = state.read().unwrap().state();
             let (st, ep) = match state.read().unwrap().run(
@@ -125,24 +143,20 @@ impl StateMachine {
         });
     }
 
-    /// Get the current state of this state machine.
-    pub fn current(&self) -> BfdPeerState {
-        self.state.read().unwrap().state()
-    }
-
     /// This is a send loop for a BFD peer. It takes care of sending out
     /// unsolicited periodic control packets. Synchronization betwen this send
     /// loop and the trait implementors receive loop happens through the
     /// `remote` peer info mutex.
-    fn send(
-        state: Arc<RwLock<Box<dyn State>>>,
-        peer: IpAddr,
+    fn send_loop(
+        &self,
         sender: Sender<(IpAddr, packet::Control)>,
         local: PeerInfo,
         remote: Arc<Mutex<PeerInfo>>,
-        stop: Arc<AtomicBool>,
-        log: Logger,
     ) {
+        let state = self.state.clone();
+        let peer = self.peer;
+        let stop = self.kill_switch.clone();
+        let log = self.log.clone();
         // State does not change for the lifetime of the trait so it's safe to
         // just copy it out of self for sending into the spawned thread. The
         // reason this is a dynamic method at all is to get runtime polymorphic

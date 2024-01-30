@@ -217,7 +217,7 @@ pub(crate) fn channel(
 }
 
 /// Run an egress handler, taking BFD control packets from a session and sending
-/// the out to the peer over UDP.
+/// them out to the peer over UDP.
 fn egress(
     rx: Receiver<(IpAddr, packet::Control)>,
     local: IpAddr,
@@ -361,7 +361,9 @@ impl Dispatcher {
 
             let (n, sa) = match sk.recv_from(&mut buf) {
                 Err(e) => {
-                    error!(log, "udp recv: {e}");
+                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                        error!(log, "udp recv: {e}");
+                    }
                     continue;
                 }
                 Ok((n, sa)) => (n, sa),
@@ -371,7 +373,9 @@ impl Dispatcher {
             let tx = match guard.get(&sa.ip()) {
                 Some(tx) => tx,
                 None => {
-                    warn!(log, "unknown peer {}, dropping", sa.ip(),);
+                    warn!(log, "unknown peer, dropping";
+                        "peer" => sa.ip().to_string(),
+                    );
                     continue;
                 }
             };
@@ -379,13 +383,17 @@ impl Dispatcher {
             let pkt = match packet::Control::from_bytes(&buf[..n]) {
                 Ok(pkt) => pkt,
                 Err(e) => {
-                    error!(log, "parse control packet: {e}");
+                    error!(log, "parse control packet: {e}";
+                        "peer" => sa.ip().to_string(),
+                    );
                     continue;
                 }
             };
 
             if let Err(e) = tx.send((sa.ip(), pkt)) {
-                warn!(log, "udp ingress channel closed: {e}");
+                warn!(log, "udp ingress channel closed: {e}";
+                    "peer" => sa.ip().to_string(),
+                );
                 break;
             }
         }
