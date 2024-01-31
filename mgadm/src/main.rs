@@ -10,6 +10,7 @@ use slog::Drain;
 use slog::Logger;
 use std::net::{IpAddr, SocketAddr};
 
+mod bfd;
 mod bgp;
 mod static_routing;
 
@@ -37,6 +38,10 @@ enum Commands {
     /// Static routing management commands.
     #[command(subcommand)]
     Static(static_routing::Commands),
+
+    /// Bidirectional forwarding detection protocol management
+    #[command(subcommand)]
+    Bfd(bfd::Commands),
 }
 
 #[tokio::main]
@@ -54,6 +59,7 @@ async fn main() -> Result<()> {
         Commands::Static(command) => {
             static_routing::commands(command, client).await?
         }
+        Commands::Bfd(command) => bfd::commands(command, client).await?,
     }
     Ok(())
 }

@@ -3,13 +3,14 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
+use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use bgp::log::init_logger;
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
 use rand::Fill;
-use rdb::{BgpNeighborInfo, BgpRouterInfo};
+use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv6Addr};
@@ -17,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 
 mod admin;
+mod bfd_admin;
 mod bgp_admin;
 mod error;
 mod static_admin;
@@ -72,11 +74,13 @@ async fn run(args: RunArgs) {
         .expect("open datastore file");
 
     let tep_ula = get_tunnel_endpoint_ula(&db);
+    let bfd = BfdContext::new(log.clone());
 
     let context = Arc::new(HandlerContext {
         tep: tep_ula,
         log: log.clone(),
         bgp,
+        bfd,
         data_dir: args.data_dir.clone(),
         db: db.clone(),
     });
@@ -98,6 +102,12 @@ async fn run(args: RunArgs) {
             .expect("get BGP routers from datastore"),
         db.get_bgp_neighbors()
             .expect("get BGP neighbors from data store"),
+    );
+
+    start_bfd_sessions(
+        context.clone(),
+        db.get_bfd_neighbors()
+            .expect("get BFD neighbors from data store"),
     );
 
     initialize_static_routes(&db);
@@ -132,7 +142,7 @@ fn start_bgp_routers(
     routers: HashMap<u32, BgpRouterInfo>,
     neighbors: Vec<BgpNeighborInfo>,
 ) {
-    slog::info!(context.log, "routers: {:#?}", routers);
+    slog::info!(context.log, "bgp routers: {:#?}", routers);
     let mut guard = context.bgp.router.lock().expect("lock bgp routers");
     for (asn, info) in routers {
         bgp_admin::add_router(
@@ -166,6 +176,17 @@ fn start_bgp_routers(
             },
         )
         .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
+    }
+}
+
+fn start_bfd_sessions(
+    context: Arc<HandlerContext>,
+    configs: Vec<BfdPeerConfig>,
+) {
+    slog::info!(context.log, "bfd peers: {:#?}", configs);
+    for config in configs {
+        bfd_admin::add_peer(context.clone(), config)
+            .unwrap_or_else(|e| panic!("failed to add bfd peer {e}"));
     }
 }
 

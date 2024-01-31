@@ -5,6 +5,91 @@
     "version": "v0.1.0"
   },
   "paths": {
+    "/bfd/peers": {
+      "get": {
+        "summary": "Get all the peers and their associated BFD state. Peers are identified by IP",
+        "description": "address.",
+        "operationId": "get_bfd_peers",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_BfdPeerInfo",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BfdPeerInfo"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "summary": "Add a new peer to the daemon. A session for the specified peer will start",
+        "description": "immediately.",
+        "operationId": "add_bfd_peer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BfdPeerConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bfd/peers/{addr}": {
+      "delete": {
+        "summary": "Remove the specified peer from the daemon. The associated peer session will",
+        "description": "be stopped immediately.",
+        "operationId": "remove_bfd_peer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "addr",
+            "description": "Address of the peer to remove.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ip"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/apply": {
       "post": {
         "operationId": "bgp_apply",
@@ -540,6 +625,96 @@
           "peers"
         ]
       },
+      "BfdPeerConfig": {
+        "type": "object",
+        "properties": {
+          "detection_threshold": {
+            "description": "Detection threshold for connectivity as a multipler to required_rx",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "listen": {
+            "description": "Address to listen on for control messages from the peer.",
+            "type": "string",
+            "format": "ip"
+          },
+          "mode": {
+            "description": "Mode is single-hop (RFC 5881) or multi-hop (RFC 5883).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SessionMode"
+              }
+            ]
+          },
+          "peer": {
+            "description": "Address of the peer to add.",
+            "type": "string",
+            "format": "ip"
+          },
+          "required_rx": {
+            "description": "Acceptable time between control messages in microseconds.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "detection_threshold",
+          "listen",
+          "mode",
+          "peer",
+          "required_rx"
+        ]
+      },
+      "BfdPeerInfo": {
+        "type": "object",
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/BfdPeerConfig"
+          },
+          "state": {
+            "$ref": "#/components/schemas/BfdPeerState"
+          }
+        },
+        "required": [
+          "config",
+          "state"
+        ]
+      },
+      "BfdPeerState": {
+        "description": "The possible peer states. See the `State` trait implementations `Down`, `Init`, and `Up` for detailed semantics.",
+        "oneOf": [
+          {
+            "description": "A stable down state. Non-responsive to incoming messages.",
+            "type": "string",
+            "enum": [
+              "AdminDown"
+            ]
+          },
+          {
+            "description": "The initial state.",
+            "type": "string",
+            "enum": [
+              "Down"
+            ]
+          },
+          {
+            "description": "The peer has detected a remote peer in the down state.",
+            "type": "string",
+            "enum": [
+              "Init"
+            ]
+          },
+          {
+            "description": "The peer has detected a remote peer in the up or init state while in the init state.",
+            "type": "string",
+            "enum": [
+              "Up"
+            ]
+          }
+        ]
+      },
       "BgpPeerConfig": {
         "type": "object",
         "properties": {
@@ -905,6 +1080,13 @@
           "asn",
           "graceful_shutdown",
           "peers"
+        ]
+      },
+      "SessionMode": {
+        "type": "string",
+        "enum": [
+          "SingleHop",
+          "MultiHop"
         ]
       },
       "StaticRoute4": {

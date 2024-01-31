@@ -2,7 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{bgp_admin, static_admin};
+use crate::{bfd_admin, bgp_admin, static_admin};
+use bfd_admin::BfdContext;
 use bgp_admin::BgpContext;
 use dropshot::{ApiDescription, ConfigDropshot, HttpServerStarter};
 use rdb::Db;
@@ -16,6 +17,7 @@ use tokio::task::JoinHandle;
 pub struct HandlerContext {
     pub tep: Ipv6Addr, // tunnel endpoint address
     pub bgp: BgpContext,
+    pub bfd: BfdContext,
     pub log: Logger,
     pub data_dir: String,
     pub db: Db,
@@ -79,6 +81,10 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     register!(api, static_admin::static_remove_v4_route);
     register!(api, static_admin::static_list_v4_routes);
 
+    // bfd
+    register!(api, bfd_admin::get_bfd_peers);
+    register!(api, bfd_admin::add_bfd_peer);
+    register!(api, bfd_admin::remove_bfd_peer);
     api
 }
 

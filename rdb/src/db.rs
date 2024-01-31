@@ -10,14 +10,14 @@
 //! Volatile information is stored in in-memory data structures such as hash
 //! sets.
 use crate::error::Error;
-use crate::types::*;
+use crate::{types::*, DEFAULT_ROUTE_PRIORITY};
 use mg_common::{lock, read_lock, write_lock};
 use slog::{error, info, Logger};
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 /// The handle used to open a persistent key-value tree for BGP origin
 /// information.
@@ -40,6 +40,10 @@ const STATIC4_ROUTES: &str = "static4_routes";
 
 /// Key used in settings tree for tunnel endpoint setting
 const TEP_KEY: &str = "tep";
+
+/// The handle used to open a persistent key-value tree for BFD neighbor
+/// information.
+const BFD_NEIGHBOR: &str = "bfd_neighbor";
 
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
@@ -66,6 +70,18 @@ unsafe impl Send for Db {}
 struct Watcher {
     tag: String,
     sender: Sender<ChangeSet>,
+}
+
+/// Describes a set of routes as either active or inactive.
+#[derive(Debug, Clone)]
+pub enum EffectiveRouteSet {
+    /// The routes in the contained set are active with priority greater than
+    /// zero.
+    Active(HashSet<Route4ImportKey>),
+
+    /// The routes in the contained set are inactive with a priority equal to
+    /// zero.
+    Inactive(HashSet<Route4ImportKey>),
 }
 
 //TODO we need bulk operations with atomic semantics here.
@@ -222,6 +238,52 @@ impl Db {
         Ok(result)
     }
 
+    pub fn add_bfd_neighbor(&self, cfg: BfdPeerConfig) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
+        let key = cfg.peer.to_string();
+        let value = serde_json::to_string(&cfg)?;
+        tree.insert(key.as_str(), value.as_str())?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn remove_bfd_neighbor(&self, addr: IpAddr) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
+        let key = addr.to_string();
+        tree.remove(key)?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn get_bfd_neighbors(&self) -> Result<Vec<BfdPeerConfig>, Error> {
+        let tree = self.persistent.open_tree(BFD_NEIGHBOR)?;
+        let result = tree
+            .scan_prefix(vec![])
+            .filter_map(|item| {
+                let (_key, value) = match item {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(self.log, "db: error fetching bfd entry: {e}");
+                        return None;
+                    }
+                };
+                let value = String::from_utf8_lossy(&value);
+                let value: BfdPeerConfig = match serde_json::from_str(&value) {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error parsing bfd neighbor entry value: {e}"
+                        );
+                        return None;
+                    }
+                };
+                Some(value)
+            })
+            .collect();
+        Ok(result)
+    }
+
     pub fn remove_origin4(&self, p: Prefix4) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         tree.remove(p.db_key())?;
@@ -285,11 +347,13 @@ impl Db {
             let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
             let key = serde_json::to_string(&r)?;
             tree.insert(key.as_str(), "")?;
+            tree.flush()?;
         }
 
-        let before = self.effective_set_for_prefix4(r.prefix);
-        lock!(self.imported).replace(r);
-        let after = self.effective_set_for_prefix4(r.prefix);
+        let mut imported = lock!(self.imported);
+        let before = Self::effective_set_for_prefix4(&imported, r.prefix);
+        imported.replace(r);
+        let after = Self::effective_set_for_prefix4(&imported, r.prefix);
 
         if let Some(change_set) = self.import_route_change_set(&before, &after)
         {
@@ -340,10 +404,55 @@ impl Db {
             .collect())
     }
 
+    pub fn disable_nexthop4(&self, addr: Ipv4Addr) {
+        let mut imported = lock!(self.imported);
+        let changed: Vec<Route4ImportKey> = imported
+            .iter()
+            .cloned()
+            .filter(|x| x.nexthop == addr && x.priority != 0)
+            .map(|x| x.with_priority(0))
+            .collect();
+
+        for x in changed {
+            let before = Self::effective_set_for_prefix4(&imported, x.prefix);
+            imported.replace(x);
+            let after = Self::effective_set_for_prefix4(&imported, x.prefix);
+            if let Some(change_set) =
+                self.import_route_change_set(&before, &after)
+            {
+                self.notify(change_set);
+            }
+        }
+    }
+
+    pub fn enable_nexthop4(&self, addr: Ipv4Addr) {
+        let mut imported = lock!(self.imported);
+        let changed: Vec<Route4ImportKey> = imported
+            .iter()
+            .cloned()
+            .filter(|x| {
+                x.nexthop == addr && x.priority != DEFAULT_ROUTE_PRIORITY
+            })
+            .map(|x| x.with_priority(DEFAULT_ROUTE_PRIORITY))
+            .collect();
+
+        for x in changed {
+            let before = Self::effective_set_for_prefix4(&imported, x.prefix);
+            imported.replace(x);
+            let after = Self::effective_set_for_prefix4(&imported, x.prefix);
+            if let Some(change_set) =
+                self.import_route_change_set(&before, &after)
+            {
+                self.notify(change_set);
+            }
+        }
+    }
+
     pub fn remove_nexthop4(&self, r: Route4ImportKey) {
-        let before = self.effective_set_for_prefix4(r.prefix);
-        lock!(self.imported).remove(&r);
-        let after = self.effective_set_for_prefix4(r.prefix);
+        let mut imported = lock!(self.imported);
+        let before = Self::effective_set_for_prefix4(&imported, r.prefix);
+        imported.remove(&r);
+        let after = Self::effective_set_for_prefix4(&imported, r.prefix);
 
         if let Some(change_set) = self.import_route_change_set(&before, &after)
         {
@@ -380,10 +489,9 @@ impl Db {
     ///      case the effective set is only the active routes.
     ///
     fn effective_set_for_prefix4(
-        &self,
+        imported: &MutexGuard<HashSet<Route4ImportKey>>,
         prefix: Prefix4,
-    ) -> HashSet<Route4ImportKey> {
-        let imported = lock!(self.imported);
+    ) -> EffectiveRouteSet {
         let full: HashSet<Route4ImportKey> = imported
             .iter()
             .filter(|x| x.prefix == prefix)
@@ -397,9 +505,9 @@ impl Db {
             full.iter().filter(|x| x.priority > 0).copied().collect();
 
         match (active.len(), shutdown.len()) {
-            (0, _) => shutdown,
-            (_, 0) => active,
-            _ => active,
+            (0, _) => EffectiveRouteSet::Inactive(shutdown),
+            (_, 0) => EffectiveRouteSet::Active(active),
+            _ => EffectiveRouteSet::Active(active),
         }
     }
 
@@ -407,25 +515,56 @@ impl Db {
     /// bumping the RIB generation number if there are changes.
     fn import_route_change_set(
         &self,
-        before: &HashSet<Route4ImportKey>,
-        after: &HashSet<Route4ImportKey>,
+        before: &EffectiveRouteSet,
+        after: &EffectiveRouteSet,
     ) -> Option<ChangeSet> {
-        let added: HashSet<Route4ImportKey> =
-            after.difference(before).copied().collect();
-
-        let removed: HashSet<Route4ImportKey> =
-            before.difference(after).copied().collect();
-
-        if added.is_empty() && removed.is_empty() {
-            return None;
-        }
-
         let gen = self.generation.fetch_add(1, Ordering::SeqCst);
+        match (before, after) {
+            (
+                EffectiveRouteSet::Active(before),
+                EffectiveRouteSet::Active(after),
+            ) => {
+                let added: HashSet<Route4ImportKey> =
+                    after.difference(before).copied().collect();
 
-        Some(ChangeSet::from_import(
-            ImportChangeSet { added, removed },
-            gen,
-        ))
+                let removed: HashSet<Route4ImportKey> =
+                    before.difference(after).copied().collect();
+
+                if added.is_empty() && removed.is_empty() {
+                    return None;
+                }
+
+                Some(ChangeSet::from_import(
+                    ImportChangeSet { added, removed },
+                    gen,
+                ))
+            }
+            (
+                EffectiveRouteSet::Active(before),
+                EffectiveRouteSet::Inactive(_after),
+            ) => Some(ChangeSet::from_import(
+                ImportChangeSet {
+                    removed: before.clone(),
+                    ..Default::default()
+                },
+                gen,
+            )),
+            (
+                EffectiveRouteSet::Inactive(_before),
+                EffectiveRouteSet::Active(after),
+            ) => Some(ChangeSet::from_import(
+                ImportChangeSet {
+                    added: after.clone(),
+                    ..Default::default()
+                },
+                gen,
+            )),
+
+            (
+                EffectiveRouteSet::Inactive(_before),
+                EffectiveRouteSet::Inactive(_after),
+            ) => None,
+        }
     }
 
     pub fn get_tep_addr(&self) -> Result<Option<Ipv6Addr>, Error> {
@@ -449,6 +588,7 @@ impl Db {
         let tree = self.persistent.open_tree(SETTINGS)?;
         let key = addr.octets();
         tree.insert(TEP_KEY, &key)?;
+        tree.flush()?;
         Ok(())
     }
 }

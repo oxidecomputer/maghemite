@@ -1,0 +1,19 @@
+[package]
+name = "bfd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rdb = { path = "../rdb" }
+slog.workspace = true
+slog-bunyan.workspace = true
+slog-async.workspace = true
+num_enum.workspace = true
+anyhow.workspace = true
+schemars.workspace = true
+serde.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+anyhow.workspace = true

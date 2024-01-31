@@ -31,6 +31,7 @@ use tokio::spawn;
 pub struct HandlerContext {
     event_channels: Vec<Sender<Event>>,
     db: Db,
+    log: Logger,
 }
 
 pub fn handler(
@@ -40,7 +41,11 @@ pub fn handler(
     db: Db,
     log: Logger,
 ) -> Result<(), String> {
-    let context = Arc::new(Mutex::new(HandlerContext { event_channels, db }));
+    let context = Arc::new(Mutex::new(HandlerContext {
+        event_channels,
+        db,
+        log: log.clone(),
+    }));
 
     let sa: SocketAddr = match addr {
         IpAddr::V4(a) => SocketAddrV4::new(a, port).into(),
@@ -193,6 +198,7 @@ async fn advertise_tunnel_endpoints(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().unwrap();
     let endpoints = request.into_inner();
+    slog::info!(ctx.log, "advertise tunnel: {:#?}", endpoints);
     ctx.db.originate_tunnel(&endpoints);
 
     for e in &ctx.event_channels {
@@ -235,6 +241,7 @@ async fn withdraw_tunnel_endpoints(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().unwrap();
     let endpoints = request.into_inner();
+    slog::info!(ctx.log, "withdraw tunnel: {:#?}", endpoints);
     ctx.db.withdraw_tunnel(&endpoints);
 
     for e in &ctx.event_channels {

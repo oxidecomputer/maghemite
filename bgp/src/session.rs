@@ -14,6 +14,7 @@ use crate::messages::{
 use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
+pub use rdb::DEFAULT_ROUTE_PRIORITY;
 use rdb::{Asn, Db, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -25,8 +26,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
-
-pub const DEFAULT_ROUTE_PRIORITY: u64 = 100;
 
 #[derive(Debug)]
 pub struct PeerConnection<Cnx: BgpConnection> {

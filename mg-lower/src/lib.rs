@@ -124,7 +124,11 @@ fn full_sync(
 ) -> Result<u64, Error> {
     let generation = db.generation();
 
-    let db_imported = db.get_imported4();
+    let db_imported: Vec<rdb::Route4ImportKey> = db
+        .get_imported4()
+        .into_iter()
+        .filter(|x| x.priority > 0)
+        .collect();
 
     ensure_tep_addr(tep, dpd, rt.clone(), log);
 
@@ -180,16 +184,22 @@ fn handle_change(
 ) -> Result<u64, Error> {
     info!(
         log,
-        "mg-lower: handling rib change generation {} -> {}",
+        "mg-lower: handling rib change generation {} -> {}: {:#?}",
         generation,
-        change.generation
+        change.generation,
+        change,
     );
 
     if change.generation > generation + 1 {
         return full_sync(tep, db, log, dpd, ddm, rt.clone());
     }
-    let to_add: Vec<rdb::Route4ImportKey> =
-        change.import.added.clone().into_iter().collect();
+    let to_add: Vec<rdb::Route4ImportKey> = change
+        .import
+        .added
+        .clone()
+        .into_iter()
+        .filter(|x| x.priority > 0)
+        .collect();
     add_tunnel_routes(tep, ddm, &to_add, rt.clone(), log);
     let to_add = db_route_to_dendrite_route(to_add, log, dpd);
 
