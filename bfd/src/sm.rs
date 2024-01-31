@@ -53,6 +53,7 @@ pub struct StateMachine {
 
 impl Drop for StateMachine {
     fn drop(&mut self) {
+        warn!(self.log, "dropping SM for {}", self.peer);
         self.kill_switch.store(true, Ordering::Relaxed);
     }
 }
@@ -136,6 +137,10 @@ impl StateMachine {
             *state.write().unwrap() = st;
             endpoint = ep;
             let new = state.read().unwrap().state();
+
+            if kill_switch.load(Ordering::Relaxed) {
+                break;
+            }
 
             if prev != new {
                 inf!(log, prev, peer; "transition -> {:?}", new);

@@ -161,10 +161,13 @@ pub(crate) async fn remove_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
     params: Path<DeleteBfdPeerPathParams>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let mut daemon = ctx.context().bfd.daemon.lock().unwrap();
     let rq = params.into_inner();
-
-    daemon.remove_peer(rq.addr);
+    ctx.context()
+        .bfd
+        .daemon
+        .lock()
+        .unwrap()
+        .remove_peer(rq.addr);
 
     ctx.context()
         .bfd
@@ -342,6 +345,7 @@ impl Dispatcher {
         for x in &to_remove {
             self.listeners.remove(x);
         }
+        self.sessions.write().unwrap().remove(&peer);
         Ok(())
     }
 
@@ -394,7 +398,10 @@ impl Dispatcher {
                 warn!(log, "udp ingress channel closed: {e}";
                     "peer" => sa.ip().to_string(),
                 );
-                break;
+                // This channel serves multiple peers, carry on as
+                // the session associated with the closed channel
+                // should get removed.
+                continue;
             }
         }
     }
