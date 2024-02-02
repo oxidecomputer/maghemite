@@ -3,19 +3,19 @@ Maghemite
 
 A suite of routing protocol implementations written in Rust.
 
-Routing protocols are commonly broken up into an upper-half and a lower-half.
-The upper-half is responsible for discovering other routers, forming peering
+Routing protocols are commonly broken up into an upper half and a lower half.
+The upper half is responsible for discovering other routers, forming peering
 relationships, and exchanging routes. The lower half is responsible for making
 packet forwarding decisions based on the routing tables established by an
-upper-half. Maghemite implements upper-halves for the protocols listed below
+upper half. Maghemite implements upper halves for the protocols listed below
 with support for the lower-half data planes listed below.
 
 ## Protocols
 
 - [x] [DDM](ddm): Delay Driven Multipath
 - [x] [BGP](bgp): Border Gateway Protocol
-- [ ] BFD: Bidirectional Forwarding Detection
-- [ ] Static: Static route specifications (e.g. no protocol involved)
+- [x] [BFD](bfd): Bidirectional Forwarding Detection
+- [x] [Static](mgd/src/static_admin.rs): Static route specifications (e.g. no protocol involved)
 
 ## Supported Data Planes
 
@@ -46,7 +46,7 @@ standalone routing information base (RIB).
 ## External Routing Protocols
 
 Unlike DDM, external routing is a coordination among several protocols and
-configuration mechanisms. Currently these include BGP, BFD and static routing.
+configuration mechanisms. Currently, these include BGP, BFD, and static routing.
 These all share a common RIB. They also live in a common daemon `mgd`. Each
 protocol is implemented as a library and `mgd` manages execution for each
 protocol. The RIB for these protocols lives in [rib](rdb) and the lower half
@@ -59,3 +59,4 @@ architecture is by design.
 
 - [DDM integration tests](tests/src/ddm.rs)
 - [BGP integration tests](bgp/src/test.rs)
+- [BFD integration tests](bfd/src/lib.rs#L282)
