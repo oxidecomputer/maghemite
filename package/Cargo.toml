@@ -7,3 +7,4 @@ edition = "2021"
 omicron-zone-package = "0.11.0"
 anyhow.workspace = true
 tokio.workspace = true
+camino = "1.1"

@@ -1909,6 +1909,7 @@ name = "mg-package"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "camino",
  "omicron-zone-package",
  "tokio",
 ]

@@ -3,20 +3,19 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
-use omicron_zone_package::target::Target;
+use omicron_zone_package::package::BuildConfig;
 use std::fs::create_dir_all;
-use std::path::Path;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cfg = omicron_zone_package::config::parse("package-manifest.toml")?;
 
-    let output_dir = Path::new("out");
+    let output_dir = camino::Utf8Path::new("out");
     create_dir_all(output_dir)?;
 
     for (name, package) in cfg.packages {
         package
-            .create_for_target(&Target::default(), &name, output_dir)
+            .create(&name, output_dir, &BuildConfig::default())
             .await?;
     }
 
