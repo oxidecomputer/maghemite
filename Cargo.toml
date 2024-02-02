@@ -52,7 +52,7 @@ hostname = "0.3"
 thiserror = "1.0"
 dropshot = { git = "https://github.com/oxidecomputer/dropshot", branch = "main" }
 schemars = { version = "0.8", features = [ "uuid" ] }
-tokio = { version = "1.35", features = ["full"] }
+tokio = { version = "1.36", features = ["full"] }
 serde_repr = "0.1"
 anyhow = "1.0"
 hyper = "0.14"
