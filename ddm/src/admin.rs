@@ -54,6 +54,7 @@ pub fn handler(
 
     let config = ConfigDropshot {
         bind_address: sa,
+        request_body_max_bytes: 1024 * 1024 * 1024,
         ..Default::default()
     };
 
