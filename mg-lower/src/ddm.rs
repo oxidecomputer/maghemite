@@ -139,7 +139,10 @@ pub(crate) fn remove_tunnel_endpoints<
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) {
-    let routes = routes.cloned().collect();
+    let routes: Vec<TunnelOrigin> = routes.cloned().collect();
+    if routes.is_empty() {
+        return;
+    }
     let resp =
         rt.block_on(async { client.withdraw_tunnel_endpoints(&routes).await });
     match resp {

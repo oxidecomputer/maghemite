@@ -21,7 +21,7 @@ use rdb::{ChangeSet, Db};
 use slog::{error, info, Logger};
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -85,13 +85,13 @@ pub fn run(
                         Err(e) => {
                             error!(log, "handling change failed: {e}");
                             info!(log, "restarting sync loop");
-                            break;
+                            continue;
                         }
                     }
                 }
                 // if we've not received updates in the timeout interval, do a
                 // full sync in case something has changed out from under us.
-                Err(_) => {
+                Err(RecvTimeoutError::Timeout) => {
                     generation =
                         match full_sync(tep, &db, &log, &dpd, &ddm, rt.clone())
                         {
@@ -106,6 +106,10 @@ pub fn run(
                                 continue;
                             }
                         }
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    error!(log, "mg-lower rdb watcher disconnected");
+                    break;
                 }
             }
         }
