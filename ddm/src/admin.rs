@@ -121,7 +121,10 @@ async fn get_originated(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<HashSet<Ipv6Prefix>>, HttpError> {
     let ctx = ctx.context().lock().unwrap();
-    let originated = ctx.db.originated();
+    let originated = ctx
+        .db
+        .originated()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     Ok(HttpResponseOk(originated))
 }
 
@@ -130,7 +133,10 @@ async fn get_originated_tunnel_endpoints(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<HashSet<TunnelOrigin>>, HttpError> {
     let ctx = ctx.context().lock().unwrap();
-    let originated = ctx.db.originated_tunnel();
+    let originated = ctx
+        .db
+        .originated_tunnel()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     Ok(HttpResponseOk(originated))
 }
 
@@ -178,7 +184,9 @@ async fn advertise_prefixes(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().unwrap();
     let prefixes = request.into_inner();
-    ctx.db.originate(&prefixes);
+    ctx.db
+        .originate(&prefixes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     for e in &ctx.event_channels {
         e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Underlay(
@@ -200,7 +208,9 @@ async fn advertise_tunnel_endpoints(
     let ctx = ctx.context().lock().unwrap();
     let endpoints = request.into_inner();
     slog::info!(ctx.log, "advertise tunnel: {:#?}", endpoints);
-    ctx.db.originate_tunnel(&endpoints);
+    ctx.db
+        .originate_tunnel(&endpoints)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     for e in &ctx.event_channels {
         e.send(Event::Admin(AdminEvent::Announce(PrefixSet::Tunnel(
@@ -221,7 +231,9 @@ async fn withdraw_prefixes(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().unwrap();
     let prefixes = request.into_inner();
-    ctx.db.withdraw(&prefixes);
+    ctx.db
+        .withdraw(&prefixes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     for e in &ctx.event_channels {
         e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Underlay(
@@ -243,7 +255,9 @@ async fn withdraw_tunnel_endpoints(
     let ctx = ctx.context().lock().unwrap();
     let endpoints = request.into_inner();
     slog::info!(ctx.log, "withdraw tunnel: {:#?}", endpoints);
-    ctx.db.withdraw_tunnel(&endpoints);
+    ctx.db
+        .withdraw_tunnel(&endpoints)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     for e in &ctx.event_channels {
         e.send(Event::Admin(AdminEvent::Withdraw(PrefixSet::Tunnel(

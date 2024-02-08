@@ -487,8 +487,13 @@ async fn run_trio_tests(
     zs1.start_router()?;
 
     wait_for_eq!(prefix_count(&s1).await.unwrap_or(99), 1);
-    wait_for_eq!(prefix_count(&s2).await?, 0);
-    wait_for_eq!(prefix_count(&t1).await?, 1);
+    if zs2.v1 {
+        wait_for_eq!(prefix_count(&s2).await?, 0);
+        wait_for_eq!(prefix_count(&t1).await?, 1);
+    } else {
+        wait_for_eq!(prefix_count(&s2).await?, 1);
+        wait_for_eq!(prefix_count(&t1).await?, 2);
+    }
 
     s1.advertise_prefixes(&vec![Ipv6Prefix {
         addr: "fd00:1::".parse().unwrap(),

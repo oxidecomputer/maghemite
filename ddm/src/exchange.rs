@@ -530,16 +530,10 @@ async fn pull_handler_v1(
 ) -> Result<HttpResponseOk<HashSet<PathVector>>, HttpError> {
     let ctx = ctx.context().lock().await.clone();
 
-    let db = tokio::task::spawn_blocking(move || ctx.ctx.db.dump())
-        .await
-        .map_err(|e| {
-            HttpError::for_internal_error(format!("spawn db dump thread {}", e))
-        })?;
-
     let mut prefixes = HashSet::new();
     // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
-        for route in &db.imported {
+        for route in &ctx.ctx.db.imported() {
             // dont redistribute prefixes to their originators
             if route.nexthop == ctx.peer {
                 continue;
@@ -552,7 +546,12 @@ async fn pull_handler_v1(
             prefixes.insert(pv);
         }
     }
-    for prefix in &db.originated {
+    let originated = ctx
+        .ctx
+        .db
+        .originated()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    for prefix in &originated {
         let pv = PathVector {
             destination: *prefix,
             path: vec![ctx.ctx.hostname.clone()],
@@ -569,18 +568,12 @@ async fn pull_handler(
 ) -> Result<HttpResponseOk<PullResponse>, HttpError> {
     let ctx = ctx.context().lock().await.clone();
 
-    let db = tokio::task::spawn_blocking(move || ctx.ctx.db.dump())
-        .await
-        .map_err(|e| {
-            HttpError::for_internal_error(format!("spawn db dump thread {}", e))
-        })?;
-
     let mut underlay = HashSet::new();
     let mut tunnel = HashSet::new();
 
     // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
-        for route in &db.imported {
+        for route in &ctx.ctx.db.imported() {
             // dont redistribute prefixes to their originators
             if route.nexthop == ctx.peer {
                 continue;
@@ -592,7 +585,7 @@ async fn pull_handler(
             pv.path.push(ctx.ctx.hostname.clone());
             underlay.insert(pv);
         }
-        for route in &db.imported_tunnel {
+        for route in &ctx.ctx.db.imported_tunnel() {
             if route.nexthop == ctx.peer {
                 continue;
             }
@@ -600,14 +593,25 @@ async fn pull_handler(
             tunnel.insert(tv);
         }
     }
-    for prefix in &db.originated {
+    let originated = ctx
+        .ctx
+        .db
+        .originated()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    for prefix in &originated {
         let pv = PathVector {
             destination: *prefix,
             path: vec![ctx.ctx.hostname.clone()],
         };
         underlay.insert(pv);
     }
-    for prefix in &db.originated_tunnel {
+
+    let originated_tunnel = ctx
+        .ctx
+        .db
+        .originated_tunnel()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    for prefix in &originated_tunnel {
         let tv = TunnelOrigin {
             overlay_prefix: prefix.overlay_prefix,
             boundary_addr: prefix.boundary_addr,
