@@ -22,3 +22,4 @@ dpd-client.workspace = true
 dendrite-common.workspace = true
 opte-ioctl.workspace = true
 oxide-vpc.workspace = true
+sled.workspace = true

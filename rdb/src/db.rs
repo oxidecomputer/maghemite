@@ -310,7 +310,6 @@ impl Db {
                         return None;
                     }
                 };
-                //let key = String::from_utf8_lossy(&key);
                 Some(match Prefix4::from_db_key(&key) {
                     Ok(item) => item,
                     Err(e) => {

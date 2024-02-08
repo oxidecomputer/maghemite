@@ -69,6 +69,10 @@ struct Arg {
     /// Listening port for the Dendrite dpd server.
     #[arg(long, default_value_t = dpd_client::default_port())]
     dpd_port: u16,
+
+    /// Where to store the local database
+    #[arg(long, default_value = "/var/run")]
+    data_dir: String,
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -82,8 +86,8 @@ async fn main() {
     let arg = Arg::parse();
 
     let mut event_channels = Vec::new();
-    let db = Db::default();
     let log = init_logger();
+    let db = Db::new(&format!("{}/ddmdb", arg.data_dir), log.clone()).unwrap();
 
     let mut sms = Vec::new();
 
