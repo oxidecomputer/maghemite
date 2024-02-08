@@ -25,10 +25,10 @@ pub enum Error {
     #[error("datastore error {0}")]
     DataStore(#[from] sled::Error),
 
-    #[error("db key error{0}")]
+    #[error("db key error {0}")]
     DbKey(String),
 
-    #[error("db value error{0}")]
+    #[error("db value error {0}")]
     DbValue(String),
 
     #[error("serialization error {0}")]
@@ -340,17 +340,14 @@ impl Ipv6Prefix {
     }
 
     pub fn from_db_key(v: &[u8]) -> Result<Self, Error> {
-        if v.len() < 5 {
+        if v.len() < 17 {
             Err(Error::DbKey(format!(
-                "buffer to short for prefix 4 key {} < 5",
+                "buffer to short for prefix 6 key {} < 17",
                 v.len()
             )))
         } else {
             Ok(Self {
-                addr: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], v[13], v[14], v[15],
-                ]),
+                addr: Ipv6Addr::from(<[u8; 16]>::try_from(&v[..16]).unwrap()),
                 len: v[16],
             })
         }
