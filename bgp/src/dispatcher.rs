@@ -11,6 +11,7 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+use std::thread::sleep;
 use std::time::Duration;
 
 pub struct Dispatcher<Cnx: BgpConnection> {
@@ -46,6 +47,7 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                         self.log,
                         "bgp dispatcher failed to listen {e}"
                     );
+                    sleep(Duration::from_secs(1));
                     continue;
                 }
             };
