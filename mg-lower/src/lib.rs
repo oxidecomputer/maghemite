@@ -128,11 +128,7 @@ fn full_sync(
 ) -> Result<u64, Error> {
     let generation = db.generation();
 
-    let db_imported: Vec<rdb::Route4ImportKey> = db
-        .get_imported4()
-        .into_iter()
-        .filter(|x| x.priority > 0)
-        .collect();
+    let db_imported: Vec<rdb::Route4ImportKey> = db.effective_route_set();
 
     ensure_tep_addr(tep, dpd, rt.clone(), log);
 
