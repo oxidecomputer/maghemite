@@ -447,7 +447,17 @@ impl Db {
         }
     }
 
-    pub fn remove_nexthop4(&self, r: Route4ImportKey) {
+    pub fn remove_nexthop4(
+        &self,
+        r: Route4ImportKey,
+        is_static: bool,
+    ) -> Result<(), Error> {
+        if is_static {
+            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+            let key = serde_json::to_string(&r)?;
+            tree.remove(key.as_str())?;
+            tree.flush()?;
+        }
         let mut imported = lock!(self.imported);
         let before = Self::effective_set_for_prefix4(&imported, r.prefix);
         imported.remove(&r);
@@ -457,6 +467,8 @@ impl Db {
         {
             self.notify(change_set);
         }
+
+        Ok(())
     }
 
     pub fn remove_peer_prefix4(&self, id: u32, prefix: Prefix4) {

@@ -79,7 +79,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             client.static_add_v4_route(&arg).await?;
         }
         Commands::RemoveV4Routes(route) => {
-            let arg = types::AddStaticRoute4Request {
+            let arg = types::DeleteStaticRoute4Request {
                 routes: types::StaticRoute4List {
                     list: vec![types::StaticRoute4 {
                         prefix: Prefix4 {
@@ -90,7 +90,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                     }],
                 },
             };
-            client.static_add_v4_route(&arg).await?;
+            client.static_remove_v4_route(&arg).await?;
         }
     }
     Ok(())

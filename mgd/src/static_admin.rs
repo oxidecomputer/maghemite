@@ -92,7 +92,10 @@ pub async fn static_remove_v4_route(
         .map(Into::into)
         .collect();
     for r in routes {
-        ctx.context().db.remove_nexthop4(r);
+        ctx.context()
+            .db
+            .remove_nexthop4(r, true)
+            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     }
     Ok(HttpResponseDeleted())
 }
