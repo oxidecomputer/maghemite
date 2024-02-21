@@ -575,6 +575,7 @@ async fn run_trio_tests(
             overlay_prefix: "203.0.113.0/24".parse().unwrap(),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
             vni: 47,
+            metric: 0,
         }])
         .await?;
 
@@ -591,6 +592,7 @@ async fn run_trio_tests(
             overlay_prefix: "203.0.113.0/24".parse().unwrap(),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
             vni: 47,
+            metric: 0,
         }])
         .await?;
 
@@ -616,6 +618,7 @@ async fn run_trio_tests(
             overlay_prefix: "203.0.113.0/24".parse().unwrap(),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
             vni: 47,
+            metric: 0,
         }])
         .await?;
 

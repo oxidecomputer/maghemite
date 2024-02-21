@@ -193,13 +193,9 @@ fn handle_change(
     if change.generation > generation + 1 {
         return full_sync(tep, db, log, dpd, ddm, rt.clone());
     }
-    let to_add: Vec<rdb::Route4ImportKey> = change
-        .import
-        .added
-        .clone()
-        .into_iter()
-        .filter(|x| x.priority > 0)
-        .collect();
+    let to_add: Vec<rdb::Route4ImportKey> =
+        change.import.added.clone().into_iter().collect();
+
     add_tunnel_routes(tep, ddm, &to_add, rt.clone(), log);
     let to_add = db_route_to_dendrite_route(to_add, log, dpd);
 

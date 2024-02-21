@@ -79,6 +79,9 @@ struct TunnelEndpoint {
 
     #[arg(short, long)]
     pub vni: u32,
+
+    #[arg(short, long)]
+    pub metric: u64,
 }
 
 #[derive(Debug, Parser)]
@@ -193,18 +196,20 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
-                "{}\t{}\t{}",
+                "{}\t{}\t{}\t{}",
                 "Overlay Prefix".dimmed(),
                 "Boundary Address".dimmed(),
                 "VNI".dimmed(),
+                "Metric".dimmed(),
             )?;
             for endpoint in msg.into_inner() {
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}",
                     endpoint.origin.overlay_prefix,
                     endpoint.origin.boundary_addr,
                     endpoint.origin.vni,
+                    endpoint.origin.metric,
                 )?;
             }
             tw.flush()?;
@@ -214,18 +219,20 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
-                "{}\t{}\t{}",
+                "{}\t{}\t{}\t{}",
                 "Overlay Prefix".dimmed(),
                 "Boundary Address".dimmed(),
                 "VNI".dimmed(),
+                "Metric".dimmed(),
             )?;
             for endpoint in msg.into_inner() {
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}",
                     endpoint.overlay_prefix,
                     endpoint.boundary_addr,
                     endpoint.vni,
+                    endpoint.metric,
                 )?;
             }
             tw.flush()?;
@@ -236,6 +243,7 @@ async fn run() -> Result<()> {
                     overlay_prefix: ep.overlay_prefix,
                     boundary_addr: ep.boundary_addr,
                     vni: ep.vni,
+                    metric: ep.metric,
                 }])
                 .await?;
         }
@@ -245,6 +253,7 @@ async fn run() -> Result<()> {
                     overlay_prefix: ep.overlay_prefix,
                     boundary_addr: ep.boundary_addr,
                     vni: ep.vni,
+                    metric: ep.metric,
                 }])
                 .await?;
         }
