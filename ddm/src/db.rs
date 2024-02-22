@@ -548,7 +548,7 @@ impl EffectiveTunnelRouteSet {
     }
 }
 
-//NOTE this is the same algorithm as rdb::Db::effective_rotue set but for
+//NOTE this is the same algorithm as rdb::Db::effective_route set but for
 //     tunnel routes. We need to apply the same logic here, but because
 //     the server routers get tunnel endpoint information from a disparate
 //     set of transit routers that are not in cahoots, we need to calculate
@@ -617,84 +617,6 @@ pub fn effective_route_set(
         }
     }
     result
-}
-
-pub fn effective_set_for_prefix(
-    imported: &HashSet<TunnelRoute>,
-    prefix: IpPrefix,
-) -> EffectiveTunnelRouteSet {
-    let full: HashSet<TunnelRoute> = imported
-        .iter()
-        .filter(|x| x.origin.overlay_prefix == prefix)
-        .copied()
-        .collect();
-
-    let shutdown: HashSet<TunnelRoute> = full
-        .iter()
-        .filter(|x| x.origin.metric == 0)
-        .copied()
-        .collect();
-
-    let active: HashSet<TunnelRoute> = full
-        .iter()
-        .filter(|x| x.origin.metric > 0)
-        .copied()
-        .collect();
-
-    match (active.len(), shutdown.len()) {
-        (0, _) => EffectiveTunnelRouteSet::Inactive(shutdown),
-        (_, 0) => EffectiveTunnelRouteSet::Active(active),
-        _ => EffectiveTunnelRouteSet::Active(active),
-    }
-}
-
-#[derive(Clone, Default, Debug)]
-pub struct TunnelRouteChangeSet {
-    pub added: HashSet<TunnelRoute>,
-    pub removed: HashSet<TunnelRoute>,
-}
-
-pub fn tunnel_route_change_set(
-    before: &EffectiveTunnelRouteSet,
-    after: &EffectiveTunnelRouteSet,
-) -> Option<TunnelRouteChangeSet> {
-    match (before, after) {
-        (
-            EffectiveTunnelRouteSet::Active(before),
-            EffectiveTunnelRouteSet::Active(after),
-        ) => {
-            let added: HashSet<TunnelRoute> =
-                after.difference(before).copied().collect();
-
-            let removed: HashSet<TunnelRoute> =
-                before.difference(after).copied().collect();
-
-            if added.is_empty() && removed.is_empty() {
-                return None;
-            }
-
-            Some(TunnelRouteChangeSet { added, removed })
-        }
-        (
-            EffectiveTunnelRouteSet::Active(before),
-            EffectiveTunnelRouteSet::Inactive(_after),
-        ) => Some(TunnelRouteChangeSet {
-            removed: before.clone(),
-            ..Default::default()
-        }),
-        (
-            EffectiveTunnelRouteSet::Inactive(_before),
-            EffectiveTunnelRouteSet::Active(after),
-        ) => Some(TunnelRouteChangeSet {
-            added: after.clone(),
-            ..Default::default()
-        }),
-
-        (
-            EffectiveTunnelRouteSet::Inactive(_before),
-            EffectiveTunnelRouteSet::Inactive(_after),
-        ) => None,
-    }
 }
 
 #[cfg(test)]
