@@ -15,7 +15,10 @@
 //! of a ddm router is defined in the state machine implementation in sm.rs.
 //!
 
-use crate::db::{Ipv6Prefix, Route, RouterKind, TunnelOrigin, TunnelRoute};
+use crate::db::{
+    effective_route_set, Ipv6Prefix, Route, RouterKind, TunnelOrigin,
+    TunnelRoute,
+};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
@@ -589,7 +592,7 @@ async fn pull_handler(
             if route.nexthop == ctx.peer {
                 continue;
             }
-            let tv = route.origin.clone();
+            let tv = route.origin;
             tunnel.insert(tv);
         }
     }
@@ -616,6 +619,7 @@ async fn pull_handler(
             overlay_prefix: prefix.overlay_prefix,
             boundary_addr: prefix.boundary_addr,
             vni: prefix.vni,
+            metric: prefix.metric,
         };
         tunnel.insert(tv);
     }
@@ -674,21 +678,43 @@ fn handle_tunnel_update(update: &TunnelUpdate, ctx: &HandlerContext) {
     let mut remove = HashSet::new();
     let db = &ctx.ctx.db;
 
+    let before = effective_route_set(&db.imported_tunnel());
+
     for x in &update.announce {
         import.insert(TunnelRoute {
             origin: TunnelOrigin {
                 overlay_prefix: x.overlay_prefix,
                 boundary_addr: x.boundary_addr,
                 vni: x.vni,
+                metric: x.metric,
             },
             nexthop: ctx.peer,
         });
     }
     db.import_tunnel(&import);
+
+    for x in &update.withdraw {
+        remove.insert(TunnelRoute {
+            origin: TunnelOrigin {
+                overlay_prefix: x.overlay_prefix,
+                boundary_addr: x.boundary_addr,
+                vni: x.vni,
+                metric: x.metric,
+            },
+            nexthop: ctx.peer,
+        });
+    }
+    db.delete_import_tunnel(&remove);
+
+    let after = effective_route_set(&db.imported_tunnel());
+
+    let to_add = after.difference(&before).copied().collect();
+    let to_del = before.difference(&after).copied().collect();
+
     if let Err(e) = crate::sys::add_tunnel_routes(
         &ctx.log,
         &ctx.ctx.config.if_name,
-        &import,
+        &to_add,
     ) {
         err!(
             ctx.log,
@@ -698,21 +724,10 @@ fn handle_tunnel_update(update: &TunnelUpdate, ctx: &HandlerContext) {
         )
     }
 
-    for x in &update.withdraw {
-        remove.insert(TunnelRoute {
-            origin: TunnelOrigin {
-                overlay_prefix: x.overlay_prefix,
-                boundary_addr: x.boundary_addr,
-                vni: x.vni,
-            },
-            nexthop: ctx.peer,
-        });
-    }
-    db.delete_import_tunnel(&remove);
     if let Err(e) = crate::sys::remove_tunnel_routes(
         &ctx.log,
         &ctx.ctx.config.if_name,
-        &remove,
+        &to_del,
     ) {
         err!(
             ctx.log,

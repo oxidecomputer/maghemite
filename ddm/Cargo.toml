@@ -3,6 +3,9 @@ name = "ddm"
 version = "0.1.0"
 edition = "2021"
 
+[dev-dependencies]
+pretty_assertions.workspace = true
+
 [dependencies]
 slog.workspace = true
 socket2.workspace = true

@@ -357,6 +357,11 @@ impl Dispatcher {
     ) {
         loop {
             if kill_switch.load(std::sync::atomic::Ordering::Relaxed) {
+                warn!(
+                    log,
+                    "kill switch activated for listener on {:?}",
+                    sk.local_addr()
+                );
                 break;
             }
             // Maximum length of a BFD packet is on the order of 100 bytes (RFC

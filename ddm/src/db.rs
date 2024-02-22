@@ -239,7 +239,7 @@ impl Db {
         let mut tnl_removed = HashSet::new();
         for x in &data.imported_tunnel {
             if x.nexthop == nexthop {
-                tnl_removed.insert(x.clone());
+                tnl_removed.insert(*x);
             }
         }
         for x in &tnl_removed {
@@ -389,7 +389,7 @@ impl std::str::FromStr for Ipv6Prefix {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct TunnelRoute {
     pub origin: TunnelOrigin,
@@ -402,12 +402,14 @@ pub struct TunnelRoute {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct TunnelOrigin {
     pub overlay_prefix: IpPrefix,
     pub boundary_addr: Ipv6Addr,
     pub vni: u32,
+    #[serde(default)]
+    pub metric: u64,
 }
 
 impl From<crate::db::TunnelRoute> for TunnelOrigin {
@@ -416,6 +418,7 @@ impl From<crate::db::TunnelRoute> for TunnelOrigin {
             overlay_prefix: x.origin.overlay_prefix,
             boundary_addr: x.origin.boundary_addr,
             vni: x.origin.vni,
+            metric: x.origin.metric,
         }
     }
 }
@@ -522,5 +525,188 @@ impl std::str::FromStr for IpPrefix {
             return Ok(IpPrefix::V4(result));
         }
         Ok(IpPrefix::V6(Ipv6Prefix::from_str(s)?))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum EffectiveTunnelRouteSet {
+    /// The routes in the contained set are active with priority greater than
+    /// zero.
+    Active(HashSet<TunnelRoute>),
+
+    /// The routes in the contained set are inactive with a priority equal to
+    /// zero.
+    Inactive(HashSet<TunnelRoute>),
+}
+
+impl EffectiveTunnelRouteSet {
+    fn values(&self) -> &HashSet<TunnelRoute> {
+        match self {
+            EffectiveTunnelRouteSet::Active(s) => s,
+            EffectiveTunnelRouteSet::Inactive(s) => s,
+        }
+    }
+}
+
+//NOTE this is the same algorithm as rdb::Db::effective_route set but for
+//     tunnel routes. We need to apply the same logic here, but because
+//     the server routers get tunnel endpoint information from a disparate
+//     set of transit routers that are not in cahoots, we need to calculate
+//     the effective set for all the tunneled routes for all endpoints.
+pub fn effective_route_set(
+    full: &HashSet<TunnelRoute>,
+) -> HashSet<TunnelRoute> {
+    let mut sets = HashMap::<IpPrefix, EffectiveTunnelRouteSet>::new();
+    for x in full.iter() {
+        match sets.get_mut(&x.origin.overlay_prefix) {
+            Some(set) => {
+                if x.origin.metric > 0 {
+                    match set {
+                        EffectiveTunnelRouteSet::Active(s) => {
+                            s.insert(*x);
+                        }
+                        EffectiveTunnelRouteSet::Inactive(_) => {
+                            let mut value = HashSet::new();
+                            value.insert(*x);
+                            sets.insert(
+                                x.origin.overlay_prefix,
+                                EffectiveTunnelRouteSet::Active(value),
+                            );
+                        }
+                    }
+                } else {
+                    match set {
+                        EffectiveTunnelRouteSet::Active(_) => {
+                            //Nothing to do here, the active set takes priority
+                        }
+                        EffectiveTunnelRouteSet::Inactive(s) => {
+                            s.insert(*x);
+                        }
+                    }
+                }
+            }
+            None => {
+                let mut value = HashSet::new();
+                value.insert(*x);
+                if x.origin.metric > 0 {
+                    sets.insert(
+                        x.origin.overlay_prefix,
+                        EffectiveTunnelRouteSet::Active(value),
+                    );
+                } else {
+                    sets.insert(
+                        x.origin.overlay_prefix,
+                        EffectiveTunnelRouteSet::Inactive(value),
+                    );
+                }
+            }
+        }
+    }
+    let mut result = HashSet::new();
+    for xs in sets.values() {
+        for x in xs.values() {
+            let mut v = *x;
+            //NOTE the point of this function is to determine an effective set
+            //     of routes based on the metric value to send to a data plane.
+            //     So from the data plane's perspective all routes returned
+            //     from this function are equally viable. Thus, we set the
+            //     metric to zero so there are not hash function differences
+            //     on subsequent operations involving the returned set.
+            v.origin.metric = 0;
+            result.insert(v);
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_effective_tunnel_route_set() {
+        let mut before = HashSet::<TunnelRoute>::new();
+        before.insert(TunnelRoute {
+            origin: TunnelOrigin {
+                overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                    addr: "0.0.0.0".parse().unwrap(),
+                    len: 0,
+                }),
+                boundary_addr: "fd00:a::1".parse().unwrap(),
+                vni: 99,
+                metric: 0,
+            },
+            nexthop: "fe80:a::1".parse().unwrap(),
+        });
+        before.insert(TunnelRoute {
+            origin: TunnelOrigin {
+                overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                    addr: "0.0.0.0".parse().unwrap(),
+                    len: 0,
+                }),
+                boundary_addr: "fd00:b::1".parse().unwrap(),
+                vni: 99,
+                metric: 0,
+            },
+            nexthop: "fe80:b::1".parse().unwrap(),
+        });
+        let effective_before = effective_route_set(&before);
+
+        let mut after = HashSet::<TunnelRoute>::new();
+        after.insert(TunnelRoute {
+            origin: TunnelOrigin {
+                overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                    addr: "0.0.0.0".parse().unwrap(),
+                    len: 0,
+                }),
+                boundary_addr: "fd00:a::1".parse().unwrap(),
+                vni: 99,
+                metric: 0,
+            },
+            nexthop: "fe80:a::1".parse().unwrap(),
+        });
+        after.insert(TunnelRoute {
+            origin: TunnelOrigin {
+                overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                    addr: "0.0.0.0".parse().unwrap(),
+                    len: 0,
+                }),
+                boundary_addr: "fd00:b::1".parse().unwrap(),
+                vni: 99,
+                metric: 100,
+            },
+            nexthop: "fe80:b::1".parse().unwrap(),
+        });
+        let effective_after = effective_route_set(&after);
+
+        let to_add: HashSet<TunnelRoute> = effective_after
+            .difference(&effective_before)
+            .copied()
+            .collect();
+
+        let expected_add = HashSet::<TunnelRoute>::new();
+        assert_eq!(to_add, expected_add);
+
+        let to_del: HashSet<TunnelRoute> = effective_before
+            .difference(&effective_after)
+            .copied()
+            .collect();
+
+        let mut expected_del = HashSet::<TunnelRoute>::new();
+        expected_del.insert(TunnelRoute {
+            origin: TunnelOrigin {
+                overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                    addr: "0.0.0.0".parse().unwrap(),
+                    len: 0,
+                }),
+                boundary_addr: "fd00:a::1".parse().unwrap(),
+                vni: 99,
+                metric: 0,
+            },
+            nexthop: "fe80:a::1".parse().unwrap(),
+        });
+        assert_eq!(to_del, expected_del);
     }
 }

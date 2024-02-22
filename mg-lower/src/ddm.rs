@@ -29,11 +29,8 @@ pub(crate) fn update_tunnel_endpoints(
     .into_iter()
     .collect();
 
-    let target: HashSet<TunnelOrigin> = routes
-        .iter()
-        .filter(|x| x.priority > 0)
-        .map(|x| route_to_tunnel(tep, x))
-        .collect();
+    let target: HashSet<TunnelOrigin> =
+        routes.iter().map(|x| route_to_tunnel(tep, x)).collect();
 
     let to_add = target.difference(&current);
     let to_remove = current.difference(&target);
@@ -84,6 +81,7 @@ fn route_to_tunnel(tep: Ipv6Addr, x: &Route4ImportKey) -> TunnelOrigin {
         ),
         boundary_addr: tep,
         vni: BOUNDARY_SERVICES_VNI, //TODO?
+        metric: x.priority,
     }
 }
 

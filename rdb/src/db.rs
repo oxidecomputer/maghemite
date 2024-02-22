@@ -84,6 +84,15 @@ pub enum EffectiveRouteSet {
     Inactive(HashSet<Route4ImportKey>),
 }
 
+impl EffectiveRouteSet {
+    fn values(&self) -> &HashSet<Route4ImportKey> {
+        match self {
+            EffectiveRouteSet::Active(s) => s,
+            EffectiveRouteSet::Inactive(s) => s,
+        }
+    }
+}
+
 //TODO we need bulk operations with atomic semantics here.
 impl Db {
     /// Create a new routing database that stores persistent data at `path`.
@@ -520,6 +529,61 @@ impl Db {
             (_, 0) => EffectiveRouteSet::Active(active),
             _ => EffectiveRouteSet::Active(active),
         }
+    }
+
+    pub fn effective_route_set(&self) -> Vec<Route4ImportKey> {
+        let full = lock!(self.imported).clone();
+        let mut sets = HashMap::<Prefix4, EffectiveRouteSet>::new();
+        for x in full.iter() {
+            match sets.get_mut(&x.prefix) {
+                Some(set) => {
+                    if x.priority > 0 {
+                        match set {
+                            EffectiveRouteSet::Active(s) => {
+                                s.insert(*x);
+                            }
+                            EffectiveRouteSet::Inactive(_) => {
+                                let mut value = HashSet::new();
+                                value.insert(*x);
+                                sets.insert(
+                                    x.prefix,
+                                    EffectiveRouteSet::Active(value),
+                                );
+                            }
+                        }
+                    } else {
+                        match set {
+                            EffectiveRouteSet::Active(_) => {
+                                //Nothing to do here, the active set takes priority
+                            }
+                            EffectiveRouteSet::Inactive(s) => {
+                                s.insert(*x);
+                            }
+                        }
+                    }
+                }
+                None => {
+                    let mut value = HashSet::new();
+                    value.insert(*x);
+                    if x.priority > 0 {
+                        sets.insert(x.prefix, EffectiveRouteSet::Active(value));
+                    } else {
+                        sets.insert(
+                            x.prefix,
+                            EffectiveRouteSet::Inactive(value),
+                        );
+                    }
+                }
+            };
+        }
+
+        let mut result = Vec::new();
+        for xs in sets.values() {
+            for x in xs.values() {
+                result.push(*x);
+            }
+        }
+        result
     }
 
     /// Compute a a change set for a before/after set of routes including
