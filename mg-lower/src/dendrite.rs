@@ -8,6 +8,7 @@ use dendrite_common::network::Cidr;
 use dendrite_common::ports::PortId;
 use dendrite_common::ports::QsfpPort;
 use dpd_client::types;
+use dpd_client::types::LinkState;
 use dpd_client::Client as DpdClient;
 use http::StatusCode;
 use libnet::{get_route, IpPrefix, Ipv4Prefix};
@@ -190,7 +191,8 @@ fn get_port_and_link(
 pub(crate) fn db_route_to_dendrite_route(
     rs: Vec<Route4ImportKey>,
     log: &Logger,
-    _dpd: &DpdClient,
+    dpd: &DpdClient,
+    rt: Arc<tokio::runtime::Handle>,
 ) -> HashSet<RouteHash> {
     let mut result = HashSet::new();
 
@@ -202,6 +204,27 @@ pub(crate) fn db_route_to_dendrite_route(
                 continue;
             }
         };
+
+        let link_info = match rt
+            .block_on(async { dpd.link_get(&port_id, &link_id).await })
+        {
+            Ok(info) => info.into_inner(),
+            Err(e) => {
+                error!(
+                    log,
+                    "failed to get link info for {port_id:?}/{link_id:?}: {e}"
+                );
+                continue;
+            }
+        };
+
+        if link_info.link_state != LinkState::Up {
+            warn!(
+                log,
+                "{port_id:?}/{link_id:?} is not up, not installing into RIB"
+            );
+            continue;
+        }
 
         let cidr = dpd_client::Ipv4Cidr {
             prefix: r.prefix.value,
