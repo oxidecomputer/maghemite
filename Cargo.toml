@@ -96,3 +96,8 @@ package = "dpd-client"
 git = "https://github.com/oxidecomputer/dendrite"
 branch = "main"
 package = "common"
+
+# See https://github.com/oxidecomputer/security-operations/issues/43.
+[patch.crates-io.whoami]
+git = "https://github.com/oxidecomputer/whoami"
+branch = "use-nix"
