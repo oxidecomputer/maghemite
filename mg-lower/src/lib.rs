@@ -137,7 +137,7 @@ fn full_sync(
 
     // get all imported routes from db
     let imported: HashSet<RouteHash> =
-        db_route_to_dendrite_route(db_imported, log, dpd);
+        db_route_to_dendrite_route(db_imported, log, dpd, rt.clone());
 
     // get all routes created by mg-lower from dendrite
     let routes =
@@ -197,12 +197,12 @@ fn handle_change(
         change.import.added.clone().into_iter().collect();
 
     add_tunnel_routes(tep, ddm, &to_add, rt.clone(), log);
-    let to_add = db_route_to_dendrite_route(to_add, log, dpd);
+    let to_add = db_route_to_dendrite_route(to_add, log, dpd, rt.clone());
 
     let to_del: Vec<rdb::Route4ImportKey> =
         change.import.removed.clone().into_iter().collect();
     remove_tunnel_routes(tep, ddm, &to_del, rt.clone(), log);
-    let to_del = db_route_to_dendrite_route(to_del, log, dpd);
+    let to_del = db_route_to_dendrite_route(to_del, log, dpd, rt.clone());
 
     update_dendrite(to_add.iter(), to_del.iter(), dpd, rt.clone(), log)?;
 
