@@ -412,6 +412,20 @@ impl Db {
             .collect())
     }
 
+    pub fn get_static4_count(&self) -> Result<usize, Error> {
+        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+        Ok(tree.len())
+    }
+
+    pub fn get_static_nexthop4_count(&self) -> Result<usize, Error> {
+        let entries = self.get_static4()?;
+        let mut nexthops = HashSet::new();
+        for e in entries {
+            nexthops.insert(e.nexthop);
+        }
+        Ok(nexthops.len())
+    }
+
     pub fn disable_nexthop4(&self, addr: Ipv4Addr) {
         let mut imported = lock!(self.imported);
         let changed: Vec<Route4ImportKey> = imported

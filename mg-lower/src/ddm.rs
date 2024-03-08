@@ -2,7 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_admin_client::{Client, Ipv6Prefix, TunnelOrigin};
+use ddm_admin_client::types::{Ipv6Prefix, TunnelOrigin};
+use ddm_admin_client::Client;
 use rdb::Route4ImportKey;
 use slog::{error, info, Logger};
 use std::{collections::HashSet, net::Ipv6Addr, sync::Arc};
@@ -73,8 +74,8 @@ fn ensure_tep_underlay_origin(
 
 fn route_to_tunnel(tep: Ipv6Addr, x: &Route4ImportKey) -> TunnelOrigin {
     TunnelOrigin {
-        overlay_prefix: ddm_admin_client::IpPrefix::V4(
-            ddm_admin_client::Ipv4Prefix {
+        overlay_prefix: ddm_admin_client::types::IpPrefix::V4(
+            ddm_admin_client::types::Ipv4Prefix {
                 addr: x.prefix.value,
                 len: x.prefix.length,
             },

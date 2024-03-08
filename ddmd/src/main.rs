@@ -3,13 +3,15 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use clap::Parser;
+use ddm::admin::RouterStats;
 use ddm::db::{Db, RouterKind};
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
 use ddm::sys::Route;
 use slog::{error, Drain, Logger};
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::mpsc::channel;
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None, styles = get_styles())]
@@ -73,6 +75,26 @@ struct Arg {
     /// Where to store the local database
     #[arg(long, default_value = "/var/run")]
     data_dir: String,
+
+    /// DNS servers used to find nexus.
+    #[arg(long)]
+    dns_servers: Vec<String>,
+
+    /// Register as an oximeter producer.
+    #[arg(long)]
+    with_stats: bool,
+
+    /// Port to listen on for the oximeter API.
+    #[arg(long, default_value_t = 8001)]
+    oximeter_port: u16,
+
+    /// Id of the rack this router is running on.
+    #[arg(long)]
+    rack_uuid: Option<Uuid>,
+
+    /// Id of the sled this router is running on.
+    #[arg(long)]
+    sled_uuid: Option<Uuid>,
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -129,6 +151,7 @@ async fn main() {
             log: log.clone(),
             hostname: hostname.clone(),
             rt: rt.clone(),
+            stats: Arc::new(ddm::sm::SessionStats::default()),
         };
         let sm = StateMachine { ctx, rx: Some(rx) };
         sms.push(sm);
@@ -153,11 +176,44 @@ async fn main() {
 
     termination_handler(db.clone(), dpd, rt, log.clone());
 
+    let router_stats = Arc::new(RouterStats::default());
+    let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
+    let dns_servers: Vec<SocketAddr> = arg
+        .dns_servers
+        .iter()
+        .filter(|x| x.as_str() != "unknown")
+        .map(|x| x.parse().unwrap())
+        .collect();
+
+    let stats_handler = if arg.with_stats && !dns_servers.is_empty() {
+        Some(
+            ddm::oxstats::start_server(
+                arg.admin_addr,
+                arg.oximeter_port,
+                peers.clone(),
+                router_stats.clone(),
+                dns_servers,
+                hostname.clone(),
+                arg.rack_uuid
+                    .expect("rack uuid required to start stats server"),
+                arg.sled_uuid
+                    .expect("sled uuid required to start stats server"),
+                log.clone(),
+            )
+            .unwrap(),
+        )
+    } else {
+        None
+    };
+
     ddm::admin::handler(
         arg.admin_addr,
         arg.admin_port,
         event_channels,
         db,
+        router_stats,
+        stats_handler,
+        peers,
         log,
     )
     .unwrap();

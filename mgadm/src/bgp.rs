@@ -14,6 +14,13 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tabwriter::TabWriter;
 
+fn to_prefix4(p: &types::Prefix4) -> Prefix4 {
+    Prefix4 {
+        value: p.value,
+        length: p.length,
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Get the running set of BGP routers.
@@ -267,7 +274,10 @@ async fn get_imported(c: Client, asn: u32) {
         writeln!(
             &mut tw,
             "{}\t{}\t{}\t{}",
-            route.prefix, route.nexthop, id, route.priority,
+            to_prefix4(&route.prefix),
+            route.nexthop,
+            id,
+            route.priority,
         )
         .unwrap();
     }
@@ -286,7 +296,7 @@ async fn get_originated(c: Client, asn: u32) {
     writeln!(&mut tw, "{}", "Prefix".dimmed()).unwrap();
 
     for prefix in &originated {
-        writeln!(&mut tw, "{}", prefix).unwrap();
+        writeln!(&mut tw, "{}", to_prefix4(prefix)).unwrap();
     }
 
     tw.flush().unwrap();
@@ -305,7 +315,15 @@ async fn delete_neighbor(asn: u32, addr: IpAddr, c: Client) {
 async fn originate4(originate: Originate4, c: Client) {
     c.originate4(&types::Originate4Request {
         asn: originate.asn,
-        prefixes: originate.prefixes.clone(),
+        prefixes: originate
+            .prefixes
+            .clone()
+            .into_iter()
+            .map(|x| types::Prefix4 {
+                length: x.length,
+                value: x.value,
+            })
+            .collect(),
     })
     .await
     .unwrap();
@@ -314,7 +332,15 @@ async fn originate4(originate: Originate4, c: Client) {
 async fn withdraw4(withdraw: Withdraw4, c: Client) {
     c.withdraw4(&types::Withdraw4Request {
         asn: withdraw.asn,
-        prefixes: withdraw.prefixes.clone(),
+        prefixes: withdraw
+            .prefixes
+            .clone()
+            .into_iter()
+            .map(|x| types::Prefix4 {
+                length: x.length,
+                value: x.value,
+            })
+            .collect(),
     })
     .await
     .unwrap();

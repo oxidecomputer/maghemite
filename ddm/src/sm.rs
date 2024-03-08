@@ -11,9 +11,9 @@ use mg_common::net::{Ipv6Prefix, TunnelOrigin};
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv6Addr};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::thread::spawn;
 use std::time::Duration;
@@ -151,6 +151,26 @@ pub struct DpdConfig {
     pub port: u16,
 }
 
+#[derive(Default)]
+pub struct SessionStats {
+    // Discovery
+    pub solicitations_sent: AtomicU64,
+    pub solicitations_received: AtomicU64,
+    pub advertisements_sent: AtomicU64,
+    pub advertisements_received: AtomicU64,
+    pub peer_expirations: AtomicU64,
+    pub peer_address_changes: AtomicU64,
+    pub peer_established: AtomicU64,
+    pub peer_address: Mutex<Option<Ipv6Addr>>,
+
+    // Exchange
+    pub updates_sent: AtomicU64,
+    pub updates_received: AtomicU64,
+    pub imported_underlay_prefixes: AtomicU64,
+    pub imported_tunnel_endpoints: AtomicU64,
+    pub update_send_fail: AtomicU64,
+}
+
 #[derive(Clone)]
 pub struct SmContext {
     pub config: Config,
@@ -159,6 +179,7 @@ pub struct SmContext {
     pub event_channels: Vec<Sender<Event>>,
     pub rt: Arc<tokio::runtime::Handle>,
     pub hostname: String,
+    pub stats: Arc<SessionStats>,
     pub log: Logger,
 }
 
@@ -254,6 +275,7 @@ impl State for Init {
                 self.ctx.config.clone(),
                 self.ctx.tx.clone(),
                 self.ctx.db.clone(),
+                self.ctx.stats.clone(),
                 self.ctx.log.clone(),
             )
             .unwrap(); // TODO unwrap
@@ -562,6 +584,7 @@ impl State for Exchange {
                         })
                         .collect();
                     if let Err(e) = crate::exchange::announce_underlay(
+                        &self.ctx,
                         self.ctx.config.clone(),
                         pv,
                         self.peer,
@@ -596,6 +619,7 @@ impl State for Exchange {
                 ))) => {
                     let tv: HashSet<TunnelOrigin> = endpoints.clone();
                     if let Err(e) = crate::exchange::announce_tunnel(
+                        &self.ctx,
                         self.ctx.config.clone(),
                         tv,
                         self.peer,
@@ -636,6 +660,7 @@ impl State for Exchange {
                         })
                         .collect();
                     if let Err(e) = crate::exchange::withdraw_underlay(
+                        &self.ctx,
                         self.ctx.config.clone(),
                         pv,
                         self.peer,
@@ -670,6 +695,7 @@ impl State for Exchange {
                 ))) => {
                     let tv: HashSet<TunnelOrigin> = endpoints.clone();
                     if let Err(e) = crate::exchange::withdraw_tunnel(
+                        &self.ctx,
                         self.ctx.config.clone(),
                         tv,
                         self.peer,
@@ -745,6 +771,7 @@ impl State for Exchange {
                     if let Some(push) = update.underlay {
                         if !push.announce.is_empty() {
                             if let Err(e) = crate::exchange::announce_underlay(
+                                &self.ctx,
                                 self.ctx.config.clone(),
                                 push.announce,
                                 self.peer,
@@ -776,6 +803,7 @@ impl State for Exchange {
                         }
                         if !push.withdraw.is_empty() {
                             if let Err(e) = crate::exchange::withdraw_underlay(
+                                &self.ctx,
                                 self.ctx.config.clone(),
                                 push.withdraw,
                                 self.peer,

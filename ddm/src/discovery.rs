@@ -86,7 +86,7 @@
 //! directly by a hostname of up to 255 bytes in length.
 
 use crate::db::{Db, PeerInfo, PeerStatus, RouterKind};
-use crate::sm::{Config, Event, NeighborEvent};
+use crate::sm::{Config, Event, NeighborEvent, SessionStats};
 use crate::util::u8_slice_assume_init_ref;
 use crate::{dbg, err, inf, trc, wrn};
 use serde::{Deserialize, Serialize};
@@ -186,6 +186,7 @@ pub(crate) fn handler(
     config: Config,
     event: Sender<Event>,
     db: Db,
+    stats: Arc<SessionStats>,
     log: Logger,
 ) -> Result<(), DiscoveryError> {
     // listening on 2 sockets, solicitations are sent to DDM_MADDR, but
@@ -229,21 +230,36 @@ pub(crate) fn handler(
 
     let stop = Arc::new(AtomicBool::new(false));
 
-    send_solicitations(ctx.clone(), stop.clone());
-    listen(ctx.clone(), ctx.mc_socket.clone(), stop.clone())?;
-    listen(ctx.clone(), ctx.uc_socket.clone(), stop.clone())?;
-    expire(ctx, stop)?;
+    send_solicitations(ctx.clone(), stop.clone(), stats.clone());
+    listen(
+        ctx.clone(),
+        ctx.mc_socket.clone(),
+        stop.clone(),
+        stats.clone(),
+    )?;
+    listen(
+        ctx.clone(),
+        ctx.uc_socket.clone(),
+        stop.clone(),
+        stats.clone(),
+    )?;
+    expire(ctx, stop, stats.clone())?;
 
     Ok(())
 }
 
-fn send_solicitations(ctx: HandlerContext, stop: Arc<AtomicBool>) {
+fn send_solicitations(
+    ctx: HandlerContext,
+    stop: Arc<AtomicBool>,
+    stats: Arc<SessionStats>,
+) {
     spawn(move || loop {
         if let Err(e) = solicit(&ctx) {
             err!(ctx.log, ctx.config.if_name, "solicit failed: {}", e);
             stop.store(true, Ordering::Relaxed);
             break;
         }
+        stats.solicitations_sent.fetch_add(1, Ordering::Relaxed);
         sleep(Duration::from_millis(ctx.config.solicit_interval));
     });
 }
@@ -251,6 +267,7 @@ fn send_solicitations(ctx: HandlerContext, stop: Arc<AtomicBool>) {
 fn expire(
     ctx: HandlerContext,
     stop: Arc<AtomicBool>,
+    stats: Arc<SessionStats>,
 ) -> Result<(), DiscoveryError> {
     spawn(move || loop {
         let mut guard = match ctx.nbr.write() {
@@ -271,6 +288,7 @@ fn expire(
                     nbr.addr
                 );
                 *guard = None;
+                stats.peer_expirations.fetch_add(1, Ordering::Relaxed);
                 emit_nbr_expire(
                     ctx.event.clone(),
                     ctx.log.clone(),
@@ -311,10 +329,11 @@ fn listen(
     ctx: HandlerContext,
     s: Arc<Socket>,
     stop: Arc<AtomicBool>,
+    stats: Arc<SessionStats>,
 ) -> Result<(), DiscoveryError> {
     spawn(move || loop {
         if let Some((addr, msg)) = recv(&ctx, &s) {
-            handle_msg(&ctx, msg, &addr);
+            handle_msg(&ctx, msg, &addr, &stats);
         };
         if stop.load(Ordering::Relaxed) {
             break;
@@ -366,12 +385,24 @@ fn recv(
     Some((addr, msg))
 }
 
-fn handle_msg(ctx: &HandlerContext, msg: DiscoveryPacket, sender: &Ipv6Addr) {
+fn handle_msg(
+    ctx: &HandlerContext,
+    msg: DiscoveryPacket,
+    sender: &Ipv6Addr,
+    stats: &Arc<SessionStats>,
+) {
     if msg.is_solicitation() {
-        handle_solicitation(ctx, sender, msg.hostname.clone());
+        handle_solicitation(ctx, sender, msg.hostname.clone(), stats);
     }
     if msg.is_advertisement() {
-        handle_advertisement(ctx, sender, msg.hostname, msg.kind, msg.version);
+        handle_advertisement(
+            ctx,
+            sender,
+            msg.hostname,
+            msg.kind,
+            msg.version,
+            stats,
+        );
     }
 }
 
@@ -379,10 +410,12 @@ fn handle_solicitation(
     ctx: &HandlerContext,
     sender: &Ipv6Addr,
     hostname: String,
+    stats: &Arc<SessionStats>,
 ) {
     trc!(&ctx.log, ctx.config.if_name, "solicit from {}", hostname);
+    stats.solicitations_received.fetch_add(1, Ordering::Relaxed);
 
-    if let Err(e) = advertise(ctx, Some(*sender)) {
+    if let Err(e) = advertise(ctx, Some(*sender), stats) {
         err!(ctx.log, ctx.config.if_name, "icmp advertise: {}", e);
     }
 }
@@ -393,8 +426,12 @@ fn handle_advertisement(
     hostname: String,
     kind: RouterKind,
     version: u8,
+    stats: &Arc<SessionStats>,
 ) {
     trc!(&ctx.log, ctx.config.if_name, "advert from {}", &hostname);
+    stats
+        .advertisements_received
+        .fetch_add(1, Ordering::Relaxed);
 
     // TODO: version negotiation
     //
@@ -444,6 +481,7 @@ fn handle_advertisement(
                 nbr.last_seen = Instant::now();
                 nbr.kind = kind;
                 nbr.addr = *sender;
+                stats.peer_address_changes.fetch_add(1, Ordering::Relaxed);
             }
             nbr.last_seen = Instant::now();
         }
@@ -462,6 +500,7 @@ fn handle_advertisement(
                 last_seen: Instant::now(),
                 kind,
             });
+            stats.peer_established.fetch_add(1, Ordering::Relaxed);
         }
     };
     drop(guard);
@@ -475,6 +514,7 @@ fn handle_advertisement(
         },
     );
     if updated {
+        stats.peer_address.lock().unwrap().replace(*sender);
         emit_nbr_update(ctx, sender, version);
     }
 }
@@ -515,6 +555,7 @@ fn solicit(ctx: &HandlerContext) -> Result<usize, DiscoveryError> {
 fn advertise(
     ctx: &HandlerContext,
     dst: Option<Ipv6Addr>,
+    stats: &Arc<SessionStats>,
 ) -> Result<usize, DiscoveryError> {
     let msg = DiscoveryPacket::new_advertisement(
         ctx.hostname.clone(),
@@ -528,5 +569,7 @@ fn advertise(
     let sa: SockAddr =
         SocketAddrV6::new(addr, DDM_PORT, 0, ctx.config.if_index).into();
 
-    Ok(ctx.uc_socket.send_to(data.as_slice(), &sa)?)
+    let n = ctx.uc_socket.send_to(data.as_slice(), &sa)?;
+    stats.advertisements_sent.fetch_add(1, Ordering::Relaxed);
+    Ok(n)
 }

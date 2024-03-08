@@ -6,7 +6,6 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use mg_admin_client::types;
 use mg_admin_client::Client;
-use rdb::Prefix4;
 use std::net::{AddrParseError, Ipv4Addr};
 use std::num::ParseIntError;
 use thiserror::Error;
@@ -68,7 +67,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = types::AddStaticRoute4Request {
                 routes: types::StaticRoute4List {
                     list: vec![types::StaticRoute4 {
-                        prefix: Prefix4 {
+                        prefix: types::Prefix4 {
                             value: route.destination.addr,
                             length: route.destination.len,
                         },
@@ -82,7 +81,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = types::DeleteStaticRoute4Request {
                 routes: types::StaticRoute4List {
                     list: vec![types::StaticRoute4 {
-                        prefix: Prefix4 {
+                        prefix: types::Prefix4 {
                             value: route.destination.addr,
                             length: route.destination.len,
                         },

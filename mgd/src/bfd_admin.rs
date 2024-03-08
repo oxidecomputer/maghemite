@@ -34,7 +34,7 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct BfdContext {
     /// The underlying deamon being run.
-    daemon: Arc<Mutex<Daemon>>,
+    pub(crate) daemon: Arc<Mutex<Daemon>>,
     dispatcher: Arc<Mutex<Dispatcher>>,
 }
 

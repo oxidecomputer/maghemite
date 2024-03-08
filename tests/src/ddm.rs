@@ -3,7 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::{anyhow, Result};
-use ddm_admin_client::{Client, Ipv6Prefix, TunnelOrigin};
+use ddm_admin_client::types::{IpPrefix, Ipv4Prefix, Ipv6Prefix, TunnelOrigin};
+use ddm_admin_client::Client;
 use slog::{Drain, Logger};
 use std::env;
 use std::net::Ipv6Addr;
@@ -165,6 +166,15 @@ impl<'a> RouterZone<'a> {
             .join(" ");
 
         let ddm = if self.v1 { "/opt/ddmd-v1" } else { "/opt/ddmd" };
+        let extra_args = if self.v1 {
+            String::new()
+        } else {
+            format!(
+                "--rack-uuid {} --sled-uuid {}",
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4(),
+            )
+        };
 
         if self.v1 {
             self.zfs.copy_workspace_to_zone(
@@ -202,15 +212,15 @@ impl<'a> RouterZone<'a> {
             sleep(Duration::from_secs(10));
             self.zone.zexec("svcadm enable tfport")?;
             self.zone.zexec(&format!(
-                "{} {ddm} --kind transit --dendrite {} &> /opt/ddmd.log &",
-                "RUST_LOG=trace RUST_BACKTRACE=1", addrs
+                "{} {ddm} --kind transit --dendrite {} {} &> /opt/ddmd.log &",
+                "RUST_LOG=trace RUST_BACKTRACE=1", extra_args, addrs
             ))?;
 
             self.zone.zexec("ipadm")?;
         } else {
             self.zone.zexec(&format!(
-                "{} {ddm} --kind server {} &> /opt/ddmd.log &",
-                "RUST_LOG=trace RUST_BACKTRACE=1", addrs
+                "{} {ddm} --kind server {} {} &> /opt/ddmd.log &",
+                "RUST_LOG=trace RUST_BACKTRACE=1", extra_args, addrs
             ))?;
         }
         Ok(())
@@ -572,7 +582,10 @@ async fn run_trio_tests(
         wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
 
         t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
-            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
+            overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                addr: "203.0.113.0".parse().unwrap(),
+                len: 24,
+            }),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
             vni: 47,
             metric: 0,
@@ -589,7 +602,10 @@ async fn run_trio_tests(
         // redudant advertise should not change things
 
         t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
-            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
+            overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                addr: "203.0.113.0".parse().unwrap(),
+                len: 24,
+            }),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
             vni: 47,
             metric: 0,
@@ -615,7 +631,10 @@ async fn run_trio_tests(
         println!("tunnel router restart passed");
 
         t1.withdraw_tunnel_endpoints(&vec![TunnelOrigin {
-            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
+            overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                addr: "203.0.113.0".parse().unwrap(),
+                len: 24,
+            }),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
             vni: 47,
             metric: 0,
