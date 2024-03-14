@@ -11,4 +11,5 @@ anyhow.workspace = true
 percent-encoding.workspace = true
 reqwest.workspace = true
 progenitor.workspace = true
+schemars.workspace = true
 rdb = { path = "../rdb" }

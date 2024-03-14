@@ -17,6 +17,7 @@ progenitor::generate_api!(
     post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
         slog::trace!(log, "client response"; "result" => ?result);
     }),
+    derives = [schemars::JsonSchema],
     replace = {
         Prefix4 = rdb::Prefix4,
         PolicyAction = rdb::PolicyAction,
