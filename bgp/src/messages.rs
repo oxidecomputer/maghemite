@@ -8,6 +8,8 @@ use nom::{
     number::complete::{be_u16, be_u32, be_u8, u8 as parse_u8},
 };
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use schemars::JsonSchema;
+use serde::Serialize;
 use std::net::{IpAddr, Ipv4Addr};
 
 pub const MAX_MESSAGE_SIZE: usize = 4096;
@@ -52,7 +54,7 @@ impl From<&Message> for MessageType {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, JsonSchema)]
 pub enum Message {
     Open(OpenMessage),
     Update(UpdateMessage),
@@ -186,7 +188,7 @@ pub const BGP4: u8 = 4;
 /// ```
 ///
 /// Ref: RFC 4271 §4.2
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
 pub struct OpenMessage {
     /// BGP protocol version.
     pub version: u8,
@@ -358,7 +360,7 @@ pub struct Tlv {
 /// ```
 ///
 /// Ref: RFC 4271 §4.3
-#[derive(Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, JsonSchema)]
 pub struct UpdateMessage {
     pub withdrawn: Vec<Prefix>,
     pub path_attributes: Vec<PathAttribute>,
@@ -506,7 +508,7 @@ impl UpdateMessage {
 /// This data structure captures a network prefix as it's layed out in a BGP
 /// message. There is a prefix length followed by a variable number of bytes.
 /// Just enough bytes to express the prefix.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
 pub struct Prefix {
     pub length: u8,
     pub value: Vec<u8>,
@@ -599,7 +601,7 @@ impl From<rdb::Prefix4> for Prefix {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
 pub struct PathAttribute {
     pub typ: PathAttributeType,
     pub value: PathAttributeValue,
@@ -666,7 +668,7 @@ impl PathAttribute {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
 pub struct PathAttributeType {
     pub flags: u8,
     pub type_code: PathAttributeTypeCode,
@@ -692,7 +694,9 @@ pub mod path_attribute_flags {
     pub const EXTENDED_LENGTH: u8 = 0b00010000;
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive)]
+#[derive(
+    Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive, Serialize, JsonSchema,
+)]
 #[repr(u8)]
 pub enum PathAttributeTypeCode {
     /// RFC 4271
@@ -741,7 +745,7 @@ impl From<PathAttributeValue> for PathAttributeTypeCode {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
 pub enum PathAttributeValue {
     Origin(PathOrigin),
     /* TODO according to RFC 4893 we do not have this as an explicit attribute
@@ -857,7 +861,15 @@ impl PathAttributeValue {
 }
 
 #[derive(
-    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, IntoPrimitive,
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    IntoPrimitive,
+    Serialize,
+    JsonSchema,
 )]
 #[repr(u32)]
 pub enum Community {
@@ -885,7 +897,9 @@ pub enum Community {
     GracefulShutdown = 0xFFFF0000,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
+)]
 #[repr(u8)]
 pub enum PathOrigin {
     Igp = 0,
@@ -899,7 +913,7 @@ pub struct AsPathSegment {
     pub value: Vec<u16>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
 pub struct As4PathSegment {
     pub typ: AsPathType,
     pub value: Vec<u32>,
@@ -944,14 +958,16 @@ impl As4PathSegment {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive)]
+#[derive(
+    Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive, Serialize, JsonSchema,
+)]
 #[repr(u8)]
 pub enum AsPathType {
     AsSet = 1,
     AsSequence = 2,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
 pub struct NotificationMessage {
     pub error_code: ErrorCode,
     pub error_subcode: ErrorSubcode,
@@ -1077,7 +1093,9 @@ impl NotificationMessage {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
+)]
 #[repr(u8)]
 pub enum ErrorCode {
     Header = 1,
@@ -1088,7 +1106,7 @@ pub enum ErrorCode {
     Cease,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
 pub enum ErrorSubcode {
     Header(HeaderErrorSubcode),
     Open(OpenErrorSubcode),
@@ -1129,7 +1147,9 @@ impl ErrorSubcode {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
+)]
 #[repr(u8)]
 pub enum HeaderErrorSubcode {
     Unspecific = 0,
@@ -1138,7 +1158,9 @@ pub enum HeaderErrorSubcode {
     BadMessageType,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
+)]
 #[repr(u8)]
 pub enum OpenErrorSubcode {
     Unspecific = 0,
@@ -1151,7 +1173,9 @@ pub enum OpenErrorSubcode {
     UnsupportedCapability,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
+)]
 #[repr(u8)]
 pub enum UpdateErrorSubcode {
     Unspecific = 0,
@@ -1169,7 +1193,7 @@ pub enum UpdateErrorSubcode {
 }
 
 /// The IANA/IETF currently defines the following optional parameter types.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
 pub enum OptionalParameter {
     /// Code 0
     Reserved,
@@ -1243,7 +1267,7 @@ impl OptionalParameter {
 
 /// The `AddPathElement` comes as a BGP capability extension as described in
 /// RFC 7911.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
 pub struct AddPathElement {
     /// Address family identifier.
     /// <https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml>
@@ -1260,7 +1284,7 @@ pub struct AddPathElement {
 /// Optional capabilities supported by a BGP implementation. An issue tracking
 /// the TODOs below is here
 /// <https://github.com/oxidecomputer/maghemite/issues/80>
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
 pub enum Capability {
     /// RFC 2858 TODO
     MultiprotocolExtensions {

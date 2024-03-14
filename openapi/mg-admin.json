@@ -179,6 +179,39 @@
         }
       }
     },
+    "/bgp/message-history": {
+      "post": {
+        "operationId": "message_history",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageHistoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageHistoryResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/neighbor": {
       "put": {
         "operationId": "ensure_neighbor_handler",
@@ -580,6 +613,35 @@
           "resolution"
         ]
       },
+      "AddPathElement": {
+        "description": "The `AddPathElement` comes as a BGP capability extension as described in RFC 7911.",
+        "type": "object",
+        "properties": {
+          "afi": {
+            "description": "Address family identifier. <https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml>",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "safi": {
+            "description": "Subsequent address family identifier. There are a large pile of these <https://www.iana.org/assignments/safi-namespace/safi-namespace.xhtml>",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "send_receive": {
+            "description": "This field indicates whether the sender is (a) able to receive multiple paths from its peer (value 1), (b) able to send multiple paths to its peer (value 2), or (c) both (value 3) for the <AFI, SAFI>.",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "afi",
+          "safi",
+          "send_receive"
+        ]
+      },
       "AddStaticRoute4Request": {
         "type": "object",
         "properties": {
@@ -623,6 +685,33 @@
           "asn",
           "originate",
           "peers"
+        ]
+      },
+      "As4PathSegment": {
+        "type": "object",
+        "properties": {
+          "typ": {
+            "$ref": "#/components/schemas/AsPathType"
+          },
+          "value": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "typ",
+          "value"
+        ]
+      },
+      "AsPathType": {
+        "type": "string",
+        "enum": [
+          "AsSet",
+          "AsSequence"
         ]
       },
       "BfdPeerConfig": {
@@ -683,7 +772,7 @@
         ]
       },
       "BfdPeerState": {
-        "description": "The possible peer states. See the `State` trait implementations `Down`, `Init`, and `Up` for detailed semantics.",
+        "description": "The possible peer states. See the `State` trait implementations `Down`, `Init`, and `Up` for detailed semantics. Data representation is u8 as this enum is used as a part of the BFD wire protocol.",
         "oneOf": [
           {
             "description": "A stable down state. Non-responsive to incoming messages.",
@@ -770,6 +859,459 @@
           "resolution"
         ]
       },
+      "Capability": {
+        "description": "Optional capabilities supported by a BGP implementation. An issue tracking the TODOs below is here <https://github.com/oxidecomputer/maghemite/issues/80>",
+        "oneOf": [
+          {
+            "description": "RFC 2858 TODO",
+            "type": "object",
+            "properties": {
+              "MultiprotocolExtensions": {
+                "type": "object",
+                "properties": {
+                  "afi": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0
+                  },
+                  "safi": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "afi",
+                  "safi"
+                ]
+              }
+            },
+            "required": [
+              "MultiprotocolExtensions"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 2918 TODO",
+            "type": "object",
+            "properties": {
+              "RouteRefresh": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "RouteRefresh"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 5291 TODO",
+            "type": "object",
+            "properties": {
+              "OutboundRouteFiltering": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "OutboundRouteFiltering"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8277 (deprecated) TODO",
+            "type": "object",
+            "properties": {
+              "MultipleRoutesToDestination": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "MultipleRoutesToDestination"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8950 TODO",
+            "type": "object",
+            "properties": {
+              "ExtendedNextHopEncoding": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "ExtendedNextHopEncoding"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8654 TODO",
+            "type": "object",
+            "properties": {
+              "BGPExtendedMessage": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "BGPExtendedMessage"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8205 TODO",
+            "type": "object",
+            "properties": {
+              "BgpSec": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "BgpSec"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8277 TODO",
+            "type": "object",
+            "properties": {
+              "MultipleLabels": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "MultipleLabels"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 9234 TODO",
+            "type": "object",
+            "properties": {
+              "BgpRole": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "BgpRole"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 4724 TODO",
+            "type": "object",
+            "properties": {
+              "GracefulRestart": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "GracefulRestart"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 6793",
+            "type": "object",
+            "properties": {
+              "FourOctetAs": {
+                "type": "object",
+                "properties": {
+                  "asn": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "asn"
+                ]
+              }
+            },
+            "required": [
+              "FourOctetAs"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "draft-ietf-idr-dynamic-cap TODO",
+            "type": "object",
+            "properties": {
+              "DynamicCapability": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "DynamicCapability"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "draft-ietf-idr-bgp-multisession TODO",
+            "type": "object",
+            "properties": {
+              "MultisessionBgp": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "MultisessionBgp"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 7911",
+            "type": "object",
+            "properties": {
+              "AddPath": {
+                "type": "object",
+                "properties": {
+                  "elements": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AddPathElement"
+                    }
+                  }
+                },
+                "required": [
+                  "elements"
+                ]
+              }
+            },
+            "required": [
+              "AddPath"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 7313 TODO",
+            "type": "object",
+            "properties": {
+              "EnhancedRouteRefresh": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "EnhancedRouteRefresh"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "draft-uttaro-idr-bgp-persistence TODO",
+            "type": "object",
+            "properties": {
+              "LongLivedGracefulRestart": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "LongLivedGracefulRestart"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "draft-ietf-idr-rpd-04 TODO",
+            "type": "object",
+            "properties": {
+              "RoutingPolicyDistribution": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "RoutingPolicyDistribution"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "draft-walton-bgp-hostname-capability TODO",
+            "type": "object",
+            "properties": {
+              "Fqdn": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "Fqdn"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8810 (deprecated) TODO",
+            "type": "object",
+            "properties": {
+              "PrestandardRouteRefresh": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "PrestandardRouteRefresh"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8810 (deprecated) TODO",
+            "type": "object",
+            "properties": {
+              "PrestandardOrfAndPd": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "PrestandardOrfAndPd"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8810 (deprecated) TODO",
+            "type": "object",
+            "properties": {
+              "PrestandardOutboundRouteFiltering": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "PrestandardOutboundRouteFiltering"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8810 (deprecated) TODO",
+            "type": "object",
+            "properties": {
+              "PrestandardMultisession": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "PrestandardMultisession"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8810 (deprecated) TODO",
+            "type": "object",
+            "properties": {
+              "PrestandardFqdn": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "PrestandardFqdn"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8810 (deprecated) TODO",
+            "type": "object",
+            "properties": {
+              "PrestandardOperationalMessage": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "PrestandardOperationalMessage"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "RFC 8810",
+            "type": "object",
+            "properties": {
+              "Experimental": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "code"
+                ]
+              }
+            },
+            "required": [
+              "Experimental"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Unassigned": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "code"
+                ]
+              }
+            },
+            "required": [
+              "Unassigned"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Reserved": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "code"
+                ]
+              }
+            },
+            "required": [
+              "Reserved"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Community": {
+        "oneOf": [
+          {
+            "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised outside a BGP confederation boundary (a stand-alone autonomous system that is not part of a confederation should be considered a confederation itself)",
+            "type": "string",
+            "enum": [
+              "NoExport"
+            ]
+          },
+          {
+            "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised to other BGP peers.",
+            "type": "string",
+            "enum": [
+              "NoAdvertise"
+            ]
+          },
+          {
+            "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised to external BGP peers (this includes peers in other members autonomous systems inside a BGP confederation).",
+            "type": "string",
+            "enum": [
+              "NoExportSubConfed"
+            ]
+          },
+          {
+            "description": "All routes received carrying a communities attribute containing this value must set the local preference for the received routes to a low value, preferably zero.",
+            "type": "string",
+            "enum": [
+              "GracefulShutdown"
+            ]
+          }
+        ]
+      },
       "DeleteNeighborRequest": {
         "type": "object",
         "properties": {
@@ -830,6 +1372,99 @@
         "required": [
           "message",
           "request_id"
+        ]
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "Header",
+          "Open",
+          "Update",
+          "HoldTimerExpired",
+          "Fsm",
+          "Cease"
+        ]
+      },
+      "ErrorSubcode": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "Header": {
+                "$ref": "#/components/schemas/HeaderErrorSubcode"
+              }
+            },
+            "required": [
+              "Header"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Open": {
+                "$ref": "#/components/schemas/OpenErrorSubcode"
+              }
+            },
+            "required": [
+              "Open"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Update": {
+                "$ref": "#/components/schemas/UpdateErrorSubcode"
+              }
+            },
+            "required": [
+              "Update"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "HoldTime": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "HoldTime"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Fsm": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "Fsm"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Cease": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "Cease"
+            ],
+            "additionalProperties": false
+          }
         ]
       },
       "FsmStateKind": {
@@ -933,6 +1568,109 @@
           "enabled"
         ]
       },
+      "HeaderErrorSubcode": {
+        "type": "string",
+        "enum": [
+          "Unspecific",
+          "ConnectionNotSynchronized",
+          "BadMessageLength",
+          "BadMessageType"
+        ]
+      },
+      "Message": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "KeepAlive"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Open": {
+                "$ref": "#/components/schemas/OpenMessage"
+              }
+            },
+            "required": [
+              "Open"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Update": {
+                "$ref": "#/components/schemas/UpdateMessage"
+              }
+            },
+            "required": [
+              "Update"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Notification": {
+                "$ref": "#/components/schemas/NotificationMessage"
+              }
+            },
+            "required": [
+              "Notification"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "MessageHistory": {
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            }
+          },
+          "sent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            }
+          }
+        },
+        "required": [
+          "received",
+          "sent"
+        ]
+      },
+      "MessageHistoryRequest": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "asn"
+        ]
+      },
+      "MessageHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "by_peer": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MessageHistory"
+            }
+          }
+        },
+        "required": [
+          "by_peer"
+        ]
+      },
       "NewRouterRequest": {
         "type": "object",
         "properties": {
@@ -959,6 +1697,135 @@
           "listen"
         ]
       },
+      "NotificationMessage": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0
+            }
+          },
+          "error_code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "error_subcode": {
+            "$ref": "#/components/schemas/ErrorSubcode"
+          }
+        },
+        "required": [
+          "data",
+          "error_code",
+          "error_subcode"
+        ]
+      },
+      "OpenErrorSubcode": {
+        "type": "string",
+        "enum": [
+          "Unspecific",
+          "UnsupportedVersionNumber",
+          "BadPeerAS",
+          "BadBgpIdentifier",
+          "UnsupportedOptionalParameter",
+          "Deprecated",
+          "UnacceptableHoldTime",
+          "UnsupportedCapability"
+        ]
+      },
+      "OpenMessage": {
+        "description": "The first message sent by each side once a TCP connection is established.\n\n```text 0                   1                   2                   3 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |    Version    |     My Autonomous System      |   Hold Time   : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :               |                BGP Identifier                 : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :               | Opt Parm Len  |     Optional Parameters       : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :                                                               : :             Optional Parameters (cont, variable)              : :                                                               | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ ```\n\nRef: RFC 4271 §4.2",
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "Autonomous system number of the sender. When 4-byte ASNs are in use this value is set to AS_TRANS which has a value of 23456.\n\nRef: RFC 4893 §7",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "hold_time": {
+            "description": "Number of seconds the sender proposes for the hold timer.",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "id": {
+            "description": "BGP identifier of the sender",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "parameters": {
+            "description": "A list of optional parameters.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OptionalParameter"
+            }
+          },
+          "version": {
+            "description": "BGP protocol version.",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "asn",
+          "hold_time",
+          "id",
+          "parameters",
+          "version"
+        ]
+      },
+      "OptionalParameter": {
+        "description": "The IANA/IETF currently defines the following optional parameter types.",
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "Unassigned"
+            ]
+          },
+          {
+            "description": "Code 0",
+            "type": "string",
+            "enum": [
+              "Reserved"
+            ]
+          },
+          {
+            "description": "Code 1: RFC 4217, RFC 5492 (deprecated)",
+            "type": "string",
+            "enum": [
+              "Authentication"
+            ]
+          },
+          {
+            "description": "Code 2: RFC 5492",
+            "type": "object",
+            "properties": {
+              "Capabilities": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Capability"
+                }
+              }
+            },
+            "required": [
+              "Capabilities"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Code 255: RFC 9072",
+            "type": "string",
+            "enum": [
+              "ExtendedLength"
+            ]
+          }
+        ]
+      },
       "Originate4Request": {
         "type": "object",
         "properties": {
@@ -979,6 +1846,217 @@
         "required": [
           "asn",
           "prefixes"
+        ]
+      },
+      "PathAttribute": {
+        "type": "object",
+        "properties": {
+          "typ": {
+            "$ref": "#/components/schemas/PathAttributeType"
+          },
+          "value": {
+            "$ref": "#/components/schemas/PathAttributeValue"
+          }
+        },
+        "required": [
+          "typ",
+          "value"
+        ]
+      },
+      "PathAttributeType": {
+        "type": "object",
+        "properties": {
+          "flags": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "type_code": {
+            "$ref": "#/components/schemas/PathAttributeTypeCode"
+          }
+        },
+        "required": [
+          "flags",
+          "type_code"
+        ]
+      },
+      "PathAttributeTypeCode": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "AsPath",
+              "NextHop",
+              "MultiExitDisc",
+              "LocalPref",
+              "AtomicAggregate",
+              "Aggregator",
+              "Communities",
+              "As4Aggregator"
+            ]
+          },
+          {
+            "description": "RFC 4271",
+            "type": "string",
+            "enum": [
+              "Origin"
+            ]
+          },
+          {
+            "description": "RFC 6793",
+            "type": "string",
+            "enum": [
+              "As4Path"
+            ]
+          }
+        ]
+      },
+      "PathAttributeValue": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "Origin": {
+                "$ref": "#/components/schemas/PathOrigin"
+              }
+            },
+            "required": [
+              "Origin"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "AsPath": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/As4PathSegment"
+                }
+              }
+            },
+            "required": [
+              "AsPath"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "NextHop": {
+                "type": "string",
+                "format": "ip"
+              }
+            },
+            "required": [
+              "NextHop"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "MultiExitDisc": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "MultiExitDisc"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "LocalPref": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "LocalPref"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Aggregator": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0
+                },
+                "minItems": 6,
+                "maxItems": 6
+              }
+            },
+            "required": [
+              "Aggregator"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Communities": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Community"
+                }
+              }
+            },
+            "required": [
+              "Communities"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "As4Path": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/As4PathSegment"
+                }
+              }
+            },
+            "required": [
+              "As4Path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "As4Aggregator": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0
+                },
+                "minItems": 8,
+                "maxItems": 8
+              }
+            },
+            "required": [
+              "As4Aggregator"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "PathOrigin": {
+        "type": "string",
+        "enum": [
+          "Igp",
+          "Egp",
+          "Incomplete"
         ]
       },
       "PeerInfo": {
@@ -1002,6 +2080,29 @@
         "required": [
           "duration_millis",
           "state"
+        ]
+      },
+      "Prefix": {
+        "description": "This data structure captures a network prefix as it's layed out in a BGP message. There is a prefix length followed by a variable number of bytes. Just enough bytes to express the prefix.",
+        "type": "object",
+        "properties": {
+          "length": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "value": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "length",
+          "value"
         ]
       },
       "Prefix4": {
@@ -1117,6 +2218,52 @@
         },
         "required": [
           "list"
+        ]
+      },
+      "UpdateErrorSubcode": {
+        "type": "string",
+        "enum": [
+          "Unspecific",
+          "MalformedAttributeList",
+          "UnrecognizedWellKnownAttribute",
+          "MissingWellKnownAttribute",
+          "AttributeFlags",
+          "AttributeLength",
+          "InvalidOriginAttribute",
+          "Deprecated",
+          "InvalidNexthopAttribute",
+          "OptionalAttribute",
+          "InvalidNetworkField",
+          "MalformedAsPath"
+        ]
+      },
+      "UpdateMessage": {
+        "description": "An update message is used to advertise feasible routes that share common path attributes to a peer, or to withdraw multiple unfeasible routes from service.\n\n```text 0                   1                   2                   3 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |        Witdrawn Length        |       Withdrawn Routes        : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :                                                               : :                Withdrawn Routes (cont, variable)              : :                                                               | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |    Path Attribute Length      |       Path Attributes         : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :                                                               : :                Path Attributes (cont, variable)               : :                                                               | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :                                                               : :       Network Layer Reachability Information (variable)       : :                                                               | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ ```\n\nRef: RFC 4271 §4.3",
+        "type": "object",
+        "properties": {
+          "nlri": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prefix"
+            }
+          },
+          "path_attributes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PathAttribute"
+            }
+          },
+          "withdrawn": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prefix"
+            }
+          }
+        },
+        "required": [
+          "nlri",
+          "path_attributes",
+          "withdrawn"
         ]
       },
       "Withdraw4Request": {
