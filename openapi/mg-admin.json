@@ -614,7 +614,7 @@
         ]
       },
       "AddPathElement": {
-        "description": "The `AddPathElement` comes as a BGP capability extension as described in RFC 7911.",
+        "description": "The add path element comes as a BGP capability extension as described in RFC 7911.",
         "type": "object",
         "properties": {
           "afi": {
@@ -872,10 +872,10 @@
         ]
       },
       "Capability": {
-        "description": "Optional capabilities supported by a BGP implementation. An issue tracking the TODOs below is here <https://github.com/oxidecomputer/maghemite/issues/80>",
+        "description": "Optional capabilities supported by a BGP implementation.",
         "oneOf": [
           {
-            "description": "RFC 2858 TODO",
+            "description": "Multiprotocol extensions as defined in RFC 2858",
             "type": "object",
             "properties": {
               "multiprotocol_extensions": {
@@ -904,7 +904,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 2918 TODO",
+            "description": "Route refresh capability as defined in RFC 2918. Note this capability is not yet implemented.",
             "type": "object",
             "properties": {
               "route_refresh": {
@@ -917,7 +917,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 5291 TODO",
+            "description": "Outbound filtering capability as defined in RFC 5291. Note this capability is not yet implemented.",
             "type": "object",
             "properties": {
               "outbound_route_filtering": {
@@ -930,7 +930,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8277 (deprecated) TODO",
+            "description": "Multiple routes to destination capability as defined in RFC 8277 (deprecated). Note this capability is not yet implemented.",
             "type": "object",
             "properties": {
               "multiple_routes_to_destination": {
@@ -943,7 +943,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8950 TODO",
+            "description": "Multiple nexthop encoding capability as defined in RFC 8950. Note this capability is not yet implemented.",
             "type": "object",
             "properties": {
               "extended_next_hop_encoding": {
@@ -956,7 +956,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8654 TODO",
+            "description": "Extended message capability as defined in RFC 8654. Note this capability is not yet implemented.",
             "type": "object",
             "properties": {
               "b_g_p_extended_message": {
@@ -969,7 +969,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8205 TODO",
+            "description": "BGPSec as defined in RFC 8205. Note this capability is not yet implemented.",
             "type": "object",
             "properties": {
               "bgp_sec": {
@@ -982,7 +982,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8277 TODO",
+            "description": "Multiple label support as defined in RFC 8277. Note this capability is not yet implemented.",
             "type": "object",
             "properties": {
               "multiple_labels": {
@@ -995,7 +995,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 9234 TODO",
+            "description": "BGP role capability as defined in RFC 9234. Note this capability is not yet implemented.",
             "type": "object",
             "properties": {
               "bgp_role": {
@@ -1008,7 +1008,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 4724 TODO",
+            "description": "Graceful restart as defined in RFC 4724. Note this capability is not yet implemented.",
             "type": "object",
             "properties": {
               "graceful_restart": {
@@ -1021,7 +1021,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 6793",
+            "description": "Four octet AS numbers as defined in RFC 6793.",
             "type": "object",
             "properties": {
               "four_octet_as": {
@@ -1044,7 +1044,7 @@
             "additionalProperties": false
           },
           {
-            "description": "draft-ietf-idr-dynamic-cap TODO",
+            "description": "Dynamic capabilities as defined in draft-ietf-idr-dynamic-cap. Note this capability is not yet implemented.",
             "type": "object",
             "properties": {
               "dynamic_capability": {
@@ -1057,7 +1057,7 @@
             "additionalProperties": false
           },
           {
-            "description": "draft-ietf-idr-bgp-multisession TODO",
+            "description": "Multi session support as defined in draft-ietf-idr-bgp-multisession. Note this capability is not yet supported.",
             "type": "object",
             "properties": {
               "multisession_bgp": {
@@ -1070,7 +1070,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 7911",
+            "description": "Add path capability as defined in RFC 7911.",
             "type": "object",
             "properties": {
               "add_path": {
@@ -1094,7 +1094,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 7313 TODO",
+            "description": "Enhanced route refresh as defined in RFC 7313. Note this capability is not yet supported.",
             "type": "object",
             "properties": {
               "enhanced_route_refresh": {
@@ -1107,7 +1107,7 @@
             "additionalProperties": false
           },
           {
-            "description": "draft-uttaro-idr-bgp-persistence TODO",
+            "description": "Long-lived graceful restart as defined in draft-uttaro-idr-bgp-persistence. Note this capability is not yet supported.",
             "type": "object",
             "properties": {
               "long_lived_graceful_restart": {
@@ -1120,7 +1120,7 @@
             "additionalProperties": false
           },
           {
-            "description": "draft-ietf-idr-rpd-04 TODO",
+            "description": "Routing policy distribution as defined indraft-ietf-idr-rpd-04. Note this capability is not yet supported.",
             "type": "object",
             "properties": {
               "routing_policy_distribution": {
@@ -1133,7 +1133,7 @@
             "additionalProperties": false
           },
           {
-            "description": "draft-walton-bgp-hostname-capability TODO",
+            "description": "Fully qualified domain names as defined intdraft-walton-bgp-hostname-capability. Note this capability is not yet supported.",
             "type": "object",
             "properties": {
               "fqdn": {
@@ -1146,7 +1146,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8810 (deprecated) TODO",
+            "description": "Pre-standard route refresh as defined in RFC 8810 (deprecated). Note this capability is not yet supported.",
             "type": "object",
             "properties": {
               "prestandard_route_refresh": {
@@ -1159,7 +1159,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8810 (deprecated) TODO",
+            "description": "Pre-standard prefix-based outbound route filtering as defined in RFC 8810 (deprecated). Note this is not yet implemented.",
             "type": "object",
             "properties": {
               "prestandard_orf_and_pd": {
@@ -1172,7 +1172,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8810 (deprecated) TODO",
+            "description": "Pre-standard outbound route filtering as defined in RFC 8810 (deprecated). Note this is not yet implemented.",
             "type": "object",
             "properties": {
               "prestandard_outbound_route_filtering": {
@@ -1185,7 +1185,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8810 (deprecated) TODO",
+            "description": "Pre-standard multisession as defined in RFC 8810 (deprecated). Note this is not yet implemented.",
             "type": "object",
             "properties": {
               "prestandard_multisession": {
@@ -1198,7 +1198,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8810 (deprecated) TODO",
+            "description": "Pre-standard fully qualified domain names as defined in RFC 8810 (deprecated). Note this is not yet implemented.",
             "type": "object",
             "properties": {
               "prestandard_fqdn": {
@@ -1211,7 +1211,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8810 (deprecated) TODO",
+            "description": "Pre-standard operational messages as defined in RFC 8810 (deprecated). Note this is not yet implemented.",
             "type": "object",
             "properties": {
               "prestandard_operational_message": {
@@ -1224,7 +1224,7 @@
             "additionalProperties": false
           },
           {
-            "description": "RFC 8810",
+            "description": "Experimental capability as defined in RFC 8810.",
             "type": "object",
             "properties": {
               "experimental": {
@@ -1759,7 +1759,7 @@
         ]
       },
       "NotificationMessage": {
-        "description": "Notification messages are exchanged between BGP peers when an exceptional event has occured.",
+        "description": "Notification messages are exchanged between BGP peers when an exceptional event has occurred.",
         "type": "object",
         "properties": {
           "data": {
@@ -2242,7 +2242,7 @@
         ]
       },
       "Prefix": {
-        "description": "This data structure captures a network prefix as it's layed out in a BGP message. There is a prefix length followed by a variable number of bytes. Just enough bytes to express the prefix.",
+        "description": "This data structure captures a network prefix as it's laid out in a BGP message. There is a prefix length followed by a variable number of bytes. Just enough bytes to express the prefix.",
         "type": "object",
         "properties": {
           "length": {

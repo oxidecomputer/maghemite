@@ -251,7 +251,7 @@ impl OpenMessage {
             .push(OptionalParameter::Capabilities(capabilities.into()));
     }
 
-    /// Serilize an open message to wire format.
+    /// Serialize an open message to wire format.
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
 
@@ -510,7 +510,7 @@ impl UpdateMessage {
     }
 }
 
-/// This data structure captures a network prefix as it's layed out in a BGP
+/// This data structure captures a network prefix as it's laid out in a BGP
 /// message. There is a prefix length followed by a variable number of bytes.
 /// Just enough bytes to express the prefix.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
@@ -705,9 +705,9 @@ pub mod path_attribute_flags {
     pub const OPTIONAL: u8 = 0b10000000;
     /// Path attribute must be redistributed
     pub const TRANSITIVE: u8 = 0b01000000;
-    /// Treat path attribute as parrital
+    /// Treat path attribute as partial
     pub const PARTIAL: u8 = 0b00100000;
-    /// If set the path attribute lenght is encoded in two octets instead o
+    /// If set the path attribute length is encoded in two octets instead o
     /// one
     pub const EXTENDED_LENGTH: u8 = 0b00010000;
 }
@@ -1043,7 +1043,7 @@ pub enum AsPathType {
 }
 
 /// Notification messages are exchanged between BGP peers when an exceptional
-/// event has occured.
+/// event has occurred.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NotificationMessage {
     /// Error code associated with the notification
@@ -1389,7 +1389,7 @@ impl OptionalParameter {
     }
 }
 
-/// The `AddPathElement` comes as a BGP capability extension as described in
+/// The add path element comes as a BGP capability extension as described in
 /// RFC 7911.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AddPathElement {
@@ -1405,92 +1405,137 @@ pub struct AddPathElement {
     pub send_receive: u8,
 }
 
-/// Optional capabilities supported by a BGP implementation. An issue tracking
-/// the TODOs below is here
-/// <https://github.com/oxidecomputer/maghemite/issues/80>
+// An issue tracking the TODOs below is here
+// <https://github.com/oxidecomputer/maghemite/issues/80>
+
+/// Optional capabilities supported by a BGP implementation.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
-    /// RFC 2858 TODO
+    /// Multiprotocol extensions as defined in RFC 2858
     MultiprotocolExtensions {
         afi: u16,
         safi: u8,
     },
 
-    /// RFC 2918 TODO
+    //TODO
+    /// Route refresh capability as defined in RFC 2918. Note this capability
+    /// is not yet implemented.
     RouteRefresh {},
 
-    /// RFC 5291 TODO
+    //TODO
+    /// Outbound filtering capability as defined in RFC 5291. Note this
+    /// capability is not yet implemented.
     OutboundRouteFiltering {},
 
-    /// RFC 8277 (deprecated) TODO
+    //TODO
+    /// Multiple routes to destination capability as defined in RFC 8277
+    /// (deprecated). Note this capability is not yet implemented.
     MultipleRoutesToDestination {},
 
-    /// RFC 8950 TODO
+    //TODO
+    /// Multiple nexthop encoding capability as defined in RFC 8950. Note this
+    /// capability is not yet implemented.
     ExtendedNextHopEncoding {},
 
-    /// RFC 8654 TODO
+    //TODO
+    /// Extended message capability as defined in RFC 8654. Note this
+    /// capability is not yet implemented.
     BGPExtendedMessage {},
 
-    /// RFC 8205 TODO
+    //TODO
+    /// BGPSec as defined in RFC 8205. Note this capability is not yet
+    /// implemented.
     BgpSec {},
 
-    /// RFC 8277 TODO
+    //TODO
+    /// Multiple label support as defined in RFC 8277. Note this capability
+    /// is not yet implemented.
     MultipleLabels {},
 
-    /// RFC 9234 TODO
+    //TODO
+    /// BGP role capability as defined in RFC 9234. Note this capability is not
+    /// yet implemented.
     BgpRole {},
 
-    /// RFC 4724 TODO
+    //TODO
+    /// Graceful restart as defined in RFC 4724. Note this capability is not
+    /// yet implemented.
     GracefulRestart {},
 
-    /// RFC 6793
+    /// Four octet AS numbers as defined in RFC 6793.
     FourOctetAs {
         asn: u32,
     },
 
-    /// draft-ietf-idr-dynamic-cap TODO
+    //TODO
+    /// Dynamic capabilities as defined in draft-ietf-idr-dynamic-cap. Note
+    /// this capability is not yet implemented.
     DynamicCapability {},
 
-    /// draft-ietf-idr-bgp-multisession TODO
+    //TODO
+    /// Multi session support as defined in draft-ietf-idr-bgp-multisession.
+    /// Note this capability is not yet supported.
     MultisessionBgp {},
 
-    /// RFC 7911
+    /// Add path capability as defined in RFC 7911.
     AddPath {
         elements: Vec<AddPathElement>,
     },
 
-    /// RFC 7313 TODO
+    //TODO
+    /// Enhanced route refresh as defined in RFC 7313. Note this capability is
+    /// not yet supported.
     EnhancedRouteRefresh {},
 
-    /// draft-uttaro-idr-bgp-persistence TODO
+    //TODO
+    /// Long-lived graceful restart as defined in
+    /// draft-uttaro-idr-bgp-persistence. Note this capability is not yet
+    /// supported.
     LongLivedGracefulRestart {},
 
-    /// draft-ietf-idr-rpd-04 TODO
+    //TODO
+    /// Routing policy distribution as defined indraft-ietf-idr-rpd-04. Note
+    /// this capability is not yet supported.
     RoutingPolicyDistribution {},
 
-    /// draft-walton-bgp-hostname-capability TODO
+    //TODO
+    /// Fully qualified domain names as defined
+    /// intdraft-walton-bgp-hostname-capability. Note this capability is not
+    /// yet supported.
     Fqdn {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard route refresh as defined in RFC 8810 (deprecated). Note
+    /// this capability is not yet supported.
     PrestandardRouteRefresh {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard prefix-based outbound route filtering as defined in
+    /// RFC 8810 (deprecated). Note this is not yet implemented.
     PrestandardOrfAndPd {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard outbound route filtering as defined in RFC 8810
+    /// (deprecated). Note this is not yet implemented.
     PrestandardOutboundRouteFiltering {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard multisession as defined in RFC 8810 (deprecated). Note
+    /// this is not yet implemented.
     PrestandardMultisession {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard fully qualified domain names as defined in RFC 8810
+    /// (deprecated). Note this is not yet implemented.
     PrestandardFqdn {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard operational messages as defined in RFC 8810 (deprecated).
+    /// Note this is not yet implemented.
     PrestandardOperationalMessage {},
 
-    /// RFC 8810
+    /// Experimental capability as defined in RFC 8810.
     Experimental {
         code: u8,
     },
@@ -1498,6 +1543,7 @@ pub enum Capability {
     Unassigned {
         code: u8,
     },
+
     Reserved {
         code: u8,
     },
@@ -1862,7 +1908,7 @@ impl Capability {
     }
 }
 
-// The set of capabilitiy codes supported by this BGP implementation
+/// The set of capability codes supported by this BGP implementation
 #[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
 pub enum CapabilityCode {
