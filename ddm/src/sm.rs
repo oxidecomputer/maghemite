@@ -2,11 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::db::{Db, Ipv6Prefix, RouterKind, TunnelOrigin};
+use crate::db::{Db, RouterKind};
 use crate::discovery::Version;
 use crate::exchange::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use libnet::get_ipaddr_info;
+use mg_common::net::{Ipv6Prefix, TunnelOrigin};
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv6Addr};

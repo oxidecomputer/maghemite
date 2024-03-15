@@ -701,6 +701,7 @@ dependencies = [
  "hyper",
  "ispf",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
+ "mg-common",
  "opte-ioctl",
  "oxide-vpc",
  "pretty_assertions",
@@ -719,7 +720,7 @@ dependencies = [
 name = "ddm-admin-client"
 version = "0.1.0"
 dependencies = [
- "ddm",
+ "mg-common",
  "percent-encoding",
  "progenitor 0.5.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
  "reqwest",
@@ -1881,6 +1882,9 @@ version = "0.1.0"
 dependencies = [
  "anstyle",
  "clap",
+ "schemars",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

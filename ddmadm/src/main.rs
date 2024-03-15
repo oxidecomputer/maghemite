@@ -5,9 +5,9 @@
 use anyhow::Result;
 use clap::Parser;
 use colored::*;
-use ddm::db::{IpPrefix, Ipv6Prefix, TunnelOrigin};
 use ddm_admin_client::Client;
 use mg_common::cli::oxide_cli_style;
+use mg_common::net::{IpPrefix, Ipv6Prefix, TunnelOrigin};
 use slog::{Drain, Logger};
 use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};

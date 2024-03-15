@@ -235,8 +235,8 @@ pub fn add_routes_dendrite(
 
 fn tunnel_route_update_map(
     routes: &HashSet<TunnelRoute>,
-) -> HashMap<crate::db::IpPrefix, Vec<TunnelEndpoint>> {
-    let mut m: HashMap<crate::db::IpPrefix, Vec<TunnelEndpoint>> =
+) -> HashMap<mg_common::net::IpPrefix, Vec<TunnelEndpoint>> {
+    let mut m: HashMap<mg_common::net::IpPrefix, Vec<TunnelEndpoint>> =
         HashMap::new();
     for r in routes {
         let pfx = r.origin.overlay_prefix;
@@ -279,11 +279,11 @@ pub fn add_tunnel_routes(
             );
         }
         let vip = match pfx {
-            crate::db::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
+            mg_common::net::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
                 Ipv4PrefixLen::new(p.len).unwrap(),
             )),
-            crate::db::IpPrefix::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
+            mg_common::net::IpPrefix::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
                 p.addr.into(),
                 Ipv6PrefixLen::new(p.len).unwrap(),
             )),
@@ -319,11 +319,11 @@ pub fn remove_tunnel_routes(
             );
         }
         let vip = match pfx {
-            crate::db::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
+            mg_common::net::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
                 Ipv4PrefixLen::new(p.len).unwrap(),
             )),
-            crate::db::IpPrefix::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
+            mg_common::net::IpPrefix::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
                 p.addr.into(),
                 Ipv6PrefixLen::new(p.len).unwrap(),
             )),

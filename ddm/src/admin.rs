@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::db::{Db, Ipv6Prefix, PeerInfo, TunnelOrigin, TunnelRoute};
+use crate::db::{Db, PeerInfo, TunnelRoute};
 use crate::exchange::PathVector;
 use crate::sm::{AdminEvent, Event, PrefixSet};
 use dropshot::endpoint;
@@ -17,6 +17,7 @@ use dropshot::HttpServerStarter;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use mg_common::net::{Ipv6Prefix, TunnelOrigin};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{error, info, warn, Logger};

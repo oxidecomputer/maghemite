@@ -2,15 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use mg_common::net::{IpPrefix, Ipv6Prefix, TunnelOrigin};
 use schemars::{JsonSchema, JsonSchema_repr};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use slog::{error, Logger};
 use std::collections::{HashMap, HashSet};
-use std::net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr};
-use std::num::ParseIntError;
+use std::net::Ipv6Addr;
 use std::sync::{Arc, Mutex};
-use thiserror::Error;
 
 /// The handle used to open a persistent key-value tree for originated
 /// prefixes.
@@ -325,70 +324,6 @@ impl std::str::FromStr for RouterKind {
 }
 
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
-pub struct Ipv6Prefix {
-    pub addr: Ipv6Addr,
-    pub len: u8,
-}
-
-impl Ipv6Prefix {
-    pub fn db_key(&self) -> Vec<u8> {
-        let mut buf: Vec<u8> = self.addr.octets().into();
-        buf.push(self.len);
-        buf
-    }
-
-    pub fn from_db_key(v: &[u8]) -> Result<Self, Error> {
-        if v.len() < 17 {
-            Err(Error::DbKey(format!(
-                "buffer to short for prefix 6 key {} < 17",
-                v.len()
-            )))
-        } else {
-            Ok(Self {
-                addr: Ipv6Addr::from(<[u8; 16]>::try_from(&v[..16]).unwrap()),
-                len: v[16],
-            })
-        }
-    }
-}
-
-impl std::fmt::Display for Ipv6Prefix {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.addr, self.len)
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum Ipv6PrefixParseError {
-    #[error("expected CIDR representation <addr>/<mask>")]
-    Cidr,
-
-    #[error("address parse error: {0}")]
-    Addr(#[from] AddrParseError),
-
-    #[error("mask parse error: {0}")]
-    Mask(#[from] ParseIntError),
-}
-
-impl std::str::FromStr for Ipv6Prefix {
-    type Err = Ipv6PrefixParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split('/').collect();
-        if parts.len() < 2 {
-            return Err(Ipv6PrefixParseError::Cidr);
-        }
-
-        Ok(Ipv6Prefix {
-            addr: Ipv6Addr::from_str(parts[0])?,
-            len: u8::from_str(parts[1])?,
-        })
-    }
-}
-
-#[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct TunnelRoute {
@@ -402,28 +337,6 @@ pub struct TunnelRoute {
 }
 
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
-pub struct TunnelOrigin {
-    pub overlay_prefix: IpPrefix,
-    pub boundary_addr: Ipv6Addr,
-    pub vni: u32,
-    #[serde(default)]
-    pub metric: u64,
-}
-
-impl From<crate::db::TunnelRoute> for TunnelOrigin {
-    fn from(x: crate::db::TunnelRoute) -> Self {
-        Self {
-            overlay_prefix: x.origin.overlay_prefix,
-            boundary_addr: x.origin.boundary_addr,
-            vni: x.origin.vni,
-            metric: x.origin.metric,
-        }
-    }
-}
-
-#[derive(
     Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct Route {
@@ -431,101 +344,6 @@ pub struct Route {
     pub nexthop: Ipv6Addr,
     pub ifname: String,
     pub path: Vec<String>,
-}
-
-#[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
-pub struct Ipv4Prefix {
-    pub addr: Ipv4Addr,
-    pub len: u8,
-}
-
-impl std::fmt::Display for Ipv4Prefix {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.addr, self.len)
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum Ipv4PrefixParseError {
-    #[error("expected CIDR representation <addr>/<mask>")]
-    Cidr,
-
-    #[error("address parse error: {0}")]
-    Addr(#[from] AddrParseError),
-
-    #[error("mask parse error: {0}")]
-    Mask(#[from] ParseIntError),
-}
-
-impl std::str::FromStr for Ipv4Prefix {
-    type Err = Ipv4PrefixParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split('/').collect();
-        if parts.len() < 2 {
-            return Err(Ipv4PrefixParseError::Cidr);
-        }
-
-        Ok(Ipv4Prefix {
-            addr: Ipv4Addr::from_str(parts[0])?,
-            len: u8::from_str(parts[1])?,
-        })
-    }
-}
-
-#[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
-pub enum IpPrefix {
-    V4(Ipv4Prefix),
-    V6(Ipv6Prefix),
-}
-
-impl std::fmt::Display for IpPrefix {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::V4(p) => p.fmt(f),
-            Self::V6(p) => p.fmt(f),
-        }
-    }
-}
-
-impl IpPrefix {
-    pub fn addr(&self) -> IpAddr {
-        match self {
-            Self::V4(s) => s.addr.into(),
-            Self::V6(s) => s.addr.into(),
-        }
-    }
-
-    pub fn length(&self) -> u8 {
-        match self {
-            Self::V4(s) => s.len,
-            Self::V6(s) => s.len,
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum IpPrefixParseError {
-    #[error("v4 address parse error: {0}")]
-    V4(#[from] Ipv4PrefixParseError),
-
-    #[error("v4 address parse error: {0}")]
-    V6(#[from] Ipv6PrefixParseError),
-}
-
-impl std::str::FromStr for IpPrefix {
-    type Err = IpPrefixParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(result) = Ipv4Prefix::from_str(s) {
-            return Ok(IpPrefix::V4(result));
-        }
-        Ok(IpPrefix::V6(Ipv6Prefix::from_str(s)?))
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -619,9 +437,48 @@ pub fn effective_route_set(
     result
 }
 
+trait DbKey: Sized {
+    fn db_key(&self) -> Vec<u8>;
+    fn from_db_key(v: &[u8]) -> Result<Self, Error>;
+}
+
+impl DbKey for Ipv6Prefix {
+    fn db_key(&self) -> Vec<u8> {
+        let mut buf: Vec<u8> = self.addr.octets().into();
+        buf.push(self.len);
+        buf
+    }
+
+    fn from_db_key(v: &[u8]) -> Result<Self, Error> {
+        if v.len() < 17 {
+            Err(Error::DbKey(format!(
+                "buffer to short for prefix 6 key {} < 17",
+                v.len()
+            )))
+        } else {
+            Ok(Self {
+                addr: Ipv6Addr::from(<[u8; 16]>::try_from(&v[..16]).unwrap()),
+                len: v[16],
+            })
+        }
+    }
+}
+
+impl From<crate::db::TunnelRoute> for TunnelOrigin {
+    fn from(x: crate::db::TunnelRoute) -> Self {
+        Self {
+            overlay_prefix: x.origin.overlay_prefix,
+            boundary_addr: x.origin.boundary_addr,
+            vni: x.origin.vni,
+            metric: x.origin.metric,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use mg_common::net::{IpPrefix, Ipv4Prefix};
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
 

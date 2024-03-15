@@ -10,4 +10,4 @@ slog.workspace = true
 percent-encoding.workspace = true
 reqwest.workspace = true
 progenitor.workspace = true
-ddm = { path = "../ddm" }
+mg-common = { path = "../mg-common" }
