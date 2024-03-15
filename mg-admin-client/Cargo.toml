@@ -12,4 +12,6 @@ percent-encoding.workspace = true
 reqwest.workspace = true
 progenitor.workspace = true
 schemars.workspace = true
+chrono.workspace = true
 rdb = { path = "../rdb" }
+bgp = { path = "../bgp" }

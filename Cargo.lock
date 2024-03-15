@@ -260,6 +260,7 @@ name = "bgp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "lazy_static",
  "mg-common",
  "nom",
@@ -1862,6 +1863,8 @@ name = "mg-admin-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bgp",
+ "chrono",
  "percent-encoding",
  "progenitor 0.5.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
  "rdb",

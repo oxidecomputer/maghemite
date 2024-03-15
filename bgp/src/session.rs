@@ -373,10 +373,18 @@ pub struct NeighborInfo {
 
 pub const MAX_MESSAGE_HISTORY: usize = 1024;
 
-#[derive(Default, Debug, Clone, Serialize, JsonSchema)]
+/// A message history entry is a BGP message with an associated timestamp
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MessageHistoryEntry {
+    timestamp: chrono::DateTime<chrono::Utc>,
+    message: Message,
+}
+
+/// Message history for a BGP session
+#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MessageHistory {
-    pub received: VecDeque<Message>,
-    pub sent: VecDeque<Message>,
+    pub received: VecDeque<MessageHistoryEntry>,
+    pub sent: VecDeque<MessageHistoryEntry>,
 }
 
 impl MessageHistory {
@@ -384,14 +392,20 @@ impl MessageHistory {
         if self.received.len() >= MAX_MESSAGE_HISTORY {
             self.received.pop_back();
         }
-        self.received.push_front(msg);
+        self.received.push_front(MessageHistoryEntry {
+            message: msg,
+            timestamp: chrono::Utc::now(),
+        });
     }
 
     fn send(&mut self, msg: Message) {
         if self.sent.len() >= MAX_MESSAGE_HISTORY {
             self.sent.pop_back();
         }
-        self.sent.push_front(msg);
+        self.sent.push_front(MessageHistoryEntry {
+            message: msg,
+            timestamp: chrono::Utc::now(),
+        });
     }
 }
 

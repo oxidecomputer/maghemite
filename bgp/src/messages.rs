@@ -9,7 +9,7 @@ use nom::{
 };
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 
 pub const MAX_MESSAGE_SIZE: usize = 4096;
@@ -54,8 +54,10 @@ impl From<&Message> for MessageType {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+/// Holds a BGP message. May be an Open, Update, Notification or Keep Alive
+/// message.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Message {
     Open(OpenMessage),
     Update(UpdateMessage),
@@ -189,7 +191,7 @@ pub const BGP4: u8 = 4;
 /// ```
 ///
 /// Ref: RFC 4271 §4.2
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OpenMessage {
     /// BGP protocol version.
     pub version: u8,
@@ -361,7 +363,9 @@ pub struct Tlv {
 /// ```
 ///
 /// Ref: RFC 4271 §4.3
-#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, JsonSchema)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
+)]
 pub struct UpdateMessage {
     pub withdrawn: Vec<Prefix>,
     pub path_attributes: Vec<PathAttribute>,
@@ -509,7 +513,7 @@ impl UpdateMessage {
 /// This data structure captures a network prefix as it's layed out in a BGP
 /// message. There is a prefix length followed by a variable number of bytes.
 /// Just enough bytes to express the prefix.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Prefix {
     pub length: u8,
     pub value: Vec<u8>,
@@ -602,9 +606,13 @@ impl From<rdb::Prefix4> for Prefix {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+/// A self-describing BGP path attribute
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PathAttribute {
+    /// Type encoding for the attribute
     pub typ: PathAttributeType,
+
+    /// Value of the attribute
     pub value: PathAttributeValue,
 }
 
@@ -669,9 +677,13 @@ impl PathAttribute {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+/// Type encoding for a path attribute.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PathAttributeType {
+    /// Flags may include, Optional, Transitive, Partial and Extended Length.
     pub flags: u8,
+
+    /// Type code for the path attribute.
     pub type_code: PathAttributeTypeCode,
 }
 
@@ -689,14 +701,28 @@ impl PathAttributeType {
 }
 
 pub mod path_attribute_flags {
+    /// Treat a path attribute as optional
     pub const OPTIONAL: u8 = 0b10000000;
+    /// Path attribute must be redistributed
     pub const TRANSITIVE: u8 = 0b01000000;
+    /// Treat path attribute as parrital
     pub const PARTIAL: u8 = 0b00100000;
+    /// If set the path attribute lenght is encoded in two octets instead o
+    /// one
     pub const EXTENDED_LENGTH: u8 = 0b00010000;
 }
 
+/// An enumeration describing available path attribute type codes.
 #[derive(
-    Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive, Serialize, JsonSchema,
+    Debug,
+    PartialEq,
+    Eq,
+    Copy,
+    Clone,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
@@ -747,21 +773,33 @@ impl From<PathAttributeValue> for PathAttributeTypeCode {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+/// The value encoding of a path attribute.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PathAttributeValue {
+    /// The type of origin associated with a path
     Origin(PathOrigin),
     /* TODO according to RFC 4893 we do not have this as an explicit attribute
      * type when 4-byte ASNs have been negotiated - but are there some
      * circumstances when we'll need transitional mode?
      */
+    /// The AS set associated with a path
     AsPath(Vec<As4PathSegment>),
+    /// The nexthop associated with a path
     NextHop(IpAddr),
+    /// A metric used for external (inter-AS) links to discriminate among
+    /// multiple entry or exit points.
     MultiExitDisc(u32),
+    /// Local pref is included in update messages sent to internal peers and
+    /// indicates a degree of preference.
     LocalPref(u32),
+    /// This attribute is included in routes that are formed by aggregation.
     Aggregator([u8; 6]),
+    /// Indicates communities associated with a path.
     Communities(Vec<Community>),
+    /// The 4-byte encoded AS set associated with a path
     As4Path(Vec<As4PathSegment>),
+    /// This attribute is included in routes that are formed by aggregation.
     As4Aggregator([u8; 8]),
     //MpReachNlri(MpReachNlri), //TODO for IPv6
 }
@@ -863,6 +901,7 @@ impl PathAttributeValue {
     }
 }
 
+/// BGP communities recognized by this BGP implementation.
 #[derive(
     Debug,
     PartialEq,
@@ -872,6 +911,7 @@ impl PathAttributeValue {
     TryFromPrimitive,
     IntoPrimitive,
     Serialize,
+    Deserialize,
     JsonSchema,
 )]
 #[repr(u32)]
@@ -901,26 +941,44 @@ pub enum Community {
     GracefulShutdown = 0xFFFF0000,
 }
 
+/// An enumeration indicating the origin type of a path.
 #[derive(
-    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
 pub enum PathOrigin {
+    /// Interior gateway protocol
     Igp = 0,
+    /// Exterior gateway protocol
     Egp = 1,
+    /// Incomplete path origin
     Incomplete = 2,
 }
 
+// A self describing segment found in path sets and sequences.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct AsPathSegment {
+    // Indicates if this segment is a part of a set or sequence.
     pub typ: AsPathType,
+    // AS numbers in the segment.
     pub value: Vec<u16>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+// A self 4-byte describing segment found in path sets and sequences.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct As4PathSegment {
+    // Indicates if this segment is a part of a set or sequence.
     pub typ: AsPathType,
+    // 4 byte AS numbers in the segment.
     pub value: Vec<u32>,
 }
 
@@ -963,19 +1021,35 @@ impl As4PathSegment {
     }
 }
 
+/// Enumeration describes possible AS path types
 #[derive(
-    Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive, Serialize, JsonSchema,
+    Debug,
+    PartialEq,
+    Eq,
+    Copy,
+    Clone,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
 pub enum AsPathType {
+    /// The path is to be interpreted as a set
     AsSet = 1,
+    /// The path is to be interpreted as a sequence
     AsSequence = 2,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+/// Notification messages are exchanged between BGP peers when an exceptional
+/// event has occured.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NotificationMessage {
+    /// Error code associated with the notification
     pub error_code: ErrorCode,
+
+    /// Error subcode associated with the notification
     pub error_subcode: ErrorSubcode,
 
     /*
@@ -1099,8 +1173,17 @@ impl NotificationMessage {
     }
 }
 
+/// This enumeration contains possible notification error codes.
 #[derive(
-    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
@@ -1113,7 +1196,8 @@ pub enum ErrorCode {
     Cease,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+/// This enumeration contains possible notification error subcodes.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorSubcode {
     Header(HeaderErrorSubcode),
@@ -1155,8 +1239,17 @@ impl ErrorSubcode {
     }
 }
 
+/// Header error subcode types
 #[derive(
-    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
@@ -1167,8 +1260,17 @@ pub enum HeaderErrorSubcode {
     BadMessageType,
 }
 
+/// Open message error subcode types
 #[derive(
-    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
@@ -1183,8 +1285,17 @@ pub enum OpenErrorSubcode {
     UnsupportedCapability,
 }
 
+/// Update message error subcode types
 #[derive(
-    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
@@ -1204,8 +1315,8 @@ pub enum UpdateErrorSubcode {
 }
 
 /// The IANA/IETF currently defines the following optional parameter types.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum OptionalParameter {
     /// Code 0
     Reserved,
@@ -1216,6 +1327,7 @@ pub enum OptionalParameter {
     /// Code 2: RFC 5492
     Capabilities(Vec<Capability>),
 
+    /// Unassigned
     Unassigned,
 
     /// Code 255: RFC 9072
@@ -1279,7 +1391,7 @@ impl OptionalParameter {
 
 /// The `AddPathElement` comes as a BGP capability extension as described in
 /// RFC 7911.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AddPathElement {
     /// Address family identifier.
     /// <https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml>
@@ -1296,7 +1408,7 @@ pub struct AddPathElement {
 /// Optional capabilities supported by a BGP implementation. An issue tracking
 /// the TODOs below is here
 /// <https://github.com/oxidecomputer/maghemite/issues/80>
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     /// RFC 2858 TODO
@@ -1750,6 +1862,7 @@ impl Capability {
     }
 }
 
+// The set of capabilitiy codes supported by this BGP implementation
 #[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
 pub enum CapabilityCode {

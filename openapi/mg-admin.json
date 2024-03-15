@@ -708,10 +708,22 @@
         ]
       },
       "AsPathType": {
-        "type": "string",
-        "enum": [
-          "as_set",
-          "as_sequence"
+        "description": "Enumeration describes possible AS path types",
+        "oneOf": [
+          {
+            "description": "The path is to be interpreted as a set",
+            "type": "string",
+            "enum": [
+              "as_set"
+            ]
+          },
+          {
+            "description": "The path is to be interpreted as a sequence",
+            "type": "string",
+            "enum": [
+              "as_sequence"
+            ]
+          }
         ]
       },
       "BfdPeerConfig": {
@@ -1281,6 +1293,7 @@
         ]
       },
       "Community": {
+        "description": "BGP communities recognized by this BGP implementation.",
         "oneOf": [
           {
             "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised outside a BGP confederation boundary (a stand-alone autonomous system that is not part of a confederation should be considered a confederation itself)",
@@ -1375,6 +1388,7 @@
         ]
       },
       "ErrorCode": {
+        "description": "This enumeration contains possible notification error codes.",
         "type": "string",
         "enum": [
           "header",
@@ -1386,6 +1400,7 @@
         ]
       },
       "ErrorSubcode": {
+        "description": "This enumeration contains possible notification error subcodes.",
         "oneOf": [
           {
             "type": "object",
@@ -1569,6 +1584,7 @@
         ]
       },
       "HeaderErrorSubcode": {
+        "description": "Header error subcode types",
         "type": "string",
         "enum": [
           "unspecific",
@@ -1578,70 +1594,115 @@
         ]
       },
       "Message": {
+        "description": "Holds a BGP message. May be an Open, Update, Notification or Keep Alive message.",
         "oneOf": [
           {
-            "type": "string",
-            "enum": [
-              "keep_alive"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "open"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/OpenMessage"
+              }
+            },
+            "required": [
+              "type",
+              "value"
             ]
           },
           {
             "type": "object",
             "properties": {
-              "open": {
-                "$ref": "#/components/schemas/OpenMessage"
-              }
-            },
-            "required": [
-              "open"
-            ],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "update": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "update"
+                ]
+              },
+              "value": {
                 "$ref": "#/components/schemas/UpdateMessage"
               }
             },
             "required": [
-              "update"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
           },
           {
             "type": "object",
             "properties": {
-              "notification": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "notification"
+                ]
+              },
+              "value": {
                 "$ref": "#/components/schemas/NotificationMessage"
               }
             },
             "required": [
-              "notification"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "keep_alive"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
           }
         ]
       },
       "MessageHistory": {
+        "description": "Message history for a BGP session",
         "type": "object",
         "properties": {
           "received": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Message"
+              "$ref": "#/components/schemas/MessageHistoryEntry"
             }
           },
           "sent": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Message"
+              "$ref": "#/components/schemas/MessageHistoryEntry"
             }
           }
         },
         "required": [
           "received",
           "sent"
+        ]
+      },
+      "MessageHistoryEntry": {
+        "description": "A message history entry is a BGP message with an associated timestamp",
+        "type": "object",
+        "properties": {
+          "message": {
+            "$ref": "#/components/schemas/Message"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "message",
+          "timestamp"
         ]
       },
       "MessageHistoryRequest": {
@@ -1698,6 +1759,7 @@
         ]
       },
       "NotificationMessage": {
+        "description": "Notification messages are exchanged between BGP peers when an exceptional event has occured.",
         "type": "object",
         "properties": {
           "data": {
@@ -1709,10 +1771,20 @@
             }
           },
           "error_code": {
-            "$ref": "#/components/schemas/ErrorCode"
+            "description": "Error code associated with the notification",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              }
+            ]
           },
           "error_subcode": {
-            "$ref": "#/components/schemas/ErrorSubcode"
+            "description": "Error subcode associated with the notification",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ErrorSubcode"
+              }
+            ]
           }
         },
         "required": [
@@ -1722,6 +1794,7 @@
         ]
       },
       "OpenErrorSubcode": {
+        "description": "Open message error subcode types",
         "type": "string",
         "enum": [
           "unspecific",
@@ -1782,30 +1855,46 @@
         "description": "The IANA/IETF currently defines the following optional parameter types.",
         "oneOf": [
           {
-            "type": "string",
-            "enum": [
-              "unassigned"
-            ]
-          },
-          {
             "description": "Code 0",
-            "type": "string",
-            "enum": [
-              "reserved"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "reserved"
+                ]
+              }
+            },
+            "required": [
+              "type"
             ]
           },
           {
             "description": "Code 1: RFC 4217, RFC 5492 (deprecated)",
-            "type": "string",
-            "enum": [
-              "authentication"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "authentication"
+                ]
+              }
+            },
+            "required": [
+              "type"
             ]
           },
           {
             "description": "Code 2: RFC 5492",
             "type": "object",
             "properties": {
-              "capabilities": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "capabilities"
+                ]
+              },
+              "value": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Capability"
@@ -1813,15 +1902,38 @@
               }
             },
             "required": [
-              "capabilities"
-            ],
-            "additionalProperties": false
+              "type",
+              "value"
+            ]
+          },
+          {
+            "description": "Unassigned",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "unassigned"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
           },
           {
             "description": "Code 255: RFC 9072",
-            "type": "string",
-            "enum": [
-              "extended_length"
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "extended_length"
+                ]
+              }
+            },
+            "required": [
+              "type"
             ]
           }
         ]
@@ -1849,13 +1961,24 @@
         ]
       },
       "PathAttribute": {
+        "description": "A self-describing BGP path attribute",
         "type": "object",
         "properties": {
           "typ": {
-            "$ref": "#/components/schemas/PathAttributeType"
+            "description": "Type encoding for the attribute",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PathAttributeType"
+              }
+            ]
           },
           "value": {
-            "$ref": "#/components/schemas/PathAttributeValue"
+            "description": "Value of the attribute",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PathAttributeValue"
+              }
+            ]
           }
         },
         "required": [
@@ -1864,15 +1987,22 @@
         ]
       },
       "PathAttributeType": {
+        "description": "Type encoding for a path attribute.",
         "type": "object",
         "properties": {
           "flags": {
+            "description": "Flags may include, Optional, Transitive, Partial and Extended Length.",
             "type": "integer",
             "format": "uint8",
             "minimum": 0
           },
           "type_code": {
-            "$ref": "#/components/schemas/PathAttributeTypeCode"
+            "description": "Type code for the path attribute.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PathAttributeTypeCode"
+              }
+            ]
           }
         },
         "required": [
@@ -1881,6 +2011,7 @@
         ]
       },
       "PathAttributeTypeCode": {
+        "description": "An enumeration describing available path attribute type codes.",
         "oneOf": [
           {
             "type": "string",
@@ -1912,8 +2043,10 @@
         ]
       },
       "PathAttributeValue": {
+        "description": "The value encoding of a path attribute.",
         "oneOf": [
           {
+            "description": "The type of origin associated with a path",
             "type": "object",
             "properties": {
               "origin": {
@@ -1926,6 +2059,7 @@
             "additionalProperties": false
           },
           {
+            "description": "The AS set associated with a path",
             "type": "object",
             "properties": {
               "as_path": {
@@ -1941,6 +2075,7 @@
             "additionalProperties": false
           },
           {
+            "description": "The nexthop associated with a path",
             "type": "object",
             "properties": {
               "next_hop": {
@@ -1954,6 +2089,7 @@
             "additionalProperties": false
           },
           {
+            "description": "A metric used for external (inter-AS) links to discriminate among multiple entry or exit points.",
             "type": "object",
             "properties": {
               "multi_exit_disc": {
@@ -1968,6 +2104,7 @@
             "additionalProperties": false
           },
           {
+            "description": "Local pref is included in update messages sent to internal peers and indicates a degree of preference.",
             "type": "object",
             "properties": {
               "local_pref": {
@@ -1982,6 +2119,7 @@
             "additionalProperties": false
           },
           {
+            "description": "This attribute is included in routes that are formed by aggregation.",
             "type": "object",
             "properties": {
               "aggregator": {
@@ -2001,6 +2139,7 @@
             "additionalProperties": false
           },
           {
+            "description": "Indicates communities associated with a path.",
             "type": "object",
             "properties": {
               "communities": {
@@ -2016,6 +2155,7 @@
             "additionalProperties": false
           },
           {
+            "description": "The 4-byte encoded AS set associated with a path",
             "type": "object",
             "properties": {
               "as4_path": {
@@ -2031,6 +2171,7 @@
             "additionalProperties": false
           },
           {
+            "description": "This attribute is included in routes that are formed by aggregation.",
             "type": "object",
             "properties": {
               "as4_aggregator": {
@@ -2052,11 +2193,29 @@
         ]
       },
       "PathOrigin": {
-        "type": "string",
-        "enum": [
-          "igp",
-          "egp",
-          "incomplete"
+        "description": "An enumeration indicating the origin type of a path.",
+        "oneOf": [
+          {
+            "description": "Interior gateway protocol",
+            "type": "string",
+            "enum": [
+              "igp"
+            ]
+          },
+          {
+            "description": "Exterior gateway protocol",
+            "type": "string",
+            "enum": [
+              "egp"
+            ]
+          },
+          {
+            "description": "Incomplete path origin",
+            "type": "string",
+            "enum": [
+              "incomplete"
+            ]
+          }
         ]
       },
       "PeerInfo": {
@@ -2221,6 +2380,7 @@
         ]
       },
       "UpdateErrorSubcode": {
+        "description": "Update message error subcode types",
         "type": "string",
         "enum": [
           "unspecific",
