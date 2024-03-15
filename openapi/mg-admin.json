@@ -710,8 +710,8 @@
       "AsPathType": {
         "type": "string",
         "enum": [
-          "AsSet",
-          "AsSequence"
+          "as_set",
+          "as_sequence"
         ]
       },
       "BfdPeerConfig": {
@@ -866,7 +866,7 @@
             "description": "RFC 2858 TODO",
             "type": "object",
             "properties": {
-              "MultiprotocolExtensions": {
+              "multiprotocol_extensions": {
                 "type": "object",
                 "properties": {
                   "afi": {
@@ -887,7 +887,7 @@
               }
             },
             "required": [
-              "MultiprotocolExtensions"
+              "multiprotocol_extensions"
             ],
             "additionalProperties": false
           },
@@ -895,12 +895,12 @@
             "description": "RFC 2918 TODO",
             "type": "object",
             "properties": {
-              "RouteRefresh": {
+              "route_refresh": {
                 "type": "object"
               }
             },
             "required": [
-              "RouteRefresh"
+              "route_refresh"
             ],
             "additionalProperties": false
           },
@@ -908,12 +908,12 @@
             "description": "RFC 5291 TODO",
             "type": "object",
             "properties": {
-              "OutboundRouteFiltering": {
+              "outbound_route_filtering": {
                 "type": "object"
               }
             },
             "required": [
-              "OutboundRouteFiltering"
+              "outbound_route_filtering"
             ],
             "additionalProperties": false
           },
@@ -921,12 +921,12 @@
             "description": "RFC 8277 (deprecated) TODO",
             "type": "object",
             "properties": {
-              "MultipleRoutesToDestination": {
+              "multiple_routes_to_destination": {
                 "type": "object"
               }
             },
             "required": [
-              "MultipleRoutesToDestination"
+              "multiple_routes_to_destination"
             ],
             "additionalProperties": false
           },
@@ -934,12 +934,12 @@
             "description": "RFC 8950 TODO",
             "type": "object",
             "properties": {
-              "ExtendedNextHopEncoding": {
+              "extended_next_hop_encoding": {
                 "type": "object"
               }
             },
             "required": [
-              "ExtendedNextHopEncoding"
+              "extended_next_hop_encoding"
             ],
             "additionalProperties": false
           },
@@ -947,12 +947,12 @@
             "description": "RFC 8654 TODO",
             "type": "object",
             "properties": {
-              "BGPExtendedMessage": {
+              "b_g_p_extended_message": {
                 "type": "object"
               }
             },
             "required": [
-              "BGPExtendedMessage"
+              "b_g_p_extended_message"
             ],
             "additionalProperties": false
           },
@@ -960,12 +960,12 @@
             "description": "RFC 8205 TODO",
             "type": "object",
             "properties": {
-              "BgpSec": {
+              "bgp_sec": {
                 "type": "object"
               }
             },
             "required": [
-              "BgpSec"
+              "bgp_sec"
             ],
             "additionalProperties": false
           },
@@ -973,12 +973,12 @@
             "description": "RFC 8277 TODO",
             "type": "object",
             "properties": {
-              "MultipleLabels": {
+              "multiple_labels": {
                 "type": "object"
               }
             },
             "required": [
-              "MultipleLabels"
+              "multiple_labels"
             ],
             "additionalProperties": false
           },
@@ -986,12 +986,12 @@
             "description": "RFC 9234 TODO",
             "type": "object",
             "properties": {
-              "BgpRole": {
+              "bgp_role": {
                 "type": "object"
               }
             },
             "required": [
-              "BgpRole"
+              "bgp_role"
             ],
             "additionalProperties": false
           },
@@ -999,12 +999,12 @@
             "description": "RFC 4724 TODO",
             "type": "object",
             "properties": {
-              "GracefulRestart": {
+              "graceful_restart": {
                 "type": "object"
               }
             },
             "required": [
-              "GracefulRestart"
+              "graceful_restart"
             ],
             "additionalProperties": false
           },
@@ -1012,7 +1012,7 @@
             "description": "RFC 6793",
             "type": "object",
             "properties": {
-              "FourOctetAs": {
+              "four_octet_as": {
                 "type": "object",
                 "properties": {
                   "asn": {
@@ -1027,7 +1027,7 @@
               }
             },
             "required": [
-              "FourOctetAs"
+              "four_octet_as"
             ],
             "additionalProperties": false
           },
@@ -1035,12 +1035,12 @@
             "description": "draft-ietf-idr-dynamic-cap TODO",
             "type": "object",
             "properties": {
-              "DynamicCapability": {
+              "dynamic_capability": {
                 "type": "object"
               }
             },
             "required": [
-              "DynamicCapability"
+              "dynamic_capability"
             ],
             "additionalProperties": false
           },
@@ -1048,12 +1048,12 @@
             "description": "draft-ietf-idr-bgp-multisession TODO",
             "type": "object",
             "properties": {
-              "MultisessionBgp": {
+              "multisession_bgp": {
                 "type": "object"
               }
             },
             "required": [
-              "MultisessionBgp"
+              "multisession_bgp"
             ],
             "additionalProperties": false
           },
@@ -1061,7 +1061,7 @@
             "description": "RFC 7911",
             "type": "object",
             "properties": {
-              "AddPath": {
+              "add_path": {
                 "type": "object",
                 "properties": {
                   "elements": {
@@ -1077,7 +1077,7 @@
               }
             },
             "required": [
-              "AddPath"
+              "add_path"
             ],
             "additionalProperties": false
           },
@@ -1085,12 +1085,12 @@
             "description": "RFC 7313 TODO",
             "type": "object",
             "properties": {
-              "EnhancedRouteRefresh": {
+              "enhanced_route_refresh": {
                 "type": "object"
               }
             },
             "required": [
-              "EnhancedRouteRefresh"
+              "enhanced_route_refresh"
             ],
             "additionalProperties": false
           },
@@ -1098,12 +1098,12 @@
             "description": "draft-uttaro-idr-bgp-persistence TODO",
             "type": "object",
             "properties": {
-              "LongLivedGracefulRestart": {
+              "long_lived_graceful_restart": {
                 "type": "object"
               }
             },
             "required": [
-              "LongLivedGracefulRestart"
+              "long_lived_graceful_restart"
             ],
             "additionalProperties": false
           },
@@ -1111,12 +1111,12 @@
             "description": "draft-ietf-idr-rpd-04 TODO",
             "type": "object",
             "properties": {
-              "RoutingPolicyDistribution": {
+              "routing_policy_distribution": {
                 "type": "object"
               }
             },
             "required": [
-              "RoutingPolicyDistribution"
+              "routing_policy_distribution"
             ],
             "additionalProperties": false
           },
@@ -1124,12 +1124,12 @@
             "description": "draft-walton-bgp-hostname-capability TODO",
             "type": "object",
             "properties": {
-              "Fqdn": {
+              "fqdn": {
                 "type": "object"
               }
             },
             "required": [
-              "Fqdn"
+              "fqdn"
             ],
             "additionalProperties": false
           },
@@ -1137,12 +1137,12 @@
             "description": "RFC 8810 (deprecated) TODO",
             "type": "object",
             "properties": {
-              "PrestandardRouteRefresh": {
+              "prestandard_route_refresh": {
                 "type": "object"
               }
             },
             "required": [
-              "PrestandardRouteRefresh"
+              "prestandard_route_refresh"
             ],
             "additionalProperties": false
           },
@@ -1150,12 +1150,12 @@
             "description": "RFC 8810 (deprecated) TODO",
             "type": "object",
             "properties": {
-              "PrestandardOrfAndPd": {
+              "prestandard_orf_and_pd": {
                 "type": "object"
               }
             },
             "required": [
-              "PrestandardOrfAndPd"
+              "prestandard_orf_and_pd"
             ],
             "additionalProperties": false
           },
@@ -1163,12 +1163,12 @@
             "description": "RFC 8810 (deprecated) TODO",
             "type": "object",
             "properties": {
-              "PrestandardOutboundRouteFiltering": {
+              "prestandard_outbound_route_filtering": {
                 "type": "object"
               }
             },
             "required": [
-              "PrestandardOutboundRouteFiltering"
+              "prestandard_outbound_route_filtering"
             ],
             "additionalProperties": false
           },
@@ -1176,12 +1176,12 @@
             "description": "RFC 8810 (deprecated) TODO",
             "type": "object",
             "properties": {
-              "PrestandardMultisession": {
+              "prestandard_multisession": {
                 "type": "object"
               }
             },
             "required": [
-              "PrestandardMultisession"
+              "prestandard_multisession"
             ],
             "additionalProperties": false
           },
@@ -1189,12 +1189,12 @@
             "description": "RFC 8810 (deprecated) TODO",
             "type": "object",
             "properties": {
-              "PrestandardFqdn": {
+              "prestandard_fqdn": {
                 "type": "object"
               }
             },
             "required": [
-              "PrestandardFqdn"
+              "prestandard_fqdn"
             ],
             "additionalProperties": false
           },
@@ -1202,12 +1202,12 @@
             "description": "RFC 8810 (deprecated) TODO",
             "type": "object",
             "properties": {
-              "PrestandardOperationalMessage": {
+              "prestandard_operational_message": {
                 "type": "object"
               }
             },
             "required": [
-              "PrestandardOperationalMessage"
+              "prestandard_operational_message"
             ],
             "additionalProperties": false
           },
@@ -1215,7 +1215,7 @@
             "description": "RFC 8810",
             "type": "object",
             "properties": {
-              "Experimental": {
+              "experimental": {
                 "type": "object",
                 "properties": {
                   "code": {
@@ -1230,14 +1230,14 @@
               }
             },
             "required": [
-              "Experimental"
+              "experimental"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Unassigned": {
+              "unassigned": {
                 "type": "object",
                 "properties": {
                   "code": {
@@ -1252,14 +1252,14 @@
               }
             },
             "required": [
-              "Unassigned"
+              "unassigned"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Reserved": {
+              "reserved": {
                 "type": "object",
                 "properties": {
                   "code": {
@@ -1274,7 +1274,7 @@
               }
             },
             "required": [
-              "Reserved"
+              "reserved"
             ],
             "additionalProperties": false
           }
@@ -1286,28 +1286,28 @@
             "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised outside a BGP confederation boundary (a stand-alone autonomous system that is not part of a confederation should be considered a confederation itself)",
             "type": "string",
             "enum": [
-              "NoExport"
+              "no_export"
             ]
           },
           {
             "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised to other BGP peers.",
             "type": "string",
             "enum": [
-              "NoAdvertise"
+              "no_advertise"
             ]
           },
           {
             "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised to external BGP peers (this includes peers in other members autonomous systems inside a BGP confederation).",
             "type": "string",
             "enum": [
-              "NoExportSubConfed"
+              "no_export_sub_confed"
             ]
           },
           {
             "description": "All routes received carrying a communities attribute containing this value must set the local preference for the received routes to a low value, preferably zero.",
             "type": "string",
             "enum": [
-              "GracefulShutdown"
+              "graceful_shutdown"
             ]
           }
         ]
@@ -1377,12 +1377,12 @@
       "ErrorCode": {
         "type": "string",
         "enum": [
-          "Header",
-          "Open",
-          "Update",
-          "HoldTimerExpired",
-          "Fsm",
-          "Cease"
+          "header",
+          "open",
+          "update",
+          "hold_timer_expired",
+          "fsm",
+          "cease"
         ]
       },
       "ErrorSubcode": {
@@ -1390,78 +1390,78 @@
           {
             "type": "object",
             "properties": {
-              "Header": {
+              "header": {
                 "$ref": "#/components/schemas/HeaderErrorSubcode"
               }
             },
             "required": [
-              "Header"
+              "header"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Open": {
+              "open": {
                 "$ref": "#/components/schemas/OpenErrorSubcode"
               }
             },
             "required": [
-              "Open"
+              "open"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Update": {
+              "update": {
                 "$ref": "#/components/schemas/UpdateErrorSubcode"
               }
             },
             "required": [
-              "Update"
+              "update"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "HoldTime": {
+              "hold_time": {
                 "type": "integer",
                 "format": "uint8",
                 "minimum": 0
               }
             },
             "required": [
-              "HoldTime"
+              "hold_time"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Fsm": {
+              "fsm": {
                 "type": "integer",
                 "format": "uint8",
                 "minimum": 0
               }
             },
             "required": [
-              "Fsm"
+              "fsm"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Cease": {
+              "cease": {
                 "type": "integer",
                 "format": "uint8",
                 "minimum": 0
               }
             },
             "required": [
-              "Cease"
+              "cease"
             ],
             "additionalProperties": false
           }
@@ -1571,10 +1571,10 @@
       "HeaderErrorSubcode": {
         "type": "string",
         "enum": [
-          "Unspecific",
-          "ConnectionNotSynchronized",
-          "BadMessageLength",
-          "BadMessageType"
+          "unspecific",
+          "connection_not_synchronized",
+          "bad_message_length",
+          "bad_message_type"
         ]
       },
       "Message": {
@@ -1582,42 +1582,42 @@
           {
             "type": "string",
             "enum": [
-              "KeepAlive"
+              "keep_alive"
             ]
           },
           {
             "type": "object",
             "properties": {
-              "Open": {
+              "open": {
                 "$ref": "#/components/schemas/OpenMessage"
               }
             },
             "required": [
-              "Open"
+              "open"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Update": {
+              "update": {
                 "$ref": "#/components/schemas/UpdateMessage"
               }
             },
             "required": [
-              "Update"
+              "update"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Notification": {
+              "notification": {
                 "$ref": "#/components/schemas/NotificationMessage"
               }
             },
             "required": [
-              "Notification"
+              "notification"
             ],
             "additionalProperties": false
           }
@@ -1724,14 +1724,14 @@
       "OpenErrorSubcode": {
         "type": "string",
         "enum": [
-          "Unspecific",
-          "UnsupportedVersionNumber",
-          "BadPeerAS",
-          "BadBgpIdentifier",
-          "UnsupportedOptionalParameter",
-          "Deprecated",
-          "UnacceptableHoldTime",
-          "UnsupportedCapability"
+          "unspecific",
+          "unsupported_version_number",
+          "bad_peer_a_s",
+          "bad_bgp_identifier",
+          "unsupported_optional_parameter",
+          "deprecated",
+          "unacceptable_hold_time",
+          "unsupported_capability"
         ]
       },
       "OpenMessage": {
@@ -1784,28 +1784,28 @@
           {
             "type": "string",
             "enum": [
-              "Unassigned"
+              "unassigned"
             ]
           },
           {
             "description": "Code 0",
             "type": "string",
             "enum": [
-              "Reserved"
+              "reserved"
             ]
           },
           {
             "description": "Code 1: RFC 4217, RFC 5492 (deprecated)",
             "type": "string",
             "enum": [
-              "Authentication"
+              "authentication"
             ]
           },
           {
             "description": "Code 2: RFC 5492",
             "type": "object",
             "properties": {
-              "Capabilities": {
+              "capabilities": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Capability"
@@ -1813,7 +1813,7 @@
               }
             },
             "required": [
-              "Capabilities"
+              "capabilities"
             ],
             "additionalProperties": false
           },
@@ -1821,7 +1821,7 @@
             "description": "Code 255: RFC 9072",
             "type": "string",
             "enum": [
-              "ExtendedLength"
+              "extended_length"
             ]
           }
         ]
@@ -1885,28 +1885,28 @@
           {
             "type": "string",
             "enum": [
-              "AsPath",
-              "NextHop",
-              "MultiExitDisc",
-              "LocalPref",
-              "AtomicAggregate",
-              "Aggregator",
-              "Communities",
-              "As4Aggregator"
+              "as_path",
+              "next_hop",
+              "multi_exit_disc",
+              "local_pref",
+              "atomic_aggregate",
+              "aggregator",
+              "communities",
+              "as4_aggregator"
             ]
           },
           {
             "description": "RFC 4271",
             "type": "string",
             "enum": [
-              "Origin"
+              "origin"
             ]
           },
           {
             "description": "RFC 6793",
             "type": "string",
             "enum": [
-              "As4Path"
+              "as4_path"
             ]
           }
         ]
@@ -1916,19 +1916,19 @@
           {
             "type": "object",
             "properties": {
-              "Origin": {
+              "origin": {
                 "$ref": "#/components/schemas/PathOrigin"
               }
             },
             "required": [
-              "Origin"
+              "origin"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "AsPath": {
+              "as_path": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/As4PathSegment"
@@ -1936,55 +1936,55 @@
               }
             },
             "required": [
-              "AsPath"
+              "as_path"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "NextHop": {
+              "next_hop": {
                 "type": "string",
                 "format": "ip"
               }
             },
             "required": [
-              "NextHop"
+              "next_hop"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "MultiExitDisc": {
+              "multi_exit_disc": {
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
               }
             },
             "required": [
-              "MultiExitDisc"
+              "multi_exit_disc"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "LocalPref": {
+              "local_pref": {
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
               }
             },
             "required": [
-              "LocalPref"
+              "local_pref"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Aggregator": {
+              "aggregator": {
                 "type": "array",
                 "items": {
                   "type": "integer",
@@ -1996,14 +1996,14 @@
               }
             },
             "required": [
-              "Aggregator"
+              "aggregator"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "Communities": {
+              "communities": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Community"
@@ -2011,14 +2011,14 @@
               }
             },
             "required": [
-              "Communities"
+              "communities"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "As4Path": {
+              "as4_path": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/As4PathSegment"
@@ -2026,14 +2026,14 @@
               }
             },
             "required": [
-              "As4Path"
+              "as4_path"
             ],
             "additionalProperties": false
           },
           {
             "type": "object",
             "properties": {
-              "As4Aggregator": {
+              "as4_aggregator": {
                 "type": "array",
                 "items": {
                   "type": "integer",
@@ -2045,7 +2045,7 @@
               }
             },
             "required": [
-              "As4Aggregator"
+              "as4_aggregator"
             ],
             "additionalProperties": false
           }
@@ -2054,9 +2054,9 @@
       "PathOrigin": {
         "type": "string",
         "enum": [
-          "Igp",
-          "Egp",
-          "Incomplete"
+          "igp",
+          "egp",
+          "incomplete"
         ]
       },
       "PeerInfo": {
@@ -2223,18 +2223,18 @@
       "UpdateErrorSubcode": {
         "type": "string",
         "enum": [
-          "Unspecific",
-          "MalformedAttributeList",
-          "UnrecognizedWellKnownAttribute",
-          "MissingWellKnownAttribute",
-          "AttributeFlags",
-          "AttributeLength",
-          "InvalidOriginAttribute",
-          "Deprecated",
-          "InvalidNexthopAttribute",
-          "OptionalAttribute",
-          "InvalidNetworkField",
-          "MalformedAsPath"
+          "unspecific",
+          "malformed_attribute_list",
+          "unrecognized_well_known_attribute",
+          "missing_well_known_attribute",
+          "attribute_flags",
+          "attribute_length",
+          "invalid_origin_attribute",
+          "deprecated",
+          "invalid_nexthop_attribute",
+          "optional_attribute",
+          "invalid_network_field",
+          "malformed_as_path"
         ]
       },
       "UpdateMessage": {

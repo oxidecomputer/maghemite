@@ -55,6 +55,7 @@ impl From<&Message> for MessageType {
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum Message {
     Open(OpenMessage),
     Update(UpdateMessage),
@@ -698,6 +699,7 @@ pub mod path_attribute_flags {
     Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive, Serialize, JsonSchema,
 )]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum PathAttributeTypeCode {
     /// RFC 4271
     Origin = 1,
@@ -746,6 +748,7 @@ impl From<PathAttributeValue> for PathAttributeTypeCode {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum PathAttributeValue {
     Origin(PathOrigin),
     /* TODO according to RFC 4893 we do not have this as an explicit attribute
@@ -872,6 +875,7 @@ impl PathAttributeValue {
     JsonSchema,
 )]
 #[repr(u32)]
+#[serde(rename_all = "snake_case")]
 pub enum Community {
     /// All routes received carrying a communities attribute
     /// containing this value MUST NOT be advertised outside a BGP
@@ -901,6 +905,7 @@ pub enum Community {
     Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
 )]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum PathOrigin {
     Igp = 0,
     Egp = 1,
@@ -962,6 +967,7 @@ impl As4PathSegment {
     Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive, Serialize, JsonSchema,
 )]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum AsPathType {
     AsSet = 1,
     AsSequence = 2,
@@ -1097,6 +1103,7 @@ impl NotificationMessage {
     Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
 )]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     Header = 1,
     Open,
@@ -1107,6 +1114,7 @@ pub enum ErrorCode {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum ErrorSubcode {
     Header(HeaderErrorSubcode),
     Open(OpenErrorSubcode),
@@ -1151,6 +1159,7 @@ impl ErrorSubcode {
     Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
 )]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum HeaderErrorSubcode {
     Unspecific = 0,
     ConnectionNotSynchronized,
@@ -1162,6 +1171,7 @@ pub enum HeaderErrorSubcode {
     Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
 )]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum OpenErrorSubcode {
     Unspecific = 0,
     UnsupportedVersionNumber,
@@ -1177,6 +1187,7 @@ pub enum OpenErrorSubcode {
     Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, Serialize, JsonSchema,
 )]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum UpdateErrorSubcode {
     Unspecific = 0,
     MalformedAttributeList,
@@ -1194,6 +1205,7 @@ pub enum UpdateErrorSubcode {
 
 /// The IANA/IETF currently defines the following optional parameter types.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum OptionalParameter {
     /// Code 0
     Reserved,
@@ -1285,6 +1297,7 @@ pub struct AddPathElement {
 /// the TODOs below is here
 /// <https://github.com/oxidecomputer/maghemite/issues/80>
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum Capability {
     /// RFC 2858 TODO
     MultiprotocolExtensions {
