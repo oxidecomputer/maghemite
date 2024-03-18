@@ -180,7 +180,7 @@
       }
     },
     "/bgp/message-history": {
-      "post": {
+      "get": {
         "operationId": "message_history",
         "requestBody": {
           "content": {
