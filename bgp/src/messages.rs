@@ -707,7 +707,7 @@ pub mod path_attribute_flags {
     pub const TRANSITIVE: u8 = 0b01000000;
     /// Treat path attribute as partial
     pub const PARTIAL: u8 = 0b00100000;
-    /// If set the path attribute length is encoded in two octets instead o
+    /// If set the path attribute length is encoded in two octets instead of
     /// one
     pub const EXTENDED_LENGTH: u8 = 0b00010000;
 }
@@ -973,7 +973,7 @@ pub struct AsPathSegment {
     pub value: Vec<u16>,
 }
 
-// A self 4-byte describing segment found in path sets and sequences.
+// A self describing segment found in path sets and sequences of 4-byte ASNs.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct As4PathSegment {
     // Indicates if this segment is a part of a set or sequence.

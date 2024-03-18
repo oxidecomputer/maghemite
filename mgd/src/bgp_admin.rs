@@ -732,7 +732,7 @@ pub struct MessageHistoryResponse {
     by_peer: HashMap<IpAddr, MessageHistory>,
 }
 
-#[endpoint { method = POST, path = "/bgp/message-history" }]
+#[endpoint { method = GET, path = "/bgp/message-history" }]
 pub async fn message_history(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MessageHistoryRequest>,
