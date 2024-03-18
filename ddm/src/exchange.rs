@@ -15,10 +15,7 @@
 //! of a ddm router is defined in the state machine implementation in sm.rs.
 //!
 
-use crate::db::{
-    effective_route_set, Ipv6Prefix, Route, RouterKind, TunnelOrigin,
-    TunnelRoute,
-};
+use crate::db::{effective_route_set, Route, RouterKind, TunnelRoute};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
@@ -34,6 +31,7 @@ use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use hyper::body::Bytes;
+use mg_common::net::{Ipv6Prefix, TunnelOrigin};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;

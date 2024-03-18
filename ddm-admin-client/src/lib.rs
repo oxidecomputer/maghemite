@@ -2,10 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-pub use ddm::db::IpPrefix;
-pub use ddm::db::Ipv4Prefix;
-pub use ddm::db::Ipv6Prefix;
-pub use ddm::db::TunnelOrigin;
+pub use mg_common::net::IpPrefix;
+pub use mg_common::net::Ipv4Prefix;
+pub use mg_common::net::Ipv6Prefix;
+pub use mg_common::net::TunnelOrigin;
 
 progenitor::generate_api!(
     spec = "../openapi/ddm-admin.json",
@@ -20,10 +20,10 @@ progenitor::generate_api!(
     post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
         slog::trace!(log, "client response"; "result" => ?result);
     }),
-    replace = {
-        IpPrefix = ddm::db::IpPrefix,
-        Ipv4Prefix = ddm::db::Ipv4Prefix,
-        Ipv6Prefix = ddm::db::Ipv6Prefix,
-        TunnelOrigin = ddm::db::TunnelOrigin,
-    }
+       replace = {
+           IpPrefix = mg_common::net::IpPrefix,
+           Ipv4Prefix = mg_common::net::Ipv4Prefix,
+           Ipv6Prefix = mg_common::net::Ipv6Prefix,
+           TunnelOrigin = mg_common::net::TunnelOrigin,
+       }
 );

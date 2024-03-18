@@ -179,6 +179,39 @@
         }
       }
     },
+    "/bgp/message-history": {
+      "get": {
+        "operationId": "message_history",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageHistoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageHistoryResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/neighbor": {
       "put": {
         "operationId": "ensure_neighbor_handler",
@@ -580,6 +613,35 @@
           "resolution"
         ]
       },
+      "AddPathElement": {
+        "description": "The add path element comes as a BGP capability extension as described in RFC 7911.",
+        "type": "object",
+        "properties": {
+          "afi": {
+            "description": "Address family identifier. <https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml>",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "safi": {
+            "description": "Subsequent address family identifier. There are a large pile of these <https://www.iana.org/assignments/safi-namespace/safi-namespace.xhtml>",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "send_receive": {
+            "description": "This field indicates whether the sender is (a) able to receive multiple paths from its peer (value 1), (b) able to send multiple paths to its peer (value 2), or (c) both (value 3) for the <AFI, SAFI>.",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "afi",
+          "safi",
+          "send_receive"
+        ]
+      },
       "AddStaticRoute4Request": {
         "type": "object",
         "properties": {
@@ -623,6 +685,45 @@
           "asn",
           "originate",
           "peers"
+        ]
+      },
+      "As4PathSegment": {
+        "type": "object",
+        "properties": {
+          "typ": {
+            "$ref": "#/components/schemas/AsPathType"
+          },
+          "value": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "typ",
+          "value"
+        ]
+      },
+      "AsPathType": {
+        "description": "Enumeration describes possible AS path types",
+        "oneOf": [
+          {
+            "description": "The path is to be interpreted as a set",
+            "type": "string",
+            "enum": [
+              "as_set"
+            ]
+          },
+          {
+            "description": "The path is to be interpreted as a sequence",
+            "type": "string",
+            "enum": [
+              "as_sequence"
+            ]
+          }
         ]
       },
       "BfdPeerConfig": {
@@ -683,7 +784,7 @@
         ]
       },
       "BfdPeerState": {
-        "description": "The possible peer states. See the `State` trait implementations `Down`, `Init`, and `Up` for detailed semantics.",
+        "description": "The possible peer states. See the `State` trait implementations `Down`, `Init`, and `Up` for detailed semantics. Data representation is u8 as this enum is used as a part of the BFD wire protocol.",
         "oneOf": [
           {
             "description": "A stable down state. Non-responsive to incoming messages.",
@@ -770,6 +871,460 @@
           "resolution"
         ]
       },
+      "Capability": {
+        "description": "Optional capabilities supported by a BGP implementation.",
+        "oneOf": [
+          {
+            "description": "Multiprotocol extensions as defined in RFC 2858",
+            "type": "object",
+            "properties": {
+              "multiprotocol_extensions": {
+                "type": "object",
+                "properties": {
+                  "afi": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0
+                  },
+                  "safi": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "afi",
+                  "safi"
+                ]
+              }
+            },
+            "required": [
+              "multiprotocol_extensions"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Route refresh capability as defined in RFC 2918. Note this capability is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "route_refresh": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "route_refresh"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Outbound filtering capability as defined in RFC 5291. Note this capability is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "outbound_route_filtering": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "outbound_route_filtering"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Multiple routes to destination capability as defined in RFC 8277 (deprecated). Note this capability is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "multiple_routes_to_destination": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "multiple_routes_to_destination"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Multiple nexthop encoding capability as defined in RFC 8950. Note this capability is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "extended_next_hop_encoding": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "extended_next_hop_encoding"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Extended message capability as defined in RFC 8654. Note this capability is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "b_g_p_extended_message": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "b_g_p_extended_message"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "BGPSec as defined in RFC 8205. Note this capability is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "bgp_sec": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "bgp_sec"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Multiple label support as defined in RFC 8277. Note this capability is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "multiple_labels": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "multiple_labels"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "BGP role capability as defined in RFC 9234. Note this capability is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "bgp_role": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "bgp_role"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Graceful restart as defined in RFC 4724. Note this capability is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "graceful_restart": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "graceful_restart"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Four octet AS numbers as defined in RFC 6793.",
+            "type": "object",
+            "properties": {
+              "four_octet_as": {
+                "type": "object",
+                "properties": {
+                  "asn": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "asn"
+                ]
+              }
+            },
+            "required": [
+              "four_octet_as"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Dynamic capabilities as defined in draft-ietf-idr-dynamic-cap. Note this capability is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "dynamic_capability": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "dynamic_capability"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Multi session support as defined in draft-ietf-idr-bgp-multisession. Note this capability is not yet supported.",
+            "type": "object",
+            "properties": {
+              "multisession_bgp": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "multisession_bgp"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Add path capability as defined in RFC 7911.",
+            "type": "object",
+            "properties": {
+              "add_path": {
+                "type": "object",
+                "properties": {
+                  "elements": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AddPathElement"
+                    }
+                  }
+                },
+                "required": [
+                  "elements"
+                ]
+              }
+            },
+            "required": [
+              "add_path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Enhanced route refresh as defined in RFC 7313. Note this capability is not yet supported.",
+            "type": "object",
+            "properties": {
+              "enhanced_route_refresh": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "enhanced_route_refresh"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Long-lived graceful restart as defined in draft-uttaro-idr-bgp-persistence. Note this capability is not yet supported.",
+            "type": "object",
+            "properties": {
+              "long_lived_graceful_restart": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "long_lived_graceful_restart"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Routing policy distribution as defined indraft-ietf-idr-rpd-04. Note this capability is not yet supported.",
+            "type": "object",
+            "properties": {
+              "routing_policy_distribution": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "routing_policy_distribution"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Fully qualified domain names as defined intdraft-walton-bgp-hostname-capability. Note this capability is not yet supported.",
+            "type": "object",
+            "properties": {
+              "fqdn": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "fqdn"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Pre-standard route refresh as defined in RFC 8810 (deprecated). Note this capability is not yet supported.",
+            "type": "object",
+            "properties": {
+              "prestandard_route_refresh": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "prestandard_route_refresh"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Pre-standard prefix-based outbound route filtering as defined in RFC 8810 (deprecated). Note this is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "prestandard_orf_and_pd": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "prestandard_orf_and_pd"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Pre-standard outbound route filtering as defined in RFC 8810 (deprecated). Note this is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "prestandard_outbound_route_filtering": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "prestandard_outbound_route_filtering"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Pre-standard multisession as defined in RFC 8810 (deprecated). Note this is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "prestandard_multisession": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "prestandard_multisession"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Pre-standard fully qualified domain names as defined in RFC 8810 (deprecated). Note this is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "prestandard_fqdn": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "prestandard_fqdn"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Pre-standard operational messages as defined in RFC 8810 (deprecated). Note this is not yet implemented.",
+            "type": "object",
+            "properties": {
+              "prestandard_operational_message": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "prestandard_operational_message"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Experimental capability as defined in RFC 8810.",
+            "type": "object",
+            "properties": {
+              "experimental": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "code"
+                ]
+              }
+            },
+            "required": [
+              "experimental"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "unassigned": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "code"
+                ]
+              }
+            },
+            "required": [
+              "unassigned"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "reserved": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "code"
+                ]
+              }
+            },
+            "required": [
+              "reserved"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Community": {
+        "description": "BGP communities recognized by this BGP implementation.",
+        "oneOf": [
+          {
+            "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised outside a BGP confederation boundary (a stand-alone autonomous system that is not part of a confederation should be considered a confederation itself)",
+            "type": "string",
+            "enum": [
+              "no_export"
+            ]
+          },
+          {
+            "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised to other BGP peers.",
+            "type": "string",
+            "enum": [
+              "no_advertise"
+            ]
+          },
+          {
+            "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised to external BGP peers (this includes peers in other members autonomous systems inside a BGP confederation).",
+            "type": "string",
+            "enum": [
+              "no_export_sub_confed"
+            ]
+          },
+          {
+            "description": "All routes received carrying a communities attribute containing this value must set the local preference for the received routes to a low value, preferably zero.",
+            "type": "string",
+            "enum": [
+              "graceful_shutdown"
+            ]
+          }
+        ]
+      },
       "DeleteNeighborRequest": {
         "type": "object",
         "properties": {
@@ -830,6 +1385,101 @@
         "required": [
           "message",
           "request_id"
+        ]
+      },
+      "ErrorCode": {
+        "description": "This enumeration contains possible notification error codes.",
+        "type": "string",
+        "enum": [
+          "header",
+          "open",
+          "update",
+          "hold_timer_expired",
+          "fsm",
+          "cease"
+        ]
+      },
+      "ErrorSubcode": {
+        "description": "This enumeration contains possible notification error subcodes.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "header": {
+                "$ref": "#/components/schemas/HeaderErrorSubcode"
+              }
+            },
+            "required": [
+              "header"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "open": {
+                "$ref": "#/components/schemas/OpenErrorSubcode"
+              }
+            },
+            "required": [
+              "open"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "update": {
+                "$ref": "#/components/schemas/UpdateErrorSubcode"
+              }
+            },
+            "required": [
+              "update"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "hold_time": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "hold_time"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "fsm": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "fsm"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "cease": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "cease"
+            ],
+            "additionalProperties": false
+          }
         ]
       },
       "FsmStateKind": {
@@ -933,6 +1583,155 @@
           "enabled"
         ]
       },
+      "HeaderErrorSubcode": {
+        "description": "Header error subcode types",
+        "type": "string",
+        "enum": [
+          "unspecific",
+          "connection_not_synchronized",
+          "bad_message_length",
+          "bad_message_type"
+        ]
+      },
+      "Message": {
+        "description": "Holds a BGP message. May be an Open, Update, Notification or Keep Alive message.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "open"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/OpenMessage"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "update"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/UpdateMessage"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "notification"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/NotificationMessage"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "keep_alive"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        ]
+      },
+      "MessageHistory": {
+        "description": "Message history for a BGP session",
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageHistoryEntry"
+            }
+          },
+          "sent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageHistoryEntry"
+            }
+          }
+        },
+        "required": [
+          "received",
+          "sent"
+        ]
+      },
+      "MessageHistoryEntry": {
+        "description": "A message history entry is a BGP message with an associated timestamp",
+        "type": "object",
+        "properties": {
+          "message": {
+            "$ref": "#/components/schemas/Message"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "message",
+          "timestamp"
+        ]
+      },
+      "MessageHistoryRequest": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "asn"
+        ]
+      },
+      "MessageHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "by_peer": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MessageHistory"
+            }
+          }
+        },
+        "required": [
+          "by_peer"
+        ]
+      },
       "NewRouterRequest": {
         "type": "object",
         "properties": {
@@ -959,6 +1758,186 @@
           "listen"
         ]
       },
+      "NotificationMessage": {
+        "description": "Notification messages are exchanged between BGP peers when an exceptional event has occurred.",
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0
+            }
+          },
+          "error_code": {
+            "description": "Error code associated with the notification",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              }
+            ]
+          },
+          "error_subcode": {
+            "description": "Error subcode associated with the notification",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ErrorSubcode"
+              }
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "error_code",
+          "error_subcode"
+        ]
+      },
+      "OpenErrorSubcode": {
+        "description": "Open message error subcode types",
+        "type": "string",
+        "enum": [
+          "unspecific",
+          "unsupported_version_number",
+          "bad_peer_a_s",
+          "bad_bgp_identifier",
+          "unsupported_optional_parameter",
+          "deprecated",
+          "unacceptable_hold_time",
+          "unsupported_capability"
+        ]
+      },
+      "OpenMessage": {
+        "description": "The first message sent by each side once a TCP connection is established.\n\n```text 0                   1                   2                   3 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |    Version    |     My Autonomous System      |   Hold Time   : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :               |                BGP Identifier                 : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :               | Opt Parm Len  |     Optional Parameters       : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :                                                               : :             Optional Parameters (cont, variable)              : :                                                               | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ ```\n\nRef: RFC 4271 §4.2",
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "Autonomous system number of the sender. When 4-byte ASNs are in use this value is set to AS_TRANS which has a value of 23456.\n\nRef: RFC 4893 §7",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "hold_time": {
+            "description": "Number of seconds the sender proposes for the hold timer.",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "id": {
+            "description": "BGP identifier of the sender",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "parameters": {
+            "description": "A list of optional parameters.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OptionalParameter"
+            }
+          },
+          "version": {
+            "description": "BGP protocol version.",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "asn",
+          "hold_time",
+          "id",
+          "parameters",
+          "version"
+        ]
+      },
+      "OptionalParameter": {
+        "description": "The IANA/IETF currently defines the following optional parameter types.",
+        "oneOf": [
+          {
+            "description": "Code 0",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "reserved"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "description": "Code 1: RFC 4217, RFC 5492 (deprecated)",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "authentication"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "description": "Code 2: RFC 5492",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "capabilities"
+                ]
+              },
+              "value": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Capability"
+                }
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          },
+          {
+            "description": "Unassigned",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "unassigned"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "description": "Code 255: RFC 9072",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "extended_length"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        ]
+      },
       "Originate4Request": {
         "type": "object",
         "properties": {
@@ -979,6 +1958,264 @@
         "required": [
           "asn",
           "prefixes"
+        ]
+      },
+      "PathAttribute": {
+        "description": "A self-describing BGP path attribute",
+        "type": "object",
+        "properties": {
+          "typ": {
+            "description": "Type encoding for the attribute",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PathAttributeType"
+              }
+            ]
+          },
+          "value": {
+            "description": "Value of the attribute",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PathAttributeValue"
+              }
+            ]
+          }
+        },
+        "required": [
+          "typ",
+          "value"
+        ]
+      },
+      "PathAttributeType": {
+        "description": "Type encoding for a path attribute.",
+        "type": "object",
+        "properties": {
+          "flags": {
+            "description": "Flags may include, Optional, Transitive, Partial and Extended Length.",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "type_code": {
+            "description": "Type code for the path attribute.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PathAttributeTypeCode"
+              }
+            ]
+          }
+        },
+        "required": [
+          "flags",
+          "type_code"
+        ]
+      },
+      "PathAttributeTypeCode": {
+        "description": "An enumeration describing available path attribute type codes.",
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "as_path",
+              "next_hop",
+              "multi_exit_disc",
+              "local_pref",
+              "atomic_aggregate",
+              "aggregator",
+              "communities",
+              "as4_aggregator"
+            ]
+          },
+          {
+            "description": "RFC 4271",
+            "type": "string",
+            "enum": [
+              "origin"
+            ]
+          },
+          {
+            "description": "RFC 6793",
+            "type": "string",
+            "enum": [
+              "as4_path"
+            ]
+          }
+        ]
+      },
+      "PathAttributeValue": {
+        "description": "The value encoding of a path attribute.",
+        "oneOf": [
+          {
+            "description": "The type of origin associated with a path",
+            "type": "object",
+            "properties": {
+              "origin": {
+                "$ref": "#/components/schemas/PathOrigin"
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The AS set associated with a path",
+            "type": "object",
+            "properties": {
+              "as_path": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/As4PathSegment"
+                }
+              }
+            },
+            "required": [
+              "as_path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The nexthop associated with a path",
+            "type": "object",
+            "properties": {
+              "next_hop": {
+                "type": "string",
+                "format": "ip"
+              }
+            },
+            "required": [
+              "next_hop"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "A metric used for external (inter-AS) links to discriminate among multiple entry or exit points.",
+            "type": "object",
+            "properties": {
+              "multi_exit_disc": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "multi_exit_disc"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Local pref is included in update messages sent to internal peers and indicates a degree of preference.",
+            "type": "object",
+            "properties": {
+              "local_pref": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "local_pref"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "This attribute is included in routes that are formed by aggregation.",
+            "type": "object",
+            "properties": {
+              "aggregator": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0
+                },
+                "minItems": 6,
+                "maxItems": 6
+              }
+            },
+            "required": [
+              "aggregator"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Indicates communities associated with a path.",
+            "type": "object",
+            "properties": {
+              "communities": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Community"
+                }
+              }
+            },
+            "required": [
+              "communities"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "The 4-byte encoded AS set associated with a path",
+            "type": "object",
+            "properties": {
+              "as4_path": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/As4PathSegment"
+                }
+              }
+            },
+            "required": [
+              "as4_path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "This attribute is included in routes that are formed by aggregation.",
+            "type": "object",
+            "properties": {
+              "as4_aggregator": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0
+                },
+                "minItems": 8,
+                "maxItems": 8
+              }
+            },
+            "required": [
+              "as4_aggregator"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "PathOrigin": {
+        "description": "An enumeration indicating the origin type of a path.",
+        "oneOf": [
+          {
+            "description": "Interior gateway protocol",
+            "type": "string",
+            "enum": [
+              "igp"
+            ]
+          },
+          {
+            "description": "Exterior gateway protocol",
+            "type": "string",
+            "enum": [
+              "egp"
+            ]
+          },
+          {
+            "description": "Incomplete path origin",
+            "type": "string",
+            "enum": [
+              "incomplete"
+            ]
+          }
         ]
       },
       "PeerInfo": {
@@ -1002,6 +2239,29 @@
         "required": [
           "duration_millis",
           "state"
+        ]
+      },
+      "Prefix": {
+        "description": "This data structure captures a network prefix as it's laid out in a BGP message. There is a prefix length followed by a variable number of bytes. Just enough bytes to express the prefix.",
+        "type": "object",
+        "properties": {
+          "length": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "value": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "length",
+          "value"
         ]
       },
       "Prefix4": {
@@ -1117,6 +2377,53 @@
         },
         "required": [
           "list"
+        ]
+      },
+      "UpdateErrorSubcode": {
+        "description": "Update message error subcode types",
+        "type": "string",
+        "enum": [
+          "unspecific",
+          "malformed_attribute_list",
+          "unrecognized_well_known_attribute",
+          "missing_well_known_attribute",
+          "attribute_flags",
+          "attribute_length",
+          "invalid_origin_attribute",
+          "deprecated",
+          "invalid_nexthop_attribute",
+          "optional_attribute",
+          "invalid_network_field",
+          "malformed_as_path"
+        ]
+      },
+      "UpdateMessage": {
+        "description": "An update message is used to advertise feasible routes that share common path attributes to a peer, or to withdraw multiple unfeasible routes from service.\n\n```text 0                   1                   2                   3 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |        Witdrawn Length        |       Withdrawn Routes        : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :                                                               : :                Withdrawn Routes (cont, variable)              : :                                                               | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |    Path Attribute Length      |       Path Attributes         : +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :                                                               : :                Path Attributes (cont, variable)               : :                                                               | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ :                                                               : :       Network Layer Reachability Information (variable)       : :                                                               | +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ ```\n\nRef: RFC 4271 §4.3",
+        "type": "object",
+        "properties": {
+          "nlri": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prefix"
+            }
+          },
+          "path_attributes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PathAttribute"
+            }
+          },
+          "withdrawn": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prefix"
+            }
+          }
+        },
+        "required": [
+          "nlri",
+          "path_attributes",
+          "withdrawn"
         ]
       },
       "Withdraw4Request": {

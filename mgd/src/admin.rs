@@ -76,6 +76,7 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     register!(api, bgp_admin::get_imported4);
     register!(api, bgp_admin::bgp_apply);
     register!(api, bgp_admin::graceful_shutdown);
+    register!(api, bgp_admin::message_history);
 
     // static
     register!(api, static_admin::static_add_v4_route);

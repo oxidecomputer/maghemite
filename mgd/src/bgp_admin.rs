@@ -10,7 +10,7 @@ use bgp::{
     connection_tcp::BgpConnectionTcp,
     messages::Prefix,
     router::Router,
-    session::{FsmEvent, FsmStateKind, SessionInfo},
+    session::{FsmEvent, FsmStateKind, MessageHistory, SessionInfo},
     BGP_PORT,
 };
 use dropshot::{
@@ -720,4 +720,33 @@ fn start_bgp_session<Cnx: BgpConnection>(
             format!("failed to start bgp session {e}",),
         )
     })
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Clone)]
+pub struct MessageHistoryRequest {
+    asn: u32,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct MessageHistoryResponse {
+    by_peer: HashMap<IpAddr, MessageHistory>,
+}
+
+#[endpoint { method = GET, path = "/bgp/message-history" }]
+pub async fn message_history(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<MessageHistoryRequest>,
+) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let mut result = HashMap::new();
+
+    for (addr, session) in
+        get_router!(ctx, rq.asn)?.sessions.lock().unwrap().iter()
+    {
+        result.insert(*addr, session.message_history.lock().unwrap().clone());
+    }
+
+    Ok(HttpResponseOk(MessageHistoryResponse { by_peer: result }))
 }

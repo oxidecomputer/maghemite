@@ -19,7 +19,7 @@ use rdb::{Asn, Db, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Display, Formatter};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -371,6 +371,44 @@ pub struct NeighborInfo {
     pub host: SocketAddr,
 }
 
+pub const MAX_MESSAGE_HISTORY: usize = 1024;
+
+/// A message history entry is a BGP message with an associated timestamp
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MessageHistoryEntry {
+    timestamp: chrono::DateTime<chrono::Utc>,
+    message: Message,
+}
+
+/// Message history for a BGP session
+#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MessageHistory {
+    pub received: VecDeque<MessageHistoryEntry>,
+    pub sent: VecDeque<MessageHistoryEntry>,
+}
+
+impl MessageHistory {
+    fn receive(&mut self, msg: Message) {
+        if self.received.len() >= MAX_MESSAGE_HISTORY {
+            self.received.pop_back();
+        }
+        self.received.push_front(MessageHistoryEntry {
+            message: msg,
+            timestamp: chrono::Utc::now(),
+        });
+    }
+
+    fn send(&mut self, msg: Message) {
+        if self.sent.len() >= MAX_MESSAGE_HISTORY {
+            self.sent.pop_back();
+        }
+        self.sent.push_front(MessageHistoryEntry {
+            message: msg,
+            timestamp: chrono::Utc::now(),
+        });
+    }
+}
+
 /// This is the top level object that tracks a BGP session with a peer.
 pub struct SessionRunner<Cnx: BgpConnection> {
     /// A sender that can be used to send FSM events to this session. When a
@@ -381,6 +419,10 @@ pub struct SessionRunner<Cnx: BgpConnection> {
 
     /// Information about the neighbor this session is to peer with.
     pub neighbor: NeighborInfo,
+
+    /// A log of the last `MAX_MESSAGE_HISTORY` messages. Keepalives are not
+    /// included in message history.
+    pub message_history: Arc<Mutex<MessageHistory>>,
 
     session: Arc<Mutex<SessionInfo>>,
     event_rx: Receiver<FsmEvent<Cnx>>,
@@ -449,6 +491,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             running: AtomicBool::new(false),
             fanout,
             router,
+            message_history: Arc::new(Mutex::new(MessageHistory::default())),
             db,
         }
     }
@@ -634,7 +677,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // The only thing we really care about in the active state is receiving
         // an open message from the peer.
         let om = match event {
-            FsmEvent::Message(Message::Open(om)) => om,
+            FsmEvent::Message(Message::Open(om)) => {
+                self.message_history
+                    .lock()
+                    .unwrap()
+                    .receive(om.clone().into());
+                om
+            }
             FsmEvent::ConnectRetryTimerExpires => {
                 inf!(self; "active: connect retry timer expired");
                 return FsmState::Idle;
@@ -692,7 +741,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // The only thing we really care about in the open sent state is
         // receiving a reciprocal open message from the peer.
         let om = match event {
-            FsmEvent::Message(Message::Open(om)) => om,
+            FsmEvent::Message(Message::Open(om)) => {
+                self.message_history
+                    .lock()
+                    .unwrap()
+                    .receive(om.clone().into());
+                om
+            }
             FsmEvent::HoldTimerExpires => {
                 wrn!(self; "open sent: hold timer expired");
                 self.send_hold_timer_expired_notification(&conn);
@@ -743,6 +798,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // Our open message has been rejected with a notifiction. Fail back
             // to the connect state, dropping the TCP connection.
             FsmEvent::Message(Message::Notification(m)) => {
+                self.message_history
+                    .lock()
+                    .unwrap()
+                    .receive(m.clone().into());
                 wrn!(self; "notification received: {:#?}", m);
                 lock!(self.session).connect_retry_counter += 1;
                 self.clock.timers.hold_timer.disable();
@@ -846,7 +905,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             FsmEvent::Message(Message::Update(m)) => {
                 self.clock.timers.hold_timer.reset();
                 inf!(self; "update received: {m:#?}");
-                self.apply_update(m, pc.id);
+                self.apply_update(m.clone(), pc.id);
+                self.message_history.lock().unwrap().receive(m.into());
                 FsmState::Established(pc)
             }
 
@@ -854,6 +914,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // with us. Exit established and restart from the connect state.
             FsmEvent::Message(Message::Notification(m)) => {
                 wrn!(self; "notification received: {m:#?}");
+                self.message_history.lock().unwrap().receive(m.into());
                 self.exit_established(pc)
             }
 
@@ -954,11 +1015,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         error_subcode: ErrorSubcode,
     ) {
         inf!(self; "sending notification {error_code:?}/{error_subcode:?}");
-        if let Err(e) = conn.send(Message::Notification(NotificationMessage {
+        let msg = Message::Notification(NotificationMessage {
             error_code,
             error_subcode,
             data: Vec::new(),
-        })) {
+        });
+        self.message_history.lock().unwrap().send(msg.clone());
+
+        if let Err(e) = conn.send(msg) {
             err!(self; "failed to send notification {e}");
         }
     }
@@ -994,6 +1058,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }],
             },
         ]);
+        self.message_history
+            .lock()
+            .unwrap()
+            .send(msg.clone().into());
+
         conn.send(msg.into())
     }
 
@@ -1014,6 +1083,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         update
             .path_attributes
             .push(PathAttributeValue::NextHop(nexthop).into());
+
+        self.message_history
+            .lock()
+            .unwrap()
+            .send(update.clone().into());
 
         conn.send(update.into())
     }

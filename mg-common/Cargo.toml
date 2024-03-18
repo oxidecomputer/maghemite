@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 clap.workspace = true
 anstyle.workspace = true
+serde.workspace = true
+schemars.workspace = true
+thiserror.workspace = true

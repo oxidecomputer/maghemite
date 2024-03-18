@@ -8,6 +8,8 @@ use nom::{
     number::complete::{be_u16, be_u32, be_u8, u8 as parse_u8},
 };
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 
 pub const MAX_MESSAGE_SIZE: usize = 4096;
@@ -52,7 +54,10 @@ impl From<&Message> for MessageType {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+/// Holds a BGP message. May be an Open, Update, Notification or Keep Alive
+/// message.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Message {
     Open(OpenMessage),
     Update(UpdateMessage),
@@ -186,7 +191,7 @@ pub const BGP4: u8 = 4;
 /// ```
 ///
 /// Ref: RFC 4271 §4.2
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OpenMessage {
     /// BGP protocol version.
     pub version: u8,
@@ -246,7 +251,7 @@ impl OpenMessage {
             .push(OptionalParameter::Capabilities(capabilities.into()));
     }
 
-    /// Serilize an open message to wire format.
+    /// Serialize an open message to wire format.
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
 
@@ -358,7 +363,9 @@ pub struct Tlv {
 /// ```
 ///
 /// Ref: RFC 4271 §4.3
-#[derive(Debug, PartialEq, Eq, Clone, Default)]
+#[derive(
+    Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
+)]
 pub struct UpdateMessage {
     pub withdrawn: Vec<Prefix>,
     pub path_attributes: Vec<PathAttribute>,
@@ -503,10 +510,10 @@ impl UpdateMessage {
     }
 }
 
-/// This data structure captures a network prefix as it's layed out in a BGP
+/// This data structure captures a network prefix as it's laid out in a BGP
 /// message. There is a prefix length followed by a variable number of bytes.
 /// Just enough bytes to express the prefix.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Prefix {
     pub length: u8,
     pub value: Vec<u8>,
@@ -599,9 +606,13 @@ impl From<rdb::Prefix4> for Prefix {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+/// A self-describing BGP path attribute
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PathAttribute {
+    /// Type encoding for the attribute
     pub typ: PathAttributeType,
+
+    /// Value of the attribute
     pub value: PathAttributeValue,
 }
 
@@ -666,9 +677,13 @@ impl PathAttribute {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+/// Type encoding for a path attribute.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PathAttributeType {
+    /// Flags may include, Optional, Transitive, Partial and Extended Length.
     pub flags: u8,
+
+    /// Type code for the path attribute.
     pub type_code: PathAttributeTypeCode,
 }
 
@@ -686,14 +701,31 @@ impl PathAttributeType {
 }
 
 pub mod path_attribute_flags {
+    /// Treat a path attribute as optional
     pub const OPTIONAL: u8 = 0b10000000;
+    /// Path attribute must be redistributed
     pub const TRANSITIVE: u8 = 0b01000000;
+    /// Treat path attribute as partial
     pub const PARTIAL: u8 = 0b00100000;
+    /// If set the path attribute length is encoded in two octets instead of
+    /// one
     pub const EXTENDED_LENGTH: u8 = 0b00010000;
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive)]
+/// An enumeration describing available path attribute type codes.
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Copy,
+    Clone,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum PathAttributeTypeCode {
     /// RFC 4271
     Origin = 1,
@@ -741,20 +773,33 @@ impl From<PathAttributeValue> for PathAttributeTypeCode {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+/// The value encoding of a path attribute.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum PathAttributeValue {
+    /// The type of origin associated with a path
     Origin(PathOrigin),
     /* TODO according to RFC 4893 we do not have this as an explicit attribute
      * type when 4-byte ASNs have been negotiated - but are there some
      * circumstances when we'll need transitional mode?
      */
+    /// The AS set associated with a path
     AsPath(Vec<As4PathSegment>),
+    /// The nexthop associated with a path
     NextHop(IpAddr),
+    /// A metric used for external (inter-AS) links to discriminate among
+    /// multiple entry or exit points.
     MultiExitDisc(u32),
+    /// Local pref is included in update messages sent to internal peers and
+    /// indicates a degree of preference.
     LocalPref(u32),
+    /// This attribute is included in routes that are formed by aggregation.
     Aggregator([u8; 6]),
+    /// Indicates communities associated with a path.
     Communities(Vec<Community>),
+    /// The 4-byte encoded AS set associated with a path
     As4Path(Vec<As4PathSegment>),
+    /// This attribute is included in routes that are formed by aggregation.
     As4Aggregator([u8; 8]),
     //MpReachNlri(MpReachNlri), //TODO for IPv6
 }
@@ -856,10 +901,21 @@ impl PathAttributeValue {
     }
 }
 
+/// BGP communities recognized by this BGP implementation.
 #[derive(
-    Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive, IntoPrimitive,
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    IntoPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[repr(u32)]
+#[serde(rename_all = "snake_case")]
 pub enum Community {
     /// All routes received carrying a communities attribute
     /// containing this value MUST NOT be advertised outside a BGP
@@ -885,23 +941,44 @@ pub enum Community {
     GracefulShutdown = 0xFFFF0000,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+/// An enumeration indicating the origin type of a path.
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum PathOrigin {
+    /// Interior gateway protocol
     Igp = 0,
+    /// Exterior gateway protocol
     Egp = 1,
+    /// Incomplete path origin
     Incomplete = 2,
 }
 
+// A self describing segment found in path sets and sequences.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct AsPathSegment {
+    // Indicates if this segment is a part of a set or sequence.
     pub typ: AsPathType,
+    // AS numbers in the segment.
     pub value: Vec<u16>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+// A self describing segment found in path sets and sequences of 4-byte ASNs.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct As4PathSegment {
+    // Indicates if this segment is a part of a set or sequence.
     pub typ: AsPathType,
+    // 4 byte AS numbers in the segment.
     pub value: Vec<u32>,
 }
 
@@ -944,16 +1021,35 @@ impl As4PathSegment {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone, TryFromPrimitive)]
+/// Enumeration describes possible AS path types
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Copy,
+    Clone,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum AsPathType {
+    /// The path is to be interpreted as a set
     AsSet = 1,
+    /// The path is to be interpreted as a sequence
     AsSequence = 2,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+/// Notification messages are exchanged between BGP peers when an exceptional
+/// event has occurred.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NotificationMessage {
+    /// Error code associated with the notification
     pub error_code: ErrorCode,
+
+    /// Error subcode associated with the notification
     pub error_subcode: ErrorSubcode,
 
     /*
@@ -1077,8 +1173,20 @@ impl NotificationMessage {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+/// This enumeration contains possible notification error codes.
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     Header = 1,
     Open,
@@ -1088,7 +1196,9 @@ pub enum ErrorCode {
     Cease,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+/// This enumeration contains possible notification error subcodes.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum ErrorSubcode {
     Header(HeaderErrorSubcode),
     Open(OpenErrorSubcode),
@@ -1129,8 +1239,20 @@ impl ErrorSubcode {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+/// Header error subcode types
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum HeaderErrorSubcode {
     Unspecific = 0,
     ConnectionNotSynchronized,
@@ -1138,8 +1260,20 @@ pub enum HeaderErrorSubcode {
     BadMessageType,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+/// Open message error subcode types
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum OpenErrorSubcode {
     Unspecific = 0,
     UnsupportedVersionNumber,
@@ -1151,8 +1285,20 @@ pub enum OpenErrorSubcode {
     UnsupportedCapability,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, TryFromPrimitive)]
+/// Update message error subcode types
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum UpdateErrorSubcode {
     Unspecific = 0,
     MalformedAttributeList,
@@ -1169,7 +1315,8 @@ pub enum UpdateErrorSubcode {
 }
 
 /// The IANA/IETF currently defines the following optional parameter types.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum OptionalParameter {
     /// Code 0
     Reserved,
@@ -1180,6 +1327,7 @@ pub enum OptionalParameter {
     /// Code 2: RFC 5492
     Capabilities(Vec<Capability>),
 
+    /// Unassigned
     Unassigned,
 
     /// Code 255: RFC 9072
@@ -1241,9 +1389,9 @@ impl OptionalParameter {
     }
 }
 
-/// The `AddPathElement` comes as a BGP capability extension as described in
+/// The add path element comes as a BGP capability extension as described in
 /// RFC 7911.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AddPathElement {
     /// Address family identifier.
     /// <https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml>
@@ -1257,91 +1405,137 @@ pub struct AddPathElement {
     pub send_receive: u8,
 }
 
-/// Optional capabilities supported by a BGP implementation. An issue tracking
-/// the TODOs below is here
-/// <https://github.com/oxidecomputer/maghemite/issues/80>
-#[derive(Debug, PartialEq, Eq, Clone)]
+// An issue tracking the TODOs below is here
+// <https://github.com/oxidecomputer/maghemite/issues/80>
+
+/// Optional capabilities supported by a BGP implementation.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum Capability {
-    /// RFC 2858 TODO
+    /// Multiprotocol extensions as defined in RFC 2858
     MultiprotocolExtensions {
         afi: u16,
         safi: u8,
     },
 
-    /// RFC 2918 TODO
+    //TODO
+    /// Route refresh capability as defined in RFC 2918. Note this capability
+    /// is not yet implemented.
     RouteRefresh {},
 
-    /// RFC 5291 TODO
+    //TODO
+    /// Outbound filtering capability as defined in RFC 5291. Note this
+    /// capability is not yet implemented.
     OutboundRouteFiltering {},
 
-    /// RFC 8277 (deprecated) TODO
+    //TODO
+    /// Multiple routes to destination capability as defined in RFC 8277
+    /// (deprecated). Note this capability is not yet implemented.
     MultipleRoutesToDestination {},
 
-    /// RFC 8950 TODO
+    //TODO
+    /// Multiple nexthop encoding capability as defined in RFC 8950. Note this
+    /// capability is not yet implemented.
     ExtendedNextHopEncoding {},
 
-    /// RFC 8654 TODO
+    //TODO
+    /// Extended message capability as defined in RFC 8654. Note this
+    /// capability is not yet implemented.
     BGPExtendedMessage {},
 
-    /// RFC 8205 TODO
+    //TODO
+    /// BGPSec as defined in RFC 8205. Note this capability is not yet
+    /// implemented.
     BgpSec {},
 
-    /// RFC 8277 TODO
+    //TODO
+    /// Multiple label support as defined in RFC 8277. Note this capability
+    /// is not yet implemented.
     MultipleLabels {},
 
-    /// RFC 9234 TODO
+    //TODO
+    /// BGP role capability as defined in RFC 9234. Note this capability is not
+    /// yet implemented.
     BgpRole {},
 
-    /// RFC 4724 TODO
+    //TODO
+    /// Graceful restart as defined in RFC 4724. Note this capability is not
+    /// yet implemented.
     GracefulRestart {},
 
-    /// RFC 6793
+    /// Four octet AS numbers as defined in RFC 6793.
     FourOctetAs {
         asn: u32,
     },
 
-    /// draft-ietf-idr-dynamic-cap TODO
+    //TODO
+    /// Dynamic capabilities as defined in draft-ietf-idr-dynamic-cap. Note
+    /// this capability is not yet implemented.
     DynamicCapability {},
 
-    /// draft-ietf-idr-bgp-multisession TODO
+    //TODO
+    /// Multi session support as defined in draft-ietf-idr-bgp-multisession.
+    /// Note this capability is not yet supported.
     MultisessionBgp {},
 
-    /// RFC 7911
+    /// Add path capability as defined in RFC 7911.
     AddPath {
         elements: Vec<AddPathElement>,
     },
 
-    /// RFC 7313 TODO
+    //TODO
+    /// Enhanced route refresh as defined in RFC 7313. Note this capability is
+    /// not yet supported.
     EnhancedRouteRefresh {},
 
-    /// draft-uttaro-idr-bgp-persistence TODO
+    //TODO
+    /// Long-lived graceful restart as defined in
+    /// draft-uttaro-idr-bgp-persistence. Note this capability is not yet
+    /// supported.
     LongLivedGracefulRestart {},
 
-    /// draft-ietf-idr-rpd-04 TODO
+    //TODO
+    /// Routing policy distribution as defined indraft-ietf-idr-rpd-04. Note
+    /// this capability is not yet supported.
     RoutingPolicyDistribution {},
 
-    /// draft-walton-bgp-hostname-capability TODO
+    //TODO
+    /// Fully qualified domain names as defined
+    /// intdraft-walton-bgp-hostname-capability. Note this capability is not
+    /// yet supported.
     Fqdn {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard route refresh as defined in RFC 8810 (deprecated). Note
+    /// this capability is not yet supported.
     PrestandardRouteRefresh {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard prefix-based outbound route filtering as defined in
+    /// RFC 8810 (deprecated). Note this is not yet implemented.
     PrestandardOrfAndPd {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard outbound route filtering as defined in RFC 8810
+    /// (deprecated). Note this is not yet implemented.
     PrestandardOutboundRouteFiltering {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard multisession as defined in RFC 8810 (deprecated). Note
+    /// this is not yet implemented.
     PrestandardMultisession {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard fully qualified domain names as defined in RFC 8810
+    /// (deprecated). Note this is not yet implemented.
     PrestandardFqdn {},
 
-    /// RFC 8810 (deprecated) TODO
+    //TODO
+    /// Pre-standard operational messages as defined in RFC 8810 (deprecated).
+    /// Note this is not yet implemented.
     PrestandardOperationalMessage {},
 
-    /// RFC 8810
+    /// Experimental capability as defined in RFC 8810.
     Experimental {
         code: u8,
     },
@@ -1349,6 +1543,7 @@ pub enum Capability {
     Unassigned {
         code: u8,
     },
+
     Reserved {
         code: u8,
     },
@@ -1713,6 +1908,7 @@ impl Capability {
     }
 }
 
+/// The set of capability codes supported by this BGP implementation
 #[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
 pub enum CapabilityCode {
