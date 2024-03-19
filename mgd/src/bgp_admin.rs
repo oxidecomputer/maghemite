@@ -32,8 +32,9 @@ use std::sync::{Arc, Mutex};
 const DEFAULT_BGP_LISTEN: SocketAddr =
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, BGP_PORT, 0, 0));
 
+#[derive(Clone)]
 pub struct BgpContext {
-    pub(crate) router: Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>,
+    pub(crate) router: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
     addr_to_session:
         Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionTcp>>>>>,
 }
@@ -45,7 +46,7 @@ impl BgpContext {
         >,
     ) -> Self {
         Self {
-            router: Mutex::new(BTreeMap::new()),
+            router: Arc::new(Mutex::new(BTreeMap::new())),
             addr_to_session,
         }
     }

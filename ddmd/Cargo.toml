@@ -14,3 +14,4 @@ tokio.workspace = true
 hostname.workspace = true
 dpd-client.workspace = true
 anstyle.workspace = true
+uuid.workspace = true

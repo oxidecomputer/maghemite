@@ -71,8 +71,16 @@ impl Db {
         self.data.lock().unwrap().imported.clone()
     }
 
+    pub fn imported_count(&self) -> usize {
+        self.data.lock().unwrap().imported.len()
+    }
+
     pub fn imported_tunnel(&self) -> HashSet<TunnelRoute> {
         self.data.lock().unwrap().imported_tunnel.clone()
+    }
+
+    pub fn imported_tunnel_count(&self) -> usize {
+        self.data.lock().unwrap().imported_tunnel.len()
     }
 
     pub fn import(&self, r: &HashSet<Route>) {
@@ -152,6 +160,10 @@ impl Db {
         Ok(result)
     }
 
+    pub fn originated_count(&self) -> Result<usize, Error> {
+        Ok(self.originated()?.len())
+    }
+
     pub fn originated_tunnel(&self) -> Result<HashSet<TunnelOrigin>, Error> {
         let tree = self.persistent_data.open_tree(TUNNEL_ORIGINATE)?;
         let result = tree
@@ -182,6 +194,10 @@ impl Db {
             })
             .collect();
         Ok(result)
+    }
+
+    pub fn originated_tunnel_count(&self) -> Result<usize, Error> {
+        Ok(self.originated_tunnel()?.len())
     }
 
     pub fn withdraw(

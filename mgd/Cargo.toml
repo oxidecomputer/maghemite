@@ -22,6 +22,12 @@ tokio.workspace = true
 http.workspace = true
 thiserror.workspace = true
 rand.workspace = true
+oximeter.workspace = true
+oximeter-producer.workspace = true
+chrono.workspace = true
+omicron-common.workspace = true
+hostname.workspace = true
+uuid.workspace = true
 
 [features]
 default = ["mg-lower"]

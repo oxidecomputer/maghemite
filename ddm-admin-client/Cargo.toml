@@ -10,4 +10,4 @@ slog.workspace = true
 percent-encoding.workspace = true
 reqwest.workspace = true
 progenitor.workspace = true
-mg-common = { path = "../mg-common" }
+uuid.workspace = true

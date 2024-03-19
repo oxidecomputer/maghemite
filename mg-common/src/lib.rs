@@ -4,6 +4,8 @@
 
 pub mod cli;
 pub mod net;
+pub mod nexus;
+pub mod stats;
 
 #[macro_export]
 macro_rules! lock {
@@ -23,5 +25,31 @@ macro_rules! read_lock {
 macro_rules! write_lock {
     ($rwl:expr) => {
         $rwl.write().expect("rwlock write")
+    };
+}
+
+//
+// stats macros
+//
+
+#[macro_export]
+macro_rules! counter {
+    ($name:ident) => {
+        #[derive(Clone, Copy, Debug, Default, Metric)]
+        pub struct $name {
+            #[datum]
+            count: Cumulative<u64>,
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! quantity {
+    ($name:ident, $kind:tt) => {
+        #[derive(Clone, Copy, Debug, Default, Metric)]
+        pub struct $name {
+            #[datum]
+            quantity: $kind,
+        }
     };
 }

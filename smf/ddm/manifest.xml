@@ -23,6 +23,9 @@
      <propval name='dpd_host' type='astring' value='' />
      <propval name='dpd_port' type='astring' value='' />
      <propval name='log' type='astring' value='info' />
+     <propval name='dns_servers' type='astring' value='unknown' />
+     <propval name='rack_uuid' type='astring' value='unknown' />
+     <propval name='sled_uuid' type='astring' value='unknown' />
      <property name='interfaces' type='astring'>
      </property>
    </property_group>

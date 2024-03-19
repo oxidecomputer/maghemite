@@ -10,6 +10,8 @@ use slog::{warn, Logger};
 use sm::StateMachine;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub mod bidi;
@@ -76,10 +78,29 @@ impl Daemon {
     }
 }
 
+#[derive(Default)]
+pub struct SessionCounters {
+    pub control_packets_sent: AtomicU64,
+    pub control_packet_send_failures: AtomicU64,
+    pub control_packets_received: AtomicU64,
+    pub admin_down_status_received: AtomicU64,
+    pub down_status_received: AtomicU64,
+    pub init_status_received: AtomicU64,
+    pub up_status_received: AtomicU64,
+    pub unknown_status_received: AtomicU64,
+    pub transition_to_init: AtomicU64,
+    pub transition_to_down: AtomicU64,
+    pub transition_to_up: AtomicU64,
+    pub timeout_expired: AtomicU64,
+    pub message_receive_error: AtomicU64,
+    pub unexpected_message: AtomicU64,
+}
+
 /// A session holds a BFD state machine for a particular peer.
 pub struct Session {
     pub sm: StateMachine,
     pub mode: SessionMode,
+    pub counters: Arc<SessionCounters>,
 }
 
 impl Session {
@@ -94,10 +115,16 @@ impl Session {
         db: rdb::Db,
         log: Logger,
     ) -> Self {
-        let mut sm =
-            StateMachine::new(addr, required_rx, detection_multiplier, log);
+        let counters = Arc::new(SessionCounters::default());
+        let mut sm = StateMachine::new(
+            addr,
+            required_rx,
+            detection_multiplier,
+            counters.clone(),
+            log,
+        );
         sm.run(ep, db);
-        Session { sm, mode }
+        Session { sm, mode, counters }
     }
 }
 

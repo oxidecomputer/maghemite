@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::Error;
+use crate::Stats;
 use crate::MG_LOWER_TAG;
 use dendrite_common::network::Cidr;
 use dendrite_common::ports::PortId;
@@ -18,6 +19,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::net::IpAddr;
 use std::net::Ipv6Addr;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 const TFPORT_QSFP_DEVICE_PREFIX: &str = "tfportqsfp";
@@ -192,9 +194,13 @@ pub(crate) fn db_route_to_dendrite_route(
     rs: Vec<Route4ImportKey>,
     log: &Logger,
     dpd: &DpdClient,
+    stats: Option<&Stats>,
+    require_link_up: bool,
     rt: Arc<tokio::runtime::Handle>,
 ) -> HashSet<RouteHash> {
     let mut result = HashSet::new();
+
+    let mut link_down_count = 0;
 
     for r in &rs {
         let (port_id, link_id) = match get_port_and_link(r) {
@@ -205,25 +211,29 @@ pub(crate) fn db_route_to_dendrite_route(
             }
         };
 
-        let link_info = match rt
-            .block_on(async { dpd.link_get(&port_id, &link_id).await })
-        {
-            Ok(info) => info.into_inner(),
-            Err(e) => {
-                error!(
+        if require_link_up {
+            let link_info = match rt
+                .block_on(async { dpd.link_get(&port_id, &link_id).await })
+            {
+                Ok(info) => info.into_inner(),
+                Err(e) => {
+                    error!(
                     log,
                     "failed to get link info for {port_id:?}/{link_id:?}: {e}"
                 );
-                continue;
-            }
-        };
+                    link_down_count += 1;
+                    continue;
+                }
+            };
 
-        if link_info.link_state != LinkState::Up {
-            warn!(
+            if link_info.link_state != LinkState::Up {
+                warn!(
                 log,
                 "{port_id:?}/{link_id:?} is not up, not installing into RIB"
             );
-            continue;
+                link_down_count += 1;
+                continue;
+            }
         }
 
         let cidr = dpd_client::Ipv4Cidr {
@@ -237,6 +247,12 @@ pub(crate) fn db_route_to_dendrite_route(
             }
             Err(e) => error!(log, "bad route: {e}"),
         };
+    }
+
+    if let Some(stats) = stats {
+        stats
+            .routes_blocked_by_link_state
+            .store(link_down_count, Ordering::Relaxed);
     }
 
     result

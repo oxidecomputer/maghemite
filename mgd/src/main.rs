@@ -9,18 +9,21 @@ use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use bgp::log::init_logger;
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
+use mg_common::stats::MgLowerStats;
 use rand::Fill;
 use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap};
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
+use uuid::Uuid;
 
 mod admin;
 mod bfd_admin;
 mod bgp_admin;
 mod error;
+mod oxstats;
 mod static_admin;
 
 #[derive(Parser, Debug)]
@@ -55,6 +58,26 @@ struct RunArgs {
     /// Where to store the local database
     #[arg(long, default_value = "/var/run")]
     data_dir: String,
+
+    /// Register as an oximemeter producer.
+    #[arg(long)]
+    with_stats: bool,
+
+    /// DNS servers used to find nexus.
+    #[arg(long)]
+    dns_servers: Vec<String>,
+
+    /// Port to listen on for the oximeter API.
+    #[arg(long, default_value_t = 4677)]
+    oximeter_port: u16,
+
+    /// Id of the rack this router is running on.
+    #[arg(long)]
+    rack_uuid: Uuid,
+
+    /// Id of the sled this router is running on.
+    #[arg(long)]
+    sled_uuid: Uuid,
 }
 
 #[tokio::main]
@@ -82,6 +105,7 @@ async fn run(args: RunArgs) {
         bgp,
         bfd,
         data_dir: args.data_dir.clone(),
+        mg_lower_stats: Arc::new(MgLowerStats::default()),
         db: db.clone(),
     });
 
@@ -91,8 +115,9 @@ async fn run(args: RunArgs) {
         let ctx = context.clone();
         let log = log.clone();
         let db = ctx.db.clone();
+        let stats = context.mg_lower_stats.clone();
         std::thread::spawn(move || {
-            mg_lower::run(ctx.tep, db, log, rt);
+            mg_lower::run(ctx.tep, db, log, stats, rt);
         });
     }
 
@@ -111,6 +136,32 @@ async fn run(args: RunArgs) {
     );
 
     initialize_static_routes(&db);
+
+    let hostname = hostname::get()
+        .expect("failed to get hostname")
+        .to_string_lossy()
+        .to_string();
+
+    let dns_servers: Vec<SocketAddr> = args
+        .dns_servers
+        .iter()
+        .filter(|x| x.as_str() != "unknown")
+        .map(|x| x.parse().unwrap())
+        .collect();
+
+    if args.with_stats && !dns_servers.is_empty() {
+        oxstats::start_server(
+            args.admin_addr,
+            args.oximeter_port,
+            context.clone(),
+            dns_servers,
+            hostname,
+            args.rack_uuid,
+            args.sled_uuid,
+            log.clone(),
+        )
+        .unwrap();
+    }
 
     let j = admin::start_server(
         log.clone(),

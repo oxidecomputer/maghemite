@@ -5,6 +5,48 @@
     "version": "v0.1.0"
   },
   "paths": {
+    "/disable-stats": {
+      "post": {
+        "operationId": "disable_stats",
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/enable-stats": {
+      "post": {
+        "operationId": "enable_stats",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnableStatsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/originated": {
       "get": {
         "operationId": "get_originated",
@@ -313,6 +355,35 @@
   },
   "components": {
     "schemas": {
+      "EnableStatsRequest": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ip"
+          },
+          "dns_servers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rack_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sled_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "addr",
+          "dns_servers",
+          "rack_id",
+          "sled_id"
+        ]
+      },
       "Error": {
         "description": "Error information from a response.",
         "type": "object",
@@ -459,6 +530,12 @@
           "boundary_addr": {
             "type": "string",
             "format": "ipv6"
+          },
+          "metric": {
+            "default": 0,
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
           },
           "overlay_prefix": {
             "$ref": "#/components/schemas/IpPrefix"

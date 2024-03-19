@@ -2,11 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::err;
-use crate::packet::Control;
+use crate::packet::{Control, State as PacketState};
 use crate::{
     bidi, inf, packet, trc, util::update_peer_info, wrn, BfdPeerState, PeerInfo,
 };
+use crate::{err, SessionCounters};
 use anyhow::{anyhow, Result};
 use slog::{warn, Logger};
 use std::net::IpAddr;
@@ -48,6 +48,7 @@ pub struct StateMachine {
     required_rx: Duration,
     detection_multiplier: u8,
     kill_switch: Arc<AtomicBool>,
+    counters: Arc<SessionCounters>,
     log: Logger,
 }
 
@@ -64,6 +65,7 @@ impl StateMachine {
         peer: IpAddr,
         required_rx: Duration,
         detection_multiplier: u8,
+        counters: Arc<SessionCounters>,
         log: Logger,
     ) -> Self {
         let state = Down::new(peer, log.clone());
@@ -73,6 +75,7 @@ impl StateMachine {
             required_rx,
             detection_multiplier,
             kill_switch: Arc::new(AtomicBool::new(false)),
+            counters,
             log,
         }
     }
@@ -122,6 +125,7 @@ impl StateMachine {
         let peer = self.peer;
         let kill_switch = self.kill_switch.clone();
         let log = self.log.clone();
+        let counters = self.counters.clone();
         spawn(move || loop {
             let prev = state.read().unwrap().state();
             let (st, ep) = match state.read().unwrap().run(
@@ -130,6 +134,7 @@ impl StateMachine {
                 remote.clone(),
                 kill_switch.clone(),
                 db.clone(),
+                counters.clone(),
             ) {
                 Ok(result) => result,
                 Err(_) => break,
@@ -143,6 +148,23 @@ impl StateMachine {
             }
 
             if prev != new {
+                match new {
+                    BfdPeerState::AdminDown | BfdPeerState::Down => {
+                        counters
+                            .transition_to_down
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    BfdPeerState::Init => {
+                        counters
+                            .transition_to_init
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    BfdPeerState::Up => {
+                        counters
+                            .transition_to_up
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
                 inf!(log, prev, peer; "transition -> {:?}", new);
             }
         });
@@ -162,6 +184,7 @@ impl StateMachine {
         let peer = self.peer;
         let stop = self.kill_switch.clone();
         let log = self.log.clone();
+        let counters = self.counters.clone();
         // State does not change for the lifetime of the trait so it's safe to
         // just copy it out of self for sending into the spawned thread. The
         // reason this is a dynamic method at all is to get runtime polymorphic
@@ -203,6 +226,13 @@ impl StateMachine {
 
             if let Err(e) = sender.send((peer, pkt)) {
                 wrn!(log, st, peer; "send: {}", e);
+                counters
+                    .control_packet_send_failures
+                    .fetch_add(1, Ordering::Relaxed);
+            } else {
+                counters
+                    .control_packets_sent
+                    .fetch_add(1, Ordering::Relaxed);
             }
         });
     }
@@ -255,6 +285,7 @@ pub(crate) trait State: Sync + Send {
         remote: Arc<Mutex<PeerInfo>>,
         kill_switch: Arc<AtomicBool>,
         db: rdb::Db,
+        counters: Arc<SessionCounters>,
     ) -> Result<(Box<dyn State>, BfdEndpoint)>;
 
     /// Return the `BfdPeerState` associated with the implementor of this trait.
@@ -297,12 +328,41 @@ pub(crate) trait State: Sync + Send {
         local: PeerInfo,
         remote: &Arc<Mutex<PeerInfo>>,
         log: Logger,
+        counters: Arc<SessionCounters>,
     ) -> Result<RecvResult> {
         match endpoint.rx.recv_timeout(
             local.required_min_rx * local.detection_multiplier.into(),
         ) {
             Ok((addr, msg)) => {
                 trc!(log, self.state(), self.peer(); "recv: {:?}", msg);
+
+                match msg.state() {
+                    PacketState::Peer(BfdPeerState::AdminDown) => {
+                        counters
+                            .admin_down_status_received
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PacketState::Peer(BfdPeerState::Down) => {
+                        counters
+                            .down_status_received
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PacketState::Peer(BfdPeerState::Init) => {
+                        counters
+                            .init_status_received
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PacketState::Peer(BfdPeerState::Up) => {
+                        counters
+                            .up_status_received
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    PacketState::Unknown(_) => {
+                        counters
+                            .unknown_status_received
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
 
                 update_peer_info(remote, &msg);
 
@@ -320,6 +380,7 @@ pub(crate) trait State: Sync + Send {
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 wrn!(log, self.state(), self.peer(); "timeout expired");
+                counters.timeout_expired.fetch_add(1, Ordering::Relaxed);
                 let next = Down::new(self.peer(), log.clone());
                 Ok(RecvResult::TransitionTo(Box::new(next)))
             }
@@ -331,6 +392,9 @@ pub(crate) trait State: Sync + Send {
                     "recv: {}, exiting recieve loop",
                     e
                 );
+                counters
+                    .message_receive_error
+                    .fetch_add(1, Ordering::Relaxed);
                 Err(anyhow::anyhow!("recv channel closed"))
             }
         }
@@ -372,6 +436,7 @@ impl State for Down {
         remote: Arc<Mutex<PeerInfo>>,
         kill_switch: Arc<AtomicBool>,
         db: rdb::Db,
+        counters: Arc<SessionCounters>,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
         match self.peer {
             IpAddr::V4(addr) => db.disable_nexthop4(addr),
@@ -384,13 +449,18 @@ impl State for Down {
         }
         loop {
             // Get an incoming message
-            let (_addr, msg) =
-                match self.recv(&endpoint, local, &remote, self.log.clone())? {
-                    RecvResult::MessageFrom((addr, control)) => (addr, control),
-                    RecvResult::TransitionTo(state) => {
-                        return Ok((state, endpoint))
-                    }
-                };
+            let (_addr, msg) = match self.recv(
+                &endpoint,
+                local,
+                &remote,
+                self.log.clone(),
+                counters.clone(),
+            )? {
+                RecvResult::MessageFrom((addr, control)) => (addr, control),
+                RecvResult::TransitionTo(state) => {
+                    return Ok((state, endpoint))
+                }
+            };
 
             if kill_switch.load(Ordering::Relaxed) {
                 return Err(anyhow!("killed"));
@@ -455,16 +525,22 @@ impl State for Init {
         remote: Arc<Mutex<PeerInfo>>,
         kill_switch: Arc<AtomicBool>,
         _db: rdb::Db,
+        counters: Arc<SessionCounters>,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
         loop {
             // Get an incoming message
-            let (_addr, msg) =
-                match self.recv(&endpoint, local, &remote, self.log.clone())? {
-                    RecvResult::MessageFrom((addr, control)) => (addr, control),
-                    RecvResult::TransitionTo(state) => {
-                        return Ok((state, endpoint))
-                    }
-                };
+            let (_addr, msg) = match self.recv(
+                &endpoint,
+                local,
+                &remote,
+                self.log.clone(),
+                counters.clone(),
+            )? {
+                RecvResult::MessageFrom((addr, control)) => (addr, control),
+                RecvResult::TransitionTo(state) => {
+                    return Ok((state, endpoint))
+                }
+            };
 
             if kill_switch.load(Ordering::Relaxed) {
                 return Err(anyhow!("killed"));
@@ -527,6 +603,7 @@ impl State for Up {
         remote: Arc<Mutex<PeerInfo>>,
         kill_switch: Arc<AtomicBool>,
         db: rdb::Db,
+        counters: Arc<SessionCounters>,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
         match self.peer {
             IpAddr::V4(addr) => db.enable_nexthop4(addr),
@@ -539,13 +616,18 @@ impl State for Up {
         }
         loop {
             // Get an incoming message
-            let (_addr, msg) =
-                match self.recv(&endpoint, local, &remote, self.log.clone())? {
-                    RecvResult::MessageFrom((addr, control)) => (addr, control),
-                    RecvResult::TransitionTo(state) => {
-                        return Ok((state, endpoint))
-                    }
-                };
+            let (_addr, msg) = match self.recv(
+                &endpoint,
+                local,
+                &remote,
+                self.log.clone(),
+                counters.clone(),
+            )? {
+                RecvResult::MessageFrom((addr, control)) => (addr, control),
+                RecvResult::TransitionTo(state) => {
+                    return Ok((state, endpoint))
+                }
+            };
 
             if kill_switch.load(Ordering::Relaxed) {
                 return Err(anyhow!("killed"));

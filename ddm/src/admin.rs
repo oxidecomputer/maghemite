@@ -4,7 +4,7 @@
 
 use crate::db::{Db, PeerInfo, TunnelRoute};
 use crate::exchange::PathVector;
-use crate::sm::{AdminEvent, Event, PrefixSet};
+use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
 use dropshot::endpoint;
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
@@ -23,28 +23,47 @@ use serde::{Deserialize, Serialize};
 use slog::{error, info, warn, Logger};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::spawn;
+use tokio::task::JoinHandle;
+use uuid::Uuid;
+
+#[derive(Default)]
+pub struct RouterStats {
+    pub originated_underlay_prefixes: AtomicU64,
+    pub originated_tunnel_endpoints: AtomicU64,
+}
 
 #[derive(Clone)]
 pub struct HandlerContext {
     event_channels: Vec<Sender<Event>>,
     db: Db,
+    stats: Arc<RouterStats>,
+    peers: Vec<SmContext>,
+    stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
     log: Logger,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn handler(
     addr: IpAddr,
     port: u16,
     event_channels: Vec<Sender<Event>>,
     db: Db,
+    stats: Arc<RouterStats>,
+    stats_handler: Option<JoinHandle<()>>,
+    peers: Vec<SmContext>,
     log: Logger,
 ) -> Result<(), String> {
     let context = Arc::new(Mutex::new(HandlerContext {
         event_channels,
         db,
+        stats,
+        peers,
+        stats_handler: Arc::new(Mutex::new(stats_handler)),
         log: log.clone(),
     }));
 
@@ -198,6 +217,19 @@ async fn advertise_prefixes(
         })?;
     }
 
+    match ctx.db.originated_count() {
+        Ok(count) => ctx
+            .stats
+            .originated_underlay_prefixes
+            .store(count as u64, Ordering::Relaxed),
+        Err(e) => {
+            error!(
+                ctx.log,
+                "failed to update originated underlay prefixes stat: {e}"
+            )
+        }
+    }
+
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -222,6 +254,18 @@ async fn advertise_tunnel_endpoints(
         })?;
     }
 
+    match ctx.db.originated_tunnel_count() {
+        Ok(count) => ctx
+            .stats
+            .originated_tunnel_endpoints
+            .store(count as u64, Ordering::Relaxed),
+        Err(e) => {
+            error!(
+                ctx.log,
+                "failed to update originated tunnel endpoints stat: {e}"
+            )
+        }
+    }
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -243,6 +287,19 @@ async fn withdraw_prefixes(
         .map_err(|e| {
             HttpError::for_internal_error(format!("admin event send: {e}"))
         })?;
+    }
+
+    match ctx.db.originated_count() {
+        Ok(count) => ctx
+            .stats
+            .originated_underlay_prefixes
+            .store(count as u64, Ordering::Relaxed),
+        Err(e) => {
+            error!(
+                ctx.log,
+                "failed to update originated underlay prefixes stat: {e}"
+            )
+        }
     }
 
     Ok(HttpResponseUpdatedNoContent())
@@ -269,6 +326,19 @@ async fn withdraw_tunnel_endpoints(
         })?;
     }
 
+    match ctx.db.originated_tunnel_count() {
+        Ok(count) => ctx
+            .stats
+            .originated_tunnel_endpoints
+            .store(count as u64, Ordering::Relaxed),
+        Err(e) => {
+            error!(
+                ctx.log,
+                "failed to update originated tunel endpoints stat: {e}"
+            )
+        }
+    }
+
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -287,6 +357,67 @@ async fn sync(
     Ok(HttpResponseUpdatedNoContent())
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct EnableStatsRequest {
+    addr: IpAddr,
+    dns_servers: Vec<SocketAddr>,
+    sled_id: Uuid,
+    rack_id: Uuid,
+}
+
+const DDM_STATS_PORT: u16 = 8001;
+
+#[endpoint { method = POST, path = "/enable-stats" }]
+async fn enable_stats(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+    request: TypedBody<EnableStatsRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context().lock().unwrap();
+
+    let mut jh = ctx.stats_handler.lock().unwrap();
+    if jh.is_none() {
+        let hostname = hostname::get()
+            .expect("failed to get hostname")
+            .to_string_lossy()
+            .to_string();
+        *jh = Some(
+            crate::oxstats::start_server(
+                rq.addr,
+                DDM_STATS_PORT,
+                ctx.peers.clone(),
+                ctx.stats.clone(),
+                rq.dns_servers.clone(),
+                hostname,
+                rq.rack_id,
+                rq.sled_id,
+                ctx.log.clone(),
+            )
+            .map_err(|e| {
+                HttpError::for_internal_error(format!(
+                    "failed to start stats server: {e}"
+                ))
+            })?,
+        );
+    }
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = POST, path = "/disable-stats" }]
+async fn disable_stats(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+    let mut jh = ctx.stats_handler.lock().unwrap();
+    if let Some(ref h) = *jh {
+        h.abort();
+    }
+    *jh = None;
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
 pub fn api_description(
 ) -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, String> {
     let mut api = ApiDescription::new();
@@ -301,5 +432,7 @@ pub fn api_description(
     api.register(get_originated)?;
     api.register(get_originated_tunnel_endpoints)?;
     api.register(sync)?;
+    api.register(enable_stats)?;
+    api.register(disable_stats)?;
     Ok(api)
 }

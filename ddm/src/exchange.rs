@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -217,6 +218,7 @@ pub enum ExchangeError {
 }
 
 pub(crate) fn announce_underlay(
+    ctx: &SmContext,
     config: Config,
     prefixes: HashSet<PathVector>,
     addr: Ipv6Addr,
@@ -225,10 +227,11 @@ pub(crate) fn announce_underlay(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = UnderlayUpdate::announce(prefixes);
-    send_update(config, update.into(), addr, version, rt, log)
+    send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn announce_tunnel(
+    ctx: &SmContext,
     config: Config,
     endpoints: HashSet<TunnelOrigin>,
     addr: Ipv6Addr,
@@ -238,10 +241,11 @@ pub(crate) fn announce_tunnel(
 ) -> Result<(), ExchangeError> {
     let update =
         TunnelUpdate::announce(endpoints.into_iter().map(Into::into).collect());
-    send_update(config, update.into(), addr, version, rt, log)
+    send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn withdraw_underlay(
+    ctx: &SmContext,
     config: Config,
     prefixes: HashSet<PathVector>,
     addr: Ipv6Addr,
@@ -250,10 +254,11 @@ pub(crate) fn withdraw_underlay(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let update = UnderlayUpdate::withdraw(prefixes);
-    send_update(config, update.into(), addr, version, rt, log)
+    send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn withdraw_tunnel(
+    ctx: &SmContext,
     config: Config,
     endpoints: HashSet<TunnelOrigin>,
     addr: Ipv6Addr,
@@ -263,7 +268,7 @@ pub(crate) fn withdraw_tunnel(
 ) -> Result<(), ExchangeError> {
     let update =
         TunnelUpdate::withdraw(endpoints.into_iter().map(Into::into).collect());
-    send_update(config, update.into(), addr, version, rt, log)
+    send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
 pub(crate) fn do_pull(
@@ -347,6 +352,7 @@ pub(crate) fn pull(
 }
 
 fn send_update(
+    ctx: &SmContext,
     config: Config,
     update: Update,
     addr: Ipv6Addr,
@@ -354,13 +360,17 @@ fn send_update(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
+    ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
     match version {
-        Version::V1 => send_update_v1(config, update.into(), addr, rt, log),
-        Version::V2 => send_update_v2(config, update, addr, rt, log),
+        Version::V1 => {
+            send_update_v1(ctx, config, update.into(), addr, rt, log)
+        }
+        Version::V2 => send_update_v2(ctx, config, update, addr, rt, log),
     }
 }
 
 fn send_update_v2(
+    ctx: &SmContext,
     config: Config,
     update: Update,
     addr: Ipv6Addr,
@@ -372,10 +382,11 @@ fn send_update_v2(
         "http://[{}%{}]:{}/v2/push",
         addr, config.if_index, config.exchange_port,
     );
-    send_update_common(uri, payload, config, rt, log)
+    send_update_common(ctx, uri, payload, config, rt, log)
 }
 
 fn send_update_v1(
+    ctx: &SmContext,
     config: Config,
     update: UpdateV1,
     addr: Ipv6Addr,
@@ -387,10 +398,11 @@ fn send_update_v1(
         "http://[{}%{}]:{}/push",
         addr, config.if_index, config.exchange_port,
     );
-    send_update_common(uri, payload, config, rt, log)
+    send_update_common(ctx, uri, payload, config, rt, log)
 }
 
 fn send_update_common(
+    ctx: &SmContext,
     uri: String,
     payload: String,
     config: Config,
@@ -418,6 +430,7 @@ fn send_update_common(
                     uri,
                     e,
                 );
+                ctx.stats.update_send_fail.fetch_add(1, Ordering::Relaxed);
                 Err(e.into())
             }
         }
@@ -637,6 +650,11 @@ async fn pull_handler(
 }
 
 fn handle_update(update: &Update, ctx: &HandlerContext) {
+    ctx.ctx
+        .stats
+        .updates_received
+        .fetch_add(1, Ordering::Relaxed);
+
     if let Some(underlay_update) = &update.underlay {
         handle_underlay_update(underlay_update, ctx);
     }
@@ -734,6 +752,11 @@ fn handle_tunnel_update(update: &TunnelUpdate, ctx: &HandlerContext) {
             import,
         )
     }
+
+    ctx.ctx
+        .stats
+        .imported_underlay_prefixes
+        .store(ctx.ctx.db.imported_tunnel_count() as u64, Ordering::Relaxed);
 }
 
 fn handle_underlay_update(update: &UnderlayUpdate, ctx: &HandlerContext) {
@@ -802,4 +825,9 @@ fn handle_underlay_update(update: &UnderlayUpdate, ctx: &HandlerContext) {
         del,
         &ctx.ctx.rt,
     );
+
+    ctx.ctx
+        .stats
+        .imported_underlay_prefixes
+        .store(ctx.ctx.db.imported_count() as u64, Ordering::Relaxed);
 }

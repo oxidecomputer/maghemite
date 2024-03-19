@@ -5,9 +5,9 @@
 use anyhow::Result;
 use clap::Parser;
 use colored::*;
-use ddm_admin_client::Client;
+use ddm_admin_client::{types, Client};
 use mg_common::cli::oxide_cli_style;
-use mg_common::net::{IpPrefix, Ipv6Prefix, TunnelOrigin};
+use mg_common::net::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
 use slog::{Drain, Logger};
 use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -156,7 +156,9 @@ async fn run() -> Result<()> {
                     writeln!(
                         &mut tw,
                         "{}\t{}\t{}",
-                        pv.destination, nexthop, strpath,
+                        to_ipv6_prefix(&pv.destination),
+                        nexthop,
+                        strpath,
                     )?;
                 }
             }
@@ -167,14 +169,14 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(&mut tw, "{}", "Prefix".dimmed(),)?;
             for prefix in msg.into_inner() {
-                writeln!(&mut tw, "{}", prefix)?;
+                writeln!(&mut tw, "{}", to_ipv6_prefix(&prefix))?;
             }
             tw.flush()?;
         }
         SubCommand::AdvertisePrefixes(ac) => {
-            let mut prefixes: Vec<Ipv6Prefix> = Vec::new();
+            let mut prefixes: Vec<types::Ipv6Prefix> = Vec::new();
             for p in ac.prefixes {
-                prefixes.push(Ipv6Prefix {
+                prefixes.push(types::Ipv6Prefix {
                     addr: p.addr,
                     len: p.len,
                 });
@@ -182,9 +184,9 @@ async fn run() -> Result<()> {
             client.advertise_prefixes(&prefixes).await?;
         }
         SubCommand::WithdrawPrefixes(ac) => {
-            let mut prefixes: Vec<Ipv6Prefix> = Vec::new();
+            let mut prefixes: Vec<types::Ipv6Prefix> = Vec::new();
             for p in ac.prefixes {
-                prefixes.push(Ipv6Prefix {
+                prefixes.push(types::Ipv6Prefix {
                     addr: p.addr,
                     len: p.len,
                 });
@@ -206,7 +208,7 @@ async fn run() -> Result<()> {
                 writeln!(
                     &mut tw,
                     "{}\t{}\t{}\t{}",
-                    endpoint.origin.overlay_prefix,
+                    to_ip_prefix(&endpoint.origin.overlay_prefix),
                     endpoint.origin.boundary_addr,
                     endpoint.origin.vni,
                     endpoint.origin.metric,
@@ -229,7 +231,7 @@ async fn run() -> Result<()> {
                 writeln!(
                     &mut tw,
                     "{}\t{}\t{}\t{}",
-                    endpoint.overlay_prefix,
+                    to_ip_prefix(&endpoint.overlay_prefix),
                     endpoint.boundary_addr,
                     endpoint.vni,
                     endpoint.metric,
@@ -239,8 +241,8 @@ async fn run() -> Result<()> {
         }
         SubCommand::TunnelAdvertise(ep) => {
             client
-                .advertise_tunnel_endpoints(&vec![TunnelOrigin {
-                    overlay_prefix: ep.overlay_prefix,
+                .advertise_tunnel_endpoints(&vec![types::TunnelOrigin {
+                    overlay_prefix: to_types_ip_prefix(&ep.overlay_prefix),
                     boundary_addr: ep.boundary_addr,
                     vni: ep.vni,
                     metric: ep.metric,
@@ -249,8 +251,8 @@ async fn run() -> Result<()> {
         }
         SubCommand::TunnelWithdraw(ep) => {
             client
-                .withdraw_tunnel_endpoints(&vec![TunnelOrigin {
-                    overlay_prefix: ep.overlay_prefix,
+                .withdraw_tunnel_endpoints(&vec![types::TunnelOrigin {
+                    overlay_prefix: to_types_ip_prefix(&ep.overlay_prefix),
                     boundary_addr: ep.boundary_addr,
                     vni: ep.vni,
                     metric: ep.metric,
@@ -271,4 +273,46 @@ fn init_logger() -> Logger {
     let drain = slog_envlogger::new(drain).fuse();
     let drain = slog_async::Async::new(drain).build().fuse();
     slog::Logger::root(drain, slog::o!())
+}
+
+fn to_ipv6_prefix(x: &types::Ipv6Prefix) -> Ipv6Prefix {
+    Ipv6Prefix {
+        addr: x.addr,
+        len: x.len,
+    }
+}
+
+fn to_ipv4_prefix(x: &types::Ipv4Prefix) -> Ipv4Prefix {
+    Ipv4Prefix {
+        addr: x.addr,
+        len: x.len,
+    }
+}
+
+fn to_ip_prefix(x: &types::IpPrefix) -> IpPrefix {
+    match x {
+        types::IpPrefix::V4(p) => IpPrefix::V4(to_ipv4_prefix(p)),
+        types::IpPrefix::V6(p) => IpPrefix::V6(to_ipv6_prefix(p)),
+    }
+}
+
+fn to_types_ipv6_prefix(x: &Ipv6Prefix) -> types::Ipv6Prefix {
+    types::Ipv6Prefix {
+        addr: x.addr,
+        len: x.len,
+    }
+}
+
+fn to_types_ipv4_prefix(x: &Ipv4Prefix) -> types::Ipv4Prefix {
+    types::Ipv4Prefix {
+        addr: x.addr,
+        len: x.len,
+    }
+}
+
+fn to_types_ip_prefix(x: &IpPrefix) -> types::IpPrefix {
+    match x {
+        IpPrefix::V4(p) => types::IpPrefix::V4(to_types_ipv4_prefix(p)),
+        IpPrefix::V6(p) => types::IpPrefix::V6(to_types_ipv6_prefix(p)),
+    }
 }

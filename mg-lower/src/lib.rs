@@ -17,6 +17,7 @@ use ddm::{
 use ddm_admin_client::Client as DdmClient;
 use dendrite::ensure_tep_addr;
 use dpd_client::Client as DpdClient;
+use mg_common::stats::MgLowerStats as Stats;
 use rdb::{ChangeSet, Db};
 use slog::{error, info, Logger};
 use std::collections::HashSet;
@@ -44,6 +45,7 @@ pub fn run(
     tep: Ipv6Addr, //tunnel endpoint address
     db: Db,
     log: Logger,
+    stats: Arc<Stats>,
     rt: Arc<tokio::runtime::Handle>,
 ) {
     loop {
@@ -57,7 +59,7 @@ pub fn run(
         let dpd = new_dpd_client(&log);
         let ddm = new_ddm_client(&log);
         let mut generation =
-            match full_sync(tep, &db, &log, &dpd, &ddm, rt.clone()) {
+            match full_sync(tep, &db, &log, &dpd, &ddm, &stats, rt.clone()) {
                 Ok(gen) => gen,
                 Err(e) => {
                     error!(log, "initializing failed: {e}");
@@ -79,6 +81,7 @@ pub fn run(
                         &dpd,
                         &ddm,
                         generation,
+                        &stats,
                         rt.clone(),
                     ) {
                         Ok(gen) => gen,
@@ -92,20 +95,23 @@ pub fn run(
                 // if we've not received updates in the timeout interval, do a
                 // full sync in case something has changed out from under us.
                 Err(RecvTimeoutError::Timeout) => {
-                    generation =
-                        match full_sync(tep, &db, &log, &dpd, &ddm, rt.clone())
-                        {
-                            Ok(gen) => gen,
-                            Err(e) => {
-                                error!(log, "initializing failed: {e}");
-                                info!(
-                                    log,
-                                    "restarting sync loop in one second"
-                                );
-                                sleep(Duration::from_secs(1));
-                                continue;
-                            }
+                    generation = match full_sync(
+                        tep,
+                        &db,
+                        &log,
+                        &dpd,
+                        &ddm,
+                        &stats,
+                        rt.clone(),
+                    ) {
+                        Ok(gen) => gen,
+                        Err(e) => {
+                            error!(log, "initializing failed: {e}");
+                            info!(log, "restarting sync loop in one second");
+                            sleep(Duration::from_secs(1));
+                            continue;
                         }
+                    }
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     error!(log, "mg-lower rdb watcher disconnected");
@@ -124,6 +130,7 @@ fn full_sync(
     log: &Logger,
     dpd: &DpdClient,
     ddm: &DdmClient,
+    stats: &Arc<Stats>,
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<u64, Error> {
     let generation = db.generation();
@@ -136,8 +143,14 @@ fn full_sync(
     update_tunnel_endpoints(tep, ddm, &db_imported, rt.clone(), log);
 
     // get all imported routes from db
-    let imported: HashSet<RouteHash> =
-        db_route_to_dendrite_route(db_imported, log, dpd, rt.clone());
+    let imported: HashSet<RouteHash> = db_route_to_dendrite_route(
+        db_imported,
+        log,
+        dpd,
+        Some(stats),
+        true,
+        rt.clone(),
+    );
 
     // get all routes created by mg-lower from dendrite
     let routes =
@@ -180,6 +193,7 @@ fn handle_change(
     dpd: &DpdClient,
     ddm: &DdmClient,
     generation: u64,
+    stats: &Arc<Stats>,
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<u64, Error> {
     info!(
@@ -191,18 +205,26 @@ fn handle_change(
     );
 
     if change.generation > generation + 1 {
-        return full_sync(tep, db, log, dpd, ddm, rt.clone());
+        return full_sync(tep, db, log, dpd, ddm, stats, rt.clone());
     }
     let to_add: Vec<rdb::Route4ImportKey> =
         change.import.added.clone().into_iter().collect();
 
     add_tunnel_routes(tep, ddm, &to_add, rt.clone(), log);
-    let to_add = db_route_to_dendrite_route(to_add, log, dpd, rt.clone());
+    let to_add = db_route_to_dendrite_route(
+        to_add,
+        log,
+        dpd,
+        Some(stats),
+        true,
+        rt.clone(),
+    );
 
     let to_del: Vec<rdb::Route4ImportKey> =
         change.import.removed.clone().into_iter().collect();
     remove_tunnel_routes(tep, ddm, &to_del, rt.clone(), log);
-    let to_del = db_route_to_dendrite_route(to_del, log, dpd, rt.clone());
+    let to_del =
+        db_route_to_dendrite_route(to_del, log, dpd, None, false, rt.clone());
 
     update_dendrite(to_add.iter(), to_del.iter(), dpd, rt.clone(), log)?;
 

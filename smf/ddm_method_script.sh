@@ -34,19 +34,36 @@ if [[ "$val" != '""' ]]; then
     export RUST_LOG="$val"
 fi
 
+val=$(svcprop -c -p config/rack_uuid "${SMF_FMRI}")
+if [[ "$val" != 'unknown' ]]; then
+    args+=( '--rack-uuid' )
+    args+=( "$val" )
+fi
+
+val=$(svcprop -c -p config/sled_uuid "${SMF_FMRI}")
+if [[ "$val" != 'unknown' ]]; then
+    args+=( '--sled-uuid' )
+    args+=( "$val" )
+fi
+
 for x in $(svcprop -c -p config/interfaces "${SMF_FMRI}"); do
     args+=( '-a' )
+    args+=( "$x" )
+done
+
+for x in $(svcprop -c -p config/dns_servers "${SMF_FMRI}"); do
+    args+=( '--dns-servers' )
     args+=( "$x" )
 done
 
 if [[ -e /opt/oxide/mg-ddm/bin/ddmd ]];
 then
     # mg-ddm.tar.gz gets the binaries at /opt/oxide/mg-ddm/bin/
-    exec /opt/oxide/mg-ddm/bin/ddmd "${args[@]}"
+    exec /opt/oxide/mg-ddm/bin/ddmd --with-stats "${args[@]}"
 elif [[ -e /opt/oxide/mg-ddm/ddmd ]];
 then
     # maghemite.tar gets the binaries at /opt/oxide/mg-ddm/
-    exec /opt/oxide/mg-ddm/ddmd "${args[@]}"
+    exec /opt/oxide/mg-ddm/ddmd --with-stats "${args[@]}"
 else
     exit 1
 fi

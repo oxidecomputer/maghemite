@@ -6,6 +6,7 @@ use crate::{bfd_admin, bgp_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp_admin::BgpContext;
 use dropshot::{ApiDescription, ConfigDropshot, HttpServerStarter};
+use mg_common::stats::MgLowerStats;
 use rdb::Db;
 use slog::o;
 use slog::{error, info, warn, Logger};
@@ -21,6 +22,7 @@ pub struct HandlerContext {
     pub log: Logger,
     pub data_dir: String,
     pub db: Db,
+    pub mg_lower_stats: Arc<MgLowerStats>,
 }
 
 pub fn start_server(
@@ -87,6 +89,7 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     register!(api, bfd_admin::get_bfd_peers);
     register!(api, bfd_admin::add_bfd_peer);
     register!(api, bfd_admin::remove_bfd_peer);
+
     api
 }
 
