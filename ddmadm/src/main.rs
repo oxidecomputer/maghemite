@@ -5,7 +5,9 @@
 use anyhow::Result;
 use clap::Parser;
 use colored::*;
+use ddm_admin_client::types::PeerStatusV2;
 use ddm_admin_client::{types, Client};
+use humantime::Duration;
 use mg_common::cli::oxide_cli_style;
 use mg_common::net::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
 use slog::{Drain, Logger};
@@ -106,7 +108,7 @@ async fn run() -> Result<()> {
 
     match arg.subcmd {
         SubCommand::GetPeers => {
-            let msg = client.get_peers().await?;
+            let msg = client.get_peers_v2().await?;
             let mut tw = TabWriter::new(stdout());
             writeln!(
                 &mut tw,
@@ -120,7 +122,7 @@ async fn run() -> Result<()> {
             for (index, info) in &msg.into_inner() {
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}\t{}\t{:?}",
+                    "{}\t{}\t{}\t{}\t{}",
                     index,
                     info.host,
                     info.addr,
@@ -129,7 +131,34 @@ async fn run() -> Result<()> {
                         1 => "Transit",
                         _ => "?",
                     },
-                    info.status,
+                    match info.status {
+                        PeerStatusV2::NoContact => "no contact".into(),
+                        PeerStatusV2::Init(t) => format!(
+                            "Init {}",
+                            // Don't care about precision beyond milliseconds
+                            Duration::from(std::time::Duration::from_millis(
+                                t.as_millis() as u64
+                            ))
+                        ),
+                        PeerStatusV2::Solicit(t) => format!(
+                            "Solicit {}",
+                            Duration::from(std::time::Duration::from_millis(
+                                t.as_millis() as u64
+                            ))
+                        ),
+                        PeerStatusV2::Exchange(t) => format!(
+                            "Exchange {}",
+                            Duration::from(std::time::Duration::from_millis(
+                                t.as_millis() as u64
+                            ))
+                        ),
+                        PeerStatusV2::Expired(t) => format!(
+                            "Expired {}",
+                            Duration::from(std::time::Duration::from_millis(
+                                t.as_millis() as u64
+                            ))
+                        ),
+                    }
                 )?;
             }
             tw.flush()?;

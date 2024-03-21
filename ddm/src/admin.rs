@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::db::{Db, PeerInfo, TunnelRoute};
+use crate::db::{Db, RouterKind, TunnelRoute};
 use crate::exchange::PathVector;
 use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
 use dropshot::endpoint;
@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -103,12 +104,130 @@ pub fn handler(
     Ok(())
 }
 
+/// Status of a DDM peer with state expressed as durations.
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(tag = "type", content = "value")]
+pub enum PeerStatusV2 {
+    NoContact,
+    Init(Duration),
+    Solicit(Duration),
+    Exchange(Duration),
+    Expired(Duration),
+}
+
+// Translate internal peer status which is based on instants, to API
+// representation which is based on durations.
+impl From<crate::db::PeerStatus> for PeerStatusV2 {
+    fn from(value: crate::db::PeerStatus) -> Self {
+        match value {
+            crate::db::PeerStatus::NoContact => Self::NoContact,
+            crate::db::PeerStatus::Init(t) => {
+                Self::Init(Instant::now().duration_since(t))
+            }
+            crate::db::PeerStatus::Solicit(t) => {
+                Self::Solicit(Instant::now().duration_since(t))
+            }
+            crate::db::PeerStatus::Exchange(t) => {
+                Self::Exchange(Instant::now().duration_since(t))
+            }
+            crate::db::PeerStatus::Expired(t) => {
+                Self::Expired(Instant::now().duration_since(t))
+            }
+        }
+    }
+}
+
+/// Information about a DDM peer.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct PeerInfoV2 {
+    pub status: PeerStatusV2,
+    pub addr: Ipv6Addr,
+    pub host: String,
+    pub kind: RouterKind,
+}
+
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
+)]
+pub enum PeerStatus {
+    NoContact,
+    Active,
+    Expired,
+}
+
+// Translate internal peer status which is based on instants, to API
+// representation which is based on durations.
+impl From<crate::db::PeerStatus> for PeerStatus {
+    fn from(value: crate::db::PeerStatus) -> Self {
+        match value {
+            crate::db::PeerStatus::NoContact => Self::NoContact,
+            crate::db::PeerStatus::Init(_)
+            | crate::db::PeerStatus::Solicit(_)
+            | crate::db::PeerStatus::Exchange(_) => Self::Active,
+            crate::db::PeerStatus::Expired(_) => Self::Expired,
+        }
+    }
+}
+
+impl From<crate::db::PeerInfo> for PeerInfo {
+    fn from(value: crate::db::PeerInfo) -> Self {
+        Self {
+            status: value.status.into(),
+            addr: value.addr,
+            host: value.host,
+            kind: value.kind,
+        }
+    }
+}
+
+/// Information about a DDM peer.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct PeerInfo {
+    pub status: PeerStatus,
+    pub addr: Ipv6Addr,
+    pub host: String,
+    pub kind: RouterKind,
+}
+
+impl From<crate::db::PeerInfo> for PeerInfoV2 {
+    fn from(value: crate::db::PeerInfo) -> Self {
+        Self {
+            status: value.status.into(),
+            addr: value.addr,
+            host: value.host,
+            kind: value.kind,
+        }
+    }
+}
+
 #[endpoint { method = GET, path = "/peers" }]
 async fn get_peers(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
     let ctx = ctx.context().lock().unwrap();
-    Ok(HttpResponseOk(ctx.db.peers()))
+    let peers = ctx
+        .db
+        .peers()
+        .into_iter()
+        .map(|(k, v)| (k, v.into()))
+        .collect();
+    Ok(HttpResponseOk(peers))
+}
+
+#[endpoint { method = GET, path = "/peers_v2" }]
+async fn get_peers_v2(
+    ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
+) -> Result<HttpResponseOk<HashMap<u32, PeerInfoV2>>, HttpError> {
+    let ctx = ctx.context().lock().unwrap();
+    let peers = ctx
+        .db
+        .peers()
+        .into_iter()
+        .map(|(k, v)| (k, v.into()))
+        .collect();
+    Ok(HttpResponseOk(peers))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -422,6 +541,7 @@ pub fn api_description(
 ) -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, String> {
     let mut api = ApiDescription::new();
     api.register(get_peers)?;
+    api.register(get_peers_v2)?;
     api.register(expire_peer)?;
     api.register(advertise_prefixes)?;
     api.register(advertise_tunnel_endpoints)?;

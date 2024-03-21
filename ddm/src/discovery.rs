@@ -85,7 +85,7 @@
 //! and 1 for a transit routers. The fourth byte is a hostname length followed
 //! directly by a hostname of up to 255 bytes in length.
 
-use crate::db::{Db, PeerInfo, PeerStatus, RouterKind};
+use crate::db::{Db, RouterKind};
 use crate::sm::{Config, Event, NeighborEvent, SessionStats};
 use crate::util::u8_slice_assume_init_ref;
 use crate::{dbg, err, inf, trc, wrn};
@@ -504,15 +504,9 @@ fn handle_advertisement(
         }
     };
     drop(guard);
-    let updated = ctx.db.set_peer(
-        ctx.config.if_index,
-        PeerInfo {
-            status: PeerStatus::Active,
-            addr: *sender,
-            host: hostname,
-            kind,
-        },
-    );
+    let updated =
+        ctx.db
+            .set_peer_info(ctx.config.if_index, *sender, hostname, kind);
     if updated {
         stats.peer_address.lock().unwrap().replace(*sender);
         emit_nbr_update(ctx, sender, version);
