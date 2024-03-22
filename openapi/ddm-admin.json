@@ -582,6 +582,7 @@
         ]
       },
       "PeerStatus": {
+        "description": "Status of a DDM peer.",
         "type": "string",
         "enum": [
           "NoContact",
@@ -590,7 +591,7 @@
         ]
       },
       "PeerStatusV2": {
-        "description": "Status of a DDM peer with state expressed as durations.",
+        "description": "Status of a DDM peer. Includes how long the current status has been active.",
         "oneOf": [
           {
             "type": "object",
