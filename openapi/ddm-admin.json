@@ -157,6 +157,33 @@
         }
       }
     },
+    "/peers_v2": {
+      "get": {
+        "operationId": "get_peers_v2",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_PeerInfoV2",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/PeerInfoV2"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/prefix": {
       "put": {
         "operationId": "advertise_prefixes",
@@ -355,6 +382,25 @@
   },
   "components": {
     "schemas": {
+      "Duration": {
+        "type": "object",
+        "properties": {
+          "nanos": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "secs": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "nanos",
+          "secs"
+        ]
+      },
       "EnableStatsRequest": {
         "type": "object",
         "properties": {
@@ -486,6 +532,7 @@
         ]
       },
       "PeerInfo": {
+        "description": "Information about a DDM peer.",
         "type": "object",
         "properties": {
           "addr": {
@@ -509,12 +556,129 @@
           "status"
         ]
       },
+      "PeerInfoV2": {
+        "description": "Information about a DDM peer.",
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "host": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RouterKind"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PeerStatusV2"
+          }
+        },
+        "required": [
+          "addr",
+          "host",
+          "kind",
+          "status"
+        ]
+      },
       "PeerStatus": {
+        "description": "Status of a DDM peer.",
         "type": "string",
         "enum": [
           "NoContact",
           "Active",
           "Expired"
+        ]
+      },
+      "PeerStatusV2": {
+        "description": "Status of a DDM peer. Includes how long the current status has been active.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "NoContact"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Init"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/Duration"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Solicit"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/Duration"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Exchange"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/Duration"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Expired"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/Duration"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
+          }
         ]
       },
       "RouterKind": {

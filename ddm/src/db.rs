@@ -6,10 +6,11 @@ use mg_common::net::{IpPrefix, Ipv6Prefix, TunnelOrigin};
 use schemars::{JsonSchema, JsonSchema_repr};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
-use slog::{error, Logger};
+use slog::{debug, error, Logger};
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// The handle used to open a persistent key-value tree for originated
 /// prefixes.
@@ -227,10 +228,34 @@ impl Db {
 
     /// Set peer info at the given index. Returns true if peer information was
     /// changed.
-    pub fn set_peer(&self, index: u32, info: PeerInfo) -> bool {
-        match self.data.lock().unwrap().peers.insert(index, info.clone()) {
-            Some(previous) => previous == info,
-            None => true,
+    pub fn set_peer_info(
+        &self,
+        index: u32,
+        addr: Ipv6Addr,
+        host: String,
+        kind: RouterKind,
+    ) -> bool {
+        let mut data = self.data.lock().unwrap();
+        if let Some(peer) = data.peers.get_mut(&index) {
+            if peer.addr == addr && peer.host == host && peer.kind == kind {
+                false
+            } else {
+                peer.addr = addr;
+                peer.host = host;
+                peer.kind = kind;
+                true
+            }
+        } else {
+            data.peers.insert(
+                index,
+                PeerInfo {
+                    addr,
+                    host,
+                    kind,
+                    status: PeerStatus::Init(Instant::now()),
+                },
+            );
+            true
         }
     }
 
@@ -267,6 +292,19 @@ impl Db {
         self.data.lock().unwrap().peers.remove(&index);
     }
 
+    pub fn peer_status_transition(&self, index: u32, status: PeerStatus) {
+        if let Some(info) = self.data.lock().unwrap().peers.get_mut(&index) {
+            info.status = status;
+        } else {
+            // This is expected to happen during initialization as we don't
+            // add a peer to the db until an advertisement is received.
+            debug!(
+                self.log,
+                "status update: peer with index {} does not exist", index
+            );
+        }
+    }
+
     pub fn routes_by_vector(
         &self,
         dst: Ipv6Prefix,
@@ -283,16 +321,16 @@ impl Db {
     }
 }
 
-#[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema,
-)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum PeerStatus {
     NoContact,
-    Active,
-    Expired,
+    Init(Instant),
+    Solicit(Instant),
+    Exchange(Instant),
+    Expired(Instant),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PeerInfo {
     pub status: PeerStatus,
     pub addr: Ipv6Addr,

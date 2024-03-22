@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::db::{Db, RouterKind};
+use crate::db::{Db, PeerStatus, RouterKind};
 use crate::discovery::Version;
 use crate::exchange::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
@@ -16,7 +16,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::thread::spawn;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 #[derive(Debug)]
@@ -228,6 +228,10 @@ impl State for Init {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
+        self.ctx.db.peer_status_transition(
+            self.ctx.config.if_index,
+            PeerStatus::Init(Instant::now()),
+        );
         loop {
             let info = match get_ipaddr_info(&self.ctx.config.aobj_name) {
                 Ok(info) => info,
@@ -303,6 +307,10 @@ impl State for Solicit {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
+        self.ctx.db.peer_status_transition(
+            self.ctx.config.if_index,
+            PeerStatus::Solicit(Instant::now()),
+        );
         loop {
             let e = match event.recv() {
                 Ok(e) => e,
@@ -529,6 +537,10 @@ impl State for Exchange {
         &mut self,
         event: Receiver<Event>,
     ) -> (Box<dyn State>, Receiver<Event>) {
+        self.ctx.db.peer_status_transition(
+            self.ctx.config.if_index,
+            PeerStatus::Exchange(Instant::now()),
+        );
         let exchange_thread = loop {
             match exchange::handler(
                 self.ctx.clone(),
@@ -759,7 +771,6 @@ impl State for Exchange {
                         );
                     }
                 }
-                // TODO tunnel
                 Event::Peer(PeerEvent::Push(update)) => {
                     inf!(
                         self.log,

@@ -17,3 +17,4 @@ tabwriter.workspace = true
 colored.workspace = true
 anyhow.workspace = true
 anstyle.workspace = true
+humantime.workspace = true
