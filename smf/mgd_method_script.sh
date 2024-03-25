@@ -8,9 +8,19 @@ export RUST_LOG=info
 args=(
     --admin-port "$(svcprop -c -p config/admin_port "${SMF_FMRI}")"
     --admin-addr "$(svcprop -c -p config/admin_host "${SMF_FMRI}")"
-    --rack-uuid "$(svcprop -c -p config/rack_uuid "${SMF_FMRI}")"
-    --sled-uuid "$(svcprop -c -p config/sled_uuid "${SMF_FMRI}")"
 )
+
+val=$(svcprop -c -p config/rack_uuid "${SMF_FMRI}")
+if [[ "$val" != 'unknown' ]]; then
+    args+=( '--rack-uuid' )
+    args+=( "$val" )
+fi
+
+val=$(svcprop -c -p config/sled_uuid "${SMF_FMRI}")
+if [[ "$val" != 'unknown' ]]; then
+    args+=( '--sled-uuid' )
+    args+=( "$val" )
+fi
 
 for x in $(svcprop -c -p config/dns_servers "${SMF_FMRI}"); do
     args+=( '--dns-servers' )

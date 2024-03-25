@@ -186,22 +186,26 @@ async fn main() {
         .collect();
 
     let stats_handler = if arg.with_stats && !dns_servers.is_empty() {
-        Some(
-            ddm::oxstats::start_server(
-                arg.admin_addr,
-                arg.oximeter_port,
-                peers.clone(),
-                router_stats.clone(),
-                dns_servers,
-                hostname.clone(),
-                arg.rack_uuid
-                    .expect("rack uuid required to start stats server"),
-                arg.sled_uuid
-                    .expect("sled uuid required to start stats server"),
-                log.clone(),
+        if let (Some(rack_uuid), Some(sled_uuid)) =
+            (arg.rack_uuid, arg.sled_uuid)
+        {
+            Some(
+                ddm::oxstats::start_server(
+                    arg.admin_addr,
+                    arg.oximeter_port,
+                    peers.clone(),
+                    router_stats.clone(),
+                    dns_servers,
+                    hostname.clone(),
+                    rack_uuid,
+                    sled_uuid,
+                    log.clone(),
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        )
+        } else {
+            None
+        }
     } else {
         None
     };
