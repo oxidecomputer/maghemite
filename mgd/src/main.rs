@@ -73,11 +73,11 @@ struct RunArgs {
 
     /// Id of the rack this router is running on.
     #[arg(long)]
-    rack_uuid: Uuid,
+    rack_uuid: Option<Uuid>,
 
     /// Id of the sled this router is running on.
     #[arg(long)]
-    sled_uuid: Uuid,
+    sled_uuid: Option<Uuid>,
 }
 
 #[tokio::main]
@@ -150,17 +150,21 @@ async fn run(args: RunArgs) {
         .collect();
 
     if args.with_stats && !dns_servers.is_empty() {
-        oxstats::start_server(
-            args.admin_addr,
-            args.oximeter_port,
-            context.clone(),
-            dns_servers,
-            hostname,
-            args.rack_uuid,
-            args.sled_uuid,
-            log.clone(),
-        )
-        .unwrap();
+        if let (Some(rack_uuid), Some(sled_uuid)) =
+            (args.rack_uuid, args.sled_uuid)
+        {
+            oxstats::start_server(
+                args.admin_addr,
+                args.oximeter_port,
+                context.clone(),
+                dns_servers,
+                hostname,
+                rack_uuid,
+                sled_uuid,
+                log.clone(),
+            )
+            .unwrap();
+        }
     }
 
     let j = admin::start_server(
