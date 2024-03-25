@@ -12,7 +12,7 @@ use slog::o;
 use slog::{error, info, warn, Logger};
 use std::fs::File;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 
 pub struct HandlerContext {
@@ -23,6 +23,8 @@ pub struct HandlerContext {
     pub data_dir: String,
     pub db: Db,
     pub mg_lower_stats: Arc<MgLowerStats>,
+    pub stats_server_running: Mutex<bool>,
+    pub oximeter_port: u16,
 }
 
 pub fn start_server(

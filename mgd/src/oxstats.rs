@@ -772,7 +772,6 @@ impl Stats {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_server(
     addr: IpAddr,
-    port: u16,
     context: Arc<HandlerContext>,
     dns_servers: Vec<SocketAddr>,
     hostname: String,
@@ -780,7 +779,7 @@ pub(crate) fn start_server(
     sled_id: Uuid,
     log: Logger,
 ) -> Result<JoinHandle<()>, String> {
-    let sa = SocketAddr::new(addr, port);
+    let sa = SocketAddr::new(addr, context.oximeter_port);
     let dropshot = ConfigDropshot {
         bind_address: sa,
         request_body_max_bytes: 1024 * 1024 * 1024,
