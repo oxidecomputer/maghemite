@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm::admin::HandlerContext;
+use ddm::admin::{HandlerContext, DDM_STATS_PORT};
 use mg_common::smf::get_stats_server_props;
 use slog::{info, warn, Logger};
 use smf::PropertyGroup;
@@ -65,7 +65,7 @@ fn refresh_stats_server(
         *handler = Some(
             ddm::oxstats::start_server(
                 props.admin_addr,
-                4747, //TODO oximeter port
+                DDM_STATS_PORT,
                 context.peers.clone(),
                 context.stats.clone(),
                 props.dns_servers,

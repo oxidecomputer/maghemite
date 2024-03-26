@@ -351,7 +351,7 @@ pub struct EnableStatsRequest {
     rack_id: Uuid,
 }
 
-const DDM_STATS_PORT: u16 = 8001;
+pub const DDM_STATS_PORT: u16 = 8001;
 
 #[endpoint { method = POST, path = "/enable-stats" }]
 async fn enable_stats(
