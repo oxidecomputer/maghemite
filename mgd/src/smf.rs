@@ -4,7 +4,7 @@
 
 use crate::admin::HandlerContext;
 use mg_common::smf::get_stats_server_props;
-use slog::{info, warn, Logger};
+use slog::{error, info, warn, Logger};
 use smf::PropertyGroup;
 use std::sync::Arc;
 
@@ -62,17 +62,21 @@ fn refresh_stats_server(
     let mut is_running = ctx.stats_server_running.lock().unwrap();
     if !*is_running {
         info!(log, "starting stats server on smf refresh");
-        crate::oxstats::start_server(
-            props.admin_addr,
+        match crate::oxstats::start_server(
             ctx.clone(),
             props.dns_servers,
             hostname,
             props.rack_uuid,
             props.sled_uuid,
             log.clone(),
-        )
-        .unwrap();
-        *is_running = true;
+        ) {
+            Ok(_) => {
+                *is_running = true;
+            }
+            Err(e) => {
+                error!(log, "failed to start stats server on refresh: {e}");
+            }
+        }
     } else {
         info!(log, "stats server already running on smf refresh");
     }

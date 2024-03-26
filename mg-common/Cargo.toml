@@ -19,3 +19,4 @@ oximeter.workspace = true
 backoff.workspace = true
 smf.workspace = true
 uuid.workspace = true
+libnet.workspace = true

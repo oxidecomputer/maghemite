@@ -4,7 +4,7 @@
 
 use ddm::admin::{HandlerContext, DDM_STATS_PORT};
 use mg_common::smf::get_stats_server_props;
-use slog::{info, warn, Logger};
+use slog::{error, info, warn, Logger};
 use smf::PropertyGroup;
 use std::sync::{Arc, Mutex};
 
@@ -63,23 +63,26 @@ fn refresh_stats_server(
     let mut handler = context.stats_handler.lock().unwrap();
     if handler.is_none() {
         info!(log, "starting stats server on smf refresh");
-        *handler = Some(
-            ddm::oxstats::start_server(
-                props.admin_addr,
-                DDM_STATS_PORT,
-                context.peers.clone(),
-                context.stats.clone(),
-                props.dns_servers,
-                hostname,
-                props.rack_uuid,
-                props.sled_uuid,
-                log.clone(),
-            )
-            .unwrap(),
-        );
+        match ddm::oxstats::start_server(
+            DDM_STATS_PORT,
+            context.peers.clone(),
+            context.stats.clone(),
+            props.dns_servers,
+            hostname,
+            props.rack_uuid,
+            props.sled_uuid,
+            log.clone(),
+        ) {
+            Ok(h) => {
+                *handler = Some(h);
+            }
+            Err(e) => {
+                error!(log, "failed to start stats server on refresh: {e}");
+            }
+        }
     } else {
         info!(log, "stats server already running on smf refresh");
     }
 
-    todo!();
+    Ok(())
 }

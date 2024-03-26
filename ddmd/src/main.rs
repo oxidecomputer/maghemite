@@ -113,7 +113,9 @@ async fn main() {
     let log = init_logger();
 
     let (sig_tx, sig_rx) = tokio::sync::mpsc::channel(1);
-    handle_signals(sig_rx, log.clone()).await;
+    handle_signals(sig_rx, log.clone())
+        .await
+        .expect("set up refresh signal handler");
 
     let mut event_channels = Vec::new();
     let db = Db::new(&format!("{}/ddmdb", arg.data_dir), log.clone()).unwrap();
@@ -196,20 +198,22 @@ async fn main() {
         if let (Some(rack_uuid), Some(sled_uuid)) =
             (arg.rack_uuid, arg.sled_uuid)
         {
-            Some(
-                ddm::oxstats::start_server(
-                    arg.admin_addr,
-                    arg.oximeter_port,
-                    peers.clone(),
-                    router_stats.clone(),
-                    dns_servers,
-                    hostname.clone(),
-                    rack_uuid,
-                    sled_uuid,
-                    log.clone(),
-                )
-                .unwrap(),
-            )
+            match ddm::oxstats::start_server(
+                arg.oximeter_port,
+                peers.clone(),
+                router_stats.clone(),
+                dns_servers,
+                hostname.clone(),
+                rack_uuid,
+                sled_uuid,
+                log.clone(),
+            ) {
+                Ok(handler) => Some(handler),
+                Err(e) => {
+                    error!(log, "failed to start stats server: {e}");
+                    None
+                }
+            }
         } else {
             None
         }

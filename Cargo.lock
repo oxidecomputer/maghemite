@@ -2091,6 +2091,7 @@ dependencies = [
  "backoff",
  "clap",
  "internal-dns",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "omicron-common",
  "oximeter",
  "oximeter-producer",

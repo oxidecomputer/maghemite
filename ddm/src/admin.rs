@@ -369,7 +369,6 @@ async fn enable_stats(
             .to_string();
         *jh = Some(
             crate::oxstats::start_server(
-                rq.addr,
                 DDM_STATS_PORT,
                 ctx.peers.clone(),
                 ctx.stats.clone(),

@@ -96,7 +96,9 @@ async fn run(args: RunArgs) {
     let log = init_logger();
 
     let (sig_tx, sig_rx) = tokio::sync::mpsc::channel(1);
-    handle_signals(sig_rx, log.clone()).await;
+    handle_signals(sig_rx, log.clone())
+        .await
+        .expect("set up refresh signal handler");
 
     let bgp = init_bgp(&args, &log);
     let db = rdb::Db::new(&format!("{}/rdb", args.data_dir), log.clone())
@@ -167,17 +169,17 @@ async fn run(args: RunArgs) {
         {
             let mut is_running = context.stats_server_running.lock().unwrap();
             if !*is_running {
-                oxstats::start_server(
-                    args.admin_addr,
+                match oxstats::start_server(
                     context.clone(),
                     dns_servers,
                     hostname,
                     rack_uuid,
                     sled_uuid,
                     log.clone(),
-                )
-                .unwrap();
-                *is_running = true;
+                ) {
+                    Ok(_) => *is_running = true,
+                    Err(e) => error!(log, "failed to start stats server: {e}"),
+                }
             }
         }
     }
