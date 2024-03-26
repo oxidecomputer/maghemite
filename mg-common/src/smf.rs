@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 use std::net::{IpAddr, SocketAddr};
 
 use anyhow::anyhow;
@@ -8,21 +12,15 @@ pub fn get_string_prop(
     name: &str,
     pg: &PropertyGroup<'_>,
 ) -> anyhow::Result<String> {
-    let prop = match pg
+    let prop = pg
         .get_property(name)
         .map_err(|e| anyhow!("smf get-prop {name}: {e}"))?
-    {
-        Some(p) => p,
-        None => anyhow::bail!("smf property {name} does not exist"),
-    };
+        .ok_or_else(|| anyhow!("smf property {name} does not exist"))?;
 
-    let value = match prop
+    let value = prop
         .value()
         .map_err(|e| anyhow!("smf prop value {name}: {e}"))?
-    {
-        Some(v) => v,
-        None => anyhow::bail!("smf property {name} has no value"),
-    };
+        .ok_or_else(|| anyhow!("smf property {name} has no value"))?;
 
     value
         .as_string()
@@ -33,13 +31,10 @@ pub fn get_string_list_prop(
     name: &str,
     pg: &PropertyGroup<'_>,
 ) -> anyhow::Result<Vec<String>> {
-    let prop = match pg
+    let prop = pg
         .get_property(name)
         .map_err(|e| anyhow!("smf get-prop {name}: {e}"))?
-    {
-        Some(p) => p,
-        None => anyhow::bail!("smf property {name} does not exist"),
-    };
+        .ok_or_else(|| anyhow!("smf property {name} does not exist"))?;
 
     let values = prop
         .values()
