@@ -13,6 +13,7 @@ mkdir -p proto/lib/svc/manifest/system
 mkdir -p proto/opt/oxide/mg-ddm/pkg
 cp ../smf/ddm/manifest.xml proto/lib/svc/manifest/system/mg-ddm.xml
 cp ../smf/ddm_method_script.sh proto/opt/oxide/mg-ddm/pkg/
+cp ../smf/refresh_ctrun_child.sh proto/opt/oxide/mg-ddm/pkg/
 cp ../target/release/ddmd proto/opt/oxide/mg-ddm/
 cp ../target/release/ddmadm proto/opt/oxide/mg-ddm/
 

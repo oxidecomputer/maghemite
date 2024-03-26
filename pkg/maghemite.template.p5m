@@ -17,5 +17,6 @@ dir path=opt/oxide/mg-ddm/pkg owner=root group=bin mode=0755
 file path=opt/oxide/mg-ddm/ddmd owner=root group=bin mode=0755
 file path=opt/oxide/mg-ddm/ddmadm owner=root group=bin mode=0755
 file path=opt/oxide/mg-ddm/pkg/ddm_method_script.sh owner=root group=bin mode=0755
+file path=opt/oxide/mg-ddm/pkg/refresh_ctrun_child.sh owner=root group=bin mode=0755
 depend type=incorporate fmri=pkg:/system/network/maghemite@0.1.%COMMIT_COUNT%
 depend type=require fmri=pkg:/system/network/maghemite@0.1.%COMMIT_COUNT%
