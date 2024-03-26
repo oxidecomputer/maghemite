@@ -21,6 +21,7 @@ use std::net::IpAddr;
 use std::net::Ipv6Addr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 const TFPORT_QSFP_DEVICE_PREFIX: &str = "tfportqsfp";
 
@@ -145,10 +146,13 @@ where
 fn get_port_and_link(
     r: &Route4ImportKey,
 ) -> Result<(PortId, types::LinkId), String> {
-    let sys_route = match get_route(IpPrefix::V4(Ipv4Prefix {
-        addr: r.nexthop,
-        mask: 32,
-    })) {
+    let sys_route = match get_route(
+        IpPrefix::V4(Ipv4Prefix {
+            addr: r.nexthop,
+            mask: 32,
+        }),
+        Some(Duration::from_secs(1)),
+    ) {
         Ok(r) => r,
         Err(e) => {
             return Err(format!("Unable to get route for {r:?}: {e:?}"));

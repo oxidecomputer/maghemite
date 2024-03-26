@@ -1919,7 +1919,7 @@ checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#d44d9e084f39e844f8083d4d9b39a331061ebbcc"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#1d75565d35765c57dcf1c1a34b56cf5024086fba"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -1938,7 +1938,7 @@ dependencies = [
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys#d44d9e084f39e844f8083d4d9b39a331061ebbcc"
+source = "git+https://github.com/oxidecomputer/netadm-sys#1d75565d35765c57dcf1c1a34b56cf5024086fba"
 dependencies = [
  "anyhow",
  "cfg-if",
