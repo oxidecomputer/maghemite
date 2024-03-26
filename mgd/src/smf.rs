@@ -12,6 +12,7 @@ pub(crate) async fn smf_refresh(
     ctx: Arc<HandlerContext>,
     log: Logger,
 ) -> anyhow::Result<()> {
+    info!(log, "handling smf refresh");
     let scf = smf::Scf::new()
         .map_err(|e| anyhow::anyhow!("create scf handle: {e}"))?;
 

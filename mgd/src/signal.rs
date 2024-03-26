@@ -24,6 +24,7 @@ pub(crate) async fn handle_signals(
                 None => continue,
             }
         };
+        info!(log, "signal handler waiting got context");
 
         loop {
             future_signal.await;
