@@ -737,7 +737,7 @@ dependencies = [
  "hostname",
  "hyper",
  "ispf",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=route-get-timeout)",
  "mg-common",
  "omicron-common",
  "opte-ioctl",
@@ -798,7 +798,7 @@ dependencies = [
  "ddm",
  "dpd-client",
  "hostname",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=route-get-timeout)",
  "slog",
  "slog-async",
  "slog-bunyan",
@@ -1938,6 +1938,25 @@ dependencies = [
 [[package]]
 name = "libnet"
 version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=route-get-timeout#2dfa84eabc789aa8f70667559460dfc75737af38"
+dependencies = [
+ "anyhow",
+ "cfg-if",
+ "colored",
+ "dlpi",
+ "libc",
+ "num_enum 0.5.11",
+ "nvpair",
+ "nvpair-sys",
+ "rusty-doors",
+ "socket2 0.4.10",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "libnet"
+version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/netadm-sys#d44d9e084f39e844f8083d4d9b39a331061ebbcc"
 dependencies = [
  "anyhow",
@@ -2107,7 +2126,7 @@ dependencies = [
  "ddm-admin-client",
  "dpd-client",
  "http 0.2.12",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=route-get-timeout)",
  "mg-common",
  "rdb",
  "slog",
@@ -2131,7 +2150,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ddm-admin-client",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=route-get-timeout)",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -4935,7 +4954,7 @@ name = "util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=route-get-timeout)",
  "slog",
  "slog-async",
  "slog-envlogger",
