@@ -13,22 +13,24 @@ pub(crate) async fn handle_signals(
     mut ch: Receiver<Arc<HandlerContext>>,
     log: Logger,
 ) {
-    let mut sigusr1 = signal(SignalKind::user_defined1()).unwrap();
-    let mut future_signal = sigusr1.recv();
+    tokio::spawn(async move {
+        let mut sigusr1 = signal(SignalKind::user_defined1()).unwrap();
+        let mut future_signal = sigusr1.recv();
 
-    info!(log, "signal handler waiting for context");
-    let ctx = loop {
-        match ch.recv().await {
-            Some(ctx) => break ctx,
-            None => continue,
-        }
-    };
+        info!(log, "signal handler waiting for context");
+        let ctx = loop {
+            match ch.recv().await {
+                Some(ctx) => break ctx,
+                None => continue,
+            }
+        };
 
-    loop {
-        future_signal.await;
-        if let Err(e) = smf_refresh(ctx.clone(), log.clone()).await {
-            error!(log, "smf update on sigusr1 failed: {e}");
+        loop {
+            future_signal.await;
+            if let Err(e) = smf_refresh(ctx.clone(), log.clone()).await {
+                error!(log, "smf update on sigusr1 failed: {e}");
+            }
+            future_signal = sigusr1.recv();
         }
-        future_signal = sigusr1.recv();
-    }
+    });
 }
