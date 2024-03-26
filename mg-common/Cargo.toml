@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 clap.workspace = true
+anyhow.workspace = true
 anstyle.workspace = true
 serde.workspace = true
 schemars.workspace = true
@@ -16,3 +17,5 @@ tokio.workspace = true
 oximeter-producer.workspace = true
 oximeter.workspace = true
 backoff.workspace = true
+smf.workspace = true
+uuid.workspace = true

@@ -794,14 +794,17 @@ name = "ddmd"
 version = "0.1.0"
 dependencies = [
  "anstyle",
+ "anyhow",
  "clap",
  "ddm",
  "dpd-client",
  "hostname",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
+ "mg-common",
  "slog",
  "slog-async",
  "slog-bunyan",
+ "smf 0.10.0",
  "tokio",
  "uuid 1.8.0",
 ]
@@ -2084,6 +2087,7 @@ name = "mg-common"
 version = "0.1.0"
 dependencies = [
  "anstyle",
+ "anyhow",
  "backoff",
  "clap",
  "internal-dns",
@@ -2093,8 +2097,10 @@ dependencies = [
  "schemars",
  "serde",
  "slog",
+ "smf 0.10.0",
  "thiserror",
  "tokio",
+ "uuid 1.8.0",
 ]
 
 [[package]]

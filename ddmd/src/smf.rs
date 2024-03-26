@@ -2,14 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::admin::HandlerContext;
+use ddm::admin::HandlerContext;
 use mg_common::smf::get_stats_server_props;
 use slog::{info, warn, Logger};
 use smf::PropertyGroup;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub(crate) async fn smf_refresh(
-    ctx: Arc<HandlerContext>,
+    ctx: Arc<Mutex<HandlerContext>>,
     log: Logger,
 ) -> anyhow::Result<()> {
     let scf = smf::Scf::new()
@@ -41,7 +41,7 @@ pub(crate) async fn smf_refresh(
 }
 
 fn refresh_stats_server(
-    ctx: &Arc<HandlerContext>,
+    ctx: &Arc<Mutex<HandlerContext>>,
     pg: PropertyGroup<'_>,
     log: &Logger,
 ) -> anyhow::Result<()> {
@@ -58,23 +58,27 @@ fn refresh_stats_server(
         }
     };
 
-    let mut is_running = ctx.stats_server_running.lock().unwrap();
-    if !*is_running {
+    let context = ctx.lock().unwrap();
+    let mut handler = context.stats_handler.lock().unwrap();
+    if handler.is_none() {
         info!(log, "starting stats server on smf refresh");
-        crate::oxstats::start_server(
-            props.admin_addr,
-            ctx.clone(),
-            props.dns_servers,
-            hostname,
-            props.rack_uuid,
-            props.sled_uuid,
-            log.clone(),
-        )
-        .unwrap();
-        *is_running = true;
+        *handler = Some(
+            ddm::oxstats::start_server(
+                props.admin_addr,
+                4747, //TODO oximeter port
+                context.peers.clone(),
+                context.stats.clone(),
+                props.dns_servers,
+                hostname,
+                props.rack_uuid,
+                props.sled_uuid,
+                log.clone(),
+            )
+            .unwrap(),
+        );
     } else {
         info!(log, "stats server already running on smf refresh");
     }
 
-    Ok(())
+    todo!();
 }
