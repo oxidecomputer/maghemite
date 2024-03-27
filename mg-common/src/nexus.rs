@@ -96,6 +96,7 @@ pub async fn run_oximeter(
     }
 }
 
+#[cfg(target_os = "illumos")]
 pub fn local_underlay_address() -> anyhow::Result<IpAddr> {
     let local_addrs = libnet::get_ipaddrs()?;
     for addrs in local_addrs.values() {
@@ -107,4 +108,9 @@ pub fn local_underlay_address() -> anyhow::Result<IpAddr> {
         }
     }
     Err(anyhow::anyhow!("underlay address not found"))
+}
+
+#[cfg(not(target_os = "illumos"))]
+pub fn local_underlay_address() -> anyhow::Result<IpAddr> {
+    Ok(std::net::Ipv6Addr::UNSPECIFIED.into())
 }
