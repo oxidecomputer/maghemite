@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 ddm = { path = "../ddm" }
+mg-common = { path = "../mg-common" }
+anyhow.workspace = true
 clap.workspace = true
 libnet.workspace = true
 slog.workspace = true
@@ -15,3 +17,4 @@ hostname.workspace = true
 dpd-client.workspace = true
 anstyle.workspace = true
 uuid.workspace = true
+smf.workspace = true

@@ -12,7 +12,8 @@ use mg_common::cli::oxide_cli_style;
 use mg_common::stats::MgLowerStats;
 use rand::Fill;
 use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
-use slog::Logger;
+use signal::handle_signals;
+use slog::{error, Logger};
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -24,6 +25,8 @@ mod bfd_admin;
 mod bgp_admin;
 mod error;
 mod oxstats;
+mod signal;
+mod smf;
 mod static_admin;
 
 #[derive(Parser, Debug)]
@@ -92,6 +95,11 @@ async fn main() {
 async fn run(args: RunArgs) {
     let log = init_logger();
 
+    let (sig_tx, sig_rx) = tokio::sync::mpsc::channel(1);
+    handle_signals(sig_rx, log.clone())
+        .await
+        .expect("set up refresh signal handler");
+
     let bgp = init_bgp(&args, &log);
     let db = rdb::Db::new(&format!("{}/rdb", args.data_dir), log.clone())
         .expect("open datastore file");
@@ -107,7 +115,13 @@ async fn run(args: RunArgs) {
         data_dir: args.data_dir.clone(),
         mg_lower_stats: Arc::new(MgLowerStats::default()),
         db: db.clone(),
+        stats_server_running: Mutex::new(false),
+        oximeter_port: args.oximeter_port,
     });
+
+    if let Err(e) = sig_tx.send(context.clone()).await {
+        error!(log, "send context to signal handler {e}");
+    }
 
     #[cfg(feature = "default")]
     {
@@ -153,17 +167,20 @@ async fn run(args: RunArgs) {
         if let (Some(rack_uuid), Some(sled_uuid)) =
             (args.rack_uuid, args.sled_uuid)
         {
-            oxstats::start_server(
-                args.admin_addr,
-                args.oximeter_port,
-                context.clone(),
-                dns_servers,
-                hostname,
-                rack_uuid,
-                sled_uuid,
-                log.clone(),
-            )
-            .unwrap();
+            let mut is_running = context.stats_server_running.lock().unwrap();
+            if !*is_running {
+                match oxstats::start_server(
+                    context.clone(),
+                    dns_servers,
+                    hostname,
+                    rack_uuid,
+                    sled_uuid,
+                    log.clone(),
+                ) {
+                    Ok(_) => *is_running = true,
+                    Err(e) => error!(log, "failed to start stats server: {e}"),
+                }
+            }
         }
     }
 

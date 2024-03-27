@@ -5,6 +5,7 @@
 pub mod cli;
 pub mod net;
 pub mod nexus;
+pub mod smf;
 pub mod stats;
 
 #[macro_export]

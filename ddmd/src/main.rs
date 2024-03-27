@@ -3,15 +3,19 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use clap::Parser;
-use ddm::admin::RouterStats;
+use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::{Db, RouterKind};
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
 use ddm::sys::Route;
+use signal::handle_signals;
 use slog::{error, Drain, Logger};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::mpsc::channel;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+
+mod signal;
+mod smf;
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None, styles = get_styles())]
@@ -106,9 +110,14 @@ struct Dendrite {
 #[tokio::main]
 async fn main() {
     let arg = Arg::parse();
+    let log = init_logger();
+
+    let (sig_tx, sig_rx) = tokio::sync::mpsc::channel(1);
+    handle_signals(sig_rx, log.clone())
+        .await
+        .expect("set up refresh signal handler");
 
     let mut event_channels = Vec::new();
-    let log = init_logger();
     let db = Db::new(&format!("{}/ddmdb", arg.data_dir), log.clone()).unwrap();
 
     let mut sms = Vec::new();
@@ -189,20 +198,22 @@ async fn main() {
         if let (Some(rack_uuid), Some(sled_uuid)) =
             (arg.rack_uuid, arg.sled_uuid)
         {
-            Some(
-                ddm::oxstats::start_server(
-                    arg.admin_addr,
-                    arg.oximeter_port,
-                    peers.clone(),
-                    router_stats.clone(),
-                    dns_servers,
-                    hostname.clone(),
-                    rack_uuid,
-                    sled_uuid,
-                    log.clone(),
-                )
-                .unwrap(),
-            )
+            match ddm::oxstats::start_server(
+                arg.oximeter_port,
+                peers.clone(),
+                router_stats.clone(),
+                dns_servers,
+                hostname.clone(),
+                rack_uuid,
+                sled_uuid,
+                log.clone(),
+            ) {
+                Ok(handler) => Some(handler),
+                Err(e) => {
+                    error!(log, "failed to start stats server: {e}");
+                    None
+                }
+            }
         } else {
             None
         }
@@ -210,17 +221,21 @@ async fn main() {
         None
     };
 
-    ddm::admin::handler(
-        arg.admin_addr,
-        arg.admin_port,
+    let context = Arc::new(Mutex::new(HandlerContext {
         event_channels,
         db,
-        router_stats,
-        stats_handler,
+        stats: router_stats,
         peers,
-        log,
-    )
-    .unwrap();
+        stats_handler: Arc::new(Mutex::new(stats_handler)),
+        log: log.clone(),
+    }));
+
+    if let Err(e) = sig_tx.send(context.clone()).await {
+        error!(log, "send context to signal handler {e}");
+    }
+
+    ddm::admin::handler(arg.admin_addr, arg.admin_port, context, log.clone())
+        .unwrap();
 
     std::thread::park();
 }

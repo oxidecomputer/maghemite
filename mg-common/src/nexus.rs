@@ -4,7 +4,10 @@
 
 use internal_dns::{resolver::Resolver, ServiceName};
 use slog::{info, warn, Logger};
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 use tokio::time::sleep;
 
 pub async fn resolve_nexus(
@@ -91,4 +94,23 @@ pub async fn run_oximeter(
     if let Ok(server) = server {
         server.serve_forever().await.expect("metrics server failed");
     }
+}
+
+#[cfg(target_os = "illumos")]
+pub fn local_underlay_address() -> anyhow::Result<IpAddr> {
+    let local_addrs = libnet::get_ipaddrs()?;
+    for addrs in local_addrs.values() {
+        for info in addrs {
+            let aobj_name = info.obj()?.0;
+            if aobj_name.ends_with("omicron6") || aobj_name.ends_with("sled6") {
+                return Ok(info.addr);
+            }
+        }
+    }
+    Err(anyhow::anyhow!("underlay address not found"))
+}
+
+#[cfg(not(target_os = "illumos"))]
+pub fn local_underlay_address() -> anyhow::Result<IpAddr> {
+    Ok(std::net::Ipv6Addr::UNSPECIFIED.into())
 }

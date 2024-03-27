@@ -28,6 +28,7 @@ chrono.workspace = true
 omicron-common.workspace = true
 hostname.workspace = true
 uuid.workspace = true
+smf.workspace = true
 
 [features]
 default = ["mg-lower"]

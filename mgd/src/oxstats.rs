@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use dropshot::{
     ConfigDropshot, ConfigLogging, ConfigLoggingLevel, HandlerTaskMode,
 };
-use mg_common::nexus::{resolve_nexus, run_oximeter};
+use mg_common::nexus::{local_underlay_address, resolve_nexus, run_oximeter};
 use mg_common::stats::MgLowerStats;
 use mg_common::{counter, quantity};
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
@@ -771,16 +771,15 @@ impl Stats {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_server(
-    addr: IpAddr,
-    port: u16,
     context: Arc<HandlerContext>,
     dns_servers: Vec<SocketAddr>,
     hostname: String,
     rack_id: Uuid,
     sled_id: Uuid,
     log: Logger,
-) -> Result<JoinHandle<()>, String> {
-    let sa = SocketAddr::new(addr, port);
+) -> anyhow::Result<JoinHandle<()>> {
+    let addr = local_underlay_address()?;
+    let sa = SocketAddr::new(addr, context.oximeter_port);
     let dropshot = ConfigDropshot {
         bind_address: sa,
         request_body_max_bytes: 1024 * 1024 * 1024,

@@ -2,12 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{
-    net::{IpAddr, SocketAddr},
-    sync::Arc,
-    time::Duration,
-};
-
 use crate::{admin::RouterStats, sm::SmContext};
 use chrono::{DateTime, Utc};
 use dropshot::{
@@ -15,7 +9,7 @@ use dropshot::{
 };
 use mg_common::{
     counter,
-    nexus::{resolve_nexus, run_oximeter},
+    nexus::{local_underlay_address, resolve_nexus, run_oximeter},
     quantity,
 };
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
@@ -26,6 +20,7 @@ use oximeter::{
 use oximeter_producer::LogConfig;
 use slog::Logger;
 use std::sync::atomic::Ordering;
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -285,7 +280,6 @@ impl Producer for Stats {
 
 #[allow(clippy::too_many_arguments)]
 pub fn start_server(
-    addr: IpAddr,
     port: u16,
     peers: Vec<SmContext>,
     router_stats: Arc<RouterStats>,
@@ -294,7 +288,8 @@ pub fn start_server(
     rack_id: Uuid,
     sled_id: Uuid,
     log: Logger,
-) -> Result<JoinHandle<()>, String> {
+) -> anyhow::Result<JoinHandle<()>> {
+    let addr = local_underlay_address()?;
     let sa = SocketAddr::new(addr, port);
     let dropshot = ConfigDropshot {
         bind_address: sa,

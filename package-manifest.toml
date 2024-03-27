@@ -15,6 +15,7 @@ source.rust.binary_names = ["ddmd", "ddmadm"]
 source.rust.release = true
 source.paths = [
   { from = "smf/ddm_method_script.sh", to = "/opt/oxide/mg-ddm/pkg/ddm_method_script.sh" },
+  { from = "smf/refresh_ctrun_child.sh", to = "/opt/oxide/mg-ddm/pkg/refresh_ctrun_child.sh" },
   { from = "smf/ddm/manifest.xml", to = "/var/svc/manifest/site/mg-ddm/manifest.xml" }
 ]
 output.type = "zone"
@@ -26,6 +27,7 @@ source.rust.binary_names = ["mgd", "mgadm"]
 source.rust.release = true
 source.paths = [
   { from = "smf/mgd_method_script.sh", to = "/opt/oxide/mgd/pkg/mgd_method_script.sh" },
+  { from = "smf/refresh_ctrun_child.sh", to = "/opt/oxide/mgd/pkg/refresh_ctrun_child.sh" },
   { from = "smf/mgd/manifest.xml", to = "/var/svc/manifest/site/mgd/manifest.xml" }
 ]
 output.type = "zone"

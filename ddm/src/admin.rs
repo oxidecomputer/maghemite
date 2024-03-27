@@ -39,34 +39,20 @@ pub struct RouterStats {
 
 #[derive(Clone)]
 pub struct HandlerContext {
-    event_channels: Vec<Sender<Event>>,
-    db: Db,
-    stats: Arc<RouterStats>,
-    peers: Vec<SmContext>,
-    stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
-    log: Logger,
+    pub event_channels: Vec<Sender<Event>>,
+    pub db: Db,
+    pub stats: Arc<RouterStats>,
+    pub peers: Vec<SmContext>,
+    pub stats_handler: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub log: Logger,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn handler(
     addr: IpAddr,
     port: u16,
-    event_channels: Vec<Sender<Event>>,
-    db: Db,
-    stats: Arc<RouterStats>,
-    stats_handler: Option<JoinHandle<()>>,
-    peers: Vec<SmContext>,
+    context: Arc<Mutex<HandlerContext>>,
     log: Logger,
 ) -> Result<(), String> {
-    let context = Arc::new(Mutex::new(HandlerContext {
-        event_channels,
-        db,
-        stats,
-        peers,
-        stats_handler: Arc::new(Mutex::new(stats_handler)),
-        log: log.clone(),
-    }));
-
     let sa: SocketAddr = match addr {
         IpAddr::V4(a) => SocketAddrV4::new(a, port).into(),
         IpAddr::V6(a) => SocketAddrV6::new(a, port, 0, 0).into(),
@@ -365,7 +351,7 @@ pub struct EnableStatsRequest {
     rack_id: Uuid,
 }
 
-const DDM_STATS_PORT: u16 = 8001;
+pub const DDM_STATS_PORT: u16 = 8001;
 
 #[endpoint { method = POST, path = "/enable-stats" }]
 async fn enable_stats(
@@ -383,7 +369,6 @@ async fn enable_stats(
             .to_string();
         *jh = Some(
             crate::oxstats::start_server(
-                rq.addr,
                 DDM_STATS_PORT,
                 ctx.peers.clone(),
                 ctx.stats.clone(),
