@@ -55,7 +55,7 @@ schemars = { version = "0.8", features = [ "uuid", "chrono" ] }
 tokio = { version = "1.36", features = ["full"] }
 serde_repr = "0.1"
 anyhow = "1.0"
-hyper = "0.14"
+hyper = "1.2"
 serde_json = "1.0"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
 percent-encoding = "2.3"
