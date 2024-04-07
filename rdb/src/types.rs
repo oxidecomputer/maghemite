@@ -338,6 +338,7 @@ pub struct BgpRouterInfo {
 pub struct BgpNeighborInfo {
     pub asn: u32,
     pub remote_asn: Option<u32>,
+    pub min_ttl: Option<u8>,
     pub name: String,
     pub host: SocketAddr,
     pub hold_time: u64,

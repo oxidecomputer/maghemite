@@ -587,6 +587,12 @@
             "format": "uint64",
             "minimum": 0
           },
+          "min_ttl": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
           "name": {
             "type": "string"
           },
@@ -851,6 +857,12 @@
           "keepalive": {
             "type": "integer",
             "format": "uint64",
+            "minimum": 0
+          },
+          "min_ttl": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint8",
             "minimum": 0
           },
           "name": {
@@ -1304,6 +1316,21 @@
           }
         ]
       },
+      "CeaseErrorSubcode": {
+        "description": "Cease error subcode types from RFC 4486",
+        "type": "string",
+        "enum": [
+          "unspecific",
+          "maximum_numberof_prefixes_reached",
+          "administrative_shutdown",
+          "peer_deconfigured",
+          "administrative_reset",
+          "connection_rejected",
+          "other_configuration_change",
+          "connection_collision_resolution",
+          "out_of_resources"
+        ]
+      },
       "Community": {
         "description": "BGP communities recognized by this BGP implementation.",
         "oneOf": [
@@ -1482,9 +1509,7 @@
             "type": "object",
             "properties": {
               "cease": {
-                "type": "integer",
-                "format": "uint8",
-                "minimum": 0
+                "$ref": "#/components/schemas/CeaseErrorSubcode"
               }
             },
             "required": [

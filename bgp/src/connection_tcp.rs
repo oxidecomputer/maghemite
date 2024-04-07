@@ -10,12 +10,16 @@ use crate::messages::{
 };
 use crate::session::FsmEvent;
 use crate::to_canonical;
+#[cfg(not(target_os = "illumos"))]
+use libc::{c_void, IPPROTO_IP, IPPROTO_IPV6, IP_MINTTL};
 use mg_common::lock;
 use slog::{error, trace, warn, Logger};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+#[cfg(not(target_os = "illumos"))]
+use std::os::fd::AsRawFd;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -92,10 +96,14 @@ impl BgpConnection for BgpConnectionTcp {
         &self,
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
+        ttl_sec: bool,
     ) -> Result<(), Error> {
         match TcpStream::connect_timeout(&self.peer, timeout) {
             Ok(new_conn) => {
                 lock!(self.conn).replace(new_conn.try_clone()?);
+                if ttl_sec {
+                    self.set_min_ttl(255)?;
+                }
                 Self::recv(
                     self.peer,
                     event_tx.clone(),
@@ -149,6 +157,45 @@ impl BgpConnection for BgpConnectionTcp {
             }
         };
         Some(sockaddr)
+    }
+
+    fn set_min_ttl(&self, ttl: u8) -> Result<(), Error> {
+        let conn = self.conn.lock().unwrap();
+        match conn.as_ref() {
+            None => Err(Error::NotConnected),
+            Some(conn) => {
+                conn.set_ttl(ttl.into())?;
+                //see: https://www.illumos.org/issues/16454
+                #[cfg(not(target_os = "illumos"))]
+                unsafe {
+                    let fd = conn.as_raw_fd();
+                    let min_ttl: u32 = 255;
+                    if self.peer().is_ipv4()
+                        && libc::setsockopt(
+                            fd,
+                            IPPROTO_IP,
+                            IP_MINTTL,
+                            &min_ttl as *const u32 as *const c_void,
+                            std::mem::size_of::<u32>() as u32,
+                        ) != 0
+                    {
+                        return Err(Error::Io(std::io::Error::last_os_error()));
+                    }
+                    if self.peer().is_ipv6()
+                        && libc::setsockopt(
+                            fd,
+                            IPPROTO_IPV6,
+                            IP_MINTTL,
+                            &min_ttl as *const u32 as *const c_void,
+                            std::mem::size_of::<u32>() as u32,
+                        ) != 0
+                    {
+                        return Err(Error::Io(std::io::Error::last_os_error()));
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 }
 

@@ -17,6 +17,7 @@ sled.workspace = true
 anyhow.workspace = true
 mg-common.workspace = true
 chrono.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 pretty-hex.workspace = true

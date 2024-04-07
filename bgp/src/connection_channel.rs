@@ -159,6 +159,7 @@ impl BgpConnection for BgpConnectionChannel {
         &self,
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
+        _ttl_sec: bool,
     ) -> Result<(), Error> {
         debug!(self.log, "[{}] connecting", self.peer);
         let (local, remote) = channel();
@@ -208,6 +209,10 @@ impl BgpConnection for BgpConnectionChannel {
 
     fn local(&self) -> Option<SocketAddr> {
         Some(self.addr)
+    }
+
+    fn set_min_ttl(&self, _ttl: u8) -> Result<(), Error> {
+        Ok(())
     }
 }
 

@@ -152,6 +152,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             neighbor.clone(),
             self.config.asn,
             info.remote_asn,
+            info.min_ttl,
             self.config.id,
             Duration::from_millis(peer.resolution),
             Some(bind_addr),

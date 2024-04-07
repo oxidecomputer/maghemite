@@ -77,6 +77,7 @@ pub struct AddNeighborRequest {
     pub name: String,
     pub host: SocketAddr,
     pub remote_asn: Option<u32>,
+    pub min_ttl: Option<u8>,
     pub hold_time: u64,
     pub idle_hold_time: u64,
     pub delay_open: u64,
@@ -111,6 +112,7 @@ impl AddNeighborRequest {
         Self {
             asn,
             remote_asn: rq.remote_asn,
+            min_ttl: rq.min_ttl,
             name: rq.name.clone(),
             host: rq.host,
             hold_time: rq.hold_time,
@@ -368,6 +370,7 @@ async fn add_neighbor(
     let info = SessionInfo {
         passive_tcp_establishment: rq.passive,
         remote_asn: rq.remote_asn,
+        min_ttl: rq.min_ttl,
         ..Default::default()
     };
 
@@ -382,6 +385,7 @@ async fn add_neighbor(
     ctx.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
         asn: rq.asn,
         remote_asn: rq.remote_asn,
+        min_ttl: rq.min_ttl,
         name: rq.name.clone(),
         host: rq.host,
         hold_time: rq.hold_time,
@@ -560,6 +564,7 @@ pub struct ApplyRequest {
 pub struct BgpPeerConfig {
     pub host: SocketAddr,
     pub remote_asn: Option<u32>,
+    pub min_ttl: Option<u8>,
     pub name: String,
     pub hold_time: u64,
     pub idle_hold_time: u64,

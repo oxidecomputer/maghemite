@@ -48,6 +48,7 @@ pub trait BgpConnection: Send + Clone {
         &self,
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
+        ttl_sec: bool,
     ) -> Result<(), Error>
     where
         Self: Sized;
@@ -61,4 +62,6 @@ pub trait BgpConnection: Send + Clone {
 
     // Return the local address being used for the connection.
     fn local(&self) -> Option<SocketAddr>;
+
+    fn set_min_ttl(&self, ttl: u8) -> Result<(), Error>;
 }

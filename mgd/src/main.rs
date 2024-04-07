@@ -236,6 +236,7 @@ fn start_bgp_routers(
             bgp_admin::AddNeighborRequest {
                 asn: nbr.asn,
                 remote_asn: nbr.remote_asn,
+                min_ttl: nbr.min_ttl,
                 name: nbr.name.clone(),
                 host: nbr.host,
                 hold_time: nbr.hold_time,

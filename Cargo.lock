@@ -292,6 +292,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "lazy_static",
+ "libc",
  "mg-common",
  "nom",
  "num_enum 0.7.2",

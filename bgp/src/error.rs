@@ -101,6 +101,11 @@ pub enum Error {
         #[from] TryFromPrimitiveError<crate::messages::UpdateErrorSubcode>,
     ),
 
+    #[error("Cease error subcode")]
+    CeaseSubcode(
+        #[from] TryFromPrimitiveError<crate::messages::CeaseErrorSubcode>,
+    ),
+
     #[error("Path origin error")]
     PathOrigin(#[from] TryFromPrimitiveError<crate::messages::PathOrigin>),
 

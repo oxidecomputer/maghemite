@@ -339,6 +339,9 @@ pub struct SessionInfo {
 
     /// The ASN of the remote peer.
     pub remote_asn: Option<u32>,
+
+    /// Minimum acceptable TTL value for incomming BGP packets.
+    pub min_ttl: Option<u8>,
 }
 
 impl Default for SessionInfo {
@@ -355,6 +358,7 @@ impl Default for SessionInfo {
             send_notification_without_open: false,
             track_tcp_state: false,
             remote_asn: None,
+            min_ttl: None,
         }
     }
 }
@@ -469,6 +473,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     last_state_change: Mutex<Instant>,
     asn: Asn,
     remote_asn: Option<u32>,
+    min_ttl: Option<u8>,
     id: u32,
     clock: Clock,
     bind_addr: Option<SocketAddr>,
@@ -499,6 +504,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         neighbor: NeighborInfo,
         asn: Asn,
         remote_asn: Option<u32>,
+        min_ttl: Option<u8>,
         id: u32,
         resolution: Duration,
         bind_addr: Option<SocketAddr>,
@@ -513,6 +519,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             event_tx: event_tx.clone(),
             asn,
             remote_asn,
+            min_ttl,
             id,
             neighbor,
             state: Arc::new(Mutex::new(FsmStateKind::Idle)),
@@ -698,9 +705,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // Start with an initial connection attempt
         let conn =
             Cnx::new(self.bind_addr, self.neighbor.host, self.log.clone());
-        if let Err(e) =
-            conn.connect(self.event_tx.clone(), self.clock.resolution)
-        {
+        if let Err(e) = conn.connect(
+            self.event_tx.clone(),
+            self.clock.resolution,
+            self.min_ttl.is_some(),
+        ) {
             wrn!(self; "initial connect attempt failed: {e}");
         }
         loop {
@@ -721,9 +730,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.counters
                         .connection_retries
                         .fetch_add(1, Ordering::Relaxed);
-                    if let Err(e) = conn
-                        .connect(self.event_tx.clone(), self.clock.resolution)
-                    {
+                    if let Err(e) = conn.connect(
+                        self.event_tx.clone(),
+                        self.clock.resolution,
+                        self.min_ttl.is_some(),
+                    ) {
                         wrn!(self; "connect attempt failed: {e}");
                     }
                     lock!(self.session).connect_retry_counter += 1;
@@ -732,6 +743,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 // The underlying connection has accepted a TCP connection
                 // initiated by the peer.
                 FsmEvent::Connected(accepted) => {
+                    if let Err(e) = self.ensure_connection_policy(&conn) {
+                        err!(self; "{e}");
+                        return FsmState::Idle;
+                    }
                     inf!(self; "accepted connection from {}", accepted.peer());
                     self.clock.timers.connect_retry_timer.disable();
                     if let Err(e) = self.send_open(&accepted) {
@@ -751,6 +766,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 // The the peer has accepted the TCP connection we have
                 // initiated.
                 FsmEvent::TcpConnectionConfirmed => {
+                    if let Err(e) = self.ensure_connection_policy(&conn) {
+                        err!(self; "{e}");
+                        return FsmState::Idle;
+                    }
                     inf!(self; "connected to {}", conn.peer());
                     self.clock.timers.connect_retry_timer.disable();
                     if let Err(e) = self.send_open(&conn) {
@@ -825,6 +844,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // The underlying connection has accepted a TCP connection
             // initiated by the peer.
             FsmEvent::Connected(accepted) => {
+                if let Err(e) = self.ensure_connection_policy(&conn) {
+                    err!(self; "{e}");
+                    return FsmState::Idle;
+                }
                 inf!(self; "active: accepted connection from {}", accepted.peer());
                 if let Err(e) = self.send_open(&accepted) {
                     err!(self; "active: send open failed {e}");
@@ -1526,5 +1549,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// state.
     pub fn current_state_duration(&self) -> Duration {
         lock!(self.last_state_change).elapsed()
+    }
+
+    pub fn ensure_connection_policy(&self, conn: &Cnx) -> anyhow::Result<()> {
+        if let Some(ttl) = self.min_ttl {
+            if let Err(e) = conn.set_min_ttl(ttl) {
+                return Err(anyhow::anyhow!("failed to set min ttl: {e}"));
+            }
+        }
+        Ok(())
     }
 }

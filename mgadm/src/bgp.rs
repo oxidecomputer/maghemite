@@ -117,6 +117,10 @@ pub struct Neighbor {
     #[arg(long)]
     pub remote_asn: Option<u32>,
 
+    /// Minimum acceptable TTL for neighbor.
+    #[arg(long)]
+    pub min_ttl: Option<u8>,
+
     /// Name for this neighbor
     name: String,
 
@@ -164,6 +168,7 @@ impl From<Neighbor> for types::AddNeighborRequest {
         types::AddNeighborRequest {
             asn: n.asn,
             remote_asn: n.remote_asn,
+            min_ttl: n.min_ttl,
             name: n.name,
             host: SocketAddr::new(n.addr, n.port).to_string(),
             hold_time: n.hold_time,

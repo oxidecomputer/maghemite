@@ -86,6 +86,7 @@ omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch= "ma
 internal-dns = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
+libc = "0.2"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"

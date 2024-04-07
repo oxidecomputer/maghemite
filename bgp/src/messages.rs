@@ -1163,7 +1163,9 @@ impl NotificationMessage {
                 ErrorSubcode::HoldTime(error_subcode)
             }
             ErrorCode::Fsm => ErrorSubcode::Fsm(error_subcode),
-            ErrorCode::Cease => ErrorSubcode::Cease(error_subcode),
+            ErrorCode::Cease => {
+                CeaseErrorSubcode::try_from(error_subcode)?.into()
+            }
         };
         Ok(NotificationMessage {
             error_code,
@@ -1205,7 +1207,7 @@ pub enum ErrorSubcode {
     Update(UpdateErrorSubcode),
     HoldTime(u8),
     Fsm(u8),
-    Cease(u8),
+    Cease(CeaseErrorSubcode),
 }
 
 impl From<HeaderErrorSubcode> for ErrorSubcode {
@@ -1226,6 +1228,12 @@ impl From<UpdateErrorSubcode> for ErrorSubcode {
     }
 }
 
+impl From<CeaseErrorSubcode> for ErrorSubcode {
+    fn from(x: CeaseErrorSubcode) -> ErrorSubcode {
+        ErrorSubcode::Cease(x)
+    }
+}
+
 impl ErrorSubcode {
     fn as_u8(&self) -> u8 {
         match self {
@@ -1234,7 +1242,7 @@ impl ErrorSubcode {
             Self::Update(u) => *u as u8,
             Self::HoldTime(x) => *x,
             Self::Fsm(x) => *x,
-            Self::Cease(x) => *x,
+            Self::Cease(x) => *x as u8,
         }
     }
 }
@@ -1312,6 +1320,32 @@ pub enum UpdateErrorSubcode {
     OptionalAttribute,
     InvalidNetworkField,
     MalformedAsPath,
+}
+
+/// Cease error subcode types from RFC 4486
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[repr(u8)]
+#[serde(rename_all = "snake_case")]
+pub enum CeaseErrorSubcode {
+    Unspecific = 0,
+    MaximumNumberofPrefixesReached,
+    AdministrativeShutdown,
+    PeerDeconfigured,
+    AdministrativeReset,
+    ConnectionRejected,
+    OtherConfigurationChange,
+    ConnectionCollisionResolution,
+    OutOfResources,
 }
 
 /// The IANA/IETF currently defines the following optional parameter types.
