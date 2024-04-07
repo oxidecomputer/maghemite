@@ -337,6 +337,7 @@ pub struct BgpRouterInfo {
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
 pub struct BgpNeighborInfo {
     pub asn: u32,
+    pub remote_asn: Option<u32>,
     pub name: String,
     pub host: SocketAddr,
     pub hold_time: u64,

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::net::IpAddr;
+use std::{fmt::Display, net::IpAddr};
 
 use num_enum::TryFromPrimitiveError;
 
@@ -151,6 +151,21 @@ pub enum Error {
 
     #[error("Internal communication error {0}")]
     InternalCommunication(String),
+
+    #[error("Unexpected ASN {0}")]
+    UnexpectedAsn(ExpectationMismatch<u32>),
+}
+
+#[derive(Debug)]
+pub struct ExpectationMismatch<T: Display> {
+    pub expected: T,
+    pub got: T,
+}
+
+impl<T: Display> Display for ExpectationMismatch<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "expected: {} got: {}", self.expected, self.got)
+    }
 }
 
 impl<'a> From<nom::Err<(&'a [u8], nom::error::ErrorKind)>> for Error {

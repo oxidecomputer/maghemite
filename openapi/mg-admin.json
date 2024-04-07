@@ -593,6 +593,12 @@
           "passive": {
             "type": "boolean"
           },
+          "remote_asn": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "resolution": {
             "type": "integer",
             "format": "uint64",
@@ -852,6 +858,12 @@
           },
           "passive": {
             "type": "boolean"
+          },
+          "remote_asn": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
           },
           "resolution": {
             "type": "integer",

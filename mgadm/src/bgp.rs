@@ -113,6 +113,10 @@ pub struct Neighbor {
     /// Autonomous system number for the router to add the neighbor to.
     pub asn: u32,
 
+    /// Autonomous system number for the remote peer.
+    #[arg(long)]
+    pub remote_asn: Option<u32>,
+
     /// Name for this neighbor
     name: String,
 
@@ -159,6 +163,7 @@ impl From<Neighbor> for types::AddNeighborRequest {
     fn from(n: Neighbor) -> types::AddNeighborRequest {
         types::AddNeighborRequest {
             asn: n.asn,
+            remote_asn: n.remote_asn,
             name: n.name,
             host: SocketAddr::new(n.addr, n.port).to_string(),
             hold_time: n.hold_time,

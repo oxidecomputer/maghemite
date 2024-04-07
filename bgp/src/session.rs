@@ -4,7 +4,7 @@
 
 use crate::clock::Clock;
 use crate::connection::BgpConnection;
-use crate::error::Error;
+use crate::error::{Error, ExpectationMismatch};
 use crate::fanout::Fanout;
 use crate::messages::{
     AddPathElement, Capability, ErrorCode, ErrorSubcode, Message,
@@ -302,6 +302,7 @@ impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
 
 // TODO break up into config/state objects.
 /// Information about a session.
+#[derive(Copy, Clone)]
 pub struct SessionInfo {
     /// Track how many times a connection has been attempted.
     pub connect_retry_counter: u64,
@@ -467,6 +468,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     state: Arc<Mutex<FsmStateKind>>,
     last_state_change: Mutex<Instant>,
     asn: Asn,
+    remote_asn: Option<u32>,
     id: u32,
     clock: Clock,
     bind_addr: Option<SocketAddr>,
@@ -496,6 +498,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         neighbor: NeighborInfo,
         asn: Asn,
+        remote_asn: Option<u32>,
         id: u32,
         resolution: Duration,
         bind_addr: Option<SocketAddr>,
@@ -509,6 +512,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             event_rx,
             event_tx: event_tx.clone(),
             asn,
+            remote_asn,
             id,
             neighbor,
             state: Arc::new(Mutex::new(FsmStateKind::Idle)),
@@ -863,7 +867,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Active(conn);
             }
         };
-        if let Err(e) = self.handle_open(&om) {
+        if let Err(e) = self.handle_open(&conn, &om) {
             wrn!(self; "failed to handle open message: {e}");
             //TODO send a notification to the peer letting them know we are
             //     rejecting the open message?
@@ -932,7 +936,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Active(conn);
             }
         };
-        if let Err(e) = self.handle_open(&om) {
+        if let Err(e) = self.handle_open(&conn, &om) {
             wrn!(self; "failed to handle open message: {e}");
             //TODO send a notification to the peer letting them know we are
             //     rejecting the open message?
@@ -1186,7 +1190,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Handle an open message
-    fn handle_open(&self, om: &OpenMessage) -> Result<(), Error> {
+    fn handle_open(&self, conn: &Cnx, om: &OpenMessage) -> Result<(), Error> {
         let mut remote_asn = om.asn as u32;
         for p in &om.parameters {
             if let OptionalParameter::Capabilities(caps) = p {
@@ -1195,6 +1199,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         remote_asn = *asn;
                     }
                 }
+            }
+        }
+        if let Some(expected_remote_asn) = self.remote_asn {
+            if remote_asn != expected_remote_asn {
+                self.send_notification(
+                    conn,
+                    ErrorCode::Open,
+                    ErrorSubcode::Open(
+                        crate::messages::OpenErrorSubcode::BadPeerAS,
+                    ),
+                );
+                return Err(Error::UnexpectedAsn(ExpectationMismatch {
+                    expected: expected_remote_asn,
+                    got: remote_asn,
+                }));
             }
         }
         lock!(self.session).remote_asn = Some(remote_asn);
