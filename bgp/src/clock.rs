@@ -25,12 +25,20 @@ pub struct ClockTimers {
     /// How long to wait between connection attempts.
     pub connect_retry_timer: Timer,
 
+    /// Configured keepliave timer interval. May be distinct from actual
+    /// keepalive interval depending on session parameter negotiation.
+    pub keepalive_configured_interval: Duration,
+
     /// Time between sending keepalive messages.
-    pub keepalive_timer: Timer,
+    pub keepalive_timer: Mutex<Timer>,
+
+    /// Configured hold timer interval. May be distinct from actual keepalive
+    /// interval depending on session parameter negotiation.
+    pub hold_configured_interval: Duration,
 
     /// How long to keep a session alive between keepalive, update and/or
     /// notification messages.
-    pub hold_timer: Timer,
+    pub hold_timer: Mutex<Timer>,
 
     /// Amount of time that a peer is held in the idle state.
     pub idle_hold_timer: Timer,
@@ -54,8 +62,10 @@ impl Clock {
         let shutdown = Arc::new(AtomicBool::new(false));
         let timers = Arc::new(ClockTimers {
             connect_retry_timer: Timer::new(connect_retry_interval),
-            keepalive_timer: Timer::new(keepalive_interval),
-            hold_timer: Timer::new(hold_interval),
+            keepalive_configured_interval: keepalive_interval,
+            keepalive_timer: Mutex::new(Timer::new(keepalive_interval)),
+            hold_configured_interval: hold_interval,
+            hold_timer: Mutex::new(Timer::new(hold_interval)),
             idle_hold_timer: Timer::new(idle_hold_interval),
             delay_open_timer: Timer::new(delay_open_interval),
         });
@@ -105,14 +115,14 @@ impl Clock {
         );
         Self::step(
             resolution,
-            &timers.keepalive_timer,
+            &timers.keepalive_timer.lock().unwrap(),
             FsmEvent::KeepaliveTimerExpires,
             s.clone(),
             &log,
         );
         Self::step(
             resolution,
-            &timers.hold_timer,
+            &timers.hold_timer.lock().unwrap(),
             FsmEvent::HoldTimerExpires,
             s.clone(),
             &log,

@@ -226,24 +226,38 @@ async fn get_routers(c: Client) {
         let mut tw = TabWriter::new(stdout());
         writeln!(
             &mut tw,
-            "{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             "Peer Address".dimmed(),
             "Peer ASN".dimmed(),
             "State".dimmed(),
             "State Duration".dimmed(),
+            "Hold".dimmed(),
+            "Keepalive".dimmed(),
         )
         .unwrap();
 
         for (addr, info) in &r.peers {
             writeln!(
                 &mut tw,
-                "{}\t{:?}\t{:?}\t{:}",
+                "{}\t{:?}\t{:?}\t{:}\t{}/{}\t{}/{}",
                 addr,
                 info.asn,
                 info.state,
                 humantime::Duration::from(Duration::from_millis(
                     info.duration_millis
                 ),),
+                humantime::Duration::from(Duration::from_secs(
+                    info.timers.hold.configured.secs
+                )),
+                humantime::Duration::from(Duration::from_secs(
+                    info.timers.hold.negotiated.secs
+                )),
+                humantime::Duration::from(Duration::from_secs(
+                    info.timers.keepalive.configured.secs,
+                )),
+                humantime::Duration::from(Duration::from_secs(
+                    info.timers.keepalive.negotiated.secs,
+                )),
             )
             .unwrap();
         }

@@ -159,6 +159,9 @@ pub enum Error {
 
     #[error("Unexpected ASN {0}")]
     UnexpectedAsn(ExpectationMismatch<u32>),
+
+    #[error("Hold time too small")]
+    HoldTimeTooSmall,
 }
 
 #[derive(Debug)]

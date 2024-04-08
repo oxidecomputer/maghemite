@@ -22,12 +22,15 @@ use rdb::{Asn, BgpRouterInfo, Md5Key, PolicyAction, Prefix4, Route4ImportKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{info, Logger};
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    time::Duration,
+};
 
 const DEFAULT_BGP_LISTEN: SocketAddr =
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, BGP_PORT, 0, 0));
@@ -206,10 +209,23 @@ pub struct RouterInfo {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DynamicTimerInfo {
+    configured: Duration,
+    negotiated: Duration,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerTimers {
+    hold: DynamicTimerInfo,
+    keepalive: DynamicTimerInfo,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PeerInfo {
     pub state: FsmStateKind,
     pub asn: Option<u32>,
     pub duration_millis: u64,
+    pub timers: PeerTimers,
 }
 
 macro_rules! lock {
@@ -235,6 +251,31 @@ pub async fn get_routers(
                     state: s.state(),
                     asn: s.remote_asn(),
                     duration_millis: dur as u64,
+                    timers: PeerTimers {
+                        hold: DynamicTimerInfo {
+                            configured: s.clock.timers.hold_configured_interval,
+                            negotiated: s
+                                .clock
+                                .timers
+                                .hold_timer
+                                .lock()
+                                .unwrap()
+                                .interval,
+                        },
+                        keepalive: DynamicTimerInfo {
+                            configured: s
+                                .clock
+                                .timers
+                                .keepalive_configured_interval,
+                            negotiated: s
+                                .clock
+                                .timers
+                                .keepalive_timer
+                                .lock()
+                                .unwrap()
+                                .interval,
+                        },
+                    },
                 },
             );
         }

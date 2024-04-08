@@ -1423,6 +1423,40 @@
           "routes"
         ]
       },
+      "Duration": {
+        "type": "object",
+        "properties": {
+          "nanos": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "secs": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "nanos",
+          "secs"
+        ]
+      },
+      "DynamicTimerInfo": {
+        "type": "object",
+        "properties": {
+          "configured": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "negotiated": {
+            "$ref": "#/components/schemas/Duration"
+          }
+        },
+        "required": [
+          "configured",
+          "negotiated"
+        ]
+      },
       "Error": {
         "description": "Error information from a response.",
         "type": "object",
@@ -2303,11 +2337,30 @@
           },
           "state": {
             "$ref": "#/components/schemas/FsmStateKind"
+          },
+          "timers": {
+            "$ref": "#/components/schemas/PeerTimers"
           }
         },
         "required": [
           "duration_millis",
-          "state"
+          "state",
+          "timers"
+        ]
+      },
+      "PeerTimers": {
+        "type": "object",
+        "properties": {
+          "hold": {
+            "$ref": "#/components/schemas/DynamicTimerInfo"
+          },
+          "keepalive": {
+            "$ref": "#/components/schemas/DynamicTimerInfo"
+          }
+        },
+        "required": [
+          "hold",
+          "keepalive"
         ]
       },
       "Prefix": {

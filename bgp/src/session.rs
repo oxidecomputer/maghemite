@@ -471,13 +471,15 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     /// Counters for message types sent and received, state transitions, etc.
     pub counters: Arc<SessionCounters>,
 
+    /// Clock that drives the state machine for this session.
+    pub clock: Clock,
+
     session: Arc<Mutex<SessionInfo>>,
     event_rx: Receiver<FsmEvent<Cnx>>,
     state: Arc<Mutex<FsmStateKind>>,
     last_state_change: Mutex<Instant>,
     asn: Asn,
     id: u32,
-    clock: Clock,
     bind_addr: Option<SocketAddr>,
     shutdown: AtomicBool,
     running: AtomicBool,
@@ -765,8 +767,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         err!(self; "send open failed {e}");
                         return FsmState::Idle;
                     }
-                    self.clock.timers.hold_timer.reset();
-                    self.clock.timers.hold_timer.enable();
+                    {
+                        let ht = self.clock.timers.hold_timer.lock().unwrap();
+                        ht.reset();
+                        ht.enable();
+                    }
                     lock!(self.session).connect_retry_counter = 0;
                     self.clock.timers.connect_retry_timer.disable();
                     self.counters
@@ -788,8 +793,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         err!(self; "send open failed {e}");
                         return FsmState::Idle;
                     }
-                    self.clock.timers.hold_timer.reset();
-                    self.clock.timers.hold_timer.enable();
+                    {
+                        let ht = self.clock.timers.hold_timer.lock().unwrap();
+                        ht.reset();
+                        ht.enable();
+                    }
                     lock!(self.session).connect_retry_counter = 0;
                     self.clock.timers.connect_retry_timer.disable();
                     self.counters
@@ -866,8 +874,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     return FsmState::Idle;
                 }
                 self.clock.timers.connect_retry_timer.disable();
-                self.clock.timers.hold_timer.reset();
-                self.clock.timers.hold_timer.enable();
+                {
+                    let ht = self.clock.timers.hold_timer.lock().unwrap();
+                    ht.reset();
+                    ht.enable();
+                }
                 lock!(self.session).connect_retry_counter = 0;
                 self.clock.timers.connect_retry_timer.disable();
                 self.counters
@@ -1000,10 +1011,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // The peer has ACK'd our open message with a keepalive. Start the
             // session timers and enter session setup.
             FsmEvent::Message(Message::KeepAlive) => {
-                self.clock.timers.hold_timer.reset();
-                self.clock.timers.hold_timer.enable();
-                self.clock.timers.keepalive_timer.reset();
-                self.clock.timers.keepalive_timer.enable();
+                {
+                    let ht = self.clock.timers.hold_timer.lock().unwrap();
+                    ht.reset();
+                    ht.enable();
+                }
+                {
+                    let kt = self.clock.timers.keepalive_timer.lock().unwrap();
+                    kt.reset();
+                    kt.enable();
+                }
                 self.counters
                     .keepalives_received
                     .fetch_add(1, Ordering::Relaxed);
@@ -1019,8 +1036,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .receive(m.clone().into());
                 wrn!(self; "notification received: {:#?}", m);
                 lock!(self.session).connect_retry_counter += 1;
-                self.clock.timers.hold_timer.disable();
-                self.clock.timers.keepalive_timer.disable();
+                self.clock.timers.hold_timer.lock().unwrap().disable();
+                self.clock.timers.keepalive_timer.lock().unwrap().disable();
                 self.counters
                     .notifications_received
                     .fetch_add(1, Ordering::Relaxed);
@@ -1028,7 +1045,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             FsmEvent::HoldTimerExpires => {
                 wrn!(self; "open sent: hold timer expired");
-                self.clock.timers.hold_timer.disable();
+                self.clock.timers.hold_timer.lock().unwrap().disable();
                 self.send_hold_timer_expired_notification(&pc.conn);
                 self.counters
                     .hold_timer_expirations
@@ -1140,7 +1157,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // We've received an update message from the peer. Reset the hold
             // timer and apply the update to the RIB.
             FsmEvent::Message(Message::Update(m)) => {
-                self.clock.timers.hold_timer.reset();
+                self.clock.timers.hold_timer.lock().unwrap().reset();
                 inf!(self; "update received: {m:#?}");
                 self.apply_update(m.clone(), pc.id);
                 self.message_history.lock().unwrap().receive(m.into());
@@ -1168,7 +1185,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .keepalives_received
                     .fetch_add(1, Ordering::Relaxed);
-                self.clock.timers.hold_timer.reset();
+                self.clock.timers.hold_timer.lock().unwrap().reset();
                 FsmState::Established(pc)
             }
 
@@ -1252,6 +1269,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
         lock!(self.session).remote_asn = Some(remote_asn);
+
+        {
+            let mut ht = self.clock.timers.hold_timer.lock().unwrap();
+            let requested = u64::from(om.hold_time);
+            if requested > 0 {
+                if requested < 3 {
+                    self.send_notification(conn, ErrorCode::Open, ErrorSubcode::Open(
+                        crate::messages::OpenErrorSubcode::UnacceptableHoldTime,
+                    ));
+                    return Err(Error::HoldTimeTooSmall);
+                }
+                if requested < ht.interval.as_secs() {
+                    ht.interval = Duration::from_secs(requested);
+                    ht.reset();
+                    let mut kt =
+                        self.clock.timers.keepalive_timer.lock().unwrap();
+                    // per BGP RFC section 10
+                    kt.interval = Duration::from_secs(requested / 3);
+                    kt.reset();
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1308,12 +1347,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let mut msg = match self.asn {
             Asn::FourOctet(asn) => OpenMessage::new4(
                 asn,
-                self.clock.timers.hold_timer.interval.as_secs() as u16,
+                self.clock
+                    .timers
+                    .hold_timer
+                    .lock()
+                    .unwrap()
+                    .interval
+                    .as_secs() as u16,
                 self.id,
             ),
             Asn::TwoOctet(asn) => OpenMessage::new2(
                 asn,
-                self.clock.timers.hold_timer.interval.as_secs() as u16,
+                self.clock
+                    .timers
+                    .hold_timer
+                    .lock()
+                    .unwrap()
+                    .interval
+                    .as_secs() as u16,
                 self.id,
             ),
         };
@@ -1392,8 +1443,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// to the connect state.
     fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         lock!(self.session).connect_retry_counter += 1;
-        self.clock.timers.hold_timer.disable();
-        self.clock.timers.keepalive_timer.disable();
+        self.clock.timers.hold_timer.lock().unwrap().disable();
+        self.clock.timers.keepalive_timer.lock().unwrap().disable();
 
         write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
 
