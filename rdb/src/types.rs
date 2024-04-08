@@ -337,8 +337,6 @@ pub struct BgpRouterInfo {
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
 pub struct BgpNeighborInfo {
     pub asn: u32,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
     pub name: String,
     pub host: SocketAddr,
     pub hold_time: u64,
@@ -349,6 +347,9 @@ pub struct BgpNeighborInfo {
     pub resolution: u64,
     pub group: String,
     pub passive: bool,
+    pub remote_asn: Option<u32>,
+    pub min_ttl: Option<u8>,
+    pub md5_auth_key: Option<Md5Key>,
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]
@@ -369,4 +370,9 @@ pub struct BfdPeerConfig {
 pub enum SessionMode {
     SingleHop,
     MultiHop,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Md5Key {
+    pub value: Vec<u8>,
 }

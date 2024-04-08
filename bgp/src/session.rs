@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::clock::Clock;
-use crate::connection::BgpConnection;
+use crate::connection::{BgpConnection, MAX_MD5SIG_KEYLEN};
 use crate::error::{Error, ExpectationMismatch};
 use crate::fanout::Fanout;
 use crate::messages::{
@@ -15,7 +15,7 @@ use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
-use rdb::{Asn, Db, Prefix4};
+use rdb::{Asn, Db, Md5Key, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -302,7 +302,7 @@ impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
 
 // TODO break up into config/state objects.
 /// Information about a session.
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct SessionInfo {
     /// Track how many times a connection has been attempted.
     pub connect_retry_counter: u64,
@@ -342,6 +342,9 @@ pub struct SessionInfo {
 
     /// Minimum acceptable TTL value for incomming BGP packets.
     pub min_ttl: Option<u8>,
+
+    /// Md5 peer authentication key
+    pub md5_auth_key: Option<Md5Key>,
 }
 
 impl Default for SessionInfo {
@@ -359,6 +362,7 @@ impl Default for SessionInfo {
             track_tcp_state: false,
             remote_asn: None,
             min_ttl: None,
+            md5_auth_key: None,
         }
     }
 }
@@ -472,8 +476,6 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     state: Arc<Mutex<FsmStateKind>>,
     last_state_change: Mutex<Instant>,
     asn: Asn,
-    remote_asn: Option<u32>,
-    min_ttl: Option<u8>,
     id: u32,
     clock: Clock,
     bind_addr: Option<SocketAddr>,
@@ -482,6 +484,12 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     db: Db,
     fanout: Arc<RwLock<Fanout<Cnx>>>,
     router: Arc<Router<Cnx>>,
+
+    // options
+    remote_asn: Option<u32>,
+    min_ttl: Option<u8>,
+    md5_auth_key: Option<Md5Key>,
+
     log: Logger,
 }
 
@@ -511,6 +519,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         db: Db,
         fanout: Arc<RwLock<Fanout<Cnx>>>,
         router: Arc<Router<Cnx>>,
+        md5_auth_key: Option<Md5Key>,
         log: Logger,
     ) -> SessionRunner<Cnx> {
         SessionRunner {
@@ -542,6 +551,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             router,
             message_history: Arc::new(Mutex::new(MessageHistory::default())),
             counters: Arc::new(SessionCounters::default()),
+            md5_auth_key,
             db,
         }
     }
@@ -709,6 +719,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.event_tx.clone(),
             self.clock.resolution,
             self.min_ttl.is_some(),
+            self.md5_auth_key.clone(),
         ) {
             wrn!(self; "initial connect attempt failed: {e}");
         }
@@ -734,6 +745,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.event_tx.clone(),
                         self.clock.resolution,
                         self.min_ttl.is_some(),
+                        self.md5_auth_key.clone(),
                     ) {
                         wrn!(self; "connect attempt failed: {e}");
                     }
@@ -1552,11 +1564,26 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     pub fn ensure_connection_policy(&self, conn: &Cnx) -> anyhow::Result<()> {
+        if let Some(md5_key) = self.md5_auth_key.as_ref() {
+            let mut key = [0u8; MAX_MD5SIG_KEYLEN];
+            let len = md5_key.value.len();
+            if len > MAX_MD5SIG_KEYLEN {
+                return Err(anyhow::anyhow!(
+                    "md5 key too long, max size is {}",
+                    MAX_MD5SIG_KEYLEN
+                ));
+            }
+            key[..len].copy_from_slice(md5_key.value.as_slice());
+            if let Err(e) = conn.set_md5_sig(len as u16, key) {
+                return Err(anyhow::anyhow!("failed to set md5 key: {e}"));
+            }
+        }
         if let Some(ttl) = self.min_ttl {
             if let Err(e) = conn.set_min_ttl(ttl) {
                 return Err(anyhow::anyhow!("failed to set min ttl: {e}"));
             }
         }
+
         Ok(())
     }
 }

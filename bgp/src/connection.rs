@@ -5,12 +5,19 @@
 use crate::error::Error;
 use crate::messages::Message;
 use crate::session::FsmEvent;
+use rdb::Md5Key;
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+#[cfg(not(target_os = "illumos"))]
+pub const MAX_MD5SIG_KEYLEN: usize = libc::TCP_MD5SIG_MAXKEYLEN;
+
+#[cfg(target_os = "illumos")]
+pub const MAX_MD5SIG_KEYLEN: usize = 80;
 
 /// Implementors of this trait listen to and accept BGP connections.
 pub trait BgpListener<Cnx: BgpConnection> {
@@ -49,6 +56,7 @@ pub trait BgpConnection: Send + Clone {
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
         ttl_sec: bool,
+        md5_key: Option<Md5Key>,
     ) -> Result<(), Error>
     where
         Self: Sized;
@@ -64,4 +72,10 @@ pub trait BgpConnection: Send + Clone {
     fn local(&self) -> Option<SocketAddr>;
 
     fn set_min_ttl(&self, ttl: u8) -> Result<(), Error>;
+
+    fn set_md5_sig(
+        &self,
+        keylen: u16,
+        key: [u8; MAX_MD5SIG_KEYLEN],
+    ) -> Result<(), Error>;
 }

@@ -305,6 +305,7 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-bunyan",
+ "socket2 0.5.6",
  "thiserror",
 ]
 

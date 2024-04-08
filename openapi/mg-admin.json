@@ -587,6 +587,14 @@
             "format": "uint64",
             "minimum": 0
           },
+          "md5_auth_key": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Md5Key"
+              }
+            ]
+          },
           "min_ttl": {
             "nullable": true,
             "type": "integer",
@@ -858,6 +866,14 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "md5_auth_key": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Md5Key"
+              }
+            ]
           },
           "min_ttl": {
             "nullable": true,
@@ -1628,6 +1644,22 @@
           "connection_not_synchronized",
           "bad_message_length",
           "bad_message_type"
+        ]
+      },
+      "Md5Key": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "value"
         ]
       },
       "Message": {

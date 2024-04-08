@@ -146,7 +146,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             Duration::from_secs(peer.hold_time),
             Duration::from_secs(peer.idle_hold_time),
             Duration::from_secs(peer.delay_open),
-            Arc::new(Mutex::new(info)),
+            Arc::new(Mutex::new(info.clone())),
             event_rx,
             event_tx.clone(),
             neighbor.clone(),
@@ -161,6 +161,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             //TODO remove all the other self properties in favor just passing
             //     the router through.
             self.clone(),
+            info.md5_auth_key,
             self.log.clone(),
         ));
 

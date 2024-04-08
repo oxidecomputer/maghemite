@@ -6,6 +6,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use colored::*;
 use mg_admin_client::types;
+use mg_admin_client::types::Md5Key;
 use mg_admin_client::Client;
 use rdb::types::{PolicyAction, Prefix4};
 use std::fs::read_to_string;
@@ -113,14 +114,6 @@ pub struct Neighbor {
     /// Autonomous system number for the router to add the neighbor to.
     pub asn: u32,
 
-    /// Autonomous system number for the remote peer.
-    #[arg(long)]
-    pub remote_asn: Option<u32>,
-
-    /// Minimum acceptable TTL for neighbor.
-    #[arg(long)]
-    pub min_ttl: Option<u8>,
-
     /// Name for this neighbor
     name: String,
 
@@ -161,6 +154,17 @@ pub struct Neighbor {
     /// Do not initiate connections, only accept them.
     #[arg(long, default_value_t = false)]
     passive_connection: bool,
+
+    /// Autonomous system number for the remote peer.
+    #[arg(long)]
+    pub remote_asn: Option<u32>,
+
+    /// Minimum acceptable TTL for neighbor.
+    #[arg(long)]
+    pub min_ttl: Option<u8>,
+
+    #[arg(long)]
+    pub md5_auth_key: Option<String>,
 }
 
 impl From<Neighbor> for types::AddNeighborRequest {
@@ -179,6 +183,9 @@ impl From<Neighbor> for types::AddNeighborRequest {
             resolution: n.resolution,
             group: n.group,
             passive: n.passive_connection,
+            md5_auth_key: n.md5_auth_key.map(|k| Md5Key {
+                value: k.clone().into_bytes(),
+            }),
         }
     }
 }

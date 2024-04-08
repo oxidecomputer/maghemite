@@ -18,7 +18,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
 use http::status::StatusCode;
-use rdb::{Asn, BgpRouterInfo, PolicyAction, Prefix4, Route4ImportKey};
+use rdb::{Asn, BgpRouterInfo, Md5Key, PolicyAction, Prefix4, Route4ImportKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{info, Logger};
@@ -73,11 +73,8 @@ pub struct DeleteRouterRequest {
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct AddNeighborRequest {
     pub asn: u32,
-
     pub name: String,
     pub host: SocketAddr,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
     pub hold_time: u64,
     pub idle_hold_time: u64,
     pub delay_open: u64,
@@ -86,6 +83,9 @@ pub struct AddNeighborRequest {
     pub resolution: u64,
     pub group: String,
     pub passive: bool,
+    pub remote_asn: Option<u32>,
+    pub min_ttl: Option<u8>,
+    pub md5_auth_key: Option<Md5Key>,
 }
 
 impl From<AddNeighborRequest> for PeerConfig {
@@ -123,6 +123,7 @@ impl AddNeighborRequest {
             resolution: rq.resolution,
             passive: rq.passive,
             group: group.clone(),
+            md5_auth_key: rq.md5_auth_key,
         }
     }
 }
@@ -371,6 +372,7 @@ async fn add_neighbor(
         passive_tcp_establishment: rq.passive,
         remote_asn: rq.remote_asn,
         min_ttl: rq.min_ttl,
+        md5_auth_key: rq.md5_auth_key.clone(),
         ..Default::default()
     };
 
@@ -396,6 +398,7 @@ async fn add_neighbor(
         resolution: rq.resolution,
         group: rq.group.clone(),
         passive: rq.passive,
+        md5_auth_key: rq.md5_auth_key,
     })?;
 
     start_bgp_session(&event_tx)?;
@@ -563,8 +566,6 @@ pub struct ApplyRequest {
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct BgpPeerConfig {
     pub host: SocketAddr,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
     pub name: String,
     pub hold_time: u64,
     pub idle_hold_time: u64,
@@ -573,6 +574,9 @@ pub struct BgpPeerConfig {
     pub keepalive: u64,
     pub resolution: u64,
     pub passive: bool,
+    pub remote_asn: Option<u32>,
+    pub min_ttl: Option<u8>,
+    pub md5_auth_key: Option<Md5Key>,
 }
 
 #[endpoint { method = POST, path = "/bgp/apply" }]
