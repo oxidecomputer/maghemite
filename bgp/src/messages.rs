@@ -508,6 +508,31 @@ impl UpdateMessage {
         }
         false
     }
+
+    pub fn multi_exit_discriminator(&self) -> Option<u32> {
+        for a in &self.path_attributes {
+            match &a.value {
+                PathAttributeValue::MultiExitDisc(med) => return Some(*med),
+                _ => continue,
+            }
+        }
+        None
+    }
+
+    pub fn as_path(&self) -> Option<Vec<As4PathSegment>> {
+        for a in &self.path_attributes {
+            match &a.value {
+                PathAttributeValue::AsPath(path) => return Some(path.clone()),
+                _ => continue,
+            }
+        }
+        None
+    }
+
+    pub fn path_len(&self) -> Option<usize> {
+        self.as_path()
+            .map(|p| p.iter().fold(0, |a, b| a + b.value.len()))
+    }
 }
 
 /// This data structure captures a network prefix as it's laid out in a BGP

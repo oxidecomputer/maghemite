@@ -601,6 +601,12 @@
             "format": "uint8",
             "minimum": 0
           },
+          "multi_exit_discriminator": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "name": {
             "type": "string"
           },
@@ -879,6 +885,12 @@
             "nullable": true,
             "type": "integer",
             "format": "uint8",
+            "minimum": 0
+          },
+          "multi_exit_discriminator": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
             "minimum": 0
           },
           "name": {

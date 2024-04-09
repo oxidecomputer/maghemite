@@ -225,6 +225,15 @@ impl From<u16> for Asn {
     }
 }
 
+impl Asn {
+    pub fn as_u32(&self) -> u32 {
+        match self {
+            Self::TwoOctet(value) => u32::from(*value),
+            Self::FourOctet(value) => *value,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub enum Status {
     Up,
@@ -350,6 +359,7 @@ pub struct BgpNeighborInfo {
     pub remote_asn: Option<u32>,
     pub min_ttl: Option<u8>,
     pub md5_auth_key: Option<Md5Key>,
+    pub multi_exit_discriminator: Option<u32>,
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]

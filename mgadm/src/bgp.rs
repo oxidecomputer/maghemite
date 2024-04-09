@@ -163,8 +163,13 @@ pub struct Neighbor {
     #[arg(long)]
     pub min_ttl: Option<u8>,
 
+    /// Authentication key used for TCP-MD5 with remote peer.
     #[arg(long)]
     pub md5_auth_key: Option<String>,
+
+    /// Multi-exit discriminator to send to eBGP peers.
+    #[arg(long)]
+    pub med: Option<u32>,
 }
 
 impl From<Neighbor> for types::AddNeighborRequest {
@@ -186,6 +191,7 @@ impl From<Neighbor> for types::AddNeighborRequest {
             md5_auth_key: n.md5_auth_key.map(|k| Md5Key {
                 value: k.clone().into_bytes(),
             }),
+            multi_exit_discriminator: n.med,
         }
     }
 }

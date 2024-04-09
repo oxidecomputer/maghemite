@@ -10,4 +10,4 @@ pub use types::*;
 pub mod error;
 
 /// The priority routes default to.
-pub const DEFAULT_ROUTE_PRIORITY: u64 = 100;
+pub const DEFAULT_ROUTE_PRIORITY: u64 = u64::MAX;

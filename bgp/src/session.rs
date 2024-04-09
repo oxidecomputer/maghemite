@@ -345,6 +345,13 @@ pub struct SessionInfo {
 
     /// Md5 peer authentication key
     pub md5_auth_key: Option<Md5Key>,
+
+    /// Multi-exit discriminator. This an optional attribute that is intended to
+    /// be used on external eBGP sessions to discriminate among multiple exit or
+    /// entry points to the same neighboring AS. The value of this attribute is
+    /// a four-octet unsigned number, called a metric. All other factors being
+    /// equal, the exit point with the lower metric should be preferred.
+    pub multi_exit_discriminator: Option<u32>,
 }
 
 impl Default for SessionInfo {
@@ -363,6 +370,7 @@ impl Default for SessionInfo {
             remote_asn: None,
             min_ttl: None,
             md5_auth_key: None,
+            multi_exit_discriminator: None,
         }
     }
 }
@@ -1402,6 +1410,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
+    fn is_ebgp(&self) -> bool {
+        if let Some(remote) = self.session.lock().unwrap().remote_asn {
+            if remote != self.asn.as_u32() {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Send an update message to the session peer.
     fn send_update(
         &self,
@@ -1419,6 +1436,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         update
             .path_attributes
             .push(PathAttributeValue::NextHop(nexthop).into());
+
+        if self.is_ebgp() {
+            if let Some(med) =
+                self.session.lock().unwrap().multi_exit_discriminator
+            {
+                update
+                    .path_attributes
+                    .push(PathAttributeValue::MultiExitDisc(med).into());
+            }
+        }
 
         self.message_history
             .lock()
@@ -1505,11 +1532,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, id: u32) {
-        let priority = if update.graceful_shutdown() {
+        let mut priority = if update.graceful_shutdown() {
             0
         } else {
             DEFAULT_ROUTE_PRIORITY
         };
+
+        if let Some(len) = update.path_len() {
+            priority -= len as u64
+        }
+
+        if let Some(med) = update.multi_exit_discriminator() {
+            priority -= u64::from(med);
+        }
 
         for w in &update.withdrawn {
             self.db.remove_peer_prefix4(id, w.into());
