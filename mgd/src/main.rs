@@ -249,6 +249,7 @@ fn start_bgp_routers(
                 passive: nbr.passive,
                 md5_auth_key: nbr.md5_auth_key.clone(),
                 multi_exit_discriminator: nbr.multi_exit_discriminator,
+                communities: nbr.communities.clone(),
             },
         )
         .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));

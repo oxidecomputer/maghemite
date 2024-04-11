@@ -360,6 +360,7 @@ pub struct BgpNeighborInfo {
     pub min_ttl: Option<u8>,
     pub md5_auth_key: Option<Md5Key>,
     pub multi_exit_discriminator: Option<u32>,
+    pub communities: Vec<u32>,
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]

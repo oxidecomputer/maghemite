@@ -556,6 +556,14 @@
             "format": "uint32",
             "minimum": 0
           },
+          "communities": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
           "connect_retry": {
             "type": "integer",
             "format": "uint64",
@@ -627,6 +635,7 @@
         },
         "required": [
           "asn",
+          "communities",
           "connect_retry",
           "delay_open",
           "group",
@@ -845,6 +854,14 @@
       "BgpPeerConfig": {
         "type": "object",
         "properties": {
+          "communities": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
           "connect_retry": {
             "type": "integer",
             "format": "uint64",
@@ -912,6 +929,7 @@
           }
         },
         "required": [
+          "communities",
           "connect_retry",
           "delay_open",
           "hold_time",
@@ -1360,7 +1378,7 @@
         ]
       },
       "Community": {
-        "description": "BGP communities recognized by this BGP implementation.",
+        "description": "BGP community value",
         "oneOf": [
           {
             "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised outside a BGP confederation boundary (a stand-alone autonomous system that is not part of a confederation should be considered a confederation itself)",
@@ -1389,6 +1407,21 @@
             "enum": [
               "graceful_shutdown"
             ]
+          },
+          {
+            "description": "A user defined community",
+            "type": "object",
+            "properties": {
+              "user_defined": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "user_defined"
+            ],
+            "additionalProperties": false
           }
         ]
       },

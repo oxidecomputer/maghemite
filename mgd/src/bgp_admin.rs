@@ -90,6 +90,7 @@ pub struct AddNeighborRequest {
     pub min_ttl: Option<u8>,
     pub md5_auth_key: Option<Md5Key>,
     pub multi_exit_discriminator: Option<u32>,
+    pub communities: Vec<u32>,
 }
 
 impl From<AddNeighborRequest> for PeerConfig {
@@ -129,6 +130,7 @@ impl AddNeighborRequest {
             group: group.clone(),
             md5_auth_key: rq.md5_auth_key,
             multi_exit_discriminator: rq.multi_exit_discriminator,
+            communities: rq.communities,
         }
     }
 }
@@ -417,6 +419,7 @@ async fn add_neighbor(
         min_ttl: rq.min_ttl,
         md5_auth_key: rq.md5_auth_key.clone(),
         multi_exit_discriminator: rq.multi_exit_discriminator,
+        communities: rq.communities.clone(),
         ..Default::default()
     };
 
@@ -444,6 +447,7 @@ async fn add_neighbor(
         passive: rq.passive,
         md5_auth_key: rq.md5_auth_key,
         multi_exit_discriminator: rq.multi_exit_discriminator,
+        communities: rq.communities,
     })?;
 
     start_bgp_session(&event_tx)?;
@@ -623,6 +627,7 @@ pub struct BgpPeerConfig {
     pub min_ttl: Option<u8>,
     pub md5_auth_key: Option<Md5Key>,
     pub multi_exit_discriminator: Option<u32>,
+    pub communities: Vec<u32>,
 }
 
 #[endpoint { method = POST, path = "/bgp/apply" }]

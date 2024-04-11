@@ -7,6 +7,7 @@ use nom::{
     bytes::complete::{tag, take},
     number::complete::{be_u16, be_u32, be_u8, u8 as parse_u8},
 };
+use num_enum::FromPrimitive;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -916,7 +917,7 @@ impl PathAttributeValue {
                         break;
                     }
                     let (out, v) = be_u32(input)?;
-                    communities.push(Community::try_from(v)?);
+                    communities.push(Community::from(v));
                     input = out;
                 }
                 Ok(PathAttributeValue::Communities(communities))
@@ -926,14 +927,14 @@ impl PathAttributeValue {
     }
 }
 
-/// BGP communities recognized by this BGP implementation.
+/// BGP community value
 #[derive(
     Debug,
     PartialEq,
     Eq,
     Clone,
     Copy,
-    TryFromPrimitive,
+    FromPrimitive,
     IntoPrimitive,
     Serialize,
     Deserialize,
@@ -964,6 +965,10 @@ pub enum Community {
     /// containing this value must set the local preference for
     /// the received routes to a low value, preferably zero.
     GracefulShutdown = 0xFFFF0000,
+
+    /// A user defined community
+    #[num_enum(catch_all)]
+    UserDefined(u32),
 }
 
 /// An enumeration indicating the origin type of a path.

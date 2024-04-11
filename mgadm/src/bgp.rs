@@ -170,6 +170,10 @@ pub struct Neighbor {
     /// Multi-exit discriminator to send to eBGP peers.
     #[arg(long)]
     pub med: Option<u32>,
+
+    // Communities to attach to update messages.
+    #[arg(long)]
+    pub communities: Vec<u32>,
 }
 
 impl From<Neighbor> for types::AddNeighborRequest {
@@ -192,6 +196,7 @@ impl From<Neighbor> for types::AddNeighborRequest {
                 value: k.clone().into_bytes(),
             }),
             multi_exit_discriminator: n.med,
+            communities: n.communities,
         }
     }
 }

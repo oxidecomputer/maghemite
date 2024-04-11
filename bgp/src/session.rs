@@ -7,7 +7,7 @@ use crate::connection::{BgpConnection, MAX_MD5SIG_KEYLEN};
 use crate::error::{Error, ExpectationMismatch};
 use crate::fanout::Fanout;
 use crate::messages::{
-    AddPathElement, Capability, ErrorCode, ErrorSubcode, Message,
+    AddPathElement, Capability, Community, ErrorCode, ErrorSubcode, Message,
     NotificationMessage, OpenMessage, OptionalParameter, PathAttributeValue,
     UpdateMessage,
 };
@@ -352,6 +352,9 @@ pub struct SessionInfo {
     /// a four-octet unsigned number, called a metric. All other factors being
     /// equal, the exit point with the lower metric should be preferred.
     pub multi_exit_discriminator: Option<u32>,
+
+    /// Communities to be attached to updates sent over this session.
+    pub communities: Vec<u32>,
 }
 
 impl Default for SessionInfo {
@@ -371,6 +374,7 @@ impl Default for SessionInfo {
             min_ttl: None,
             md5_auth_key: None,
             multi_exit_discriminator: None,
+            communities: Vec::new(),
         }
     }
 }
@@ -1445,6 +1449,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .path_attributes
                     .push(PathAttributeValue::MultiExitDisc(med).into());
             }
+        }
+
+        let cs: Vec<Community> = self
+            .session
+            .lock()
+            .unwrap()
+            .communities
+            .clone()
+            .into_iter()
+            .map(Community::from)
+            .collect();
+
+        if !cs.is_empty() {
+            update
+                .path_attributes
+                .push(PathAttributeValue::Communities(cs).into())
         }
 
         self.message_history

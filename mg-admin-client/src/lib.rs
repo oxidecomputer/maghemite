@@ -2,12 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-/*
-pub use bgp::messages::Message;
-pub use bgp::session::{MessageHistory, MessageHistoryEntry};
-pub use rdb::{PolicyAction, Prefix4};
-*/
-
 progenitor::generate_api!(
     spec = "../openapi/mg-admin.json",
     inner_type = slog::Logger,
