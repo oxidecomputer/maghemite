@@ -361,6 +361,7 @@ pub struct BgpNeighborInfo {
     pub md5_auth_key: Option<Md5Key>,
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
+    pub local_pref: Option<u32>,
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]

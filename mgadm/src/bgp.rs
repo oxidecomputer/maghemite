@@ -174,6 +174,10 @@ pub struct Neighbor {
     // Communities to attach to update messages.
     #[arg(long)]
     pub communities: Vec<u32>,
+
+    /// Local preference to send to iBGP peers.
+    #[arg(long)]
+    pub local_pref: Option<u32>,
 }
 
 impl From<Neighbor> for types::AddNeighborRequest {
@@ -197,6 +201,7 @@ impl From<Neighbor> for types::AddNeighborRequest {
             }),
             multi_exit_discriminator: n.med,
             communities: n.communities,
+            local_pref: n.local_pref,
         }
     }
 }

@@ -595,6 +595,12 @@
             "format": "uint64",
             "minimum": 0
           },
+          "local_pref": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "md5_auth_key": {
             "nullable": true,
             "allOf": [
@@ -888,6 +894,12 @@
           "keepalive": {
             "type": "integer",
             "format": "uint64",
+            "minimum": 0
+          },
+          "local_pref": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
             "minimum": 0
           },
           "md5_auth_key": {

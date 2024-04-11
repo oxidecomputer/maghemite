@@ -9,7 +9,7 @@ use crate::fanout::Fanout;
 use crate::messages::{
     AddPathElement, Capability, Community, ErrorCode, ErrorSubcode, Message,
     NotificationMessage, OpenMessage, OptionalParameter, PathAttributeValue,
-    UpdateMessage,
+    PathOrigin, UpdateMessage,
 };
 use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
@@ -355,6 +355,9 @@ pub struct SessionInfo {
 
     /// Communities to be attached to updates sent over this session.
     pub communities: Vec<u32>,
+
+    /// Local preference attribute added to updates if this is an iBGP session
+    pub local_pref: Option<u32>,
 }
 
 impl Default for SessionInfo {
@@ -375,6 +378,7 @@ impl Default for SessionInfo {
             md5_auth_key: None,
             multi_exit_discriminator: None,
             communities: Vec::new(),
+            local_pref: None,
         }
     }
 }
@@ -1423,6 +1427,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         false
     }
 
+    fn is_ibgp(&self) -> bool {
+        !self.is_ebgp()
+    }
+
     /// Send an update message to the session peer.
     fn send_update(
         &self,
@@ -1442,13 +1450,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             .push(PathAttributeValue::NextHop(nexthop).into());
 
         if self.is_ebgp() {
-            if let Some(med) =
-                self.session.lock().unwrap().multi_exit_discriminator
-            {
-                update
-                    .path_attributes
-                    .push(PathAttributeValue::MultiExitDisc(med).into());
-            }
+            update
+                .path_attributes
+                .push(PathAttributeValue::Origin(PathOrigin::Egp).into());
+        }
+
+        if let Some(med) = self.session.lock().unwrap().multi_exit_discriminator
+        {
+            update
+                .path_attributes
+                .push(PathAttributeValue::MultiExitDisc(med).into());
+        }
+
+        if self.is_ibgp() {
+            update
+                .path_attributes
+                .push(PathAttributeValue::Origin(PathOrigin::Igp).into());
+            update.path_attributes.push(
+                PathAttributeValue::LocalPref(
+                    self.session.lock().unwrap().local_pref.unwrap_or(0),
+                )
+                .into(),
+            );
         }
 
         let cs: Vec<Community> = self

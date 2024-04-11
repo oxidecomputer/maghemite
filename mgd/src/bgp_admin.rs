@@ -91,6 +91,7 @@ pub struct AddNeighborRequest {
     pub md5_auth_key: Option<Md5Key>,
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
+    pub local_pref: Option<u32>,
 }
 
 impl From<AddNeighborRequest> for PeerConfig {
@@ -131,6 +132,7 @@ impl AddNeighborRequest {
             md5_auth_key: rq.md5_auth_key,
             multi_exit_discriminator: rq.multi_exit_discriminator,
             communities: rq.communities,
+            local_pref: rq.local_pref,
         }
     }
 }
@@ -420,6 +422,7 @@ async fn add_neighbor(
         md5_auth_key: rq.md5_auth_key.clone(),
         multi_exit_discriminator: rq.multi_exit_discriminator,
         communities: rq.communities.clone(),
+        local_pref: rq.local_pref,
         ..Default::default()
     };
 
@@ -448,6 +451,7 @@ async fn add_neighbor(
         md5_auth_key: rq.md5_auth_key,
         multi_exit_discriminator: rq.multi_exit_discriminator,
         communities: rq.communities,
+        local_pref: rq.local_pref,
     })?;
 
     start_bgp_session(&event_tx)?;
@@ -498,6 +502,12 @@ pub(crate) fn ensure_neighbor(
 
     let info = SessionInfo {
         passive_tcp_establishment: rq.passive,
+        remote_asn: rq.remote_asn,
+        min_ttl: rq.min_ttl,
+        md5_auth_key: rq.md5_auth_key.clone(),
+        multi_exit_discriminator: rq.multi_exit_discriminator,
+        communities: rq.communities.clone(),
+        local_pref: rq.local_pref,
         ..Default::default()
     };
 
@@ -628,6 +638,7 @@ pub struct BgpPeerConfig {
     pub md5_auth_key: Option<Md5Key>,
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
+    pub local_pref: Option<u32>,
 }
 
 #[endpoint { method = POST, path = "/bgp/apply" }]

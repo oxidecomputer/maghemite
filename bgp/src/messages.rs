@@ -649,6 +649,9 @@ impl From<PathAttributeValue> for PathAttribute {
             PathAttributeValue::AsPath(_) => path_attribute_flags::TRANSITIVE,
             PathAttributeValue::As4Path(_) => path_attribute_flags::TRANSITIVE,
             PathAttributeValue::NextHop(_) => path_attribute_flags::TRANSITIVE,
+            PathAttributeValue::LocalPref(_) => {
+                path_attribute_flags::TRANSITIVE
+            }
             PathAttributeValue::Communities(_) => {
                 path_attribute_flags::OPTIONAL
                     | path_attribute_flags::TRANSITIVE
@@ -863,6 +866,8 @@ impl PathAttributeValue {
                 }
                 Ok(buf)
             }
+            Self::LocalPref(value) => Ok(value.to_be_bytes().into()),
+            Self::MultiExitDisc(value) => Ok(value.to_be_bytes().into()),
             x => Err(Error::UnsupportedPathAttributeValue(x.clone())),
         }
     }
@@ -921,6 +926,10 @@ impl PathAttributeValue {
                     input = out;
                 }
                 Ok(PathAttributeValue::Communities(communities))
+            }
+            PathAttributeTypeCode::LocalPref => {
+                let (_input, v) = be_u32(input)?;
+                Ok(PathAttributeValue::LocalPref(v))
             }
             x => Err(Error::UnsupportedPathAttributeTypeCode(x)),
         }
