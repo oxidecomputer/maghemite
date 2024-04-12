@@ -3,7 +3,6 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::Error;
-use crate::Stats;
 use crate::MG_LOWER_TAG;
 use dendrite_common::network::Cidr;
 use dendrite_common::ports::PortId;
@@ -17,7 +16,6 @@ use dpd_client::Ipv6Cidr;
 use http::StatusCode;
 use libnet::Ipv6Prefix;
 use libnet::{get_route, IpPrefix, Ipv4Prefix};
-use rdb::db::Rib;
 use rdb::Path;
 use rdb::Prefix;
 use slog::{error, warn, Logger};
@@ -25,7 +23,6 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::net::IpAddr;
 use std::net::Ipv6Addr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -230,90 +227,6 @@ fn get_port_and_link(
     Ok((port_id, link_id))
 }
 
-/// Translate a vector of RIB route data structures to a HashSet of RouteHashes
-pub(crate) fn db_route_to_dendrite_route(
-    rs: Rib,
-    log: &Logger,
-    dpd: &DpdClient,
-    stats: Option<&Stats>,
-    require_link_up: bool,
-    rt: Arc<tokio::runtime::Handle>,
-) -> HashSet<RouteHash> {
-    let mut result = HashSet::new();
-
-    let mut link_down_count = 0;
-
-    for (prefix, paths) in &rs {
-        for path in paths.iter() {
-            let (port_id, link_id) = match get_port_and_link(path.nexthop) {
-                Ok((p, l)) => (p, l),
-                Err(e) => {
-                    error!(
-                        log,
-                        "failed to get port for {:?}: {e:?}", path.nexthop
-                    );
-                    continue;
-                }
-            };
-
-            if require_link_up {
-                let link_info = match rt
-                    .block_on(async { dpd.link_get(&port_id, &link_id).await })
-                {
-                    Ok(info) => info.into_inner(),
-                    Err(e) => {
-                        error!(
-                    log,
-                    "failed to get link info for {port_id:?}/{link_id:?}: {e}"
-                );
-                        link_down_count += 1;
-                        continue;
-                    }
-                };
-
-                if link_info.link_state != LinkState::Up {
-                    warn!(
-                log,
-                "{port_id:?}/{link_id:?} is not up, not installing into RIB"
-            );
-                    link_down_count += 1;
-                    continue;
-                }
-            }
-
-            let cidr = match prefix {
-                rdb::Prefix::V4(p) => {
-                    dpd_client::Cidr::V4(dpd_client::Ipv4Cidr {
-                        prefix: p.value,
-                        prefix_len: p.length,
-                    })
-                }
-                rdb::Prefix::V6(p) => {
-                    dpd_client::Cidr::V6(dpd_client::Ipv6Cidr {
-                        prefix: p.value,
-                        prefix_len: p.length,
-                    })
-                }
-            };
-
-            match RouteHash::new(cidr, port_id, link_id, path.nexthop) {
-                Ok(route) => {
-                    let _ = result.insert(route);
-                }
-                Err(e) => error!(log, "bad route: {e}"),
-            };
-        }
-    }
-
-    if let Some(stats) = stats {
-        stats
-            .routes_blocked_by_link_state
-            .store(link_down_count, Ordering::Relaxed);
-    }
-
-    result
-}
-
 pub(crate) fn get_routes_for_prefix(
     dpd: &DpdClient,
     prefix: &Prefix,
@@ -332,6 +245,9 @@ pub(crate) fn get_routes_for_prefix(
 
             let mut result: Vec<RouteHash> = Vec::new();
             for r in dpd_routes.iter() {
+                if r.tag != MG_LOWER_TAG {
+                    continue;
+                }
                 match link_is_up(dpd, r.port_id, r.link_id, &rt) {
                     Err(e) => {
                         error!(

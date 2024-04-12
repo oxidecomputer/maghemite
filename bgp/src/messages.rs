@@ -252,6 +252,15 @@ impl OpenMessage {
             .push(OptionalParameter::Capabilities(capabilities.into()));
     }
 
+    pub fn get_capabilities(&self) -> Vec<Capability> {
+        for p in self.parameters.iter() {
+            if let OptionalParameter::Capabilities(caps) = p {
+                return caps.clone();
+            }
+        }
+        Vec::new()
+    }
+
     /// Serialize an open message to wire format.
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();

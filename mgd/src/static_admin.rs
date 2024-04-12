@@ -2,9 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::admin::HandlerContext;
+use crate::{admin::HandlerContext, register};
 use dropshot::{
-    endpoint, HttpError, HttpResponseDeleted, HttpResponseOk,
+    endpoint, ApiDescription, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
 use rdb::{db::Rib, Path, Prefix4, StaticRouteKey};
@@ -40,6 +40,12 @@ impl From<StaticRoute4> for StaticRouteKey {
             nexthop: val.nexthop.into(),
         }
     }
+}
+
+pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
+    register!(api, static_add_v4_route);
+    register!(api, static_remove_v4_route);
+    register!(api, static_list_v4_routes);
 }
 
 #[endpoint { method = PUT, path = "/static/route4" }]

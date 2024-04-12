@@ -7,6 +7,7 @@ use crate::config::RouterConfig;
 use crate::connection::BgpConnection;
 use crate::error::Error;
 use crate::fanout::{Egress, Fanout};
+use crate::messages::PathOrigin;
 use crate::messages::{
     As4PathSegment, AsPathType, Community, PathAttribute, PathAttributeValue,
     Prefix, UpdateMessage,
@@ -229,7 +230,8 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn base_attributes(&self) -> Vec<PathAttribute> {
-        let mut path_attributes = Vec::new();
+        let mut path_attributes =
+            vec![PathAttributeValue::Origin(PathOrigin::Igp).into()];
 
         if self.graceful_shutdown.load(Ordering::Relaxed) {
             path_attributes.push(

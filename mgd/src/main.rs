@@ -23,6 +23,7 @@ use uuid::Uuid;
 mod admin;
 mod bfd_admin;
 mod bgp_admin;
+mod bgp_param;
 mod error;
 mod oxstats;
 mod signal;
@@ -217,9 +218,9 @@ fn start_bgp_routers(
     slog::info!(context.log, "bgp routers: {:#?}", routers);
     let mut guard = context.bgp.router.lock().expect("lock bgp routers");
     for (asn, info) in routers {
-        bgp_admin::add_router(
+        bgp_admin::helpers::add_router(
             context.clone(),
-            bgp_admin::NewRouterRequest {
+            bgp_param::NewRouterRequest {
                 asn,
                 id: info.id,
                 listen: info.listen.clone(),
@@ -231,9 +232,9 @@ fn start_bgp_routers(
     drop(guard);
 
     for nbr in neighbors {
-        bgp_admin::ensure_neighbor(
+        bgp_admin::helpers::add_neighbor(
             context.clone(),
-            bgp_admin::AddNeighborRequest {
+            bgp_param::AddNeighborRequest {
                 asn: nbr.asn,
                 remote_asn: nbr.remote_asn,
                 min_ttl: nbr.min_ttl,
@@ -252,6 +253,7 @@ fn start_bgp_routers(
                 communities: nbr.communities.clone(),
                 local_pref: nbr.local_pref,
             },
+            true,
         )
         .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
     }

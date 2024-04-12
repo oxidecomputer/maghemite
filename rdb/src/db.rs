@@ -54,9 +54,13 @@ pub struct Db {
     /// A sled database handle where persistent routing information is stored.
     persistent: sled::Db,
 
-    /// Routes imported via dynamic routing protocols. These are volatile.
-    //imported: Arc<Mutex<HashSet<Route4ImportKey>>>,
-    imported: Arc<Mutex<Rib>>,
+    /// Routes learned from BGP update messages or administratively added
+    /// static routes. These are volatile.
+    rib_in: Arc<Mutex<Rib>>,
+
+    /// Routes selected from rib_in according to local policy and added to the
+    /// lower half forwarding plane.
+    rib_loc: Arc<Mutex<Rib>>,
 
     /// A generation number for the overall data store.
     generation: Arc<AtomicU64>,
@@ -81,7 +85,8 @@ impl Db {
     pub fn new(path: &str, log: Logger) -> Result<Self, Error> {
         Ok(Self {
             persistent: sled::open(path)?,
-            imported: Arc::new(Mutex::new(Rib::new())),
+            rib_in: Arc::new(Mutex::new(Rib::new())),
+            rib_loc: Arc::new(Mutex::new(Rib::new())),
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
             log,
@@ -104,12 +109,16 @@ impl Db {
         }
     }
 
+    pub fn loc_rib(&self) -> Arc<Mutex<Rib>> {
+        self.rib_loc.clone()
+    }
+
     pub fn full_rib(&self) -> Rib {
-        lock!(self.imported).clone()
+        lock!(self.rib_in).clone()
     }
 
     pub fn static_rib(&self) -> Rib {
-        let mut rib = lock!(self.imported).clone();
+        let mut rib = lock!(self.rib_in).clone();
         for (_prefix, paths) in rib.iter_mut() {
             paths.retain(|x| x.bgp_id == 0)
         }
@@ -117,7 +126,7 @@ impl Db {
     }
 
     pub fn bgp_rib(&self) -> Rib {
-        let mut rib = lock!(self.imported).clone();
+        let mut rib = lock!(self.rib_in).clone();
         for (_prefix, paths) in rib.iter_mut() {
             paths.retain(|x| x.bgp_id != 0)
         }
@@ -332,7 +341,7 @@ impl Db {
     }
 
     pub fn get_prefix_paths(&self, prefix: &Prefix) -> Vec<Path> {
-        let rib = lock!(self.imported);
+        let rib = lock!(self.rib_in);
         let paths = rib.get(prefix);
         match paths {
             None => Vec::new(),
@@ -341,7 +350,7 @@ impl Db {
     }
 
     pub fn get_imported(&self) -> Rib {
-        lock!(self.imported).clone()
+        lock!(self.rib_in).clone()
     }
 
     pub fn add_prefix_path(
@@ -350,7 +359,7 @@ impl Db {
         path: Path,
         is_static: bool,
     ) -> Result<(), Error> {
-        let mut rib = lock!(self.imported);
+        let mut rib = lock!(self.rib_in);
         match rib.get_mut(&prefix) {
             Some(paths) => {
                 paths.insert(path.clone());
@@ -422,7 +431,7 @@ impl Db {
     }
 
     pub fn disable_nexthop(&self, nexthop: IpAddr) {
-        let mut rib = lock!(self.imported);
+        let mut rib = lock!(self.rib_in);
         let mut pcn = PrefixChangeNotification::default();
         for (prefix, paths) in rib.iter_mut() {
             for p in paths.clone().into_iter() {
@@ -439,7 +448,7 @@ impl Db {
     }
 
     pub fn enable_nexthop(&self, nexthop: IpAddr) {
-        let mut rib = lock!(self.imported);
+        let mut rib = lock!(self.rib_in);
         let mut pcn = PrefixChangeNotification::default();
         for (prefix, paths) in rib.iter_mut() {
             for p in paths.clone().into_iter() {
@@ -461,7 +470,7 @@ impl Db {
         path: Path,
         is_static: bool, //TODO
     ) -> Result<(), Error> {
-        let mut rib = lock!(self.imported);
+        let mut rib = lock!(self.rib_in);
         if let Some(paths) = rib.get_mut(&prefix) {
             paths.retain(|x| x.nexthop != path.nexthop)
         }
@@ -482,7 +491,7 @@ impl Db {
     }
 
     pub fn remove_peer_prefix(&self, id: u32, prefix: Prefix) {
-        let mut rib = lock!(self.imported);
+        let mut rib = lock!(self.rib_in);
         let paths = match rib.get_mut(&prefix) {
             None => return,
             Some(ps) => ps,
@@ -496,7 +505,7 @@ impl Db {
         &self,
         id: u32,
     ) -> HashMap<Prefix, HashSet<Path>> {
-        let mut rib = lock!(self.imported);
+        let mut rib = lock!(self.rib_in);
 
         let mut pcn = PrefixChangeNotification::default();
         let mut result = HashMap::new();

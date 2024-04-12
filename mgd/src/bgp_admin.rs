@@ -2,34 +2,29 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::admin::HandlerContext;
-use crate::error::Error;
+use crate::{admin::HandlerContext, bgp_param::*, error::Error, register};
 use bgp::{
-    config::{PeerConfig, RouterConfig},
+    config::RouterConfig,
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
     messages::Prefix,
     router::Router,
-    session::{FsmEvent, FsmStateKind, MessageHistory, SessionInfo},
+    session::{FsmEvent, SessionInfo},
     BGP_PORT,
 };
 use dropshot::{
-    endpoint, HttpError, HttpResponseDeleted, HttpResponseOk,
+    endpoint, ApiDescription, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
 use http::status::StatusCode;
-use rdb::{db::Rib, Asn, BgpRouterInfo, Md5Key, PolicyAction, Prefix4};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use slog::{info, Logger};
+use rdb::{db::Rib, Asn, BgpRouterInfo, Prefix4};
+use slog::info;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::sync::mpsc::channel;
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    time::Duration,
+use std::sync::{
+    mpsc::{channel, Sender},
+    Arc, Mutex,
 };
 
 const DEFAULT_BGP_LISTEN: SocketAddr =
@@ -55,189 +50,40 @@ impl BgpContext {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct NewRouterRequest {
-    /// Autonomous system number for this router
-    pub asn: u32,
-
-    /// Id for this router
-    pub id: u32,
-
-    /// Listening address <addr>:<port>
-    pub listen: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DeleteRouterRequest {
-    /// Autonomous system number for the router to remove
-    pub asn: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct AddNeighborRequest {
-    pub asn: u32,
-    pub name: String,
-    pub host: SocketAddr,
-    pub hold_time: u64,
-    pub idle_hold_time: u64,
-    pub delay_open: u64,
-    pub connect_retry: u64,
-    pub keepalive: u64,
-    pub resolution: u64,
-    pub group: String,
-    pub passive: bool,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
-    pub md5_auth_key: Option<Md5Key>,
-    pub multi_exit_discriminator: Option<u32>,
-    pub communities: Vec<u32>,
-    pub local_pref: Option<u32>,
-}
-
-impl From<AddNeighborRequest> for PeerConfig {
-    fn from(rq: AddNeighborRequest) -> Self {
-        Self {
-            name: rq.name.clone(),
-            host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
-        }
-    }
-}
-
-impl AddNeighborRequest {
-    fn from_bgp_peer_config(
-        asn: u32,
-        group: String,
-        rq: BgpPeerConfig,
-    ) -> Self {
-        Self {
-            asn,
-            remote_asn: rq.remote_asn,
-            min_ttl: rq.min_ttl,
-            name: rq.name.clone(),
-            host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
-            passive: rq.passive,
-            group: group.clone(),
-            md5_auth_key: rq.md5_auth_key,
-            multi_exit_discriminator: rq.multi_exit_discriminator,
-            communities: rq.communities,
-            local_pref: rq.local_pref,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DeleteNeighborRequest {
-    pub asn: u32,
-    pub addr: IpAddr,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct AddExportPolicyRequest {
-    /// ASN of the router to apply the export policy to.
-    pub asn: u32,
-
-    /// Address of the peer to apply this policy to.
-    pub addr: IpAddr,
-
-    /// Prefix this policy applies to.
-    pub prefix: Prefix4,
-
-    /// Priority of the policy, higher value is higher priority.
-    pub priority: u16,
-
-    /// The policy action to apply.
-    pub action: PolicyAction,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct Originate4Request {
-    /// ASN of the router to originate from.
-    pub asn: u32,
-
-    /// Set of prefixes to originate.
-    pub prefixes: Vec<Prefix4>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct Withdraw4Request {
-    /// ASN of the router to originate from.
-    pub asn: u32,
-
-    /// Set of prefixes to originate.
-    pub prefixes: Vec<Prefix4>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct GetImported4Request {
-    /// ASN of the router to get imported prefixes from.
-    pub asn: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct GracefulShutdownRequest {
-    /// ASN of the router to gracefully shut down.
-    pub asn: u32,
-    /// Set whether or not graceful shutdown is initiated from this router.
-    pub enabled: bool,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct GetOriginated4Request {
-    /// ASN of the router to get originated prefixes from.
-    pub asn: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct GetRoutersRequest {}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct GetRouersResponse {
-    router: Vec<RouterInfo>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct RouterInfo {
-    pub asn: u32,
-    pub peers: BTreeMap<IpAddr, PeerInfo>,
-    pub graceful_shutdown: bool,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DynamicTimerInfo {
-    configured: Duration,
-    negotiated: Duration,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PeerTimers {
-    hold: DynamicTimerInfo,
-    keepalive: DynamicTimerInfo,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PeerInfo {
-    pub state: FsmStateKind,
-    pub asn: Option<u32>,
-    pub duration_millis: u64,
-    pub timers: PeerTimers,
-}
-
 macro_rules! lock {
     ($mtx:expr) => {
         $mtx.lock().expect("lock mutex")
     };
+}
+
+macro_rules! get_router {
+    ($ctx:expr, $asn:expr) => {
+        lock!($ctx.bgp.router)
+            .get(&$asn)
+            .ok_or(Error::NotFound("no bgp router configured".into()))
+    };
+}
+
+pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
+    register!(api, get_routers);
+    register!(api, new_router);
+    register!(api, ensure_router);
+    register!(api, delete_router);
+
+    register!(api, add_neighbor);
+    register!(api, ensure_neighbor);
+    register!(api, delete_neighbor);
+
+    register!(api, originate4);
+    register!(api, withdraw4);
+    register!(api, get_originated4);
+
+    register!(api, get_imported4);
+
+    register!(api, bgp_apply);
+
+    register!(api, graceful_shutdown);
+    register!(api, message_history);
 }
 
 #[endpoint { method = GET, path = "/bgp/routers" }]
@@ -299,25 +145,13 @@ pub async fn get_routers(
 }
 
 #[endpoint { method = PUT, path = "/bgp/router" }]
-pub async fn ensure_router_handler(
+pub async fn ensure_router(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<NewRouterRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    Ok(ensure_router(ctx.clone(), rq).await?)
-}
-
-async fn ensure_router(
-    ctx: Arc<HandlerContext>,
-    rq: NewRouterRequest,
-) -> Result<HttpResponseUpdatedNoContent, Error> {
-    let mut guard = lock!(ctx.bgp.router);
-    if guard.get(&rq.asn).is_some() {
-        return Ok(HttpResponseUpdatedNoContent());
-    }
-
-    add_router(ctx.clone(), rq, &mut guard)
+    Ok(helpers::ensure_router(ctx.clone(), rq).await?)
 }
 
 #[endpoint { method = POST, path = "/bgp/router" }]
@@ -336,40 +170,7 @@ pub async fn new_router(
         ));
     }
 
-    Ok(add_router(ctx.clone(), rq, &mut guard)?)
-}
-
-pub(crate) fn add_router(
-    ctx: Arc<HandlerContext>,
-    rq: NewRouterRequest,
-    routers: &mut BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>,
-) -> Result<HttpResponseUpdatedNoContent, Error> {
-    let cfg = RouterConfig {
-        asn: Asn::FourOctet(rq.asn),
-        id: rq.id,
-    };
-
-    let db = ctx.db.clone();
-
-    let router = Arc::new(Router::<BgpConnectionTcp>::new(
-        cfg,
-        ctx.log.clone(),
-        db.clone(),
-        ctx.bgp.addr_to_session.clone(),
-    ));
-
-    router.run();
-
-    routers.insert(rq.asn, router);
-    db.add_bgp_router(
-        rq.asn,
-        BgpRouterInfo {
-            id: rq.id,
-            listen: rq.listen.clone(),
-        },
-    )?;
-
-    Ok(HttpResponseUpdatedNoContent())
+    Ok(helpers::add_router(ctx.clone(), rq, &mut guard)?)
 }
 
 #[endpoint { method = DELETE, path = "/bgp/router" }]
@@ -386,90 +187,15 @@ pub async fn delete_router(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-macro_rules! get_router {
-    ($ctx:expr, $asn:expr) => {
-        lock!($ctx.bgp.router)
-            .get(&$asn)
-            .ok_or(Error::NotFound("no bgp router configured".into()))
-    };
-}
-
 #[endpoint { method = POST, path = "/bgp/neighbor" }]
-pub async fn add_neighbor_handler(
+pub async fn add_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddNeighborRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let log = ctx.context().log.clone();
     let rq = request.into_inner();
     let ctx = ctx.context();
-    add_neighbor(ctx.clone(), rq, log).await?;
+    helpers::add_neighbor(ctx.clone(), rq, false)?;
     Ok(HttpResponseUpdatedNoContent())
-}
-
-async fn add_neighbor(
-    ctx: Arc<HandlerContext>,
-    rq: AddNeighborRequest,
-    log: Logger,
-) -> Result<(), Error> {
-    info!(log, "add neighbor: {:#?}", rq);
-
-    let (event_tx, event_rx) = channel();
-
-    let info = SessionInfo {
-        passive_tcp_establishment: rq.passive,
-        remote_asn: rq.remote_asn,
-        min_ttl: rq.min_ttl,
-        md5_auth_key: rq.md5_auth_key.clone(),
-        multi_exit_discriminator: rq.multi_exit_discriminator,
-        communities: rq.communities.clone(),
-        local_pref: rq.local_pref,
-        ..Default::default()
-    };
-
-    get_router!(&ctx, rq.asn)?.new_session(
-        rq.clone().into(),
-        DEFAULT_BGP_LISTEN,
-        event_tx.clone(),
-        event_rx,
-        info,
-    )?;
-
-    ctx.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
-        asn: rq.asn,
-        remote_asn: rq.remote_asn,
-        min_ttl: rq.min_ttl,
-        name: rq.name.clone(),
-        host: rq.host,
-        hold_time: rq.hold_time,
-        idle_hold_time: rq.idle_hold_time,
-        delay_open: rq.delay_open,
-        connect_retry: rq.connect_retry,
-        keepalive: rq.keepalive,
-        resolution: rq.resolution,
-        group: rq.group.clone(),
-        passive: rq.passive,
-        md5_auth_key: rq.md5_auth_key,
-        multi_exit_discriminator: rq.multi_exit_discriminator,
-        communities: rq.communities,
-        local_pref: rq.local_pref,
-    })?;
-
-    start_bgp_session(&event_tx)?;
-
-    Ok(())
-}
-
-async fn remove_neighbor(
-    ctx: Arc<HandlerContext>,
-    asn: u32,
-    addr: IpAddr,
-) -> Result<HttpResponseDeleted, Error> {
-    info!(ctx.log, "remove neighbor: {}", addr);
-
-    ctx.db.remove_bgp_neighbor(addr)?;
-    get_router!(&ctx, asn)?.delete_session(addr);
-
-    Ok(HttpResponseDeleted())
 }
 
 #[endpoint { method = DELETE, path = "/bgp/neighbor" }]
@@ -479,55 +205,17 @@ pub async fn delete_neighbor(
 ) -> Result<HttpResponseDeleted, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    Ok(remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
+    Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
 }
 
 #[endpoint { method = PUT, path = "/bgp/neighbor" }]
-pub async fn ensure_neighbor_handler(
+pub async fn ensure_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddNeighborRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    ensure_neighbor(ctx.clone(), rq)
-}
-
-pub(crate) fn ensure_neighbor(
-    ctx: Arc<HandlerContext>,
-    rq: AddNeighborRequest,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    info!(ctx.log, "add neighbor: {:#?}", rq);
-
-    let (event_tx, event_rx) = channel();
-
-    let info = SessionInfo {
-        passive_tcp_establishment: rq.passive,
-        remote_asn: rq.remote_asn,
-        min_ttl: rq.min_ttl,
-        md5_auth_key: rq.md5_auth_key.clone(),
-        multi_exit_discriminator: rq.multi_exit_discriminator,
-        communities: rq.communities.clone(),
-        local_pref: rq.local_pref,
-        ..Default::default()
-    };
-
-    match get_router!(&ctx, rq.asn)?.new_session(
-        rq.into(),
-        DEFAULT_BGP_LISTEN,
-        event_tx.clone(),
-        event_rx,
-        info,
-    ) {
-        Ok(_) => {}
-        Err(bgp::error::Error::PeerExists) => {
-            return Ok(HttpResponseUpdatedNoContent());
-        }
-        Err(e) => {
-            return Err(HttpError::for_internal_error(format!("{:?}", e)));
-        }
-    }
-    start_bgp_session(&event_tx)?;
-
+    helpers::add_neighbor(ctx.clone(), rq, true)?;
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -599,46 +287,6 @@ pub async fn graceful_shutdown(
         .graceful_shutdown(rq.enabled)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     Ok(HttpResponseUpdatedNoContent())
-}
-
-/// Apply changes to an ASN.
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct ApplyRequest {
-    /// ASN to apply changes to.
-    pub asn: u32,
-    /// Complete set of prefixes to originate. Any active prefixes not in this
-    /// list will be removed. All prefixes in this list are ensured to be in
-    /// the originating set.
-    pub originate: Vec<Prefix4>,
-    /// Lists of peers indexed by peer group. Set's within a peer group key are
-    /// a total set. For example, the value
-    ///
-    /// ```text
-    /// {"foo": [a, b, d]}
-    /// ```
-    /// Means that the peer group "foo" only contains the peers `a`, `b` and
-    /// `d`. If there is a peer `c` currently in the peer group "foo", it will
-    /// be removed.
-    pub peers: HashMap<String, Vec<BgpPeerConfig>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct BgpPeerConfig {
-    pub host: SocketAddr,
-    pub name: String,
-    pub hold_time: u64,
-    pub idle_hold_time: u64,
-    pub delay_open: u64,
-    pub connect_retry: u64,
-    pub keepalive: u64,
-    pub resolution: u64,
-    pub passive: bool,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
-    pub md5_auth_key: Option<Md5Key>,
-    pub multi_exit_discriminator: Option<u32>,
-    pub communities: Vec<u32>,
-    pub local_pref: Option<u32>,
 }
 
 #[endpoint { method = POST, path = "/bgp/apply" }]
@@ -714,7 +362,7 @@ pub async fn bgp_apply(
         // TODO all the db modification that happens below needs to happen in a
         // transaction.
 
-        ensure_router(
+        helpers::ensure_router(
             ctx.context().clone(),
             NewRouterRequest {
                 asn: rq.asn,
@@ -725,20 +373,20 @@ pub async fn bgp_apply(
         .await?;
 
         for (nbr, cfg) in nbr_config {
-            add_neighbor(
+            helpers::add_neighbor(
                 ctx.context().clone(),
                 AddNeighborRequest::from_bgp_peer_config(
                     nbr.asn,
                     group.clone(),
                     cfg.clone(),
                 ),
-                log.clone(),
-            )
-            .await?;
+                false,
+            )?;
         }
 
         for nbr in to_delete {
-            remove_neighbor(ctx.context().clone(), nbr.asn, nbr.addr).await?;
+            helpers::remove_neighbor(ctx.context().clone(), nbr.asn, nbr.addr)
+                .await?;
 
             let mut routers = lock!(ctx.context().bgp.router);
             let mut remove = false;
@@ -789,26 +437,6 @@ pub async fn bgp_apply(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-fn start_bgp_session<Cnx: BgpConnection>(
-    event_tx: &Sender<FsmEvent<Cnx>>,
-) -> Result<(), Error> {
-    event_tx.send(FsmEvent::ManualStart).map_err(|e| {
-        Error::InternalCommunication(
-            format!("failed to start bgp session {e}",),
-        )
-    })
-}
-
-#[derive(Debug, Deserialize, JsonSchema, Clone)]
-pub struct MessageHistoryRequest {
-    asn: u32,
-}
-
-#[derive(Debug, Serialize, JsonSchema, Clone)]
-pub struct MessageHistoryResponse {
-    by_peer: HashMap<IpAddr, MessageHistory>,
-}
-
 #[endpoint { method = GET, path = "/bgp/message-history" }]
 pub async fn message_history(
     ctx: RequestContext<Arc<HandlerContext>>,
@@ -826,4 +454,144 @@ pub async fn message_history(
     }
 
     Ok(HttpResponseOk(MessageHistoryResponse { by_peer: result }))
+}
+
+pub(crate) mod helpers {
+    use super::*;
+
+    pub(crate) async fn ensure_router(
+        ctx: Arc<HandlerContext>,
+        rq: NewRouterRequest,
+    ) -> Result<HttpResponseUpdatedNoContent, Error> {
+        let mut guard = lock!(ctx.bgp.router);
+        if guard.get(&rq.asn).is_some() {
+            return Ok(HttpResponseUpdatedNoContent());
+        }
+
+        add_router(ctx.clone(), rq, &mut guard)
+    }
+
+    pub(crate) async fn remove_neighbor(
+        ctx: Arc<HandlerContext>,
+        asn: u32,
+        addr: IpAddr,
+    ) -> Result<HttpResponseDeleted, Error> {
+        info!(ctx.log, "remove neighbor: {}", addr);
+
+        ctx.db.remove_bgp_neighbor(addr)?;
+        get_router!(&ctx, asn)?.delete_session(addr);
+
+        Ok(HttpResponseDeleted())
+    }
+
+    pub(crate) fn add_neighbor(
+        ctx: Arc<HandlerContext>,
+        rq: AddNeighborRequest,
+        ensure: bool,
+    ) -> Result<(), Error> {
+        let log = &ctx.log;
+        info!(log, "add neighbor: {:#?}", rq);
+
+        let (event_tx, event_rx) = channel();
+
+        let info = SessionInfo {
+            passive_tcp_establishment: rq.passive,
+            remote_asn: rq.remote_asn,
+            min_ttl: rq.min_ttl,
+            md5_auth_key: rq.md5_auth_key.clone(),
+            multi_exit_discriminator: rq.multi_exit_discriminator,
+            communities: rq.communities.clone(),
+            local_pref: rq.local_pref,
+            ..Default::default()
+        };
+
+        match get_router!(&ctx, rq.asn)?.new_session(
+            rq.clone().into(),
+            DEFAULT_BGP_LISTEN,
+            event_tx.clone(),
+            event_rx,
+            info,
+        ) {
+            Ok(_) => {}
+            e @ Err(bgp::error::Error::PeerExists) => {
+                if ensure {
+                    return Ok(());
+                } else {
+                    e?;
+                }
+            }
+            e @ Err(_) => {
+                e?;
+            }
+        };
+
+        start_bgp_session(&event_tx)?;
+
+        ctx.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
+            asn: rq.asn,
+            remote_asn: rq.remote_asn,
+            min_ttl: rq.min_ttl,
+            name: rq.name.clone(),
+            host: rq.host,
+            hold_time: rq.hold_time,
+            idle_hold_time: rq.idle_hold_time,
+            delay_open: rq.delay_open,
+            connect_retry: rq.connect_retry,
+            keepalive: rq.keepalive,
+            resolution: rq.resolution,
+            group: rq.group.clone(),
+            passive: rq.passive,
+            md5_auth_key: rq.md5_auth_key,
+            multi_exit_discriminator: rq.multi_exit_discriminator,
+            communities: rq.communities,
+            local_pref: rq.local_pref,
+        })?;
+
+        start_bgp_session(&event_tx)?;
+
+        Ok(())
+    }
+
+    pub(crate) fn add_router(
+        ctx: Arc<HandlerContext>,
+        rq: NewRouterRequest,
+        routers: &mut BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>,
+    ) -> Result<HttpResponseUpdatedNoContent, Error> {
+        let cfg = RouterConfig {
+            asn: Asn::FourOctet(rq.asn),
+            id: rq.id,
+        };
+
+        let db = ctx.db.clone();
+
+        let router = Arc::new(Router::<BgpConnectionTcp>::new(
+            cfg,
+            ctx.log.clone(),
+            db.clone(),
+            ctx.bgp.addr_to_session.clone(),
+        ));
+
+        router.run();
+
+        routers.insert(rq.asn, router);
+        db.add_bgp_router(
+            rq.asn,
+            BgpRouterInfo {
+                id: rq.id,
+                listen: rq.listen.clone(),
+            },
+        )?;
+
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    fn start_bgp_session<Cnx: BgpConnection>(
+        event_tx: &Sender<FsmEvent<Cnx>>,
+    ) -> Result<(), Error> {
+        event_tx.send(FsmEvent::ManualStart).map_err(|e| {
+            Error::InternalCommunication(format!(
+                "failed to start bgp session {e}",
+            ))
+        })
+    }
 }

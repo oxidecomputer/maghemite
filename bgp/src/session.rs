@@ -9,7 +9,7 @@ use crate::fanout::Fanout;
 use crate::messages::{
     AddPathElement, Capability, Community, ErrorCode, ErrorSubcode, Message,
     NotificationMessage, OpenMessage, OptionalParameter, PathAttributeValue,
-    PathOrigin, UpdateMessage,
+    UpdateMessage,
 };
 use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
@@ -358,6 +358,12 @@ pub struct SessionInfo {
 
     /// Local preference attribute added to updates if this is an iBGP session
     pub local_pref: Option<u32>,
+
+    /// Capabilities received from the peer.
+    pub capabilities_received: Vec<Capability>,
+
+    /// Capabilities sent to the peer.
+    pub capabilities_sent: Vec<Capability>,
 }
 
 impl Default for SessionInfo {
@@ -379,6 +385,8 @@ impl Default for SessionInfo {
             multi_exit_discriminator: None,
             communities: Vec::new(),
             local_pref: None,
+            capabilities_received: Vec::new(),
+            capabilities_sent: Vec::new(),
         }
     }
 }
@@ -593,6 +601,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return;
         };
 
+        self.initialize_capabilities();
+
         // Run the BGP peer state machine.
         dbg!(self; "starting peer state machine");
         let mut current = FsmState::<Cnx>::Idle;
@@ -663,6 +673,26 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 *(lock!(self.last_state_change)) = Instant::now();
             }
         }
+    }
+
+    fn initialize_capabilities(&self) {
+        let mut session = lock!(self.session);
+        session.capabilities_sent = vec![
+            //Capability::RouteRefresh{},
+            //Capability::EnhancedRouteRefresh{},
+            Capability::MultiprotocolExtensions {
+                afi: 1,  //IP
+                safi: 1, //NLRI for unicast
+            },
+            //Capability::GracefulRestart{},
+            Capability::AddPath {
+                elements: vec![AddPathElement {
+                    afi: 1,          //IP
+                    safi: 1,         //NLRI for unicast
+                    send_receive: 1, //receive
+                }],
+            },
+        ];
     }
 
     /// Initial state. Refuse all incomming BGP connections. No resources
@@ -1284,7 +1314,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }));
             }
         }
-        lock!(self.session).remote_asn = Some(remote_asn);
+        {
+            let mut session = lock!(self.session);
+            session.remote_asn = Some(remote_asn);
+            session.capabilities_received = om.get_capabilities();
+        }
 
         {
             let mut ht = self.clock.timers.hold_timer.lock().unwrap();
@@ -1360,6 +1394,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Send an open message to the session peer.
     fn send_open(&self, conn: &Cnx) -> Result<(), Error> {
+        let capabilities = lock!(self.session).capabilities_sent.clone();
         let mut msg = match self.asn {
             Asn::FourOctet(asn) => OpenMessage::new4(
                 asn,
@@ -1384,23 +1419,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.id,
             ),
         };
-        // TODO negotiate capabilities
-        msg.add_capabilities(&[
-            //Capability::RouteRefresh{},
-            //Capability::EnhancedRouteRefresh{},
-            Capability::MultiprotocolExtensions {
-                afi: 1,  //IP
-                safi: 1, //NLRI for unicast
-            },
-            //Capability::GracefulRestart{},
-            Capability::AddPath {
-                elements: vec![AddPathElement {
-                    afi: 1,          //IP
-                    safi: 1,         //NLRI for unicast
-                    send_receive: 1, //receive
-                }],
-            },
-        ]);
+        msg.add_capabilities(&capabilities);
         self.message_history
             .lock()
             .unwrap()
@@ -1449,12 +1468,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             .path_attributes
             .push(PathAttributeValue::NextHop(nexthop).into());
 
-        if self.is_ebgp() {
-            update
-                .path_attributes
-                .push(PathAttributeValue::Origin(PathOrigin::Egp).into());
-        }
-
         if let Some(med) = self.session.lock().unwrap().multi_exit_discriminator
         {
             update
@@ -1463,9 +1476,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         if self.is_ibgp() {
-            update
-                .path_attributes
-                .push(PathAttributeValue::Origin(PathOrigin::Igp).into());
             update.path_attributes.push(
                 PathAttributeValue::LocalPref(
                     self.session.lock().unwrap().local_pref.unwrap_or(0),
