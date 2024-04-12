@@ -18,7 +18,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
 use http::status::StatusCode;
-use rdb::{Asn, BgpRouterInfo, Md5Key, PolicyAction, Prefix4, Route4ImportKey};
+use rdb::{db::Rib, Asn, BgpRouterInfo, Md5Key, PolicyAction, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{info, Logger};
@@ -581,10 +581,10 @@ pub async fn get_originated4(
 pub async fn get_imported4(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<GetImported4Request>,
-) -> Result<HttpResponseOk<Vec<Route4ImportKey>>, HttpError> {
+) -> Result<HttpResponseOk<Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let imported = get_router!(ctx, rq.asn)?.db.get_imported4();
+    let imported = get_router!(ctx, rq.asn)?.db.full_rib();
     Ok(HttpResponseOk(imported))
 }
 

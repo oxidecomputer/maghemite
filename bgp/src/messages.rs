@@ -11,7 +11,7 @@ use num_enum::FromPrimitive;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 pub const MAX_MESSAGE_SIZE: usize = 4096;
 
@@ -520,6 +520,16 @@ impl UpdateMessage {
         None
     }
 
+    pub fn local_pref(&self) -> Option<u32> {
+        for a in &self.path_attributes {
+            match &a.value {
+                PathAttributeValue::LocalPref(value) => return Some(*value),
+                _ => continue,
+            }
+        }
+        None
+    }
+
     pub fn as_path(&self) -> Option<Vec<As4PathSegment>> {
         for a in &self.path_attributes {
             match &a.value {
@@ -567,6 +577,150 @@ impl Prefix {
             },
         ))
     }
+
+    pub fn as_prefix4(&self) -> rdb::Prefix4 {
+        let v = &self.value;
+        match self.length {
+            0 => rdb::Prefix4 {
+                value: Ipv4Addr::UNSPECIFIED,
+                length: 0,
+            },
+            x if x <= 8 => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], 0, 0, 0]),
+                length: x,
+            },
+            x if x <= 16 => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], v[1], 0, 0]),
+                length: x,
+            },
+            x if x <= 24 => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], v[1], v[2], 0]),
+                length: x,
+            },
+            x => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], v[1], v[2], v[3]]),
+                length: x,
+            },
+        }
+    }
+
+    pub fn as_prefix6(&self) -> rdb::Prefix6 {
+        let v = &self.value;
+        match self.length {
+            0 => rdb::Prefix6 {
+                value: Ipv6Addr::UNSPECIFIED,
+                length: 0,
+            },
+            x if x <= 8 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 16 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 24 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 32 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 40 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0,
+                ]),
+                length: x,
+            },
+            x if x <= 48 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 56 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], 0, 0, 0, 0, 0, 0,
+                    0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 64 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], 0, 0, 0, 0,
+                    0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 72 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], 0, 0,
+                    0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 80 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    0, 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 88 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 96 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], v[11], 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 104 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], v[11], v[12], 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 112 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], v[11], v[12], v[13], 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 120 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], v[11], v[12], v[13], v[14], 0,
+                ]),
+                length: x,
+            },
+            x => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], v[11], v[12], v[13], v[14], v[15],
+                ]),
+                length: x,
+            },
+        }
+    }
 }
 
 impl std::str::FromStr for Prefix {
@@ -590,36 +744,6 @@ impl std::str::FromStr for Prefix {
             IpAddr::V6(a) => a.octets().to_vec(),
         };
         Ok(Self { value, length })
-    }
-}
-
-/// The BGP prefix format only contains enough bytes to describe the prefix
-/// so we need to be careful about transferring into fixed width IP addresses.
-impl From<&Prefix> for rdb::Prefix4 {
-    fn from(p: &Prefix) -> Self {
-        let v = &p.value;
-        match p.length {
-            0 => rdb::Prefix4 {
-                value: Ipv4Addr::UNSPECIFIED,
-                length: 0,
-            },
-            x if x <= 8 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], 0, 0, 0]),
-                length: x,
-            },
-            x if x <= 16 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], 0, 0]),
-                length: x,
-            },
-            x if x <= 24 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], v[2], 0]),
-                length: x,
-            },
-            x => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], v[2], v[3]]),
-                length: x,
-            },
-        }
     }
 }
 

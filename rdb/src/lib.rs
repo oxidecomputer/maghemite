@@ -7,6 +7,7 @@ pub mod types;
 
 pub use db::Db;
 pub use types::*;
+pub mod bestpath;
 pub mod error;
 
 /// The priority routes default to.

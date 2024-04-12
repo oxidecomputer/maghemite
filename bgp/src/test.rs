@@ -5,7 +5,7 @@
 use crate::config::{PeerConfig, RouterConfig};
 use crate::connection_channel::{BgpConnectionChannel, BgpListenerChannel};
 use crate::session::{FsmStateKind, SessionInfo};
-use rdb::{Asn, Prefix4};
+use rdb::{Asn, Prefix};
 use std::collections::BTreeMap;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
@@ -110,9 +110,9 @@ fn test_basic_update() {
     wait_for_eq!(r1_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
-    let prefix: Prefix4 = cidr!("1.2.3.0/24");
+    let prefix = Prefix::V4(cidr!("1.2.3.0/24"));
 
-    wait_for_eq!(r2.db.get_nexthop4(&prefix).is_empty(), false);
+    wait_for_eq!(r2.db.get_prefix_paths(&prefix).is_empty(), false);
 
     // shut down r1 and ensure that the prefixes are withdrawn from r2 on
     // session timeout.
@@ -120,7 +120,7 @@ fn test_basic_update() {
     d1.shutdown();
     wait_for_eq!(r2_session.state(), FsmStateKind::Connect);
     wait_for_eq!(r1_session.state(), FsmStateKind::Idle);
-    wait_for_eq!(r2.db.get_nexthop4(&prefix).is_empty(), true);
+    wait_for_eq!(r2.db.get_prefix_paths(&prefix).is_empty(), true);
 }
 
 fn two_router_test_setup(

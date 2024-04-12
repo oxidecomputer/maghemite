@@ -6,9 +6,7 @@ use crate::admin::HandlerContext;
 use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use chrono::{DateTime, Utc};
-use dropshot::{
-    ConfigDropshot, ConfigLogging, ConfigLoggingLevel, HandlerTaskMode,
-};
+use dropshot::{ConfigLogging, ConfigLoggingLevel};
 use mg_common::nexus::{local_underlay_address, resolve_nexus, run_oximeter};
 use mg_common::stats::MgLowerStats;
 use mg_common::{counter, quantity};
@@ -744,14 +742,17 @@ impl Stats {
     fn rib_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
         let mut samples = Vec::new();
 
-        let count = self.db.effective_route_set().len() as u64;
+        let mut count = 0usize;
+        for (_prefix, paths) in self.db.full_rib().iter() {
+            count += paths.len();
+        }
         samples.push(rib_quantity!(
             self.hostname.clone(),
             self.rack_id,
             self.sled_id,
             self.start_time,
             ActiveRoutes,
-            count
+            count as u64
         ));
 
         Ok(samples)
@@ -780,11 +781,6 @@ pub(crate) fn start_server(
 ) -> anyhow::Result<JoinHandle<()>> {
     let addr = local_underlay_address()?;
     let sa = SocketAddr::new(addr, context.oximeter_port);
-    let dropshot = ConfigDropshot {
-        bind_address: sa,
-        request_body_max_bytes: 1024 * 1024 * 1024,
-        default_handler_task_mode: HandlerTaskMode::Detached,
-    };
     let log_config = LogConfig::Config(ConfigLogging::StderrTerminal {
         level: ConfigLoggingLevel::Debug,
     });
@@ -813,9 +809,9 @@ pub(crate) fn start_server(
         let nexus_addr = resolve_nexus(log.clone(), &dns_servers).await;
         let config = oximeter_producer::Config {
             server_info: producer_info,
-            registration_address: nexus_addr,
+            registration_address: Some(nexus_addr),
             log: log_config,
-            dropshot,
+            request_body_max_bytes: 1024 * 1024 * 1024,
         };
         run_oximeter(registry.clone(), config.clone(), log.clone()).await
     }))

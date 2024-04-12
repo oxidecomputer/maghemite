@@ -9,11 +9,17 @@ use dendrite_common::network::Cidr;
 use dendrite_common::ports::PortId;
 use dendrite_common::ports::QsfpPort;
 use dpd_client::types;
+use dpd_client::types::LinkId;
 use dpd_client::types::LinkState;
 use dpd_client::Client as DpdClient;
+use dpd_client::Ipv4Cidr;
+use dpd_client::Ipv6Cidr;
 use http::StatusCode;
+use libnet::Ipv6Prefix;
 use libnet::{get_route, IpPrefix, Ipv4Prefix};
-use rdb::Route4ImportKey;
+use rdb::db::Rib;
+use rdb::Path;
+use rdb::Prefix;
 use slog::{error, warn, Logger};
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -25,12 +31,12 @@ use std::time::Duration;
 
 const TFPORT_QSFP_DEVICE_PREFIX: &str = "tfportqsfp";
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct RouteHash {
-    cidr: Cidr,
-    port_id: PortId,
-    link_id: types::LinkId,
-    nexthop: IpAddr,
+    pub(crate) cidr: Cidr,
+    pub(crate) port_id: PortId,
+    pub(crate) link_id: types::LinkId,
+    pub(crate) nexthop: IpAddr,
 }
 
 impl RouteHash {
@@ -52,6 +58,32 @@ impl RouteHash {
             _ => Err("mismatched subnet and target"),
         }
     }
+
+    pub fn for_prefix_path(
+        prefix: Prefix,
+        path: Path,
+    ) -> Result<RouteHash, Error> {
+        let (port_id, link_id) = get_port_and_link(path.nexthop)?;
+        let rh = RouteHash {
+            cidr: match prefix {
+                Prefix::V4(p) => Ipv4Cidr {
+                    prefix: p.value,
+                    prefix_len: p.length,
+                }
+                .into(),
+                Prefix::V6(p) => Ipv6Cidr {
+                    prefix: p.value,
+                    prefix_len: p.length,
+                }
+                .into(),
+            },
+            port_id,
+            link_id,
+            nexthop: path.nexthop,
+        };
+
+        Ok(rh)
+    }
 }
 
 pub(crate) fn ensure_tep_addr(
@@ -71,6 +103,18 @@ pub(crate) fn ensure_tep_addr(
             warn!(log, "failed to ensure TEP address {tep} on ASIC: {e}");
         }
     }
+}
+
+pub(crate) fn link_is_up(
+    dpd: &DpdClient,
+    port_id: PortId,
+    link_id: LinkId,
+    rt: &Arc<tokio::runtime::Handle>,
+) -> Result<bool, Error> {
+    let link_info =
+        rt.block_on(async { dpd.link_get(&port_id, &link_id).await })?;
+
+    Ok(link_info.link_state == LinkState::Up)
 }
 
 /// Perform a set of route additions and deletions via the Dendrite API.
@@ -144,28 +188,21 @@ where
 }
 
 fn get_port_and_link(
-    r: &Route4ImportKey,
-) -> Result<(PortId, types::LinkId), String> {
-    let sys_route = match get_route(
-        IpPrefix::V4(Ipv4Prefix {
-            addr: r.nexthop,
-            mask: 32,
-        }),
-        Some(Duration::from_secs(1)),
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(format!("Unable to get route for {r:?}: {e:?}"));
-        }
+    nexthop: IpAddr,
+) -> Result<(PortId, types::LinkId), Error> {
+    let prefix = match nexthop {
+        IpAddr::V4(addr) => IpPrefix::V4(Ipv4Prefix { addr, mask: 32 }),
+        IpAddr::V6(addr) => IpPrefix::V6(Ipv6Prefix { addr, mask: 128 }),
     };
+    let sys_route = get_route(prefix, Some(Duration::from_secs(1)))?;
 
     let ifname = match sys_route.ifx {
         Some(name) => name,
         None => {
-            return Err(format!(
+            return Err(Error::NoNexthopRoute(format!(
                 "No interface associated with route for {:?}: {:?}",
-                r, sys_route,
-            ));
+                prefix, sys_route,
+            )));
         }
     };
 
@@ -177,15 +214,15 @@ fn get_port_and_link(
         .map(|x| x.trim())
         .and_then(|x| x.parse::<u8>().ok())
     else {
-        return Err(format!(
+        return Err(Error::Tfport(format!(
             "expected {}$M_0, got {}",
             TFPORT_QSFP_DEVICE_PREFIX, ifname
-        ));
+        )));
     };
 
     let port_id = match QsfpPort::try_from(egress_port_num) {
         Ok(qsfp) => PortId::Qsfp(qsfp),
-        Err(e) => return Err(format!("bad port name: {e}")),
+        Err(e) => return Err(Error::Tfport(format!("bad port name: {e}"))),
     };
 
     // TODO breakout considerations
@@ -195,7 +232,7 @@ fn get_port_and_link(
 
 /// Translate a vector of RIB route data structures to a HashSet of RouteHashes
 pub(crate) fn db_route_to_dendrite_route(
-    rs: Vec<Route4ImportKey>,
+    rs: Rib,
     log: &Logger,
     dpd: &DpdClient,
     stats: Option<&Stats>,
@@ -206,51 +243,66 @@ pub(crate) fn db_route_to_dendrite_route(
 
     let mut link_down_count = 0;
 
-    for r in &rs {
-        let (port_id, link_id) = match get_port_and_link(r) {
-            Ok((p, l)) => (p, l),
-            Err(e) => {
-                error!(log, "failed to get port for {r:?}: {e:?}");
-                continue;
-            }
-        };
-
-        if require_link_up {
-            let link_info = match rt
-                .block_on(async { dpd.link_get(&port_id, &link_id).await })
-            {
-                Ok(info) => info.into_inner(),
+    for (prefix, paths) in &rs {
+        for path in paths.iter() {
+            let (port_id, link_id) = match get_port_and_link(path.nexthop) {
+                Ok((p, l)) => (p, l),
                 Err(e) => {
                     error!(
-                    log,
-                    "failed to get link info for {port_id:?}/{link_id:?}: {e}"
-                );
-                    link_down_count += 1;
+                        log,
+                        "failed to get port for {:?}: {e:?}", path.nexthop
+                    );
                     continue;
                 }
             };
 
-            if link_info.link_state != LinkState::Up {
-                warn!(
+            if require_link_up {
+                let link_info = match rt
+                    .block_on(async { dpd.link_get(&port_id, &link_id).await })
+                {
+                    Ok(info) => info.into_inner(),
+                    Err(e) => {
+                        error!(
+                    log,
+                    "failed to get link info for {port_id:?}/{link_id:?}: {e}"
+                );
+                        link_down_count += 1;
+                        continue;
+                    }
+                };
+
+                if link_info.link_state != LinkState::Up {
+                    warn!(
                 log,
                 "{port_id:?}/{link_id:?} is not up, not installing into RIB"
             );
-                link_down_count += 1;
-                continue;
+                    link_down_count += 1;
+                    continue;
+                }
             }
+
+            let cidr = match prefix {
+                rdb::Prefix::V4(p) => {
+                    dpd_client::Cidr::V4(dpd_client::Ipv4Cidr {
+                        prefix: p.value,
+                        prefix_len: p.length,
+                    })
+                }
+                rdb::Prefix::V6(p) => {
+                    dpd_client::Cidr::V6(dpd_client::Ipv6Cidr {
+                        prefix: p.value,
+                        prefix_len: p.length,
+                    })
+                }
+            };
+
+            match RouteHash::new(cidr, port_id, link_id, path.nexthop) {
+                Ok(route) => {
+                    let _ = result.insert(route);
+                }
+                Err(e) => error!(log, "bad route: {e}"),
+            };
         }
-
-        let cidr = dpd_client::Ipv4Cidr {
-            prefix: r.prefix.value,
-            prefix_len: r.prefix.length,
-        };
-
-        match RouteHash::new(cidr.into(), port_id, link_id, r.nexthop.into()) {
-            Ok(route) => {
-                let _ = result.insert(route);
-            }
-            Err(e) => error!(log, "bad route: {e}"),
-        };
     }
 
     if let Some(stats) = stats {
@@ -260,6 +312,105 @@ pub(crate) fn db_route_to_dendrite_route(
     }
 
     result
+}
+
+pub(crate) fn get_routes_for_prefix(
+    dpd: &DpdClient,
+    prefix: &Prefix,
+    rt: Arc<tokio::runtime::Handle>,
+    log: Logger,
+) -> Result<HashSet<RouteHash>, Error> {
+    let result = match prefix {
+        Prefix::V4(p) => {
+            let cidr = Ipv4Cidr {
+                prefix: p.value,
+                prefix_len: p.length,
+            };
+            let dpd_routes = rt
+                .block_on(async { dpd.route_ipv4_get(&cidr).await })?
+                .into_inner();
+
+            let mut result: Vec<RouteHash> = Vec::new();
+            for r in dpd_routes.iter() {
+                match link_is_up(dpd, r.port_id, r.link_id, &rt) {
+                    Err(e) => {
+                        error!(
+                            log,
+                            "nexthop: {} failed to get link state for {:?}/{:?}: {e}",
+                            r.tgt_ip,
+                            r.port_id,
+                            r.link_id
+                        );
+                        continue;
+                    }
+                    Ok(false) => {
+                        warn!(
+                            log,
+                            "nexthop: {} link {:?}/{:?} is not up, \
+                            not installing route for {:?}",
+                            r.tgt_ip,
+                            r.port_id,
+                            r.link_id,
+                            prefix,
+                        );
+                        continue;
+                    }
+                    Ok(true) => {}
+                }
+                match RouteHash::new(
+                    cidr.into(),
+                    r.port_id,
+                    r.link_id,
+                    r.tgt_ip.into(),
+                ) {
+                    Ok(rh) => result.push(rh),
+                    Err(e) => {
+                        error!(
+                            log,
+                            "route hash creation failed for {:?}: {e}", prefix
+                        );
+                        continue;
+                    }
+                };
+            }
+
+            dpd_routes
+                .into_iter()
+                .map(|r| {
+                    RouteHash::new(
+                        cidr.into(),
+                        r.port_id,
+                        r.link_id,
+                        r.tgt_ip.into(),
+                    )
+                    .unwrap()
+                })
+                .collect()
+        }
+        Prefix::V6(p) => {
+            let cidr = Ipv6Cidr {
+                prefix: p.value,
+                prefix_len: p.length,
+            };
+            let dpd_routes = rt
+                .block_on(async { dpd.route_ipv6_get(&cidr).await })?
+                .into_inner();
+
+            dpd_routes
+                .into_iter()
+                .map(|r| {
+                    RouteHash::new(
+                        cidr.into(),
+                        r.port_id,
+                        r.link_id,
+                        r.tgt_ip.into(),
+                    )
+                    .unwrap()
+                })
+                .collect()
+        }
+    };
+    Ok(result)
 }
 
 /// Create a new Dendrite/dpd client. The lower half always runs on the same

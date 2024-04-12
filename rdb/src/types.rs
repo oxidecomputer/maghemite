@@ -7,46 +7,43 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 use crate::error::Error;
 
-#[derive(Copy, Clone, Eq, Serialize, Deserialize, JsonSchema, Debug)]
-pub struct Route4ImportKey {
-    /// The destination prefix of the route.
-    pub prefix: Prefix4,
-
-    /// The nexthop/gateway for the route.
-    pub nexthop: Ipv4Addr,
-
-    /// A BGP route identifier.
-    pub id: u32,
-
-    /// Local priority/preference for the route.
-    pub priority: u64,
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq, JsonSchema,
+)]
+pub struct Path {
+    pub nexthop: IpAddr,
+    pub bgp_id: u32,
+    pub shutdown: bool,
+    pub med: Option<u32>,
+    pub local_pref: Option<u32>,
+    pub as_path: Vec<u32>,
 }
 
-impl Route4ImportKey {
-    pub fn with_priority(&self, priority: u64) -> Self {
-        let mut x = *self;
-        x.priority = priority;
-        x
+impl Path {
+    pub fn for_static(nexthop: IpAddr) -> Self {
+        Self {
+            nexthop,
+            bgp_id: 0,
+            shutdown: false,
+            med: None,
+            local_pref: None,
+            as_path: Vec::new(),
+        }
     }
 }
 
-impl Hash for Route4ImportKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.prefix.hash(state);
-        self.nexthop.hash(state);
-    }
-}
-
-impl PartialEq for Route4ImportKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.prefix == other.prefix && self.nexthop == other.nexthop
-    }
+#[derive(
+    Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Debug,
+)]
+pub struct StaticRouteKey {
+    pub prefix: Prefix,
+    pub nexthop: IpAddr,
 }
 
 #[derive(
@@ -174,7 +171,9 @@ impl FromStr for Prefix4 {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(
+    Debug, Copy, Clone, Serialize, Deserialize, Hash, Eq, PartialEq, JsonSchema,
+)]
 pub struct Prefix6 {
     pub value: Ipv6Addr,
     pub length: u8,
@@ -183,6 +182,26 @@ pub struct Prefix6 {
 impl fmt::Display for Prefix6 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}", self.value, self.length)
+    }
+}
+
+#[derive(
+    Debug, Copy, Clone, Serialize, Deserialize, Hash, Eq, PartialEq, JsonSchema,
+)]
+pub enum Prefix {
+    V4(Prefix4),
+    V6(Prefix6),
+}
+
+impl From<Prefix4> for Prefix {
+    fn from(value: Prefix4) -> Self {
+        Self::V4(value)
+    }
+}
+
+impl From<Prefix6> for Prefix {
+    fn from(value: Prefix6) -> Self {
+        Self::V6(value)
     }
 }
 
@@ -271,27 +290,6 @@ pub struct Policy {
 }
 
 #[derive(Clone, Default, Debug)]
-pub struct ImportChangeSet {
-    pub added: HashSet<Route4ImportKey>,
-    pub removed: HashSet<Route4ImportKey>,
-}
-
-impl ImportChangeSet {
-    pub fn added<V: Into<HashSet<Route4ImportKey>>>(v: V) -> Self {
-        Self {
-            added: v.into(),
-            ..Default::default()
-        }
-    }
-    pub fn removed<V: Into<HashSet<Route4ImportKey>>>(v: V) -> Self {
-        Self {
-            removed: v.into(),
-            ..Default::default()
-        }
-    }
-}
-
-#[derive(Clone, Default, Debug)]
 pub struct OriginChangeSet {
     pub added: HashSet<Prefix4>,
     pub removed: HashSet<Prefix4>,
@@ -307,31 +305,6 @@ impl OriginChangeSet {
     pub fn removed<V: Into<HashSet<Prefix4>>>(v: V) -> Self {
         Self {
             removed: v.into(),
-            ..Default::default()
-        }
-    }
-}
-
-#[derive(Clone, Default, Debug)]
-pub struct ChangeSet {
-    pub generation: u64,
-    pub import: ImportChangeSet,
-    pub origin: OriginChangeSet,
-}
-
-impl ChangeSet {
-    pub fn from_origin(origin: OriginChangeSet, generation: u64) -> Self {
-        Self {
-            generation,
-            origin,
-            ..Default::default()
-        }
-    }
-
-    pub fn from_import(import: ImportChangeSet, generation: u64) -> Self {
-        Self {
-            generation,
-            import,
             ..Default::default()
         }
     }
@@ -387,4 +360,33 @@ pub enum SessionMode {
 #[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Md5Key {
     pub value: Vec<u8>,
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct PrefixChangeNotification {
+    pub changed: HashSet<Prefix>,
+}
+
+impl From<Prefix> for PrefixChangeNotification {
+    fn from(value: Prefix) -> Self {
+        Self {
+            changed: HashSet::from([value]),
+        }
+    }
+}
+
+impl From<Prefix4> for PrefixChangeNotification {
+    fn from(value: Prefix4) -> Self {
+        Self {
+            changed: HashSet::from([value.into()]),
+        }
+    }
+}
+
+impl From<Prefix6> for PrefixChangeNotification {
+    fn from(value: Prefix6) -> Self {
+        Self {
+            changed: HashSet::from([value.into()]),
+        }
+    }
 }

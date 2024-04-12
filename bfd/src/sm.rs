@@ -438,6 +438,8 @@ impl State for Down {
         db: rdb::Db,
         counters: Arc<SessionCounters>,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
+        db.disable_nexthop(self.peer);
+        /*
         match self.peer {
             IpAddr::V4(addr) => db.disable_nexthop4(addr),
             IpAddr::V6(addr) => {
@@ -447,6 +449,7 @@ impl State for Down {
                 )
             }
         }
+        */
         loop {
             // Get an incoming message
             let (_addr, msg) = match self.recv(
@@ -605,15 +608,7 @@ impl State for Up {
         db: rdb::Db,
         counters: Arc<SessionCounters>,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
-        match self.peer {
-            IpAddr::V4(addr) => db.enable_nexthop4(addr),
-            IpAddr::V6(addr) => {
-                warn!(
-                    self.log,
-                    "{addr} is up but active mode ipv6 not implemented yet"
-                )
-            }
-        }
+        db.enable_nexthop(self.peer);
         loop {
             // Get an incoming message
             let (_addr, msg) = match self.recv(

@@ -13,10 +13,13 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-#[cfg(not(target_os = "illumos"))]
+#[cfg(target_os = "linux")]
 pub const MAX_MD5SIG_KEYLEN: usize = libc::TCP_MD5SIG_MAXKEYLEN;
 
 #[cfg(target_os = "illumos")]
+pub const MAX_MD5SIG_KEYLEN: usize = 80;
+
+#[cfg(target_os = "macos")]
 pub const MAX_MD5SIG_KEYLEN: usize = 80;
 
 /// Implementors of this trait listen to and accept BGP connections.

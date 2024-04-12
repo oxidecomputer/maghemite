@@ -15,13 +15,13 @@ use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
-use rdb::{Asn, Db, Md5Key, Prefix4};
+use rdb::{Asn, Db, Md5Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt::{self, Display, Formatter};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
@@ -1519,37 +1519,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
 
         // remove peer prefixes from db
-        let withdraw = self.db.remove_peer_prefixes4(pc.id);
-
-        // propagate a withdraw message through fanout
-        let mut m = BTreeMap::<Ipv4Addr, Vec<Prefix4>>::new();
-        for o in withdraw {
-            match m.get_mut(&o.nexthop) {
-                Some(ref mut prefixes) => {
-                    prefixes.push(o.prefix);
-                }
-                None => {
-                    m.insert(o.nexthop, vec![o.prefix]);
-                }
-            }
-        }
-
-        for (nexthop, prefixes) in m {
-            let mut update = UpdateMessage {
-                path_attributes: vec![PathAttributeValue::NextHop(
-                    nexthop.into(),
-                )
-                .into()],
-                ..Default::default()
-            };
-            for p in prefixes {
-                update.withdrawn.push(p.into());
-                if let Err(e) = self.db.remove_origin4(p) {
-                    err!(self; "failed to remove origin {p} from db {e}");
-                }
-            }
-            read_lock!(self.fanout).send_all(&update);
-        }
+        self.db.remove_peer_prefixes(pc.id);
 
         FsmState::Idle
     }
@@ -1575,22 +1545,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, id: u32) {
-        let mut priority = if update.graceful_shutdown() {
-            0
-        } else {
-            DEFAULT_ROUTE_PRIORITY
-        };
-
-        if let Some(len) = update.path_len() {
-            priority -= len as u64
-        }
-
-        if let Some(med) = update.multi_exit_discriminator() {
-            priority -= u64::from(med);
-        }
-
         for w in &update.withdrawn {
-            self.db.remove_peer_prefix4(id, w.into());
+            self.db.remove_peer_prefix(id, w.as_prefix4().into());
         }
 
         let originated = match self.db.get_originated4() {
@@ -1617,19 +1573,32 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             };
 
             for n in &update.nlri {
-                let prefix = n.into();
+                let prefix = n.as_prefix4();
                 // ignore prefixes we originate
                 if originated.contains(&prefix) {
                     continue;
                 }
-                let k = rdb::Route4ImportKey {
-                    prefix,
-                    nexthop,
-                    id,
-                    priority,
+
+                let mut as_path = Vec::new();
+                if let Some(segments_list) = update.as_path() {
+                    for segments in &segments_list {
+                        as_path.extend(segments.value.iter());
+                    }
+                }
+
+                let path = rdb::Path {
+                    nexthop: nexthop.into(),
+                    bgp_id: id,
+                    shutdown: update.graceful_shutdown(),
+                    med: update.multi_exit_discriminator(),
+                    local_pref: update.local_pref(),
+                    as_path,
                 };
-                if let Err(e) = self.db.set_nexthop4(k, false) {
-                    err!(self; "failed to set nexthop {k:#?}: {e}");
+
+                if let Err(e) =
+                    self.db.add_prefix_path(prefix.into(), path.clone(), false)
+                {
+                    err!(self; "failed to add path {:?} -> {:?}: {e}", prefix, path);
                 }
             }
         }

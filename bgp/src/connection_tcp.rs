@@ -11,7 +11,7 @@ use crate::messages::{
 use crate::session::FsmEvent;
 use crate::to_canonical;
 use libc::{c_int, sockaddr_storage};
-#[cfg(not(target_os = "illumos"))]
+#[cfg(target_os = "linux")]
 use libc::{
     c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, IP_MINTTL, TCP_MD5SIG,
 };
@@ -116,7 +116,7 @@ impl BgpConnection for BgpConnectionTcp {
             )?,
         };
 
-        #[cfg(not(target_os = "illumos"))]
+        #[cfg(target_os = "linux")]
         if let Some(key) = md5_key {
             slog::info!(self.log, "setting md5 key: {:?}", key);
             let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
@@ -203,7 +203,7 @@ impl BgpConnection for BgpConnectionTcp {
                 let fd = conn.as_raw_fd();
                 let min_ttl: u32 = 255;
                 //see: https://www.illumos.org/issues/16454
-                #[cfg(not(target_os = "illumos"))]
+                #[cfg(target_os = "linux")]
                 unsafe {
                     if self.peer().is_ipv4()
                         && libc::setsockopt(
@@ -233,7 +233,7 @@ impl BgpConnection for BgpConnectionTcp {
         }
     }
 
-    #[cfg(not(target_os = "illumos"))]
+    #[cfg(target_os = "linux")]
     fn set_md5_sig(
         &self,
         keylen: u16,
@@ -250,6 +250,15 @@ impl BgpConnection for BgpConnectionTcp {
     }
 
     #[cfg(target_os = "illumos")]
+    fn set_md5_sig(
+        &self,
+        _keylen: u16,
+        _key: [u8; MAX_MD5SIG_KEYLEN],
+    ) -> Result<(), Error> {
+        todo!();
+    }
+
+    #[cfg(target_os = "macos")]
     fn set_md5_sig(
         &self,
         _keylen: u16,
@@ -477,7 +486,7 @@ impl BgpConnectionTcp {
     }
 }
 
-#[cfg(not(target_os = "illumos"))]
+#[cfg(target_os = "linux")]
 fn set_md5_sig_fd(
     fd: i32,
     keylen: u16,

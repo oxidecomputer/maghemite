@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
 use mg_common::stats::MgLowerStats;
 use rand::Fill;
-use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
+use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo, Path};
 use signal::handle_signals;
 use slog::{error, Logger};
 use std::collections::{BTreeMap, HashMap};
@@ -273,9 +273,11 @@ fn initialize_static_routes(db: &rdb::Db) {
         .get_static4()
         .expect("failed to get static routes from db");
     for route in &routes {
-        db.set_nexthop4(*route, false).unwrap_or_else(|e| {
-            panic!("failed to initialize static route {route:#?}: {e}")
-        });
+        let path = Path::for_static(route.nexthop);
+        db.add_prefix_path(route.prefix, path, true)
+            .unwrap_or_else(|e| {
+                panic!("failed to initialize static route {route:#?}: {e}")
+            })
     }
 }
 

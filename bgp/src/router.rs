@@ -200,7 +200,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         for p in &prefixes {
             update.nlri.push(p.clone());
-            self.db.add_origin4(p.into())?;
+            self.db.add_origin4(p.as_prefix4())?;
         }
 
         if !update.nlri.is_empty() {
@@ -218,7 +218,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         for p in &prefixes {
             update.withdrawn.push(p.clone());
-            self.db.remove_origin4(p.into())?;
+            self.db.remove_origin4(p.as_prefix4())?;
         }
 
         if !update.withdrawn.is_empty() {

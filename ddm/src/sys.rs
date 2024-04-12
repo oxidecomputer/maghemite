@@ -12,14 +12,18 @@ use dpd_client::types;
 use dpd_client::Client;
 use dpd_client::ClientState;
 use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
-use opte_ioctl::OpteHdl;
-use oxide_vpc::api::TunnelEndpoint;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
+
+#[cfg(target_os = "illumos")]
+use ::{
+    opte_ioctl::OpteHdl, oxide_vpc::api::TunnelEndpoint,
+    std::collections::HashMap,
+};
 
 const DDM_DPD_TAG: &str = "ddmd";
 
@@ -233,6 +237,7 @@ pub fn add_routes_dendrite(
     }
 }
 
+#[cfg(target_os = "illumos")]
 fn tunnel_route_update_map(
     routes: &HashSet<TunnelRoute>,
 ) -> HashMap<mg_common::net::IpPrefix, Vec<TunnelEndpoint>> {
@@ -256,16 +261,26 @@ fn tunnel_route_update_map(
     m
 }
 
+#[cfg(not(target_os = "illumos"))]
+pub fn add_tunnel_routes(
+    _log: &Logger,
+    _ifname: &str,
+    _routes: &HashSet<TunnelRoute>,
+) -> Result<(), String> {
+    todo!();
+}
+
+#[cfg(target_os = "illumos")]
 pub fn add_tunnel_routes(
     log: &Logger,
     ifname: &str,
     routes: &HashSet<TunnelRoute>,
-) -> Result<(), opte_ioctl::Error> {
+) -> Result<(), String> {
     use oxide_vpc::api::{
         IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr, Ipv6PrefixLen,
         SetVirt2BoundaryReq,
     };
-    let hdl = OpteHdl::open(OpteHdl::XDE_CTL)?;
+    let hdl = OpteHdl::open(OpteHdl::XDE_CTL).map_err(|e| e.to_string())?;
 
     for (pfx, tep) in tunnel_route_update_map(routes) {
         for t in &tep {
@@ -297,16 +312,26 @@ pub fn add_tunnel_routes(
     Ok(())
 }
 
+#[cfg(not(target_os = "illumos"))]
+pub fn remove_tunnel_routes(
+    _log: &Logger,
+    _ifname: &str,
+    _routes: &HashSet<TunnelRoute>,
+) -> Result<(), String> {
+    todo!()
+}
+
+#[cfg(target_os = "illumos")]
 pub fn remove_tunnel_routes(
     log: &Logger,
     ifname: &str,
     routes: &HashSet<TunnelRoute>,
-) -> Result<(), opte_ioctl::Error> {
+) -> Result<(), String> {
     use oxide_vpc::api::{
         ClearVirt2BoundaryReq, IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr,
         Ipv6PrefixLen,
     };
-    let hdl = OpteHdl::open(OpteHdl::XDE_CTL)?;
+    let hdl = OpteHdl::open(OpteHdl::XDE_CTL).map_err(|e| e.to_string())?;
     for (pfx, tep) in tunnel_route_update_map(routes) {
         for t in &tep {
             inf!(

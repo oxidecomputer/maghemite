@@ -10,14 +10,14 @@
 //! Volatile information is stored in in-memory data structures such as hash
 //! sets.
 use crate::error::Error;
-use crate::{types::*, DEFAULT_ROUTE_PRIORITY};
+use crate::types::*;
 use mg_common::{lock, read_lock, write_lock};
-use slog::{error, info, Logger};
+use slog::{error, Logger};
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 /// The handle used to open a persistent key-value tree for BGP origin
 /// information.
@@ -45,6 +45,8 @@ const TEP_KEY: &str = "tep";
 /// information.
 const BFD_NEIGHBOR: &str = "bfd_neighbor";
 
+pub type Rib = HashMap<Prefix, HashSet<Path>>;
+
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
 #[derive(Clone)]
@@ -53,7 +55,8 @@ pub struct Db {
     persistent: sled::Db,
 
     /// Routes imported via dynamic routing protocols. These are volatile.
-    imported: Arc<Mutex<HashSet<Route4ImportKey>>>,
+    //imported: Arc<Mutex<HashSet<Route4ImportKey>>>,
+    imported: Arc<Mutex<Rib>>,
 
     /// A generation number for the overall data store.
     generation: Arc<AtomicU64>,
@@ -69,28 +72,7 @@ unsafe impl Send for Db {}
 #[derive(Clone)]
 struct Watcher {
     tag: String,
-    sender: Sender<ChangeSet>,
-}
-
-/// Describes a set of routes as either active or inactive.
-#[derive(Debug, Clone)]
-pub enum EffectiveRouteSet {
-    /// The routes in the contained set are active with priority greater than
-    /// zero.
-    Active(HashSet<Route4ImportKey>),
-
-    /// The routes in the contained set are inactive with a priority equal to
-    /// zero.
-    Inactive(HashSet<Route4ImportKey>),
-}
-
-impl EffectiveRouteSet {
-    fn values(&self) -> &HashSet<Route4ImportKey> {
-        match self {
-            EffectiveRouteSet::Active(s) => s,
-            EffectiveRouteSet::Inactive(s) => s,
-        }
-    }
+    sender: Sender<PrefixChangeNotification>,
 }
 
 //TODO we need bulk operations with atomic semantics here.
@@ -99,7 +81,7 @@ impl Db {
     pub fn new(path: &str, log: Logger) -> Result<Self, Error> {
         Ok(Self {
             persistent: sled::open(path)?,
-            imported: Arc::new(Mutex::new(HashSet::new())),
+            imported: Arc::new(Mutex::new(Rib::new())),
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
             log,
@@ -107,13 +89,13 @@ impl Db {
     }
 
     /// Register a routing databse watcher.
-    pub fn watch(&self, tag: String, sender: Sender<ChangeSet>) {
+    pub fn watch(&self, tag: String, sender: Sender<PrefixChangeNotification>) {
         write_lock!(self.watchers).push(Watcher { tag, sender });
     }
 
-    fn notify(&self, c: ChangeSet) {
+    fn notify(&self, n: PrefixChangeNotification) {
         for Watcher { tag, sender } in read_lock!(self.watchers).iter() {
-            if let Err(e) = sender.send(c.clone()) {
+            if let Err(e) = sender.send(n.clone()) {
                 error!(
                     self.log,
                     "failed to send notification to watcher '{tag}': {e}"
@@ -122,13 +104,32 @@ impl Db {
         }
     }
 
+    pub fn full_rib(&self) -> Rib {
+        lock!(self.imported).clone()
+    }
+
+    pub fn static_rib(&self) -> Rib {
+        let mut rib = lock!(self.imported).clone();
+        for (_prefix, paths) in rib.iter_mut() {
+            paths.retain(|x| x.bgp_id == 0)
+        }
+        rib
+    }
+
+    pub fn bgp_rib(&self) -> Rib {
+        let mut rib = lock!(self.imported).clone();
+        for (_prefix, paths) in rib.iter_mut() {
+            paths.retain(|x| x.bgp_id != 0)
+        }
+        rib
+    }
+
     // TODO return previous value if this is an update.
     pub fn add_origin4(&self, p: Prefix4) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         tree.insert(p.db_key(), "")?;
         tree.flush()?;
-        let g = self.generation.fetch_add(1, Ordering::SeqCst);
-        self.notify(ChangeSet::from_origin(OriginChangeSet::added([p]), g + 1));
+        self.notify(p.into());
         Ok(())
     }
 
@@ -296,11 +297,7 @@ impl Db {
     pub fn remove_origin4(&self, p: Prefix4) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         tree.remove(p.db_key())?;
-        let g = self.generation.fetch_add(1, Ordering::SeqCst);
-        self.notify(ChangeSet::from_origin(
-            OriginChangeSet::removed([p]),
-            g + 1,
-        ));
+        self.notify(p.into());
         Ok(())
     }
 
@@ -334,53 +331,51 @@ impl Db {
         Ok(result)
     }
 
-    pub fn get_nexthop4(&self, prefix: &Prefix4) -> Vec<Route4ImportKey> {
-        lock!(self.imported)
-            .iter()
-            .filter(|x| prefix == &x.prefix)
-            .cloned()
-            .collect()
+    pub fn get_prefix_paths(&self, prefix: &Prefix) -> Vec<Path> {
+        let rib = lock!(self.imported);
+        let paths = rib.get(prefix);
+        match paths {
+            None => Vec::new(),
+            Some(p) => p.iter().cloned().collect(),
+        }
     }
 
-    pub fn get_imported4(&self) -> Vec<Route4ImportKey> {
-        lock!(self.imported).clone().into_iter().collect()
+    pub fn get_imported(&self) -> Rib {
+        lock!(self.imported).clone()
     }
 
-    pub fn set_nexthop4(
+    pub fn add_prefix_path(
         &self,
-        r: Route4ImportKey,
+        prefix: Prefix,
+        path: Path,
         is_static: bool,
     ) -> Result<(), Error> {
+        let mut rib = lock!(self.imported);
+        match rib.get_mut(&prefix) {
+            Some(paths) => {
+                paths.insert(path.clone());
+            }
+            None => {
+                rib.insert(prefix, HashSet::from([path.clone()]));
+            }
+        }
+
         if is_static {
             let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-            let key = serde_json::to_string(&r)?;
+            let srk = StaticRouteKey {
+                prefix,
+                nexthop: path.nexthop,
+            };
+            let key = serde_json::to_string(&srk)?;
             tree.insert(key.as_str(), "")?;
             tree.flush()?;
         }
 
-        let mut imported = lock!(self.imported);
-        let before = Self::effective_set_for_prefix4(&imported, r.prefix);
-        imported.replace(r);
-        let after = Self::effective_set_for_prefix4(&imported, r.prefix);
-
-        if let Some(change_set) = self.import_route_change_set(&before, &after)
-        {
-            info!(
-                self.log,
-                "sending notification for change set {:#?}", change_set,
-            );
-            self.notify(change_set);
-        } else {
-            info!(
-                self.log,
-                "no effective change for {:#?} -> {:#?}", before, after
-            );
-        }
-
+        self.notify(prefix.into());
         Ok(())
     }
 
-    pub fn get_static4(&self) -> Result<Vec<Route4ImportKey>, Error> {
+    pub fn get_static4(&self) -> Result<Vec<StaticRouteKey>, Error> {
         let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
         Ok(tree
             .scan_prefix(vec![])
@@ -397,7 +392,7 @@ impl Db {
                 };
 
                 let key = String::from_utf8_lossy(&key);
-                let rkey: Route4ImportKey = match serde_json::from_str(&key) {
+                let rkey: StaticRouteKey = match serde_json::from_str(&key) {
                     Ok(item) => item,
                     Err(e) => {
                         error!(
@@ -426,234 +421,100 @@ impl Db {
         Ok(nexthops.len())
     }
 
-    pub fn disable_nexthop4(&self, addr: Ipv4Addr) {
-        let mut imported = lock!(self.imported);
-        let changed: Vec<Route4ImportKey> = imported
-            .iter()
-            .cloned()
-            .filter(|x| x.nexthop == addr && x.priority != 0)
-            .map(|x| x.with_priority(0))
-            .collect();
-
-        for x in changed {
-            let before = Self::effective_set_for_prefix4(&imported, x.prefix);
-            imported.replace(x);
-            let after = Self::effective_set_for_prefix4(&imported, x.prefix);
-            if let Some(change_set) =
-                self.import_route_change_set(&before, &after)
-            {
-                self.notify(change_set);
+    pub fn disable_nexthop(&self, nexthop: IpAddr) {
+        let mut rib = lock!(self.imported);
+        let mut pcn = PrefixChangeNotification::default();
+        for (prefix, paths) in rib.iter_mut() {
+            for p in paths.clone().into_iter() {
+                if p.nexthop == nexthop && !p.shutdown {
+                    let mut replacement = p.clone();
+                    replacement.shutdown = true;
+                    paths.insert(replacement);
+                    pcn.changed.insert(*prefix);
+                }
             }
         }
+
+        self.notify(pcn);
     }
 
-    pub fn enable_nexthop4(&self, addr: Ipv4Addr) {
-        let mut imported = lock!(self.imported);
-        let changed: Vec<Route4ImportKey> = imported
-            .iter()
-            .cloned()
-            .filter(|x| {
-                x.nexthop == addr && x.priority != DEFAULT_ROUTE_PRIORITY
-            })
-            .map(|x| x.with_priority(DEFAULT_ROUTE_PRIORITY))
-            .collect();
-
-        for x in changed {
-            let before = Self::effective_set_for_prefix4(&imported, x.prefix);
-            imported.replace(x);
-            let after = Self::effective_set_for_prefix4(&imported, x.prefix);
-            if let Some(change_set) =
-                self.import_route_change_set(&before, &after)
-            {
-                self.notify(change_set);
+    pub fn enable_nexthop(&self, nexthop: IpAddr) {
+        let mut rib = lock!(self.imported);
+        let mut pcn = PrefixChangeNotification::default();
+        for (prefix, paths) in rib.iter_mut() {
+            for p in paths.clone().into_iter() {
+                if p.nexthop == nexthop && p.shutdown {
+                    let mut replacement = p.clone();
+                    replacement.shutdown = false;
+                    paths.insert(replacement);
+                    pcn.changed.insert(*prefix);
+                }
             }
         }
+
+        self.notify(pcn);
     }
 
-    pub fn remove_nexthop4(
+    pub fn remove_prefix_path(
         &self,
-        r: Route4ImportKey,
-        is_static: bool,
+        prefix: Prefix,
+        path: Path,
+        is_static: bool, //TODO
     ) -> Result<(), Error> {
+        let mut rib = lock!(self.imported);
+        if let Some(paths) = rib.get_mut(&prefix) {
+            paths.retain(|x| x.nexthop != path.nexthop)
+        }
+
         if is_static {
             let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-            let key = serde_json::to_string(&r)?;
+            let srk = StaticRouteKey {
+                prefix,
+                nexthop: path.nexthop,
+            };
+            let key = serde_json::to_string(&srk)?;
             tree.remove(key.as_str())?;
             tree.flush()?;
         }
-        let mut imported = lock!(self.imported);
-        let before = Self::effective_set_for_prefix4(&imported, r.prefix);
-        imported.remove(&r);
-        let after = Self::effective_set_for_prefix4(&imported, r.prefix);
 
-        if let Some(change_set) = self.import_route_change_set(&before, &after)
-        {
-            self.notify(change_set);
-        }
-
+        self.notify(prefix.into());
         Ok(())
     }
 
-    pub fn remove_peer_prefix4(&self, id: u32, prefix: Prefix4) {
-        let mut imported = lock!(self.imported);
-        imported.retain(|x| !(x.id == id && x.prefix == prefix));
+    pub fn remove_peer_prefix(&self, id: u32, prefix: Prefix) {
+        let mut rib = lock!(self.imported);
+        let paths = match rib.get_mut(&prefix) {
+            None => return,
+            Some(ps) => ps,
+        };
+        paths.retain(|x| x.bgp_id != id);
+
+        self.notify(prefix.into());
     }
 
-    pub fn remove_peer_prefixes4(&self, id: u32) -> Vec<Route4ImportKey> {
-        let mut imported = lock!(self.imported);
-        //TODO do in one pass instead of two
-        let result = imported.iter().filter(|x| x.id == id).copied().collect();
-        imported.retain(|x| x.id != id);
+    pub fn remove_peer_prefixes(
+        &self,
+        id: u32,
+    ) -> HashMap<Prefix, HashSet<Path>> {
+        let mut rib = lock!(self.imported);
+
+        let mut pcn = PrefixChangeNotification::default();
+        let mut result = HashMap::new();
+        for (prefix, paths) in rib.iter_mut() {
+            result.insert(
+                *prefix,
+                paths.iter().filter(|x| x.bgp_id == id).cloned().collect(),
+            );
+            paths.retain(|x| x.bgp_id != id);
+            pcn.changed.insert(*prefix);
+        }
+
+        self.notify(pcn);
         result
     }
 
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
-    }
-
-    /// Given a target prefix, compute the effective route set for that prefix.
-    /// This is needed to support graceful shutdown. Routes being shutdown are
-    /// always a last resort - so there are three cases.
-    ///
-    ///   1. Only shutdown routes exist, in which case the effective set is all
-    ///      the shutdown routes.
-    ///   2. Only active routes (routes not being shut down) exist, in which
-    ///      case the effective set is all the active routes.
-    ///   3. A mixture of shutdown routes and active routes exist, in which
-    ///      case the effective set is only the active routes.
-    ///
-    fn effective_set_for_prefix4(
-        imported: &MutexGuard<HashSet<Route4ImportKey>>,
-        prefix: Prefix4,
-    ) -> EffectiveRouteSet {
-        let full: HashSet<Route4ImportKey> = imported
-            .iter()
-            .filter(|x| x.prefix == prefix)
-            .copied()
-            .collect();
-
-        let shutdown: HashSet<Route4ImportKey> =
-            full.iter().filter(|x| x.priority == 0).copied().collect();
-
-        let active: HashSet<Route4ImportKey> =
-            full.iter().filter(|x| x.priority > 0).copied().collect();
-
-        match (active.len(), shutdown.len()) {
-            (0, _) => EffectiveRouteSet::Inactive(shutdown),
-            (_, 0) => EffectiveRouteSet::Active(active),
-            _ => EffectiveRouteSet::Active(active),
-        }
-    }
-
-    pub fn effective_route_set(&self) -> Vec<Route4ImportKey> {
-        let full = lock!(self.imported).clone();
-        let mut sets = HashMap::<Prefix4, EffectiveRouteSet>::new();
-        for x in full.iter() {
-            match sets.get_mut(&x.prefix) {
-                Some(set) => {
-                    if x.priority > 0 {
-                        match set {
-                            EffectiveRouteSet::Active(s) => {
-                                s.insert(*x);
-                            }
-                            EffectiveRouteSet::Inactive(_) => {
-                                let mut value = HashSet::new();
-                                value.insert(*x);
-                                sets.insert(
-                                    x.prefix,
-                                    EffectiveRouteSet::Active(value),
-                                );
-                            }
-                        }
-                    } else {
-                        match set {
-                            EffectiveRouteSet::Active(_) => {
-                                //Nothing to do here, the active set takes priority
-                            }
-                            EffectiveRouteSet::Inactive(s) => {
-                                s.insert(*x);
-                            }
-                        }
-                    }
-                }
-                None => {
-                    let mut value = HashSet::new();
-                    value.insert(*x);
-                    if x.priority > 0 {
-                        sets.insert(x.prefix, EffectiveRouteSet::Active(value));
-                    } else {
-                        sets.insert(
-                            x.prefix,
-                            EffectiveRouteSet::Inactive(value),
-                        );
-                    }
-                }
-            };
-        }
-
-        let mut result = Vec::new();
-        for xs in sets.values() {
-            for x in xs.values() {
-                result.push(*x);
-            }
-        }
-        result
-    }
-
-    /// Compute a a change set for a before/after set of routes including
-    /// bumping the RIB generation number if there are changes.
-    fn import_route_change_set(
-        &self,
-        before: &EffectiveRouteSet,
-        after: &EffectiveRouteSet,
-    ) -> Option<ChangeSet> {
-        let gen = self.generation.fetch_add(1, Ordering::SeqCst);
-        match (before, after) {
-            (
-                EffectiveRouteSet::Active(before),
-                EffectiveRouteSet::Active(after),
-            ) => {
-                let added: HashSet<Route4ImportKey> =
-                    after.difference(before).copied().collect();
-
-                let removed: HashSet<Route4ImportKey> =
-                    before.difference(after).copied().collect();
-
-                if added.is_empty() && removed.is_empty() {
-                    return None;
-                }
-
-                Some(ChangeSet::from_import(
-                    ImportChangeSet { added, removed },
-                    gen,
-                ))
-            }
-            (
-                EffectiveRouteSet::Active(before),
-                EffectiveRouteSet::Inactive(_after),
-            ) => Some(ChangeSet::from_import(
-                ImportChangeSet {
-                    removed: before.clone(),
-                    ..Default::default()
-                },
-                gen,
-            )),
-            (
-                EffectiveRouteSet::Inactive(_before),
-                EffectiveRouteSet::Active(after),
-            ) => Some(ChangeSet::from_import(
-                ImportChangeSet {
-                    added: after.clone(),
-                    ..Default::default()
-                },
-                gen,
-            )),
-
-            (
-                EffectiveRouteSet::Inactive(_before),
-                EffectiveRouteSet::Inactive(_after),
-            ) => None,
-        }
     }
 
     pub fn get_tep_addr(&self) -> Result<Option<Ipv6Addr>, Error> {
