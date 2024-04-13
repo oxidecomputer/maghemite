@@ -14,7 +14,7 @@ use rand::Fill;
 use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo, Path};
 use signal::handle_signals;
 use slog::{error, Logger};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
@@ -212,7 +212,7 @@ fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
 
 fn start_bgp_routers(
     context: Arc<HandlerContext>,
-    routers: HashMap<u32, BgpRouterInfo>,
+    routers: BTreeMap<u32, BgpRouterInfo>,
     neighbors: Vec<BgpNeighborInfo>,
 ) {
     slog::info!(context.log, "bgp routers: {:#?}", routers);

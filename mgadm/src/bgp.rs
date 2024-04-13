@@ -5,10 +5,11 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use colored::*;
-use mg_admin_client::types;
-use mg_admin_client::types::Md5Key;
+use mg_admin_client::types::{self, Path};
+use mg_admin_client::types::{Md5Key, Rib};
 use mg_admin_client::Client;
 use rdb::types::{PolicyAction, Prefix4};
+use std::collections::BTreeMap;
 use std::fs::read_to_string;
 use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -315,51 +316,17 @@ async fn get_imported(c: Client, asn: u32) {
         .unwrap()
         .into_inner();
 
-    let mut tw = TabWriter::new(stdout());
-    writeln!(
-        &mut tw,
-        "{}\t{}\t{}",
-        "Prefix".dimmed(),
-        "Nexthop".dimmed(),
-        "Peer Id".dimmed(),
-    )
-    .unwrap();
-
-    for (prefix, paths) in &imported.0 {
-        for path in paths {
-            let id = Ipv4Addr::from(path.bgp_id);
-            writeln!(&mut tw, "{}\t{}\t{}", prefix, path.nexthop, id,).unwrap();
-        }
-    }
-
-    tw.flush().unwrap();
+    print_rib(imported);
 }
 
 async fn get_selected(c: Client, asn: u32) {
-    let imported = c
+    let selected = c
         .get_selected(&types::AsnSelector { asn })
         .await
         .unwrap()
         .into_inner();
 
-    let mut tw = TabWriter::new(stdout());
-    writeln!(
-        &mut tw,
-        "{}\t{}\t{}",
-        "Prefix".dimmed(),
-        "Nexthop".dimmed(),
-        "Peer Id".dimmed(),
-    )
-    .unwrap();
-
-    for (prefix, paths) in &imported.0 {
-        for path in paths {
-            let id = Ipv4Addr::from(path.bgp_id);
-            writeln!(&mut tw, "{}\t{}\t{}", prefix, path.nexthop, id,).unwrap();
-        }
-    }
-
-    tw.flush().unwrap();
+    print_rib(selected);
 }
 
 async fn get_originated(c: Client, asn: u32) {
@@ -444,4 +411,78 @@ async fn graceful_shutdown(asn: u32, enabled: bool, c: Client) {
     c.graceful_shutdown(&types::GracefulShutdownRequest { asn, enabled })
         .await
         .unwrap();
+}
+fn print_rib(rib: Rib) {
+    type CliRib = BTreeMap<String, Vec<Path>>;
+
+    let mut static_routes = CliRib::new();
+    let mut bgp_routes = CliRib::new();
+    for (prefix, paths) in rib.0.into_iter() {
+        let (br, sr) = paths.into_iter().partition(|p| p.bgp.is_some());
+        static_routes.insert(prefix.clone(), sr);
+        bgp_routes.insert(prefix, br);
+    }
+
+    if !static_routes.is_empty() {
+        let mut tw = TabWriter::new(stdout());
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}",
+            "Prefix".dimmed(),
+            "Nexthop".dimmed(),
+            "Local Pref".dimmed(),
+        )
+        .unwrap();
+
+        for (prefix, paths) in static_routes.into_iter() {
+            for path in paths.into_iter() {
+                writeln!(
+                    &mut tw,
+                    "{}\t{}\t{:?}",
+                    prefix, path.nexthop, path.local_pref,
+                )
+                .unwrap();
+            }
+        }
+        println!("{}", "Static Routes".dimmed());
+        println!("{}", "=============".dimmed());
+        tw.flush().unwrap();
+    }
+
+    if !bgp_routes.is_empty() {
+        let mut tw = TabWriter::new(stdout());
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "Prefix".dimmed(),
+            "Nexthop".dimmed(),
+            "Local Pref".dimmed(),
+            "Origin AS".dimmed(),
+            "Peer ID".dimmed(),
+            "MED".dimmed(),
+            "AS Path".dimmed(),
+        )
+        .unwrap();
+
+        for (prefix, paths) in bgp_routes.into_iter() {
+            for path in paths.into_iter() {
+                let bgp = path.bgp.as_ref().unwrap();
+                writeln!(
+                    &mut tw,
+                    "{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}",
+                    prefix,
+                    path.nexthop,
+                    path.local_pref,
+                    bgp.origin_as,
+                    Ipv4Addr::from(bgp.bgp_id),
+                    bgp.med,
+                    bgp.as_path,
+                )
+                .unwrap();
+            }
+        }
+        println!("{}", "BGP Routes".dimmed());
+        println!("{}", "=============".dimmed());
+        tw.flush().unwrap();
+    }
 }

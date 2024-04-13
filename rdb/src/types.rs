@@ -5,7 +5,8 @@
 use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::cmp::Ordering;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -13,29 +14,43 @@ use std::str::FromStr;
 
 use crate::error::Error;
 
-#[derive(
-    Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq, JsonSchema,
-)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct Path {
     pub nexthop: IpAddr,
-    pub bgp_id: u32,
     pub shutdown: bool,
-    pub med: Option<u32>,
     pub local_pref: Option<u32>,
-    pub as_path: Vec<u32>,
+    pub bgp: Option<BgpPathProperties>,
+}
+
+// Define a basic ordering on paths so bestpath selection is deterministic
+impl PartialOrd for Path {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Path {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.nexthop.cmp(&other.nexthop)
+    }
 }
 
 impl Path {
     pub fn for_static(nexthop: IpAddr) -> Self {
         Self {
             nexthop,
-            bgp_id: 0,
             shutdown: false,
-            med: None,
             local_pref: None,
-            as_path: Vec::new(),
+            bgp: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
+pub struct BgpPathProperties {
+    pub origin_as: u32,
+    pub bgp_id: u32,
+    pub med: Option<u32>,
+    pub as_path: Vec<u32>,
 }
 
 #[derive(
@@ -46,9 +61,7 @@ pub struct StaticRouteKey {
     pub nexthop: IpAddr,
 }
 
-#[derive(
-    Copy, Clone, Hash, Eq, PartialEq, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Route4Key {
     pub prefix: Prefix4,
     pub nexthop: Ipv4Addr,
@@ -118,11 +131,25 @@ impl Policy4Key {
 }
 
 #[derive(
-    Debug, Copy, Clone, Serialize, Deserialize, Hash, Eq, PartialEq, JsonSchema,
+    Debug, Copy, Clone, Serialize, Deserialize, Eq, PartialEq, JsonSchema,
 )]
 pub struct Prefix4 {
     pub value: Ipv4Addr,
     pub length: u8,
+}
+
+impl PartialOrd for Prefix4 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Prefix4 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.value != other.value {
+            return self.value.cmp(&other.value);
+        }
+        self.length.cmp(&other.length)
+    }
 }
 
 impl Prefix4 {
@@ -179,6 +206,20 @@ pub struct Prefix6 {
     pub length: u8,
 }
 
+impl PartialOrd for Prefix6 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Prefix6 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.value != other.value {
+            return self.value.cmp(&other.value);
+        }
+        self.length.cmp(&other.length)
+    }
+}
+
 impl fmt::Display for Prefix6 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}", self.value, self.length)
@@ -186,7 +227,16 @@ impl fmt::Display for Prefix6 {
 }
 
 #[derive(
-    Debug, Copy, Clone, Serialize, Deserialize, Hash, Eq, PartialEq, JsonSchema,
+    Debug,
+    Copy,
+    Clone,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    JsonSchema,
+    PartialOrd,
+    Ord,
 )]
 pub enum Prefix {
     V4(Prefix4),
@@ -373,13 +423,13 @@ pub struct Md5Key {
 
 #[derive(Clone, Default, Debug)]
 pub struct PrefixChangeNotification {
-    pub changed: HashSet<Prefix>,
+    pub changed: BTreeSet<Prefix>,
 }
 
 impl From<Prefix> for PrefixChangeNotification {
     fn from(value: Prefix) -> Self {
         Self {
-            changed: HashSet::from([value]),
+            changed: BTreeSet::from([value]),
         }
     }
 }
@@ -387,7 +437,7 @@ impl From<Prefix> for PrefixChangeNotification {
 impl From<Prefix4> for PrefixChangeNotification {
     fn from(value: Prefix4) -> Self {
         Self {
-            changed: HashSet::from([value.into()]),
+            changed: BTreeSet::from([value.into()]),
         }
     }
 }
@@ -395,7 +445,7 @@ impl From<Prefix4> for PrefixChangeNotification {
 impl From<Prefix6> for PrefixChangeNotification {
     fn from(value: Prefix6) -> Self {
         Self {
-            changed: HashSet::from([value.into()]),
+            changed: BTreeSet::from([value.into()]),
         }
     }
 }

@@ -493,11 +493,8 @@ impl UpdateMessage {
 
     pub fn nexthop4(&self) -> Option<Ipv4Addr> {
         for a in &self.path_attributes {
-            match a.value {
-                PathAttributeValue::NextHop(IpAddr::V4(addr)) => {
-                    return Some(addr);
-                }
-                _ => continue,
+            if let PathAttributeValue::NextHop(IpAddr::V4(addr)) = a.value {
+                return Some(addr);
             }
         }
         None
@@ -505,15 +502,12 @@ impl UpdateMessage {
 
     pub fn graceful_shutdown(&self) -> bool {
         for a in &self.path_attributes {
-            match &a.value {
-                PathAttributeValue::Communities(communities) => {
-                    for c in communities {
-                        if *c == Community::GracefulShutdown {
-                            return true;
-                        }
+            if let PathAttributeValue::Communities(communities) = &a.value {
+                for c in communities {
+                    if *c == Community::GracefulShutdown {
+                        return true;
                     }
                 }
-                _ => continue,
             }
         }
         false
@@ -521,9 +515,8 @@ impl UpdateMessage {
 
     pub fn multi_exit_discriminator(&self) -> Option<u32> {
         for a in &self.path_attributes {
-            match &a.value {
-                PathAttributeValue::MultiExitDisc(med) => return Some(*med),
-                _ => continue,
+            if let PathAttributeValue::MultiExitDisc(med) = &a.value {
+                return Some(*med);
             }
         }
         None
@@ -531,19 +524,22 @@ impl UpdateMessage {
 
     pub fn local_pref(&self) -> Option<u32> {
         for a in &self.path_attributes {
-            match &a.value {
-                PathAttributeValue::LocalPref(value) => return Some(*value),
-                _ => continue,
+            if let PathAttributeValue::LocalPref(value) = &a.value {
+                return Some(*value);
             }
         }
         None
     }
 
+    pub fn clear_local_perf(&mut self) {
+        self.path_attributes
+            .retain(|a| a.typ.type_code != PathAttributeTypeCode::LocalPref);
+    }
+
     pub fn as_path(&self) -> Option<Vec<As4PathSegment>> {
         for a in &self.path_attributes {
-            match &a.value {
-                PathAttributeValue::AsPath(path) => return Some(path.clone()),
-                _ => continue,
+            if let PathAttributeValue::AsPath(path) = &a.value {
+                return Some(path.clone());
             }
         }
         None

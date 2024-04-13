@@ -14,7 +14,7 @@ use crate::error::Error;
 use crate::types::*;
 use mg_common::{lock, read_lock, write_lock};
 use slog::{error, Logger};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
@@ -49,7 +49,7 @@ const BFD_NEIGHBOR: &str = "bfd_neighbor";
 //TODO as parameter
 const BESTPATH_FANOUT: usize = 1;
 
-pub type Rib = HashMap<Prefix, HashSet<Path>>;
+pub type Rib = BTreeMap<Prefix, BTreeSet<Path>>;
 
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
@@ -124,7 +124,7 @@ impl Db {
     pub fn static_rib(&self) -> Rib {
         let mut rib = lock!(self.rib_in).clone();
         for (_prefix, paths) in rib.iter_mut() {
-            paths.retain(|x| x.bgp_id == 0)
+            paths.retain(|x| x.bgp.is_none())
         }
         rib
     }
@@ -132,7 +132,7 @@ impl Db {
     pub fn bgp_rib(&self) -> Rib {
         let mut rib = lock!(self.rib_in).clone();
         for (_prefix, paths) in rib.iter_mut() {
-            paths.retain(|x| x.bgp_id != 0)
+            paths.retain(|x| x.bgp.is_some())
         }
         rib
     }
@@ -168,7 +168,7 @@ impl Db {
 
     pub fn get_bgp_routers(
         &self,
-    ) -> Result<HashMap<u32, BgpRouterInfo>, Error> {
+    ) -> Result<BTreeMap<u32, BgpRouterInfo>, Error> {
         let tree = self.persistent.open_tree(BGP_ROUTER)?;
         let result = tree
             .scan_prefix(vec![])
@@ -357,7 +357,14 @@ impl Db {
 
     pub fn update_loc_rib(rib_in: &Rib, rib_loc: &mut Rib, prefix: Prefix) {
         let bp = bestpaths(prefix, rib_in, BESTPATH_FANOUT);
-        rib_loc.insert(prefix, bp.clone());
+        match bp {
+            Some(bp) => {
+                rib_loc.insert(prefix, bp.clone());
+            }
+            None => {
+                rib_loc.remove(&prefix);
+            }
+        }
     }
 
     pub fn add_prefix_path(
@@ -369,10 +376,10 @@ impl Db {
         let mut rib = lock!(self.rib_in);
         match rib.get_mut(&prefix) {
             Some(paths) => {
-                paths.insert(path.clone());
+                paths.replace(path.clone());
             }
             None => {
-                rib.insert(prefix, HashSet::from([path.clone()]));
+                rib.insert(prefix, BTreeSet::from([path.clone()]));
             }
         }
         Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
@@ -431,7 +438,7 @@ impl Db {
 
     pub fn get_static_nexthop4_count(&self) -> Result<usize, Error> {
         let entries = self.get_static4()?;
-        let mut nexthops = HashSet::new();
+        let mut nexthops = BTreeSet::new();
         for e in entries {
             nexthops.insert(e.nexthop);
         }
@@ -513,7 +520,10 @@ impl Db {
             None => return,
             Some(ps) => ps,
         };
-        paths.retain(|x| x.bgp_id != id);
+        paths.retain(|x| match x.bgp {
+            Some(ref bgp) => bgp.bgp_id != id,
+            None => true,
+        });
 
         Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
         self.notify(prefix.into());
@@ -522,17 +532,17 @@ impl Db {
     pub fn remove_peer_prefixes(
         &self,
         id: u32,
-    ) -> HashMap<Prefix, HashSet<Path>> {
+    ) -> BTreeMap<Prefix, BTreeSet<Path>> {
         let mut rib = lock!(self.rib_in);
 
         let mut pcn = PrefixChangeNotification::default();
-        let mut result = HashMap::new();
+        let mut result = BTreeMap::new();
         for (prefix, paths) in rib.iter_mut() {
-            result.insert(
-                *prefix,
-                paths.iter().filter(|x| x.bgp_id == id).cloned().collect(),
-            );
-            paths.retain(|x| x.bgp_id != id);
+            paths.retain(|x| match x.bgp {
+                Some(ref bgp) => bgp.bgp_id != id,
+                None => true,
+            });
+            result.insert(*prefix, paths.clone());
             pcn.changed.insert(*prefix);
         }
 

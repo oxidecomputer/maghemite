@@ -15,7 +15,7 @@ use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
-use rdb::{Asn, Db, Md5Key};
+use rdb::{Asn, BgpPathProperties, Db, Md5Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -1205,7 +1205,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             FsmEvent::Message(Message::Update(m)) => {
                 self.clock.timers.hold_timer.lock().unwrap().reset();
                 inf!(self; "update received: {m:#?}");
-                self.apply_update(m.clone(), pc.id);
+                let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
+                self.apply_update(m.clone(), pc.id, peer_as);
                 self.message_history.lock().unwrap().receive(m.into());
                 self.counters
                     .updates_received
@@ -1535,7 +1536,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Apply an update by adding it to our RIB.
-    fn apply_update(&self, update: UpdateMessage, id: u32) {
+    fn apply_update(&self, mut update: UpdateMessage, id: u32, peer_as: u32) {
         if let Err(e) = self.check_update(&update) {
             wrn!(
                 self;
@@ -1544,7 +1545,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             );
             return;
         }
-        self.update_rib(&update, id);
+        self.apply_update_policy(&mut update);
+        self.update_rib(&update, id, peer_as);
 
         // NOTE: for now we are only acting as an edge router. This means we
         //       do not redistribute announcements. If this changes, uncomment
@@ -1554,7 +1556,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Update this router's RIB based on an update message from a peer.
-    fn update_rib(&self, update: &UpdateMessage, id: u32) {
+    fn update_rib(&self, update: &UpdateMessage, id: u32, peer_as: u32) {
         for w in &update.withdrawn {
             self.db.remove_peer_prefix(id, w.as_prefix4().into());
         }
@@ -1598,11 +1600,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 let path = rdb::Path {
                     nexthop: nexthop.into(),
-                    bgp_id: id,
                     shutdown: update.graceful_shutdown(),
-                    med: update.multi_exit_discriminator(),
                     local_pref: update.local_pref(),
-                    as_path,
+                    bgp: Some(BgpPathProperties {
+                        origin_as: peer_as,
+                        bgp_id: id,
+                        med: update.multi_exit_discriminator(),
+                        as_path,
+                    }),
                 };
 
                 if let Err(e) =
@@ -1619,6 +1624,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Perform a set of checks on an update to see if we can accept it.
     fn check_update(&self, update: &UpdateMessage) -> Result<(), Error> {
         self.check_for_self_in_path(update)
+    }
+
+    fn apply_update_policy(&self, update: &mut UpdateMessage) {
+        if self.is_ebgp() {
+            update.clear_local_perf()
+        }
     }
 
     /// Do not accept routes that have our ASN in the AS_PATH e.g., do

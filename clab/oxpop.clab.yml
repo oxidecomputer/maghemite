@@ -7,7 +7,10 @@ topology:
     cdn:
       kind: nokia_srlinux
       image: ghcr.io/nokia/srlinux
-    pcloud:
+    pcwest:
+      kind: nokia_srlinux
+      image: ghcr.io/nokia/srlinux
+    pceast:
       kind: nokia_srlinux
       image: ghcr.io/nokia/srlinux
     oxpop:
@@ -26,5 +29,8 @@ topology:
     - endpoints: ["cdn:e1-1", "oxpop:eth2"]
     - endpoints: ["cdn:e1-2", "host:cdn_e1-2"]
 
-    - endpoints: ["pcloud:e1-1", "oxpop:eth3"]
-    - endpoints: ["pcloud:e1-2", "host:pcloud_e1-2"]
+    - endpoints: ["pcwest:e1-1", "oxpop:eth3"]
+    - endpoints: ["pcwest:e1-2", "host:pcwest_e1-2"]
+
+    - endpoints: ["pceast:e1-1", "oxpop:eth4"]
+    - endpoints: ["pceast:e1-2", "host:pceast_e1-2"]

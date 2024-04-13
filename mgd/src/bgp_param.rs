@@ -7,7 +7,7 @@ use bgp::session::{FsmStateKind, MessageHistory};
 use rdb::{Md5Key, Path, PolicyAction, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 use std::{
     collections::BTreeMap,
@@ -250,7 +250,7 @@ pub struct BgpPeerConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct Rib(HashMap<String, HashSet<Path>>);
+pub struct Rib(BTreeMap<String, BTreeSet<Path>>);
 
 impl From<rdb::db::Rib> for Rib {
     fn from(value: rdb::db::Rib) -> Self {

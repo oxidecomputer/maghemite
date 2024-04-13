@@ -939,6 +939,40 @@
           }
         ]
       },
+      "BgpPathProperties": {
+        "type": "object",
+        "properties": {
+          "as_path": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "bgp_id": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "med": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "origin_as": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "as_path",
+          "bgp_id",
+          "origin_as"
+        ]
+      },
       "BgpPeerConfig": {
         "type": "object",
         "properties": {
@@ -2209,26 +2243,15 @@
       "Path": {
         "type": "object",
         "properties": {
-          "as_path": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          "bgp_id": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
+          "bgp": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BgpPathProperties"
+              }
+            ]
           },
           "local_pref": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "med": {
             "nullable": true,
             "type": "integer",
             "format": "uint32",
@@ -2243,8 +2266,6 @@
           }
         },
         "required": [
-          "as_path",
-          "bgp_id",
           "nexthop",
           "shutdown"
         ]

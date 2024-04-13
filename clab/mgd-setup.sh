@@ -27,9 +27,20 @@ addr=`host -t A -4 clab-pop-oxpop | awk '{print $4}'`
     --communities 3081893 \
     --med 99
 
-# public cloud
+# public cloud west
 ~/src/maghemite/target/debug/mgadm -a $addr \
-    bgp add-neighbor 65547 pcloud 169.254.30.1 qsfp2 \
+    bgp add-neighbor 65547 pcwest 169.254.30.1 qsfp2 \
+    --remote-asn 64502 \
+    --min-ttl 255 \
+    --md5-auth-key hypermuffin \
+    --hold-time 900 \
+    --keepalive-time 300 \
+    --communities 8675309 \
+    --med 99
+
+# public cloud east
+~/src/maghemite/target/debug/mgadm -a $addr \
+    bgp add-neighbor 65547 pceast 169.254.40.1 qsfp3 \
     --remote-asn 64502 \
     --min-ttl 255 \
     --md5-auth-key hypermuffin \

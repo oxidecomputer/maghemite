@@ -19,7 +19,7 @@ use dropshot::{
 use http::status::StatusCode;
 use rdb::{Asn, BgpRouterInfo, Prefix4};
 use slog::info;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::{
@@ -439,7 +439,7 @@ pub async fn bgp_apply(
         }
     }
 
-    let current_originate: HashSet<Prefix4> = ctx
+    let current_originate: BTreeSet<Prefix4> = ctx
         .context()
         .db
         .get_originated4()
@@ -447,7 +447,7 @@ pub async fn bgp_apply(
         .into_iter()
         .collect();
 
-    let specified_originate: HashSet<Prefix4> =
+    let specified_originate: BTreeSet<Prefix4> =
         rq.originate.iter().cloned().collect();
 
     let to_delete = current_originate
