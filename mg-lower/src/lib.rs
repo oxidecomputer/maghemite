@@ -18,7 +18,6 @@ use ddm_admin_client::Client as DdmClient;
 use dendrite::ensure_tep_addr;
 use dpd_client::Client as DpdClient;
 use mg_common::stats::MgLowerStats as Stats;
-use rdb::bestpath::bestpaths;
 use rdb::db::Rib;
 use rdb::{Db, Prefix, PrefixChangeNotification};
 use slog::{error, info, Logger};
@@ -35,9 +34,6 @@ mod error;
 
 /// Tag used for managing both dpd and rdb elements.
 const MG_LOWER_TAG: &str = "mg-lower";
-
-/// XXX make configurable
-const MAX_ECMP_FANOUT: usize = 4;
 
 /// This is the primary entry point for the lower half. It loops forever,
 /// observing changes in the routing databse and synchronizing them to the
@@ -139,7 +135,7 @@ fn full_sync(
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
     for (prefix, _paths) in rib.iter() {
-        sync_prefix(tep, &rib, db.loc_rib(), prefix, dpd, ddm, log, &rt)?;
+        sync_prefix(tep, db.loc_rib(), prefix, dpd, ddm, log, &rt)?;
     }
 
     Ok(())
@@ -155,18 +151,15 @@ fn handle_change(
     ddm: &DdmClient,
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
-    let rib_in = db.full_rib();
     for prefix in notification.changed.iter() {
-        sync_prefix(tep, &rib_in, db.loc_rib(), prefix, dpd, ddm, log, &rt)?;
+        sync_prefix(tep, db.loc_rib(), prefix, dpd, ddm, log, &rt)?;
     }
 
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn sync_prefix(
     tep: Ipv6Addr,
-    rib_in: &Rib,
     rib_loc: Arc<Mutex<Rib>>,
     prefix: &Prefix,
     dpd: &DpdClient,
@@ -179,10 +172,10 @@ fn sync_prefix(
 
     // The best routes in the RIB
     let mut best: HashSet<RouteHash> = HashSet::new();
-    let bp = bestpaths(*prefix, rib_in, MAX_ECMP_FANOUT);
-    rib_loc.lock().unwrap().insert(*prefix, bp.clone());
-    for path in bp.into_iter() {
-        best.insert(RouteHash::for_prefix_path(*prefix, path)?);
+    if let Some(paths) = rib_loc.lock().unwrap().get(prefix) {
+        for path in paths {
+            best.insert(RouteHash::for_prefix_path(*prefix, path.clone())?);
+        }
     }
 
     // Routes that are in the best set but not on the asic should be added.

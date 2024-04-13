@@ -9,6 +9,7 @@
 //! in a sled key-value store that is persisted to disk via flush operations.
 //! Volatile information is stored in in-memory data structures such as hash
 //! sets.
+use crate::bestpath::bestpaths;
 use crate::error::Error;
 use crate::types::*;
 use mg_common::{lock, read_lock, write_lock};
@@ -44,6 +45,9 @@ const TEP_KEY: &str = "tep";
 /// The handle used to open a persistent key-value tree for BFD neighbor
 /// information.
 const BFD_NEIGHBOR: &str = "bfd_neighbor";
+
+//TODO as parameter
+const BESTPATH_FANOUT: usize = 4;
 
 pub type Rib = HashMap<Prefix, HashSet<Path>>;
 
@@ -138,7 +142,6 @@ impl Db {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         tree.insert(p.db_key(), "")?;
         tree.flush()?;
-        self.notify(p.into());
         Ok(())
     }
 
@@ -306,7 +309,6 @@ impl Db {
     pub fn remove_origin4(&self, p: Prefix4) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         tree.remove(p.db_key())?;
-        self.notify(p.into());
         Ok(())
     }
 
@@ -353,6 +355,11 @@ impl Db {
         lock!(self.rib_in).clone()
     }
 
+    pub fn update_loc_rib(rib_in: &Rib, rib_loc: &mut Rib, prefix: Prefix) {
+        let bp = bestpaths(prefix, rib_in, BESTPATH_FANOUT);
+        rib_loc.insert(prefix, bp.clone());
+    }
+
     pub fn add_prefix_path(
         &self,
         prefix: Prefix,
@@ -368,6 +375,7 @@ impl Db {
                 rib.insert(prefix, HashSet::from([path.clone()]));
             }
         }
+        Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
 
         if is_static {
             let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
@@ -444,6 +452,10 @@ impl Db {
             }
         }
 
+        for prefix in pcn.changed.iter() {
+            Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
+        }
+
         self.notify(pcn);
     }
 
@@ -461,6 +473,10 @@ impl Db {
             }
         }
 
+        //TODO loc_rib updater as a pcn listener?
+        for prefix in pcn.changed.iter() {
+            Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
+        }
         self.notify(pcn);
     }
 
@@ -486,6 +502,7 @@ impl Db {
             tree.flush()?;
         }
 
+        Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
         self.notify(prefix.into());
         Ok(())
     }
@@ -498,6 +515,7 @@ impl Db {
         };
         paths.retain(|x| x.bgp_id != id);
 
+        Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
         self.notify(prefix.into());
     }
 
@@ -518,6 +536,9 @@ impl Db {
             pcn.changed.insert(*prefix);
         }
 
+        for prefix in pcn.changed.iter() {
+            Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
+        }
         self.notify(pcn);
         result
     }
