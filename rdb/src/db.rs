@@ -47,7 +47,7 @@ const TEP_KEY: &str = "tep";
 const BFD_NEIGHBOR: &str = "bfd_neighbor";
 
 //TODO as parameter
-const BESTPATH_FANOUT: usize = 4;
+const BESTPATH_FANOUT: usize = 1;
 
 pub type Rib = HashMap<Prefix, HashSet<Path>>;
 

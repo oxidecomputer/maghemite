@@ -1,0 +1,39 @@
+#!/bin/bash
+
+addr=`host -t A -4 clab-pop-oxpop | awk '{print $4}'`
+
+~/src/maghemite/target/debug/mgadm -a $addr \
+    bgp add-router 65547 1701 0.0.0.0:0
+
+# transit
+~/src/maghemite/target/debug/mgadm -a $addr \
+    bgp add-neighbor 65547 transit 169.254.10.1 qsfp0 \
+    --remote-asn 64500 \
+    --min-ttl 255 \
+    --md5-auth-key hypermuffin \
+    --hold-time 900 \
+    --keepalive-time 300 \
+    --communities 1287493 \
+    --med 99
+
+# cdn
+~/src/maghemite/target/debug/mgadm -a $addr \
+    bgp add-neighbor 65547 cdn 169.254.20.1 qsfp1 \
+    --remote-asn 64501 \
+    --min-ttl 255 \
+    --md5-auth-key hypermuffin \
+    --hold-time 900 \
+    --keepalive-time 300 \
+    --communities 3081893 \
+    --med 99
+
+# public cloud
+~/src/maghemite/target/debug/mgadm -a $addr \
+    bgp add-neighbor 65547 pcloud 169.254.30.1 qsfp2 \
+    --remote-asn 64502 \
+    --min-ttl 255 \
+    --md5-auth-key hypermuffin \
+    --hold-time 900 \
+    --keepalive-time 300 \
+    --communities 8675309 \
+    --med 99

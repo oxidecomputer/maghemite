@@ -1,0 +1,128 @@
+{
+    "jsonrpc": "2.0",
+    "id": 0,
+    "method": "set",
+    "params": {
+        "commands": [
+            {
+                "action": "update",
+                "path": "/",
+                "value":
+                {
+                    "interface": [
+                        {
+                            "name": "ethernet-1/1",
+                            "subinterface": [
+                                {
+                                    "index": 0,
+                                    "admin-state": "enable",
+                                    "ipv4": {
+                                        "admin-state": "enable",
+                                        "address": [
+                                            {
+                                                "ip-prefix": "169.254.30.1/30",
+                                                "primary": [null]
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
+						{
+							"name": "ethernet-1/2",
+							"subinterface": [
+								{
+									"index": 0,
+									"type": "routed",
+									"admin-state": "enable",
+									"ipv4": {
+										"admin-state": "enable",
+										"address": [
+											{
+												"ip-prefix": "10.10.0.1/16"
+											}
+										]
+									}
+								}
+							]
+						}
+                    ],
+                    "network-instance": [
+                        {
+                            "name": "default",
+                            "interface": [
+                                {
+                                    "name": "ethernet-1/1.0"
+                                },
+								{
+									"name": "ethernet-1/2.0"
+								}
+                            ],
+                            "protocols": {
+                                "bgp": {
+                                    "admin-state": "enable",
+                                    "autonomous-system": 64502,
+									"export-policy": "all",
+                                    "router-id": "10.10.0.1",
+                                    "afi-safi": [
+                                        {
+                                            "afi-safi-name": "ipv4-unicast",
+                                            "admin-state": "enable"
+                                        }
+                                    ],
+                                    "group": [
+                                        {
+                                            "group-name": "oxpop",
+                                            "admin-state": "enable",
+                                            "afi-safi": [
+                                                {
+                                                    "afi-safi-name": "ipv4-unicast",
+                                                    "admin-state": "enable"
+                                                }
+                                            ],
+                                            "trace-options": {
+                                                "flag": [
+                                                    {
+                                                        "name": "events"
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ],
+                                    "neighbor": [
+                                        {
+                                            "peer-address": "169.254.30.2",
+                                            "description": "oxide point of presence",
+                                            "peer-as": 65547,
+                                            "peer-group": "oxpop",
+                                            "authentication": {
+                                                "password": "$aes1$ATTuNB0NU2L7AW8=$HpBACI63gldrmF9SBkiuPQ=="
+                                            },
+                                            "multihop": {
+                                                "admin-state": "enable",
+                                                "maximum-hops": 255
+                                            },
+                                            "local-as": {
+                                                "as-number": 64502
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+					"routing-policy": {
+						"policy": [
+							{
+								"name": "all",
+								"default-action": {
+									"policy-result": "accept"
+								}
+							}
+						]
+					}
+                }
+            }
+        ]
+    }
+}
