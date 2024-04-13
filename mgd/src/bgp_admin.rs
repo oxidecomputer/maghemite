@@ -17,7 +17,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
 use http::status::StatusCode;
-use rdb::{db::Rib, Asn, BgpRouterInfo, Prefix4};
+use rdb::{Asn, BgpRouterInfo, Prefix4};
 use slog::info;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -73,12 +73,14 @@ pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
     register!(api, add_neighbor);
     register!(api, ensure_neighbor);
     register!(api, delete_neighbor);
+    register!(api, neighbor_detail);
 
     register!(api, originate4);
     register!(api, withdraw4);
     register!(api, get_originated4);
 
-    register!(api, get_imported4);
+    register!(api, get_imported);
+    register!(api, get_selected);
 
     register!(api, bgp_apply);
 
@@ -198,6 +200,30 @@ pub async fn add_neighbor(
     Ok(HttpResponseUpdatedNoContent())
 }
 
+#[endpoint { method = GET, path = "/bgp/neighbor" }]
+pub async fn neighbor_detail(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<NeighborSelector>,
+) -> Result<HttpResponseOk<SessionInfo>, HttpError> {
+    let rq = request.into_inner();
+    let routers = lock!(ctx.context().bgp.router);
+    match routers.get(&rq.asn) {
+        Some(rtr) => match lock!(rtr.sessions).get(&rq.addr) {
+            Some(session) => {
+                let mut info = lock!(session.session).clone();
+                if let Some(x) = info.md5_auth_key.as_mut() {
+                    x.value.clear()
+                }
+                Ok(HttpResponseOk(info))
+            }
+            None => {
+                Err(HttpError::for_not_found(None, "asn peer address".into()))
+            }
+        },
+        None => Err(HttpError::for_not_found(None, "asn".into())),
+    }
+}
+
 #[endpoint { method = DELETE, path = "/bgp/neighbor" }]
 pub async fn delete_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
@@ -265,15 +291,27 @@ pub async fn get_originated4(
     Ok(HttpResponseOk(originated))
 }
 
-#[endpoint { method = GET, path = "/bgp/imported4" }]
-pub async fn get_imported4(
+#[endpoint { method = GET, path = "/bgp/imported" }]
+pub async fn get_imported(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<GetImported4Request>,
+    request: TypedBody<AsnSelector>,
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     let imported = get_router!(ctx, rq.asn)?.db.full_rib();
-    Ok(HttpResponseOk(imported))
+    Ok(HttpResponseOk(imported.into()))
+}
+
+#[endpoint { method = GET, path = "/bgp/selected" }]
+pub async fn get_selected(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<AsnSelector>,
+) -> Result<HttpResponseOk<Rib>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    let rib = get_router!(ctx, rq.asn)?.db.loc_rib();
+    let selected = rib.lock().unwrap().clone();
+    Ok(HttpResponseOk(selected.into()))
 }
 
 #[endpoint { method = POST, path = "/bgp/graceful_shutdown" }]

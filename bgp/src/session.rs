@@ -302,7 +302,7 @@ impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
 
 // TODO break up into config/state objects.
 /// Information about a session.
-#[derive(Clone)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct SessionInfo {
     /// Track how many times a connection has been attempted.
     pub connect_retry_counter: u64,
@@ -498,7 +498,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     /// Clock that drives the state machine for this session.
     pub clock: Clock,
 
-    session: Arc<Mutex<SessionInfo>>,
+    pub session: Arc<Mutex<SessionInfo>>,
     event_rx: Receiver<FsmEvent<Cnx>>,
     state: Arc<Mutex<FsmStateKind>>,
     last_state_change: Mutex<Instant>,

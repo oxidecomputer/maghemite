@@ -4,10 +4,10 @@
 
 use bgp::config::PeerConfig;
 use bgp::session::{FsmStateKind, MessageHistory};
-use rdb::{Md5Key, PolicyAction, Prefix4};
+use rdb::{Md5Key, Path, PolicyAction, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use std::{
     collections::BTreeMap,
@@ -30,6 +30,12 @@ pub struct NewRouterRequest {
 pub struct DeleteRouterRequest {
     /// Autonomous system number for the router to remove
     pub asn: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct NeighborSelector {
+    pub asn: u32,
+    pub addr: IpAddr,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
@@ -139,7 +145,7 @@ pub struct Withdraw4Request {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct GetImported4Request {
+pub struct AsnSelector {
     /// ASN of the router to get imported prefixes from.
     pub asn: u32,
 }
@@ -241,4 +247,13 @@ pub struct BgpPeerConfig {
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct Rib(HashMap<String, HashSet<Path>>);
+
+impl From<rdb::db::Rib> for Rib {
+    fn from(value: rdb::db::Rib) -> Self {
+        Rib(value.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    }
 }

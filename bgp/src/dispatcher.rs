@@ -71,7 +71,7 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                     if let Err(e) = tx.send(FsmEvent::Connected(accepted)) {
                         slog::error!(
                             self.log,
-                            "failed to send connected envent to session: {e}",
+                            "failed to send connected event to session: {e}",
                         );
                         continue;
                     }

@@ -6,7 +6,7 @@ use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::fmt;
+use std::fmt::{self, Formatter};
 use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
@@ -191,6 +191,15 @@ impl fmt::Display for Prefix6 {
 pub enum Prefix {
     V4(Prefix4),
     V6(Prefix6),
+}
+
+impl std::fmt::Display for Prefix {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Prefix::V4(p) => p.fmt(f),
+            Prefix::V6(p) => p.fmt(f),
+        }
+    }
 }
 
 impl From<Prefix4> for Prefix {

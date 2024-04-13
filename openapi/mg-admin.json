@@ -142,14 +142,14 @@
         }
       }
     },
-    "/bgp/imported4": {
+    "/bgp/imported": {
       "get": {
-        "operationId": "get_imported4",
+        "operationId": "get_imported",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/GetImported4Request"
+                "$ref": "#/components/schemas/AsnSelector"
               }
             }
           },
@@ -161,11 +161,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Array_of_Route4ImportKey",
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Route4ImportKey"
-                  }
+                  "$ref": "#/components/schemas/Rib"
                 }
               }
             }
@@ -213,8 +209,39 @@
       }
     },
     "/bgp/neighbor": {
+      "get": {
+        "operationId": "neighbor_detail",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NeighborSelector"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionInfo"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
       "put": {
-        "operationId": "ensure_neighbor_handler",
+        "operationId": "ensure_neighbor",
         "requestBody": {
           "content": {
             "application/json": {
@@ -238,7 +265,7 @@
         }
       },
       "post": {
-        "operationId": "add_neighbor_handler",
+        "operationId": "add_neighbor",
         "requestBody": {
           "content": {
             "application/json": {
@@ -349,7 +376,7 @@
     },
     "/bgp/router": {
       "put": {
-        "operationId": "ensure_router_handler",
+        "operationId": "ensure_router",
         "requestBody": {
           "content": {
             "application/json": {
@@ -448,6 +475,39 @@
         }
       }
     },
+    "/bgp/selected": {
+      "get": {
+        "operationId": "get_selected",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AsnSelector"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rib"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/withdraw4": {
       "post": {
         "operationId": "withdraw4",
@@ -483,7 +543,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StaticRoute4List"
+                  "title": "Map_of_Set_of_Path",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Path"
+                    },
+                    "uniqueItems": true
+                  }
                 }
               }
             }
@@ -765,6 +833,20 @@
               "as_sequence"
             ]
           }
+        ]
+      },
+      "AsnSelector": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "ASN of the router to get imported prefixes from.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "asn"
         ]
       },
       "BfdPeerConfig": {
@@ -1680,20 +1762,6 @@
           }
         ]
       },
-      "GetImported4Request": {
-        "type": "object",
-        "properties": {
-          "asn": {
-            "description": "ASN of the router to get imported prefixes from.",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "asn"
-        ]
-      },
       "GetOriginated4Request": {
         "type": "object",
         "properties": {
@@ -1890,6 +1958,24 @@
         },
         "required": [
           "by_peer"
+        ]
+      },
+      "NeighborSelector": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ip"
+          },
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "addr",
+          "asn"
         ]
       },
       "NewRouterRequest": {
@@ -2118,6 +2204,49 @@
         "required": [
           "asn",
           "prefixes"
+        ]
+      },
+      "Path": {
+        "type": "object",
+        "properties": {
+          "as_path": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "bgp_id": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "local_pref": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "med": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "nexthop": {
+            "type": "string",
+            "format": "ip"
+          },
+          "shutdown": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "as_path",
+          "bgp_id",
+          "nexthop",
+          "shutdown"
         ]
       },
       "PathAttribute": {
@@ -2461,41 +2590,15 @@
           "value"
         ]
       },
-      "Route4ImportKey": {
+      "Rib": {
         "type": "object",
-        "properties": {
-          "id": {
-            "description": "A BGP route identifier.",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/Path"
           },
-          "nexthop": {
-            "description": "The nexthop/gateway for the route.",
-            "type": "string",
-            "format": "ipv4"
-          },
-          "prefix": {
-            "description": "The destination prefix of the route.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Prefix4"
-              }
-            ]
-          },
-          "priority": {
-            "description": "Local priority/preference for the route.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "id",
-          "nexthop",
-          "prefix",
-          "priority"
-        ]
+          "uniqueItems": true
+        }
       },
       "RouterInfo": {
         "type": "object",
@@ -2519,6 +2622,129 @@
           "asn",
           "graceful_shutdown",
           "peers"
+        ]
+      },
+      "SessionInfo": {
+        "description": "Information about a session.",
+        "type": "object",
+        "properties": {
+          "accept_connections_unconfigured_peers": {
+            "description": "Allow connections from peers that are not explicitly configured.",
+            "type": "boolean"
+          },
+          "allow_automatic_start": {
+            "description": "Start the peer session automatically.",
+            "type": "boolean"
+          },
+          "allow_automatic_stop": {
+            "description": "Stop the peer automatically under certain conditions. TODO: list conditions",
+            "type": "boolean"
+          },
+          "capabilities_received": {
+            "description": "Capabilities received from the peer.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Capability"
+            }
+          },
+          "capabilities_sent": {
+            "description": "Capabilities sent to the peer.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Capability"
+            }
+          },
+          "collision_detect_established_state": {
+            "description": "Detect open message collisions when in the established state.",
+            "type": "boolean"
+          },
+          "communities": {
+            "description": "Communities to be attached to updates sent over this session.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "connect_retry_counter": {
+            "description": "Track how many times a connection has been attempted.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "damp_peer_oscillations": {
+            "description": "Increase/decrease the idle_hold_timer in response to peer connectivity flapping.",
+            "type": "boolean"
+          },
+          "delay_open": {
+            "description": "Delay sending out the initial open message.",
+            "type": "boolean"
+          },
+          "local_pref": {
+            "nullable": true,
+            "description": "Local preference attribute added to updates if this is an iBGP session",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "md5_auth_key": {
+            "nullable": true,
+            "description": "Md5 peer authentication key",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Md5Key"
+              }
+            ]
+          },
+          "min_ttl": {
+            "nullable": true,
+            "description": "Minimum acceptable TTL value for incomming BGP packets.",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "multi_exit_discriminator": {
+            "nullable": true,
+            "description": "Multi-exit discriminator. This an optional attribute that is intended to be used on external eBGP sessions to discriminate among multiple exit or entry points to the same neighboring AS. The value of this attribute is a four-octet unsigned number, called a metric. All other factors being equal, the exit point with the lower metric should be preferred.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "passive_tcp_establishment": {
+            "description": "Passively wait for the remote BGP peer to establish a TCP connection.",
+            "type": "boolean"
+          },
+          "remote_asn": {
+            "nullable": true,
+            "description": "The ASN of the remote peer.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "send_notification_without_open": {
+            "description": "Allow sending notification messages without first sending an open message.",
+            "type": "boolean"
+          },
+          "track_tcp_state": {
+            "description": "Enable fine-grained tracking and logging of TCP connection state.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accept_connections_unconfigured_peers",
+          "allow_automatic_start",
+          "allow_automatic_stop",
+          "capabilities_received",
+          "capabilities_sent",
+          "collision_detect_established_state",
+          "communities",
+          "connect_retry_counter",
+          "damp_peer_oscillations",
+          "delay_open",
+          "passive_tcp_establishment",
+          "send_notification_without_open",
+          "track_tcp_state"
         ]
       },
       "SessionMode": {

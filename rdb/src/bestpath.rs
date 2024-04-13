@@ -42,10 +42,10 @@ pub fn bestpaths(prefix: Prefix, rib: &Rib, max: usize) -> HashSet<Path> {
         (_, _) => active,
     };
 
-    // Filter down to paths with the shortest local preference
+    // Filter down to paths with the highest local preference
     let candidates = candidates
         .into_iter()
-        .min_set_by_key(|x| x.local_pref.unwrap_or(0));
+        .max_set_by_key(|x| x.local_pref.unwrap_or(0));
 
     // Filter down to paths with the shortest length
     let candidates = candidates.into_iter().min_set_by_key(|x| x.as_path.len());

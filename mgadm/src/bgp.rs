@@ -36,6 +36,9 @@ pub enum Commands {
     /// Add a neighbor to a BGP router.
     AddNeighbor(Neighbor),
 
+    /// Get neighbor details.
+    NeighborInfo { asn: u32, addr: IpAddr },
+
     /// Remove a neighbor from a BGP router.
     DeleteNeighbor { asn: u32, addr: IpAddr },
 
@@ -47,6 +50,9 @@ pub enum Commands {
 
     /// Get the prefixes imported by a BGP router.
     GetImported { asn: u32 },
+
+    /// Get the selected paths chosen from imported paths.
+    GetSelected { asn: u32 },
 
     /// Get the prefixes originated by a BGP router.
     GetOriginated { asn: u32 },
@@ -215,9 +221,13 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
         Commands::DeleteNeighbor { asn, addr } => {
             delete_neighbor(asn, addr, client).await
         }
+        Commands::NeighborInfo { asn, addr } => {
+            show_neighbor(asn, addr, client).await
+        }
         Commands::Originate4(originate) => originate4(originate, client).await,
         Commands::Withdraw4(withdraw) => withdraw4(withdraw, client).await,
         Commands::GetImported { asn } => get_imported(client, asn).await,
+        Commands::GetSelected { asn } => get_selected(client, asn).await,
         Commands::GetOriginated { asn } => get_originated(client, asn).await,
         Commands::Apply { filename } => apply(filename, client).await,
         Commands::EnableGshut { asn } => {
@@ -300,7 +310,7 @@ async fn delete_router(asn: u32, c: Client) {
 
 async fn get_imported(c: Client, asn: u32) {
     let imported = c
-        .get_imported4(&types::GetImported4Request { asn })
+        .get_imported(&types::AsnSelector { asn })
         .await
         .unwrap()
         .into_inner();
@@ -308,25 +318,45 @@ async fn get_imported(c: Client, asn: u32) {
     let mut tw = TabWriter::new(stdout());
     writeln!(
         &mut tw,
-        "{}\t{}\t{}\t{}",
+        "{}\t{}\t{}",
         "Prefix".dimmed(),
         "Nexthop".dimmed(),
         "Peer Id".dimmed(),
-        "Priority".dimmed(),
     )
     .unwrap();
 
-    for route in &imported {
-        let id = Ipv4Addr::from(route.id);
-        writeln!(
-            &mut tw,
-            "{}\t{}\t{}\t{}",
-            to_prefix4(&route.prefix),
-            route.nexthop,
-            id,
-            route.priority,
-        )
-        .unwrap();
+    for (prefix, paths) in &imported.0 {
+        for path in paths {
+            let id = Ipv4Addr::from(path.bgp_id);
+            writeln!(&mut tw, "{}\t{}\t{}", prefix, path.nexthop, id,).unwrap();
+        }
+    }
+
+    tw.flush().unwrap();
+}
+
+async fn get_selected(c: Client, asn: u32) {
+    let imported = c
+        .get_selected(&types::AsnSelector { asn })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut tw = TabWriter::new(stdout());
+    writeln!(
+        &mut tw,
+        "{}\t{}\t{}",
+        "Prefix".dimmed(),
+        "Nexthop".dimmed(),
+        "Peer Id".dimmed(),
+    )
+    .unwrap();
+
+    for (prefix, paths) in &imported.0 {
+        for path in paths {
+            let id = Ipv4Addr::from(path.bgp_id);
+            writeln!(&mut tw, "{}\t{}\t{}", prefix, path.nexthop, id,).unwrap();
+        }
     }
 
     tw.flush().unwrap();
@@ -350,13 +380,23 @@ async fn get_originated(c: Client, asn: u32) {
 }
 
 async fn add_neighbor(nbr: Neighbor, c: Client) {
-    c.add_neighbor_handler(&nbr.into()).await.unwrap();
+    c.add_neighbor(&nbr.into()).await.unwrap();
 }
 
 async fn delete_neighbor(asn: u32, addr: IpAddr, c: Client) {
     c.delete_neighbor(&types::DeleteNeighborRequest { asn, addr })
         .await
         .unwrap();
+}
+
+async fn show_neighbor(asn: u32, addr: IpAddr, c: Client) {
+    let nbr = c
+        .neighbor_detail(&types::NeighborSelector { asn, addr })
+        .await
+        .unwrap()
+        .into_inner();
+
+    println!("{nbr:#?}");
 }
 
 async fn originate4(originate: Originate4, c: Client) {
