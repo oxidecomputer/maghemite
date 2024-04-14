@@ -57,6 +57,7 @@ pub struct AddNeighborRequest {
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
+    pub enforce_first_as: bool,
 }
 
 impl From<AddNeighborRequest> for PeerConfig {
@@ -98,6 +99,7 @@ impl AddNeighborRequest {
             multi_exit_discriminator: rq.multi_exit_discriminator,
             communities: rq.communities,
             local_pref: rq.local_pref,
+            enforce_first_as: rq.enforce_first_as,
         }
     }
 }
@@ -247,6 +249,7 @@ pub struct BgpPeerConfig {
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
+    pub enforce_first_as: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]

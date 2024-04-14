@@ -145,6 +145,15 @@ pub enum Error {
     #[error("Self loop detected")]
     SelfLoopDetected,
 
+    #[error("AS path missing")]
+    MissingAsPath,
+
+    #[error("AS path is empty")]
+    EmptyAsPath,
+
+    #[error("Enforce-first-AS check failed: expected: {0}, found: {1:?}")]
+    EnforceAsFirst(u32, Vec<u32>),
+
     #[error("Invalid address")]
     InvalidAddress(String),
 

@@ -642,6 +642,9 @@
             "format": "uint64",
             "minimum": 0
           },
+          "enforce_first_as": {
+            "type": "boolean"
+          },
           "group": {
             "type": "string"
           },
@@ -712,6 +715,7 @@
           "communities",
           "connect_retry",
           "delay_open",
+          "enforce_first_as",
           "group",
           "hold_time",
           "host",
@@ -994,6 +998,9 @@
             "format": "uint64",
             "minimum": 0
           },
+          "enforce_first_as": {
+            "type": "boolean"
+          },
           "hold_time": {
             "type": "integer",
             "format": "uint64",
@@ -1060,6 +1067,7 @@
           "communities",
           "connect_retry",
           "delay_open",
+          "enforce_first_as",
           "hold_time",
           "host",
           "idle_hold_time",
@@ -2702,6 +2710,10 @@
             "description": "Delay sending out the initial open message.",
             "type": "boolean"
           },
+          "enforce_first_as": {
+            "description": "Ensure that routes received from eBGP peers have the peer's ASN as the first element in the AS path.",
+            "type": "boolean"
+          },
           "local_pref": {
             "nullable": true,
             "description": "Local preference attribute added to updates if this is an iBGP session",
@@ -2763,6 +2775,7 @@
           "connect_retry_counter",
           "damp_peer_oscillations",
           "delay_open",
+          "enforce_first_as",
           "passive_tcp_establishment",
           "send_notification_without_open",
           "track_tcp_state"

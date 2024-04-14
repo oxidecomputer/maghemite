@@ -364,6 +364,10 @@ pub struct SessionInfo {
 
     /// Capabilities sent to the peer.
     pub capabilities_sent: Vec<Capability>,
+
+    /// Ensure that routes received from eBGP peers have the peer's ASN as the
+    /// first element in the AS path.
+    pub enforce_first_as: bool,
 }
 
 impl Default for SessionInfo {
@@ -387,6 +391,7 @@ impl Default for SessionInfo {
             local_pref: None,
             capabilities_received: Vec::new(),
             capabilities_sent: Vec::new(),
+            enforce_first_as: false,
         }
     }
 }
@@ -1628,7 +1633,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Perform a set of checks on an update to see if we can accept it.
     fn check_update(&self, update: &UpdateMessage) -> Result<(), Error> {
-        self.check_for_self_in_path(update)
+        self.check_for_self_in_path(update)?;
+        let info = lock!(self.session);
+        if info.enforce_first_as {
+            if let Some(peer_as) = info.remote_asn {
+                self.enforce_first_as(update, peer_as)?;
+            }
+        }
+        Ok(())
     }
 
     fn apply_update_policy(&self, update: &mut UpdateMessage) {
@@ -1655,10 +1667,32 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             };
             for segment in path {
                 if segment.value.contains(&asn) {
+                    wrn!(self; "self in AS path: {:?}", update);
                     return Err(Error::SelfLoopDetected);
                 }
             }
         }
+        Ok(())
+    }
+
+    fn enforce_first_as(
+        &self,
+        update: &UpdateMessage,
+        peer_as: u32,
+    ) -> Result<(), Error> {
+        let path = match update.as_path() {
+            Some(path) => path,
+            None => return Err(Error::MissingAsPath),
+        };
+        let path: Vec<u32> = path.into_iter().flat_map(|x| x.value).collect();
+        if path.is_empty() {
+            return Err(Error::EmptyAsPath);
+        }
+
+        if path[0] != peer_as {
+            return Err(Error::EnforceAsFirst(peer_as, path));
+        }
+
         Ok(())
     }
 

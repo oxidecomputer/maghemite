@@ -185,6 +185,11 @@ pub struct Neighbor {
     /// Local preference to send to iBGP peers.
     #[arg(long)]
     pub local_pref: Option<u32>,
+
+    /// Ensure that routes received from eBGP peers have the peer's ASN as the
+    /// first element in the AS path.
+    #[arg(long)]
+    pub enforce_first_as: bool,
 }
 
 impl From<Neighbor> for types::AddNeighborRequest {
@@ -209,6 +214,7 @@ impl From<Neighbor> for types::AddNeighborRequest {
             multi_exit_discriminator: n.med,
             communities: n.communities,
             local_pref: n.local_pref,
+            enforce_first_as: n.enforce_first_as,
         }
     }
 }

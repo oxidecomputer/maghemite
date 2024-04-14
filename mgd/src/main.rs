@@ -252,6 +252,7 @@ fn start_bgp_routers(
                 multi_exit_discriminator: nbr.multi_exit_discriminator,
                 communities: nbr.communities.clone(),
                 local_pref: nbr.local_pref,
+                enforce_first_as: nbr.enforce_first_as,
             },
             true,
         )

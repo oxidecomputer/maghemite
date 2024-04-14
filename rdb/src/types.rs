@@ -394,6 +394,7 @@ pub struct BgpNeighborInfo {
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
+    pub enforce_first_as: bool,
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]

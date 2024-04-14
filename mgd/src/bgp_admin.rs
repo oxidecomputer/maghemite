@@ -540,6 +540,7 @@ pub(crate) mod helpers {
             multi_exit_discriminator: rq.multi_exit_discriminator,
             communities: rq.communities.clone(),
             local_pref: rq.local_pref,
+            enforce_first_as: rq.enforce_first_as,
             ..Default::default()
         };
 
@@ -583,6 +584,7 @@ pub(crate) mod helpers {
             multi_exit_discriminator: rq.multi_exit_discriminator,
             communities: rq.communities,
             local_pref: rq.local_pref,
+            enforce_first_as: rq.enforce_first_as,
         })?;
 
         start_bgp_session(&event_tx)?;
