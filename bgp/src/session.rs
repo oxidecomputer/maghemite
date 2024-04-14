@@ -698,6 +698,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Initial state. Refuse all incomming BGP connections. No resources
     /// allocated to peer.
     fn idle(&self) -> FsmState<Cnx> {
+        self.clock.timers.idle_hold_timer.reset();
+        self.clock.timers.idle_hold_timer.enable();
+
         let event = match self.event_rx.recv() {
             Ok(event) => event,
             Err(e) => {
@@ -708,15 +711,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         match event {
             FsmEvent::ManualStart => {
-                self.clock.timers.idle_hold_timer.enable();
                 if lock!(self.session).passive_tcp_establishment {
                     let conn = Cnx::new(
                         self.bind_addr,
                         self.neighbor.host,
                         self.log.clone(),
                     );
+                    self.clock.timers.idle_hold_timer.disable();
                     FsmState::Active(conn)
                 } else {
+                    self.clock.timers.idle_hold_timer.disable();
                     FsmState::Connect
                 }
             }
@@ -725,6 +729,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .idle_hold_timer_expirations
                     .fetch_add(1, Ordering::Relaxed);
+                self.clock.timers.idle_hold_timer.disable();
                 FsmState::Connect
             }
             FsmEvent::Message(Message::KeepAlive) => {
