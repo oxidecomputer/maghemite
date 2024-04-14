@@ -1634,6 +1634,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Perform a set of checks on an update to see if we can accept it.
     fn check_update(&self, update: &UpdateMessage) -> Result<(), Error> {
         self.check_for_self_in_path(update)?;
+        self.check_v4_prefixes(update)?;
+        self.check_nexthop_self(update)?;
         let info = lock!(self.session);
         if info.enforce_first_as {
             if let Some(peer_as) = info.remote_asn {
@@ -1670,6 +1672,41 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     wrn!(self; "self in AS path: {:?}", update);
                     return Err(Error::SelfLoopDetected);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    //TODO similar check needed for v6 once we get full v6 support
+    fn check_v4_prefixes(&self, update: &UpdateMessage) -> Result<(), Error> {
+        for prefix in &update.nlri {
+            if prefix.length == 0 {
+                continue;
+            }
+            let first = prefix.value[0];
+            // check 127.0.0.0/8, 224.0.0.0/4, 240.0.0.0/4
+            if (first == 127) || (first & 0xf0 == 224) || (first & 0xf0 == 240)
+            {
+                return Err(Error::InvalidNlriPrefix(prefix.as_prefix4()));
+            }
+        }
+        Ok(())
+    }
+
+    fn check_nexthop_self(&self, update: &UpdateMessage) -> Result<(), Error> {
+        // nothing to check when no prefixes presnt, and nexthop not required
+        // for pure withdraw
+        if update.nlri.is_empty() {
+            return Ok(());
+        }
+        let nexthop = match update.nexthop4() {
+            Some(nh) => nh,
+            None => return Err(Error::MissingNexthop),
+        };
+        for prefix in &update.nlri {
+            let prefix = prefix.as_prefix4();
+            if prefix.length == 32 && prefix.value == nexthop {
+                return Err(Error::NexthopSelf(prefix.value.into()));
             }
         }
         Ok(())
