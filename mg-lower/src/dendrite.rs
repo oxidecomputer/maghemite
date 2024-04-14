@@ -19,10 +19,10 @@ use libnet::{get_route, IpPrefix, Ipv4Prefix};
 use rdb::Path;
 use rdb::Prefix;
 use slog::{error, warn, Logger};
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::hash::Hash;
-use std::net::IpAddr;
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -114,6 +114,40 @@ pub(crate) fn link_is_up(
     Ok(link_info.link_state == LinkState::Up)
 }
 
+fn get_local_addrs(
+    dpd: &DpdClient,
+    rt: &Arc<tokio::runtime::Handle>,
+) -> Result<(BTreeSet<Ipv4Addr>, BTreeSet<Ipv6Addr>), Error> {
+    let links = rt
+        .block_on(async { dpd.link_list_all().await })?
+        .into_inner();
+
+    let mut v4 = BTreeSet::new();
+    let mut v6 = BTreeSet::new();
+
+    for link in links {
+        let addrs = rt
+            .block_on(async {
+                dpd.link_ipv4_list(&link.port_id, &link.link_id, None, None)
+                    .await
+            })?
+            .into_inner()
+            .items;
+        v4.extend(addrs.into_iter().map(|x| x.addr));
+
+        let addrs = rt
+            .block_on(async {
+                dpd.link_ipv6_list(&link.port_id, &link.link_id, None, None)
+                    .await
+            })?
+            .into_inner()
+            .items;
+        v6.extend(addrs.into_iter().map(|x| x.addr));
+    }
+
+    Ok((v4, v6))
+}
+
 /// Perform a set of route additions and deletions via the Dendrite API.
 pub(crate) fn update_dendrite<'a, I>(
     to_add: I,
@@ -125,6 +159,8 @@ pub(crate) fn update_dendrite<'a, I>(
 where
     I: Iterator<Item = &'a RouteHash>,
 {
+    let (local_v4_addrs, local_v6_addrs) = get_local_addrs(dpd, &rt)?;
+
     for r in to_add {
         let cidr = r.cidr;
         let tag = dpd.inner().tag.clone();
@@ -132,20 +168,58 @@ where
         let link_id = r.link_id;
 
         let target = match (r.cidr, r.nexthop) {
-            (Cidr::V4(_), IpAddr::V4(tgt_ip)) => types::Ipv4Route {
-                tag,
-                port_id,
-                link_id,
-                tgt_ip,
+            (Cidr::V4(c), IpAddr::V4(tgt_ip)) => {
+                if c.prefix_len == 32 && local_v4_addrs.contains(&c.prefix) {
+                    warn!(
+                        log,
+                        "martian detected: prefix={c:?}, \
+                        skipping data plane installation"
+                    );
+                    continue;
+                }
+                if local_v4_addrs.contains(&tgt_ip) {
+                    warn!(
+                        log,
+                        "martian detected: nexthop={tgt_ip:?}, \
+                        skipping data plane installation"
+                    );
+                    continue;
+                }
+
+                types::Ipv4Route {
+                    tag,
+                    port_id,
+                    link_id,
+                    tgt_ip,
+                }
+                .into()
             }
-            .into(),
-            (Cidr::V6(_), IpAddr::V6(tgt_ip)) => types::Ipv6Route {
-                tag,
-                port_id,
-                link_id,
-                tgt_ip,
+            (Cidr::V6(c), IpAddr::V6(tgt_ip)) => {
+                if c.prefix_len == 128 && local_v6_addrs.contains(&c.prefix) {
+                    warn!(
+                        log,
+                        "martian detected: prefix={c:?}, \
+                        skipping data plane installation"
+                    );
+                    continue;
+                }
+                if local_v6_addrs.contains(&tgt_ip) {
+                    warn!(
+                        log,
+                        "martian detected: nexthop={tgt_ip:?}, \
+                        skipping data plane installation"
+                    );
+                    continue;
+                }
+
+                types::Ipv6Route {
+                    tag,
+                    port_id,
+                    link_id,
+                    tgt_ip,
+                }
+                .into()
             }
-            .into(),
             _ => {
                 error!(
                     log,

@@ -541,6 +541,9 @@ impl UpdateMessage {
             if let PathAttributeValue::AsPath(path) = &a.value {
                 return Some(path.clone());
             }
+            if let PathAttributeValue::As4Path(path) = &a.value {
+                return Some(path.clone());
+            }
         }
         None
     }
