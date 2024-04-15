@@ -12,9 +12,12 @@ use crate::messages::{
     As4PathSegment, AsPathType, Community, PathAttribute, PathAttributeValue,
     Prefix, UpdateMessage,
 };
+use crate::policy::load_checker;
+use crate::policy::load_shaper;
 use crate::session::{FsmEvent, NeighborInfo, SessionInfo, SessionRunner};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db};
+use rhai::AST;
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -38,6 +41,9 @@ pub struct Router<Cnx: BgpConnection> {
     /// A set of BGP session runners indexed by peer IP address.
     pub sessions: Mutex<BTreeMap<IpAddr, Arc<SessionRunner<Cnx>>>>,
 
+    /// Compiled policy programs.
+    pub policy: Policy,
+
     /// The logger used by this router.
     log: Logger,
 
@@ -60,6 +66,28 @@ pub struct Router<Cnx: BgpConnection> {
     fanout: Arc<RwLock<Fanout<Cnx>>>,
 }
 
+#[derive(Default, Clone)]
+pub struct Policy {
+    pub shaper: Arc<RwLock<Option<AST>>>,
+    pub checker: Arc<RwLock<Option<AST>>>,
+}
+
+impl Policy {
+    pub fn load_shaper(&self, program_source: &str) -> anyhow::Result<()> {
+        let ast =
+            load_shaper(program_source).map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.shaper.write().unwrap().replace(ast);
+        Ok(())
+    }
+
+    pub fn load_checker(&self, program_source: &str) -> anyhow::Result<()> {
+        let ast =
+            load_checker(program_source).map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.checker.write().unwrap().replace(ast);
+        Ok(())
+    }
+}
+
 unsafe impl<Cnx: BgpConnection> Send for Router<Cnx> {}
 unsafe impl<Cnx: BgpConnection> Sync for Router<Cnx> {}
 
@@ -79,6 +107,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             db,
             sessions: Mutex::new(BTreeMap::new()),
             fanout: Arc::new(RwLock::new(Fanout::default())),
+            policy: Policy::default(),
         }
     }
 

@@ -116,6 +116,32 @@
         }
       }
     },
+    "/bgp/checker": {
+      "put": {
+        "operationId": "load_checker",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoadPolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/graceful_shutdown": {
       "post": {
         "operationId": "graceful_shutdown",
@@ -1845,6 +1871,23 @@
           "connection_not_synchronized",
           "bad_message_length",
           "bad_message_type"
+        ]
+      },
+      "LoadPolicyRequest": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asn",
+          "code"
         ]
       },
       "Md5Key": {

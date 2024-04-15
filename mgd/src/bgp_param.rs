@@ -255,6 +255,12 @@ pub struct BgpPeerConfig {
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct Rib(BTreeMap<String, BTreeSet<Path>>);
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct LoadPolicyRequest {
+    pub asn: u32,
+    pub code: String,
+}
+
 impl From<rdb::db::Rib> for Rib {
     fn from(value: rdb::db::Rib) -> Self {
         Rib(value.into_iter().map(|(k, v)| (k.to_string(), v)).collect())

@@ -11,6 +11,7 @@ use crate::messages::{
     NotificationMessage, OpenMessage, OptionalParameter, PathAttributeValue,
     UpdateMessage,
 };
+use crate::policy::{PolicyResult, ShaperResult};
 use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
@@ -1039,14 +1040,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
         if let Err(e) = self.handle_open(&conn, &om) {
-            wrn!(self; "failed to handle open message: {e}");
-            //TODO send a notification to the peer letting them know we are
-            //     rejecting the open message?
-            self.clock.timers.connect_retry_timer.enable();
-            self.counters
-                .open_handle_failures
-                .fetch_add(1, Ordering::Relaxed);
-            return FsmState::Active(conn);
+            match e {
+                Error::PolicyCheckFailed => {
+                    inf!(self; "{}", e)
+                }
+                e => {
+                    wrn!(self; "failed to handle open message: {e}");
+                    //TODO send a notification to the peer letting them know we are
+                    //     rejecting the open message?
+                    self.clock.timers.connect_retry_timer.enable();
+                    self.counters
+                        .open_handle_failures
+                        .fetch_add(1, Ordering::Relaxed);
+                    return FsmState::Active(conn);
+                }
+            }
         }
 
         // ACK the open with a keepalive and transition to open confirm.
@@ -1325,6 +1333,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }));
             }
         }
+        if let Some(checker) =
+            self.router.policy.checker.read().unwrap().as_ref()
+        {
+            match crate::policy::check_incoming_open(
+                om.clone(),
+                checker,
+                remote_asn,
+                self.neighbor.host.ip(),
+            ) {
+                Ok(result) => match result {
+                    PolicyResult::Accept => {}
+                    PolicyResult::Drop => return Err(Error::PolicyCheckFailed),
+                },
+                Err(e) => {
+                    err!(self; "open checker exec: {e}");
+                }
+            }
+        }
         {
             let mut session = lock!(self.session);
             session.remote_asn = Some(remote_asn);
@@ -1431,13 +1457,35 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             ),
         };
         msg.add_capabilities(&capabilities);
-        self.message_history
-            .lock()
-            .unwrap()
-            .send(msg.clone().into());
+
+        let mut out = Message::from(msg.clone());
+        if let Some(shaper) = self.router.policy.shaper.read().unwrap().as_ref()
+        {
+            let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
+            match crate::policy::shape_outgoing_open(
+                msg.clone(),
+                shaper,
+                peer_as,
+                self.neighbor.host.ip(),
+            ) {
+                Ok(result) => match result {
+                    ShaperResult::Emit(msg) => {
+                        out = msg;
+                    }
+                    ShaperResult::Drop => {
+                        return Ok(());
+                    }
+                },
+                Err(e) => {
+                    err!(self; "open shaper exec: {e}");
+                }
+            }
+        }
+        drop(msg);
+        self.message_history.lock().unwrap().send(out.clone());
 
         self.counters.opens_sent.fetch_add(1, Ordering::Relaxed);
-        if let Err(e) = conn.send(msg.into()) {
+        if let Err(e) = conn.send(out) {
             err!(self; "failed to send open {e}");
             self.counters
                 .open_send_failure
@@ -1511,14 +1559,36 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .push(PathAttributeValue::Communities(cs).into())
         }
 
-        self.message_history
-            .lock()
-            .unwrap()
-            .send(update.clone().into());
+        let mut out = Message::from(update.clone());
+        if let Some(shaper) = self.router.policy.shaper.read().unwrap().as_ref()
+        {
+            let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
+            match crate::policy::shape_outgoing_update(
+                update.clone(),
+                shaper,
+                peer_as,
+                self.neighbor.host.ip(),
+            ) {
+                Ok(result) => match result {
+                    ShaperResult::Emit(msg) => {
+                        out = msg;
+                    }
+                    ShaperResult::Drop => {
+                        return Ok(());
+                    }
+                },
+                Err(e) => {
+                    err!(self; "update shaper exec: {e}");
+                }
+            }
+        }
+        drop(update);
+
+        self.message_history.lock().unwrap().send(out.clone());
 
         self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
 
-        if let Err(e) = conn.send(update.into()) {
+        if let Err(e) = conn.send(out) {
             err!(self; "failed to send update {e}");
             self.counters
                 .update_send_failure
@@ -1555,7 +1625,29 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             );
             return;
         }
-        self.apply_update_policy(&mut update);
+        self.apply_static_update_policy(&mut update);
+
+        if let Some(checker) =
+            self.router.policy.checker.read().unwrap().as_ref()
+        {
+            match crate::policy::check_incoming_update(
+                update.clone(),
+                checker,
+                peer_as,
+                self.neighbor.host.ip(),
+            ) {
+                Ok(result) => match result {
+                    PolicyResult::Accept => {}
+                    PolicyResult::Drop => {
+                        return;
+                    }
+                },
+                Err(e) => {
+                    err!(self; "update checker exec: {e}");
+                }
+            }
+        }
+
         self.update_rib(&update, id, peer_as);
 
         // NOTE: for now we are only acting as an edge router. This means we
@@ -1645,9 +1737,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         Ok(())
     }
 
-    fn apply_update_policy(&self, update: &mut UpdateMessage) {
+    fn apply_static_update_policy(&self, update: &mut UpdateMessage) {
         if self.is_ebgp() {
-            update.clear_local_perf()
+            update.clear_local_pref()
         }
     }
 

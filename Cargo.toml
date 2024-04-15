@@ -88,6 +88,7 @@ uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
 libc = "0.2"
 itertools = "0.12"
+rhai = { version = "1", features = ["metadata"] }
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"

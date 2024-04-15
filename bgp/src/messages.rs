@@ -261,6 +261,12 @@ impl OpenMessage {
         Vec::new()
     }
 
+    pub fn has_capability(&self, code: CapabilityCode) -> bool {
+        self.get_capabilities()
+            .into_iter()
+            .any(|x| CapabilityCode::from(x) == code)
+    }
+
     /// Serialize an open message to wire format.
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
@@ -501,16 +507,7 @@ impl UpdateMessage {
     }
 
     pub fn graceful_shutdown(&self) -> bool {
-        for a in &self.path_attributes {
-            if let PathAttributeValue::Communities(communities) = &a.value {
-                for c in communities {
-                    if *c == Community::GracefulShutdown {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+        self.has_community(Community::GracefulShutdown)
     }
 
     pub fn multi_exit_discriminator(&self) -> Option<u32> {
@@ -531,7 +528,7 @@ impl UpdateMessage {
         None
     }
 
-    pub fn clear_local_perf(&mut self) {
+    pub fn clear_local_pref(&mut self) {
         self.path_attributes
             .retain(|a| a.typ.type_code != PathAttributeTypeCode::LocalPref);
     }
@@ -551,6 +548,32 @@ impl UpdateMessage {
     pub fn path_len(&self) -> Option<usize> {
         self.as_path()
             .map(|p| p.iter().fold(0, |a, b| a + b.value.len()))
+    }
+
+    pub fn has_community(&self, community: Community) -> bool {
+        for a in &self.path_attributes {
+            if let PathAttributeValue::Communities(communities) = &a.value {
+                for c in communities {
+                    if *c == community {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    pub fn add_community(&mut self, community: Community) {
+        for a in &mut self.path_attributes {
+            if let PathAttributeValue::Communities(ref mut communities) =
+                &mut a.value
+            {
+                communities.push(community);
+                return;
+            }
+        }
+        self.path_attributes
+            .push(PathAttributeValue::Communities(vec![community]).into());
     }
 }
 
@@ -2114,7 +2137,7 @@ impl Capability {
 }
 
 /// The set of capability codes supported by this BGP implementation
-#[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Copy, Clone)]
 #[repr(u8)]
 pub enum CapabilityCode {
     /// RFC 5492
@@ -2245,6 +2268,122 @@ pub enum CapabilityCode {
     Experimental49,
     Experimental50,
     Experimental51,
+}
+
+impl From<Capability> for CapabilityCode {
+    fn from(value: Capability) -> Self {
+        match value {
+            Capability::MultiprotocolExtensions { afi: _, safi: _ } => {
+                CapabilityCode::MultiprotocolExtensions
+            }
+            Capability::RouteRefresh {} => CapabilityCode::RouteRefresh,
+            Capability::OutboundRouteFiltering {} => {
+                CapabilityCode::OutboundRouteFiltering
+            }
+            Capability::MultipleRoutesToDestination {} => {
+                CapabilityCode::MultipleRoutesToDestination
+            }
+            Capability::ExtendedNextHopEncoding {} => {
+                CapabilityCode::ExtendedNextHopEncoding
+            }
+            Capability::BGPExtendedMessage {} => {
+                CapabilityCode::BGPExtendedMessage
+            }
+            Capability::BgpSec {} => CapabilityCode::BgpSec,
+            Capability::MultipleLabels {} => CapabilityCode::MultipleLabels,
+            Capability::BgpRole {} => CapabilityCode::BgpRole,
+            Capability::GracefulRestart {} => CapabilityCode::GracefulRestart,
+            Capability::FourOctetAs { asn: _ } => CapabilityCode::FourOctetAs,
+            Capability::DynamicCapability {} => {
+                CapabilityCode::DynamicCapability
+            }
+            Capability::MultisessionBgp {} => CapabilityCode::MultisessionBgp,
+            Capability::AddPath { elements: _ } => CapabilityCode::AddPath,
+            Capability::EnhancedRouteRefresh {} => {
+                CapabilityCode::EnhancedRouteRefresh
+            }
+            Capability::LongLivedGracefulRestart {} => {
+                CapabilityCode::LongLivedGracefulRestart
+            }
+            Capability::RoutingPolicyDistribution {} => {
+                CapabilityCode::RoutingPolicyDistribution
+            }
+            Capability::Fqdn {} => CapabilityCode::Fqdn,
+            Capability::PrestandardRouteRefresh {} => {
+                CapabilityCode::PrestandardRouteRefresh
+            }
+            Capability::PrestandardOrfAndPd {} => {
+                CapabilityCode::PrestandardOrfAndPd
+            }
+            Capability::PrestandardOutboundRouteFiltering {} => {
+                CapabilityCode::PrestandardOutboundRouteFiltering
+            }
+            Capability::PrestandardMultisession {} => {
+                CapabilityCode::PrestandardMultisession
+            }
+            Capability::PrestandardFqdn {} => CapabilityCode::PrestandardFqdn,
+            Capability::PrestandardOperationalMessage {} => {
+                CapabilityCode::PrestandardOperationalMessage
+            }
+            Capability::Experimental { code } => match code {
+                0 => CapabilityCode::Experimental0,
+                1 => CapabilityCode::Experimental1,
+                2 => CapabilityCode::Experimental2,
+                3 => CapabilityCode::Experimental3,
+                4 => CapabilityCode::Experimental4,
+                5 => CapabilityCode::Experimental5,
+                6 => CapabilityCode::Experimental6,
+                7 => CapabilityCode::Experimental7,
+                8 => CapabilityCode::Experimental8,
+                9 => CapabilityCode::Experimental9,
+                10 => CapabilityCode::Experimental10,
+                11 => CapabilityCode::Experimental11,
+                12 => CapabilityCode::Experimental12,
+                13 => CapabilityCode::Experimental13,
+                14 => CapabilityCode::Experimental14,
+                15 => CapabilityCode::Experimental15,
+                16 => CapabilityCode::Experimental16,
+                17 => CapabilityCode::Experimental17,
+                18 => CapabilityCode::Experimental18,
+                19 => CapabilityCode::Experimental19,
+                20 => CapabilityCode::Experimental20,
+                21 => CapabilityCode::Experimental21,
+                22 => CapabilityCode::Experimental22,
+                23 => CapabilityCode::Experimental23,
+                24 => CapabilityCode::Experimental24,
+                25 => CapabilityCode::Experimental25,
+                26 => CapabilityCode::Experimental26,
+                27 => CapabilityCode::Experimental27,
+                28 => CapabilityCode::Experimental28,
+                29 => CapabilityCode::Experimental29,
+                30 => CapabilityCode::Experimental30,
+                31 => CapabilityCode::Experimental31,
+                32 => CapabilityCode::Experimental32,
+                33 => CapabilityCode::Experimental33,
+                34 => CapabilityCode::Experimental34,
+                35 => CapabilityCode::Experimental35,
+                36 => CapabilityCode::Experimental36,
+                37 => CapabilityCode::Experimental37,
+                38 => CapabilityCode::Experimental38,
+                39 => CapabilityCode::Experimental39,
+                40 => CapabilityCode::Experimental40,
+                41 => CapabilityCode::Experimental41,
+                42 => CapabilityCode::Experimental42,
+                43 => CapabilityCode::Experimental43,
+                44 => CapabilityCode::Experimental44,
+                45 => CapabilityCode::Experimental45,
+                46 => CapabilityCode::Experimental46,
+                47 => CapabilityCode::Experimental47,
+                48 => CapabilityCode::Experimental48,
+                49 => CapabilityCode::Experimental49,
+                50 => CapabilityCode::Experimental50,
+                51 => CapabilityCode::Experimental51,
+                _ => CapabilityCode::Experimental0,
+            },
+            Capability::Unassigned { code: _ } => CapabilityCode::Reserved,
+            Capability::Reserved { code: _ } => CapabilityCode::Reserved,
+        }
+    }
 }
 
 #[cfg(test)]

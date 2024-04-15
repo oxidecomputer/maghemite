@@ -178,6 +178,9 @@ pub enum Error {
 
     #[error("Nexthop missing")]
     MissingNexthop,
+
+    #[error("Drop due to user defined policy")]
+    PolicyCheckFailed,
 }
 
 #[derive(Debug)]

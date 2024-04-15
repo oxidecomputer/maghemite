@@ -84,6 +84,8 @@ pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
 
     register!(api, bgp_apply);
 
+    register!(api, load_checker);
+
     register!(api, graceful_shutdown);
     register!(api, message_history);
 }
@@ -492,6 +494,31 @@ pub async fn message_history(
     }
 
     Ok(HttpResponseOk(MessageHistoryResponse { by_peer: result }))
+}
+
+#[endpoint { method = PUT, path = "/bgp/checker" }]
+pub async fn load_checker(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<LoadPolicyRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context();
+    let rq = request.into_inner();
+    match ctx.bgp.router.lock().unwrap().get(&rq.asn) {
+        None => {
+            return Err(HttpError::for_not_found(
+                None,
+                String::from("ASN not found"),
+            ));
+        }
+        Some(rtr) => {
+            if let Err(e) = rtr.policy.load_checker(&rq.code) {
+                // The program failed to compile, return a bad request error
+                // with the error string from the compiler.
+                return Err(HttpError::for_bad_request(None, e.to_string()));
+            }
+        }
+    }
+    Ok(HttpResponseUpdatedNoContent())
 }
 
 pub(crate) mod helpers {

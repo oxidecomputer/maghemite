@@ -66,6 +66,9 @@ pub enum Commands {
 
     /// Disable graceful shutdown of a BGP router.
     DisableGshut { asn: u32 },
+
+    /// Load a checker program for a BGP router.
+    LoadChecker { filename: String, asn: u32 },
 }
 
 #[derive(Args, Debug)]
@@ -242,6 +245,9 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
         }
         Commands::DisableGshut { asn } => {
             graceful_shutdown(asn, false, client).await
+        }
+        Commands::LoadChecker { filename, asn } => {
+            load_checker(filename, asn, client).await
         }
     }
     Ok(())
@@ -491,4 +497,11 @@ fn print_rib(rib: Rib) {
         println!("{}", "=============".dimmed());
         tw.flush().unwrap();
     }
+}
+
+async fn load_checker(filename: String, asn: u32, c: Client) {
+    let code = std::fs::read_to_string(filename).unwrap();
+    c.load_checker(&types::LoadPolicyRequest { asn, code })
+        .await
+        .unwrap();
 }
