@@ -95,6 +95,39 @@ impl From<NotificationMessage> for Message {
     }
 }
 
+impl TryFrom<Message> for OpenMessage {
+    type Error = &'static str;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::Open(msg) = value {
+            Ok(msg)
+        } else {
+            Err("not an open message")
+        }
+    }
+}
+
+impl TryFrom<Message> for UpdateMessage {
+    type Error = &'static str;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::Update(msg) = value {
+            Ok(msg)
+        } else {
+            Err("not an update message")
+        }
+    }
+}
+
+impl TryFrom<Message> for NotificationMessage {
+    type Error = &'static str;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::Notification(msg) = value {
+            Ok(msg)
+        } else {
+            Err("not a notification message")
+        }
+    }
+}
+
 /// Each BGP message has a fixed sized header.
 ///
 /// ```text
@@ -751,6 +784,32 @@ impl Prefix {
                 length: x,
             },
         }
+    }
+
+    pub fn within(&self, x: &Prefix) -> bool {
+        if self.length > 128 || x.length > 128 {
+            return false;
+        }
+        if self.length < x.length {
+            return false;
+        }
+        if self.value.len() > 16 || x.value.len() > 16 {
+            return false;
+        }
+
+        let mut a = self.value.clone();
+        a.resize(16, 0);
+        let mut a = u128::from_le_bytes(a.try_into().unwrap());
+
+        let mut b = x.value.clone();
+        b.resize(16, 0);
+        let mut b = u128::from_le_bytes(b.try_into().unwrap());
+
+        let mask = (1u128 << x.length) - 1;
+        a &= mask;
+        b &= mask;
+
+        a == b
     }
 }
 
@@ -2463,5 +2522,35 @@ mod tests {
         let um1 =
             UpdateMessage::from_wire(&buf).expect("update message from wire");
         assert_eq!(um0, um1);
+    }
+
+    #[test]
+    fn prefix_within() {
+        let prefixes: &[Prefix] = &[
+            "10.10.10.10/32".parse().unwrap(),
+            "10.10.10.0/24".parse().unwrap(),
+            "10.10.0.0/16".parse().unwrap(),
+            "10.0.0.0/8".parse().unwrap(),
+        ];
+
+        for i in 0..prefixes.len() {
+            for j in i..prefixes.len() {
+                // shorter prefixes contain longer or equal
+                assert!(prefixes[i].within(&prefixes[j]));
+                if i != j {
+                    // longer prefixes should not contain shorter
+                    assert!(!prefixes[j].within(&prefixes[i]))
+                }
+            }
+        }
+
+        let a: Prefix = "10.10.0.0/16".parse().unwrap();
+        let b: Prefix = "10.20.0.0/16".parse().unwrap();
+        assert!(!a.within(&b));
+        let a: Prefix = "10.10.0.0/24".parse().unwrap();
+        assert!(!a.within(&b));
+
+        let b: Prefix = "0.0.0.0/0".parse().unwrap();
+        assert!(a.within(&b));
     }
 }

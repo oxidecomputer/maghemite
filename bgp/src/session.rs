@@ -11,7 +11,7 @@ use crate::messages::{
     NotificationMessage, OpenMessage, OptionalParameter, PathAttributeValue,
     UpdateMessage,
 };
-use crate::policy::{PolicyResult, ShaperResult};
+use crate::policy::{CheckerResult, ShaperResult};
 use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
@@ -1341,10 +1341,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 checker,
                 remote_asn,
                 self.neighbor.host.ip(),
+                self.log.clone(),
             ) {
                 Ok(result) => match result {
-                    PolicyResult::Accept => {}
-                    PolicyResult::Drop => return Err(Error::PolicyCheckFailed),
+                    CheckerResult::Accept => {}
+                    CheckerResult::Drop => {
+                        return Err(Error::PolicyCheckFailed)
+                    }
                 },
                 Err(e) => {
                     err!(self; "open checker exec: {e}");
@@ -1467,6 +1470,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 shaper,
                 peer_as,
                 self.neighbor.host.ip(),
+                self.log.clone(),
             ) {
                 Ok(result) => match result {
                     ShaperResult::Emit(msg) => {
@@ -1568,6 +1572,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 shaper,
                 peer_as,
                 self.neighbor.host.ip(),
+                self.log.clone(),
             ) {
                 Ok(result) => match result {
                     ShaperResult::Emit(msg) => {
@@ -1635,10 +1640,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 checker,
                 peer_as,
                 self.neighbor.host.ip(),
+                self.log.clone(),
             ) {
                 Ok(result) => match result {
-                    PolicyResult::Accept => {}
-                    PolicyResult::Drop => {
+                    CheckerResult::Accept => {}
+                    CheckerResult::Drop => {
                         return;
                     }
                 },

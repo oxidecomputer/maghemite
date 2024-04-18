@@ -2225,6 +2225,7 @@ name = "mgadm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bgp",
  "clap",
  "colored",
  "humantime",

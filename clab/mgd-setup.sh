@@ -48,3 +48,12 @@ addr=`host -t A -4 clab-pop-oxpop | awk '{print $4}'`
     --keepalive-time 300 \
     --communities 8675309 \
     --med 99
+
+~/src/maghemite/target/debug/mgadm -a $addr \
+	bgp load-shaper \
+	shaper.rhai 65547
+
+~/src/maghemite/target/debug/mgadm -a $addr \
+    bgp originate4 65547 \
+    198.51.100.0/24 \
+    192.168.12.0/24

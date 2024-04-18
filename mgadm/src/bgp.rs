@@ -69,6 +69,9 @@ pub enum Commands {
 
     /// Load a checker program for a BGP router.
     LoadChecker { filename: String, asn: u32 },
+
+    /// Load a shaper program for a BGP router.
+    LoadShaper { filename: String, asn: u32 },
 }
 
 #[derive(Args, Debug)]
@@ -248,6 +251,9 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
         }
         Commands::LoadChecker { filename, asn } => {
             load_checker(filename, asn, client).await
+        }
+        Commands::LoadShaper { filename, asn } => {
+            load_shaper(filename, asn, client).await
         }
     }
     Ok(())
@@ -435,7 +441,7 @@ fn print_rib(rib: Rib) {
         bgp_routes.insert(prefix, br);
     }
 
-    if !static_routes.is_empty() {
+    if static_routes.values().map(|x| x.len()).sum::<usize>() > 0 {
         let mut tw = TabWriter::new(stdout());
         writeln!(
             &mut tw,
@@ -461,7 +467,7 @@ fn print_rib(rib: Rib) {
         tw.flush().unwrap();
     }
 
-    if !bgp_routes.is_empty() {
+    if bgp_routes.values().map(|x| x.len()).sum::<usize>() > 0 {
         let mut tw = TabWriter::new(stdout());
         writeln!(
             &mut tw,
@@ -501,7 +507,22 @@ fn print_rib(rib: Rib) {
 
 async fn load_checker(filename: String, asn: u32, c: Client) {
     let code = std::fs::read_to_string(filename).unwrap();
+
+    // check that the program is loadable first
+    bgp::policy::load_checker(&code).unwrap();
+
     c.load_checker(&types::LoadPolicyRequest { asn, code })
+        .await
+        .unwrap();
+}
+
+async fn load_shaper(filename: String, asn: u32, c: Client) {
+    let code = std::fs::read_to_string(filename).unwrap();
+
+    // check that the program is loadable first
+    bgp::policy::load_checker(&code).unwrap();
+
+    c.load_shaper(&types::LoadPolicyRequest { asn, code })
         .await
         .unwrap();
 }

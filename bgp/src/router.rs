@@ -80,11 +80,27 @@ impl Policy {
         Ok(())
     }
 
+    pub fn shaper_source(&self) -> Option<String> {
+        self.shaper
+            .read()
+            .unwrap()
+            .clone()
+            .and_then(|ast| ast.source().map(|s| s.to_owned()))
+    }
+
     pub fn load_checker(&self, program_source: &str) -> anyhow::Result<()> {
         let ast =
             load_checker(program_source).map_err(|e| anyhow::anyhow!("{e}"))?;
         self.checker.write().unwrap().replace(ast);
         Ok(())
+    }
+
+    pub fn checker_source(&self) -> Option<String> {
+        self.checker
+            .read()
+            .unwrap()
+            .clone()
+            .and_then(|ast| ast.source().map(|s| s.to_owned()))
     }
 }
 

@@ -4,10 +4,10 @@
 
 use crate::{
     messages::{
-        Capability, CapabilityCode, Community, Message, OpenMessage,
+        Capability, CapabilityCode, Community, Message, OpenMessage, Prefix,
         UpdateMessage,
     },
-    policy::{PolicyResult, ShaperResult},
+    policy::{CheckerResult, ShaperResult},
 };
 use rhai::{export_module, plugin::*, Module};
 
@@ -53,7 +53,7 @@ create_enum_module! {
 }
 
 create_enum_module! {
-    checker_result_module: PolicyResult => Accept, Drop
+    checker_result_module: CheckerResult => Accept, Drop
 }
 
 // Rhai needs methods to be &mut self and not just &self, so the following
@@ -85,6 +85,7 @@ impl UpdateMessage {
         };
         self.has_community(Community::from(c))
     }
+
     pub fn rhai_add_community(&mut self, community: i64) {
         let c: u32 = match community.try_into() {
             Ok(c) => c,
@@ -92,8 +93,25 @@ impl UpdateMessage {
         };
         self.add_community(Community::from(c));
     }
+
     pub fn emit(&mut self) -> ShaperResult {
         ShaperResult::Emit(Message::Update(self.clone()))
+    }
+
+    pub fn prefix_filter<F>(&mut self, f: F)
+    where
+        F: Clone + Fn(&Prefix) -> bool,
+    {
+        self.withdrawn.retain(f.clone());
+        self.nlri.retain(f);
+    }
+
+    pub fn get_nlri(&mut self) -> Vec<Prefix> {
+        self.nlri.clone()
+    }
+
+    pub fn set_nlri(&mut self, value: Vec<Prefix>) {
+        self.nlri = value;
     }
 }
 
@@ -156,5 +174,16 @@ pub mod shaper_result_module {
     #[rhai_fn(global, name = "!=", pure)]
     pub fn neq(sr: &mut ShaperResult, sr2: ShaperResult) -> bool {
         sr != &sr2
+    }
+}
+
+impl Prefix {
+    pub fn within_rhai(&mut self, x: &str) -> bool {
+        let x: Prefix = match x.parse() {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        let s = self.clone();
+        s.within(&x)
     }
 }

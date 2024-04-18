@@ -26,9 +26,15 @@
 //!
 //! Policy scripts are operator defined and written in Rhai.
 
-use crate::messages::{CapabilityCode, Message, OpenMessage, UpdateMessage};
+use crate::messages::{
+    CapabilityCode, Message, OpenMessage, Prefix, UpdateMessage,
+};
 use crate::rhai_integration::*;
-use rhai::{Engine, EvalAltResult, ParseError, Scope, AST};
+use rhai::{
+    Dynamic, Engine, EvalAltResult, FnPtr, NativeCallContext, ParseError,
+    Scope, AST,
+};
+use slog::{debug, info, Logger};
 use std::net::IpAddr;
 
 #[derive(Debug, Clone, Copy)]
@@ -56,8 +62,17 @@ pub enum ShaperResult {
     Drop,
 }
 
+impl ShaperResult {
+    pub fn unwrap(self) -> Message {
+        match self {
+            Self::Drop => panic!("unwrap dropped shaper result"),
+            Self::Emit(message) => message,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
-pub enum PolicyResult {
+pub enum CheckerResult {
     Accept,
     Drop,
 }
@@ -85,6 +100,7 @@ pub enum Error {
 
 pub fn new_rhai_engine() -> Engine {
     let mut engine = Engine::new();
+    engine.set_max_expr_depths(50, 50);
 
     engine
         .register_type_with_name::<CapabilityCode>("CapabilityCode")
@@ -94,7 +110,7 @@ pub fn new_rhai_engine() -> Engine {
         );
 
     engine
-        .register_type_with_name::<PolicyResult>("PolicyResult")
+        .register_type_with_name::<CheckerResult>("PolicyResult")
         .register_static_module(
             "PolicyResult",
             rhai::exported_module!(checker_result_module).into(),
@@ -117,9 +133,61 @@ pub fn new_rhai_engine() -> Engine {
         .register_type_with_name::<UpdateMessage>("UpdateMessage")
         .register_fn("has_community", UpdateMessage::rhai_has_community)
         .register_fn("add_community", UpdateMessage::rhai_add_community)
-        .register_fn("emit", UpdateMessage::emit);
+        .register_fn("emit", UpdateMessage::emit)
+        .register_raw_fn(
+            "prefix_filter",
+            [
+                std::any::TypeId::of::<UpdateMessage>(),
+                std::any::TypeId::of::<FnPtr>(),
+            ],
+            |context: NativeCallContext, args: &mut [&'_ mut Dynamic]| {
+                // get the passed in function
+                let fp = args[1].take().cast::<FnPtr>();
+                let mut msg = args[0].write_lock::<UpdateMessage>().unwrap();
+                msg.prefix_filter(|p| {
+                    fp.call_raw(&context, None, [Dynamic::from(p.clone())])
+                        .unwrap()
+                        .cast::<bool>()
+                });
+                Ok(())
+            },
+        );
 
     engine
+        .register_type_with_name::<Prefix>("Prefix")
+        .register_fn("within", Prefix::within_rhai);
+
+    #[cfg(debug_assertions)]
+    {
+        println!("Functions registered:");
+        engine
+            .gen_fn_signatures(false)
+            .into_iter()
+            .for_each(|func| println!("{func}"));
+        println!();
+    }
+
+    engine
+}
+
+fn set_engine_logger(
+    engine: &mut Engine,
+    log: Logger,
+    component: &str,
+    asn: u32,
+) {
+    //TODO have a log scraper ship these to somewhere the user can get at them
+    let info_log =
+        log.new(slog::o!("component" => component.to_string(), "asn" => asn));
+    engine.on_print(move |s| {
+        info!(info_log, "{}", s);
+    });
+
+    let debug_log =
+        log.new(slog::o!("component" => component.to_string(), "asn" => asn));
+    engine.on_debug(move |s, src, pos| {
+        debug!(debug_log, "[{src:?}:{pos}] {}", s);
+    });
 }
 
 fn new_rhai_scope(ctx: &PolicyContext) -> Scope {
@@ -135,7 +203,8 @@ pub fn check_incoming_open(
     checker: &AST,
     asn: u32,
     address: IpAddr,
-) -> Result<PolicyResult, Error> {
+    log: Logger,
+) -> Result<CheckerResult, Error> {
     let ctx = PolicyContext {
         direction: Direction::Incoming,
         message: m.clone().into(),
@@ -143,9 +212,10 @@ pub fn check_incoming_open(
     };
 
     let mut scope = new_rhai_scope(&ctx);
-    let engine = new_rhai_engine();
+    let mut engine = new_rhai_engine();
+    set_engine_logger(&mut engine, log, "checker", asn);
 
-    Ok(engine.call_fn::<PolicyResult>(
+    Ok(engine.call_fn::<CheckerResult>(
         &mut scope,
         checker,
         "open",
@@ -158,7 +228,8 @@ pub fn check_incoming_update(
     checker: &AST,
     asn: u32,
     address: IpAddr,
-) -> Result<PolicyResult, Error> {
+    log: Logger,
+) -> Result<CheckerResult, Error> {
     let ctx = PolicyContext {
         direction: Direction::Incoming,
         message: m.clone().into(),
@@ -166,9 +237,10 @@ pub fn check_incoming_update(
     };
 
     let mut scope = new_rhai_scope(&ctx);
-    let engine = new_rhai_engine();
+    let mut engine = new_rhai_engine();
+    set_engine_logger(&mut engine, log, "checker", asn);
 
-    Ok(engine.call_fn::<PolicyResult>(
+    Ok(engine.call_fn::<CheckerResult>(
         &mut scope,
         checker,
         "update",
@@ -181,6 +253,7 @@ pub fn shape_outgoing_open(
     shaper: &AST,
     asn: u32,
     address: IpAddr,
+    log: Logger,
 ) -> Result<ShaperResult, Error> {
     let ctx = PolicyContext {
         direction: Direction::Incoming,
@@ -189,7 +262,8 @@ pub fn shape_outgoing_open(
     };
 
     let mut scope = new_rhai_scope(&ctx);
-    let engine = new_rhai_engine();
+    let mut engine = new_rhai_engine();
+    set_engine_logger(&mut engine, log, "checker", asn);
 
     Ok(engine.call_fn::<ShaperResult>(
         &mut scope,
@@ -204,6 +278,7 @@ pub fn shape_outgoing_update(
     shaper: &AST,
     asn: u32,
     address: IpAddr,
+    log: Logger,
 ) -> Result<ShaperResult, Error> {
     let ctx = PolicyContext {
         direction: Direction::Incoming,
@@ -212,7 +287,8 @@ pub fn shape_outgoing_update(
     };
 
     let mut scope = new_rhai_scope(&ctx);
-    let engine = new_rhai_engine();
+    let mut engine = new_rhai_engine();
+    set_engine_logger(&mut engine, log, "checker", asn);
 
     Ok(engine.call_fn::<ShaperResult>(
         &mut scope,
@@ -254,12 +330,23 @@ pub fn load_checker(program_source: &str) -> Result<AST, Error> {
 
 #[cfg(test)]
 mod test {
+    use slog::Drain;
+
     use crate::messages::{
         Community, PathAttribute, PathAttributeType, PathAttributeTypeCode,
         PathAttributeValue,
     };
 
     use super::*;
+
+    fn log() -> Logger {
+        let drain = slog_bunyan::new(std::io::stdout()).build().fuse();
+        let drain = slog_async::Async::new(drain)
+            .chan_size(0x8000)
+            .build()
+            .fuse();
+        slog::Logger::root(drain, slog::o!())
+    }
 
     #[test]
     fn open_require_4byte_as() {
@@ -271,13 +358,15 @@ mod test {
             std::fs::read_to_string("../bgp/policy/policy-check0.rhai")
                 .unwrap();
         let ast = load_checker(&source).unwrap();
-        let result = check_incoming_open(m, &ast, asn.into(), addr).unwrap();
-        assert_eq!(result, PolicyResult::Drop);
+        let result =
+            check_incoming_open(m, &ast, asn.into(), addr, log()).unwrap();
+        assert_eq!(result, CheckerResult::Drop);
 
         // check that open messages with the 4-octet AS capability code get accepted
         let m = OpenMessage::new4(asn.into(), 30, 1701);
-        let result = check_incoming_open(m, &ast, asn.into(), addr).unwrap();
-        assert_eq!(result, PolicyResult::Accept);
+        let result =
+            check_incoming_open(m, &ast, asn.into(), addr, log()).unwrap();
+        assert_eq!(result, CheckerResult::Accept);
     }
 
     #[test]
@@ -297,13 +386,13 @@ mod test {
             std::fs::read_to_string("../bgp/policy/policy-check0.rhai")
                 .unwrap();
         let ast = load_checker(&source).unwrap();
-        let result = check_incoming_update(m, &ast, asn, addr).unwrap();
-        assert_eq!(result, PolicyResult::Drop);
+        let result = check_incoming_update(m, &ast, asn, addr, log()).unwrap();
+        assert_eq!(result, CheckerResult::Drop);
 
         // check that messages without the no-export community are accepted
         let m = UpdateMessage::default();
-        let result = check_incoming_update(m, &ast, asn, addr).unwrap();
-        assert_eq!(result, PolicyResult::Accept);
+        let result = check_incoming_update(m, &ast, asn, addr, log()).unwrap();
+        assert_eq!(result, CheckerResult::Accept);
     }
 
     #[test]
@@ -317,7 +406,8 @@ mod test {
                 .unwrap();
         let ast = load_shaper(&source).unwrap();
         let result =
-            shape_outgoing_open(m.clone(), &ast, asn.into(), addr).unwrap();
+            shape_outgoing_open(m.clone(), &ast, asn.into(), addr, log())
+                .unwrap();
         m.add_four_octet_as(74);
         assert_eq!(result, ShaperResult::Emit(m.into()));
     }
@@ -339,8 +429,49 @@ mod test {
             std::fs::read_to_string("../bgp/policy/policy-shape0.rhai")
                 .unwrap();
         let ast = load_shaper(&source).unwrap();
-        let result = shape_outgoing_update(m.clone(), &ast, asn, addr).unwrap();
+        let result =
+            shape_outgoing_update(m.clone(), &ast, asn, addr, log()).unwrap();
         m.add_community(Community::UserDefined(1701));
         assert_eq!(result, ShaperResult::Emit(m.into()));
+    }
+
+    #[test]
+    fn shape_update_prefixes() {
+        let addr = "198.51.100.1".parse().unwrap();
+        let originated = UpdateMessage {
+            nlri: vec![
+                "10.10.0.0/16".parse().unwrap(),
+                "10.128.0.0/16".parse().unwrap(),
+            ],
+            ..Default::default()
+        };
+        let filtered = UpdateMessage {
+            nlri: vec!["10.128.0.0/16".parse().unwrap()],
+            ..Default::default()
+        };
+        let source =
+            std::fs::read_to_string("../bgp/policy/shape-prefix0.rhai")
+                .unwrap();
+        let ast = load_shaper(&source).unwrap();
+
+        // ASN 100 should not have any changes
+        let result: UpdateMessage =
+            shape_outgoing_update(originated.clone(), &ast, 100, addr, log())
+                .unwrap()
+                .unwrap()
+                .try_into()
+                .unwrap();
+
+        assert_eq!(result, originated.clone());
+
+        // ASN 65402 should have only the 10.128./16 prefix
+        let result: UpdateMessage =
+            shape_outgoing_update(originated, &ast, 65402, addr, log())
+                .unwrap()
+                .unwrap()
+                .try_into()
+                .unwrap();
+
+        assert_eq!(result, filtered);
     }
 }
