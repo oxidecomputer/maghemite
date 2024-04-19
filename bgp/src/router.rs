@@ -73,11 +73,14 @@ pub struct Policy {
 }
 
 impl Policy {
-    pub fn load_shaper(&self, program_source: &str) -> anyhow::Result<()> {
+    // Load a shaper and return the previously loaded shaper (if any).
+    pub fn load_shaper(
+        &self,
+        program_source: &str,
+    ) -> anyhow::Result<Option<AST>> {
         let ast =
             load_shaper(program_source).map_err(|e| anyhow::anyhow!("{e}"))?;
-        self.shaper.write().unwrap().replace(ast);
-        Ok(())
+        Ok(self.shaper.write().unwrap().replace(ast))
     }
 
     pub fn shaper_source(&self) -> Option<String> {
@@ -88,11 +91,13 @@ impl Policy {
             .and_then(|ast| ast.source().map(|s| s.to_owned()))
     }
 
-    pub fn load_checker(&self, program_source: &str) -> anyhow::Result<()> {
+    pub fn load_checker(
+        &self,
+        program_source: &str,
+    ) -> anyhow::Result<Option<AST>> {
         let ast =
             load_checker(program_source).map_err(|e| anyhow::anyhow!("{e}"))?;
-        self.checker.write().unwrap().replace(ast);
-        Ok(())
+        Ok(self.checker.write().unwrap().replace(ast))
     }
 
     pub fn checker_source(&self) -> Option<String> {

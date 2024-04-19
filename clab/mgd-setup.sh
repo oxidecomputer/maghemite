@@ -49,9 +49,9 @@ addr=`host -t A -4 clab-pop-oxpop | awk '{print $4}'`
     --communities 8675309 \
     --med 99
 
-~/src/maghemite/target/debug/mgadm -a $addr \
-	bgp load-shaper \
-	shaper.rhai 65547
+#~/src/maghemite/target/debug/mgadm -a $addr \
+#	bgp load-shaper \
+#	shaper.rhai 65547
 
 ~/src/maghemite/target/debug/mgadm -a $addr \
     bgp originate4 65547 \

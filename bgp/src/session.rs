@@ -157,6 +157,14 @@ pub enum FsmEvent<Cnx: BgpConnection> {
     // Instructs peer to announce the update
     Announce(UpdateMessage),
 
+    // The shaper for the router has changed. Event contains previous checker.
+    // Current shaper is available in the router policy object.
+    ShaperChanged(Option<rhai::AST>),
+
+    // The checker for the router has changed. Event contains previous checker.
+    // Current checker is available in the router policy object.
+    CheckerChanged(Option<rhai::AST>),
+
     /// Local system administrator manually starts the peer connection.
     ManualStart,
 
@@ -261,6 +269,8 @@ impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
             Self::Message(message) => write!(f, "message {message:?}"),
             Self::Connected(_) => write!(f, "connected"),
             Self::Announce(update) => write!(f, "update {update:?}"),
+            Self::ShaperChanged(_) => write!(f, "shaper changed"),
+            Self::CheckerChanged(_) => write!(f, "checker changed"),
             Self::ManualStart => write!(f, "manual start"),
             Self::ManualStop => write!(f, "manual stop"),
             Self::AutomaticStart => write!(f, "automatic start"),
@@ -481,6 +491,11 @@ pub struct SessionCounters {
     pub open_send_failure: AtomicU64,
     pub keepalive_send_failure: AtomicU64,
     pub update_send_failure: AtomicU64,
+}
+
+pub enum ShaperApplication {
+    Current,
+    Difference(Option<rhai::AST>),
 }
 
 /// This is the top level object that tracks a BGP session with a peer.
@@ -1177,7 +1192,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 update.nlri.push(p.into());
             }
             read_lock!(self.fanout).send_all(&update);
-            if let Err(e) = self.send_update(update, &pc.conn) {
+            if let Err(e) =
+                self.send_update(update, &pc.conn, ShaperApplication::Current)
+            {
                 err!(self; "sending update to peer failed {e}");
                 return self.exit_established(pc);
             }
@@ -1258,7 +1275,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // another peer session (redistribution). Send the update to our
             // peer.
             FsmEvent::Announce(update) => {
-                if let Err(e) = self.send_update(update, &pc.conn) {
+                if let Err(e) = self.send_update(
+                    update,
+                    &pc.conn,
+                    ShaperApplication::Current,
+                ) {
                     err!(self; "sending update to peer failed {e}");
                     return self.exit_established(pc);
                 }
@@ -1274,6 +1295,39 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .unexpected_open_message
                     .fetch_add(1, Ordering::Relaxed);
                 wrn!(self; "unexpected open message in open established");
+                FsmState::Established(pc)
+            }
+
+            FsmEvent::ShaperChanged(previous) => {
+                let originated = match self.db.get_originated4() {
+                    Ok(value) => value,
+                    Err(e) => {
+                        //TODO possible death loop. Should we just panic here?
+                        err!(self; "failed to get originated from db: {e}");
+                        return FsmState::SessionSetup(pc);
+                    }
+                };
+                let mut update = UpdateMessage {
+                    path_attributes: self.router.base_attributes(),
+                    ..Default::default()
+                };
+                for p in originated {
+                    update.nlri.push(p.into());
+                }
+                if let Err(e) = self.send_update(
+                    update,
+                    &pc.conn,
+                    ShaperApplication::Difference(previous),
+                ) {
+                    err!(self; "shaper changed: sending update to peer failed {e}");
+                    return self.exit_established(pc);
+                }
+                //TODO
+                FsmState::Established(pc)
+            }
+
+            FsmEvent::CheckerChanged(_previous) => {
+                //TODO
                 FsmState::Established(pc)
             }
 
@@ -1513,11 +1567,67 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         !self.is_ebgp()
     }
 
+    fn shape_update(
+        &self,
+        update: UpdateMessage,
+        shaper_application: ShaperApplication,
+    ) -> Result<ShaperResult, Error> {
+        match shaper_application {
+            ShaperApplication::Current => self.shape_update_basic(update),
+            ShaperApplication::Difference(previous) => {
+                self.shape_update_differential(update, previous)
+            }
+        }
+    }
+
+    fn shape_update_basic(
+        &self,
+        update: UpdateMessage,
+    ) -> Result<ShaperResult, Error> {
+        if let Some(shaper) = self.router.policy.shaper.read().unwrap().as_ref()
+        {
+            let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
+            Ok(crate::policy::shape_outgoing_update(
+                update.clone(),
+                shaper,
+                peer_as,
+                self.neighbor.host.ip(),
+                self.log.clone(),
+            )?)
+        } else {
+            Ok(ShaperResult::Emit(update.into()))
+        }
+    }
+
+    fn shape_update_differential(
+        &self,
+        update: UpdateMessage,
+        previous: Option<rhai::AST>,
+    ) -> Result<ShaperResult, Error> {
+        let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
+
+        let former = match previous {
+            Some(shaper) => crate::policy::shape_outgoing_update(
+                update.clone(),
+                &shaper,
+                peer_as,
+                self.neighbor.host.ip(),
+                self.log.clone(),
+            )?,
+            None => ShaperResult::Emit(update.clone().into()),
+        };
+
+        let current = self.shape_update_basic(update)?;
+
+        Ok(former.difference(&current))
+    }
+
     /// Send an update message to the session peer.
     fn send_update(
         &self,
         mut update: UpdateMessage,
         conn: &Cnx,
+        shaper_application: ShaperApplication,
     ) -> Result<(), Error> {
         let nexthop = to_canonical(match conn.local() {
             Some(sockaddr) => sockaddr.ip(),
@@ -1563,6 +1673,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .push(PathAttributeValue::Communities(cs).into())
         }
 
+        let out = match self.shape_update(update, shaper_application)? {
+            ShaperResult::Emit(msg) => msg,
+            ShaperResult::Drop => return Ok(()),
+        };
+
+        /*
         let mut out = Message::from(update.clone());
         if let Some(shaper) = self.router.policy.shaper.read().unwrap().as_ref()
         {
@@ -1588,6 +1704,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
         drop(update);
+        */
 
         self.message_history.lock().unwrap().send(out.clone());
 

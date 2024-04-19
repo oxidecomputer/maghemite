@@ -96,34 +96,49 @@ impl From<NotificationMessage> for Message {
 }
 
 impl TryFrom<Message> for OpenMessage {
-    type Error = &'static str;
+    type Error = MessageConvertError;
     fn try_from(value: Message) -> Result<Self, Self::Error> {
         if let Message::Open(msg) = value {
             Ok(msg)
         } else {
-            Err("not an open message")
+            Err(MessageConvertError::NotAnOpen)
         }
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum MessageConvertError {
+    #[error("not an update")]
+    NotAnUpdate,
+
+    #[error("not a notification")]
+    NotANotification,
+
+    #[error("not an open")]
+    NotAnOpen,
+
+    #[error("not a keepalive")]
+    NotAKeepalive,
+}
+
 impl TryFrom<Message> for UpdateMessage {
-    type Error = &'static str;
+    type Error = MessageConvertError;
     fn try_from(value: Message) -> Result<Self, Self::Error> {
         if let Message::Update(msg) = value {
             Ok(msg)
         } else {
-            Err("not an update message")
+            Err(MessageConvertError::NotAnUpdate)
         }
     }
 }
 
 impl TryFrom<Message> for NotificationMessage {
-    type Error = &'static str;
+    type Error = MessageConvertError;
     fn try_from(value: Message) -> Result<Self, Self::Error> {
         if let Message::Notification(msg) = value {
             Ok(msg)
         } else {
-            Err("not a notification message")
+            Err(MessageConvertError::NotANotification)
         }
     }
 }
@@ -613,7 +628,9 @@ impl UpdateMessage {
 /// This data structure captures a network prefix as it's laid out in a BGP
 /// message. There is a prefix length followed by a variable number of bytes.
 /// Just enough bytes to express the prefix.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, JsonSchema,
+)]
 pub struct Prefix {
     pub length: u8,
     pub value: Vec<u8>,

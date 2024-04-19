@@ -35,6 +35,7 @@ use rhai::{
     Scope, AST,
 };
 use slog::{debug, info, Logger};
+use std::collections::HashSet;
 use std::net::IpAddr;
 
 #[derive(Debug, Clone, Copy)]
@@ -60,6 +61,73 @@ pub struct PolicyContext {
 pub enum ShaperResult {
     Emit(Message),
     Drop,
+}
+
+impl ShaperResult {
+    // TODO this is too general, we really only need to perform differences on
+    // updates
+    pub fn difference(&self, other: &ShaperResult) -> ShaperResult {
+        match (self, other) {
+            (ShaperResult::Drop, ShaperResult::Drop) => ShaperResult::Drop,
+            (ShaperResult::Drop, b @ ShaperResult::Emit(_)) => b.clone(),
+            (ShaperResult::Emit(a), ShaperResult::Drop) => {
+                ShaperResult::Emit(Self::diff_emit_to_drop(a))
+            }
+            (ShaperResult::Emit(a), ShaperResult::Emit(b)) => {
+                ShaperResult::Emit(Self::diff_emit_to_emit(a, b))
+            }
+        }
+    }
+
+    fn diff_emit_to_drop(b: &Message) -> Message {
+        match b {
+            Message::Open(m) => Self::diff_emit_to_drop_open(m).into(),
+            Message::Update(m) => Self::diff_emit_to_drop_update(m).into(),
+            m @ Message::Notification(_) => m.clone(),
+            m @ Message::KeepAlive => m.clone(),
+        }
+    }
+
+    fn diff_emit_to_drop_open(b: &OpenMessage) -> OpenMessage {
+        b.clone()
+    }
+
+    fn diff_emit_to_drop_update(b: &UpdateMessage) -> UpdateMessage {
+        // if we were emitting before and dropping now, that means all nlris
+        // need to be sent out as withdraws.
+        let mut new = b.clone();
+        new.withdrawn = new.nlri.clone();
+        new.nlri.clear();
+        new
+    }
+
+    fn diff_emit_to_emit(a: &Message, b: &Message) -> Message {
+        match (a, b) {
+            (Message::Update(a), Message::Update(b)) => {
+                Self::diff_emit_to_emit_update(a, b).into()
+            }
+            (Message::Open(_), m @ Message::Open(_)) => m.clone(),
+            _ => todo!(),
+        }
+    }
+
+    fn diff_emit_to_emit_update(
+        a: &UpdateMessage,
+        b: &UpdateMessage,
+    ) -> UpdateMessage {
+        // anything that was previously being announced that is no longer
+        // being announced, must be withdrawn
+        let previous: HashSet<crate::messages::Prefix> =
+            a.nlri.iter().cloned().collect();
+
+        let current: HashSet<crate::messages::Prefix> =
+            b.nlri.iter().cloned().collect();
+
+        let mut new = b.clone();
+        new.withdrawn = previous.difference(&current).cloned().collect();
+
+        new
+    }
 }
 
 impl ShaperResult {

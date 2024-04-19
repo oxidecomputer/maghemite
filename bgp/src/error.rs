@@ -181,6 +181,12 @@ pub enum Error {
 
     #[error("Drop due to user defined policy")]
     PolicyCheckFailed,
+
+    #[error("Policy error {0}")]
+    PolicyError(#[from] crate::policy::Error),
+
+    #[error("Message conversion: {0}")]
+    MessageConversion(#[from] crate::messages::MessageConvertError),
 }
 
 #[derive(Debug)]

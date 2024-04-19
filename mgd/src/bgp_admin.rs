@@ -536,10 +536,23 @@ pub async fn load_checker(
             ));
         }
         Some(rtr) => {
-            if let Err(e) = rtr.policy.load_checker(&rq.code) {
-                // The program failed to compile, return a bad request error
-                // with the error string from the compiler.
-                return Err(HttpError::for_bad_request(None, e.to_string()));
+            match rtr.policy.load_checker(&rq.code) {
+                Err(e) => {
+                    // The program failed to compile, return a bad request error
+                    // with the error string from the compiler.
+                    return Err(HttpError::for_bad_request(
+                        None,
+                        e.to_string(),
+                    ));
+                }
+                Ok(previous) => {
+                    rtr.send_event(FsmEvent::CheckerChanged(previous))
+                        .map_err(|e| {
+                            HttpError::for_internal_error(format!(
+                                "send event: {e}"
+                            ))
+                        })?;
+                }
             }
         }
     }
@@ -561,10 +574,24 @@ pub async fn load_shaper(
             ));
         }
         Some(rtr) => {
-            if let Err(e) = rtr.policy.load_shaper(&rq.code) {
-                // The program failed to compile, return a bad request error
-                // with the error string from the compiler.
-                return Err(HttpError::for_bad_request(None, e.to_string()));
+            match rtr.policy.load_shaper(&rq.code) {
+                Err(e) => {
+                    // The program failed to compile, return a bad request error
+                    // with the error string from the compiler.
+                    return Err(HttpError::for_bad_request(
+                        None,
+                        e.to_string(),
+                    ));
+                }
+                Ok(previous) => {
+                    rtr.send_event(FsmEvent::ShaperChanged(previous)).map_err(
+                        |e| {
+                            HttpError::for_internal_error(format!(
+                                "send event: {e}"
+                            ))
+                        },
+                    )?;
+                }
             }
         }
     }
