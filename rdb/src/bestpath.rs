@@ -46,6 +46,15 @@ pub fn bestpaths(
         (_, _) => active,
     };
 
+    // Filter down to paths that are not stale
+    let candidates = candidates.into_iter().min_set_by_key(|x| match x.bgp {
+        Some(ref bgp) => match bgp.stale {
+            Some(_) => 1,
+            None => 0,
+        },
+        None => 0,
+    });
+
     // Filter down to paths with the highest local preference
     let candidates = candidates
         .into_iter()
@@ -98,8 +107,9 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 470,
-                bgp_id: 47,
+                id: 47,
                 med: Some(75),
+                stale: None,
                 as_path: vec![64500, 64501, 64502],
             }),
         };
@@ -116,8 +126,9 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 480,
-                bgp_id: 48,
+                id: 48,
                 med: Some(75),
+                stale: None,
                 as_path: vec![64500, 64501, 64502],
             }),
         };
@@ -137,8 +148,9 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 490,
-                bgp_id: 49,
+                id: 49,
                 med: Some(100),
+                stale: None,
                 as_path: vec![64500, 64501, 64502],
             }),
         };

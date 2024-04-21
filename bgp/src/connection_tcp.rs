@@ -6,7 +6,7 @@ use crate::connection::{BgpConnection, BgpListener, MAX_MD5SIG_KEYLEN};
 use crate::error::Error;
 use crate::messages::{
     ErrorCode, ErrorSubcode, Header, Message, MessageType, NotificationMessage,
-    OpenMessage, UpdateMessage,
+    OpenMessage, RouteRefreshMessage, UpdateMessage,
 };
 use crate::session::FsmEvent;
 use crate::to_canonical;
@@ -438,6 +438,17 @@ impl BgpConnectionTcp {
                 }
             }
             MessageType::KeepAlive => return Ok(Message::KeepAlive),
+            MessageType::RouteRefresh => {
+                match RouteRefreshMessage::from_wire(&msgbuf) {
+                    Ok(m) => m.into(),
+                    Err(_) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "route refresh message error",
+                        ))
+                    }
+                }
+            }
         };
 
         Ok(msg)

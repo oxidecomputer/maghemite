@@ -85,6 +85,7 @@ impl ShaperResult {
             Message::Update(m) => Self::diff_emit_to_drop_update(m).into(),
             m @ Message::Notification(_) => m.clone(),
             m @ Message::KeepAlive => m.clone(),
+            m @ Message::RouteRefresh(_) => m.clone(),
         }
     }
 

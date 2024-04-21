@@ -23,28 +23,28 @@ pub struct Clock {
 
 pub struct ClockTimers {
     /// How long to wait between connection attempts.
-    pub connect_retry_timer: Timer,
+    pub connect_retry_timer: Mutex<Timer>,
 
     /// Configured keepliave timer interval. May be distinct from actual
     /// keepalive interval depending on session parameter negotiation.
-    pub keepalive_configured_interval: Duration,
+    pub keepalive_configured_interval: Mutex<Duration>,
 
     /// Time between sending keepalive messages.
     pub keepalive_timer: Mutex<Timer>,
 
     /// Configured hold timer interval. May be distinct from actual keepalive
     /// interval depending on session parameter negotiation.
-    pub hold_configured_interval: Duration,
+    pub hold_configured_interval: Mutex<Duration>,
 
     /// How long to keep a session alive between keepalive, update and/or
     /// notification messages.
     pub hold_timer: Mutex<Timer>,
 
     /// Amount of time that a peer is held in the idle state.
-    pub idle_hold_timer: Timer,
+    pub idle_hold_timer: Mutex<Timer>,
 
     /// Interval to wait before sending out an open message.
-    pub delay_open_timer: Timer,
+    pub delay_open_timer: Mutex<Timer>,
 }
 
 impl Clock {
@@ -61,13 +61,13 @@ impl Clock {
     ) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
         let timers = Arc::new(ClockTimers {
-            connect_retry_timer: Timer::new(connect_retry_interval),
-            keepalive_configured_interval: keepalive_interval,
+            connect_retry_timer: Mutex::new(Timer::new(connect_retry_interval)),
+            keepalive_configured_interval: Mutex::new(keepalive_interval),
             keepalive_timer: Mutex::new(Timer::new(keepalive_interval)),
-            hold_configured_interval: hold_interval,
+            hold_configured_interval: Mutex::new(hold_interval),
             hold_timer: Mutex::new(Timer::new(hold_interval)),
-            idle_hold_timer: Timer::new(idle_hold_interval),
-            delay_open_timer: Timer::new(delay_open_interval),
+            idle_hold_timer: Mutex::new(Timer::new(idle_hold_interval)),
+            delay_open_timer: Mutex::new(Timer::new(delay_open_interval)),
         });
         let join_handle = Arc::new(Self::run(
             resolution,
@@ -108,7 +108,7 @@ impl Clock {
     ) {
         Self::step(
             resolution,
-            &timers.connect_retry_timer,
+            &timers.connect_retry_timer.lock().unwrap(),
             FsmEvent::ConnectRetryTimerExpires,
             s.clone(),
             &log,
@@ -129,14 +129,14 @@ impl Clock {
         );
         Self::step(
             resolution,
-            &timers.idle_hold_timer,
+            &timers.idle_hold_timer.lock().unwrap(),
             FsmEvent::IdleHoldTimerExpires,
             s.clone(),
             &log,
         );
         Self::step(
             resolution,
-            &timers.delay_open_timer,
+            &timers.delay_open_timer.lock().unwrap(),
             FsmEvent::DelayOpenTimerExpires,
             s.clone(),
             &log,

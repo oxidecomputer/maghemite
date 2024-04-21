@@ -12,6 +12,7 @@
 use crate::bestpath::bestpaths;
 use crate::error::Error;
 use crate::types::*;
+use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
 use slog::{error, Logger};
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +20,7 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread::{sleep, spawn};
 
 /// The handle used to open a persistent key-value tree for BGP origin
 /// information.
@@ -72,6 +74,9 @@ pub struct Db {
     /// A set of watchers that are notified when changes to the data store occur.
     watchers: Arc<RwLock<Vec<Watcher>>>,
 
+    /// Reaps expired routes from the local RIB
+    reaper: Arc<Reaper>,
+
     log: Logger,
 }
 unsafe impl Sync for Db {}
@@ -87,14 +92,24 @@ struct Watcher {
 impl Db {
     /// Create a new routing database that stores persistent data at `path`.
     pub fn new(path: &str, log: Logger) -> Result<Self, Error> {
+        let rib_loc = Arc::new(Mutex::new(Rib::new()));
         Ok(Self {
             persistent: sled::open(path)?,
             rib_in: Arc::new(Mutex::new(Rib::new())),
-            rib_loc: Arc::new(Mutex::new(Rib::new())),
+            rib_loc: rib_loc.clone(),
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
+            reaper: Reaper::new(rib_loc),
             log,
         })
+    }
+
+    pub fn set_reaper_interval(&self, interval: std::time::Duration) {
+        *self.reaper.interval.lock().unwrap() = interval;
+    }
+
+    pub fn set_reaper_stale_max(&self, stale_max: chrono::Duration) {
+        *self.reaper.stale_max.lock().unwrap() = stale_max;
     }
 
     /// Register a routing databse watcher.
@@ -521,7 +536,7 @@ impl Db {
             Some(ps) => ps,
         };
         paths.retain(|x| match x.bgp {
-            Some(ref bgp) => bgp.bgp_id != id,
+            Some(ref bgp) => bgp.id != id,
             None => true,
         });
 
@@ -539,7 +554,7 @@ impl Db {
         let mut result = BTreeMap::new();
         for (prefix, paths) in rib.iter_mut() {
             paths.retain(|x| match x.bgp {
-                Some(ref bgp) => bgp.bgp_id != id,
+                Some(ref bgp) => bgp.id != id,
                 None => true,
             });
             result.insert(*prefix, paths.clone());
@@ -580,5 +595,75 @@ impl Db {
         tree.insert(TEP_KEY, &key)?;
         tree.flush()?;
         Ok(())
+    }
+
+    pub fn mark_bgp_id_stale(&self, id: u32) {
+        let mut rib = self.rib_loc.lock().unwrap();
+        rib.iter_mut().for_each(|(_prefix, path)| {
+            let targets: Vec<Path> = path
+                .iter()
+                .filter_map(|p| {
+                    if let Some(bgp) = p.bgp.as_ref() {
+                        if bgp.id == id {
+                            let mut marked = p.clone();
+                            marked.bgp = Some(bgp.as_stale());
+                            return Some(marked);
+                        }
+                    }
+                    None
+                })
+                .collect();
+            for t in targets.into_iter() {
+                path.replace(t);
+            }
+        });
+    }
+}
+
+struct Reaper {
+    interval: Mutex<std::time::Duration>,
+    stale_max: Mutex<chrono::Duration>,
+    rib: Arc<Mutex<Rib>>,
+}
+
+impl Reaper {
+    fn new(rib: Arc<Mutex<Rib>>) -> Arc<Self> {
+        let reaper = Arc::new(Self {
+            interval: Mutex::new(std::time::Duration::from_millis(100)),
+            stale_max: Mutex::new(chrono::Duration::new(1, 0).unwrap()),
+            rib,
+        });
+        reaper.run();
+        reaper
+    }
+
+    fn run(self: &Arc<Self>) {
+        let s = self.clone();
+        spawn(move || loop {
+            s.reap();
+            sleep(*s.interval.lock().unwrap());
+        });
+    }
+
+    fn reap(self: &Arc<Self>) {
+        self.rib
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .for_each(|(_prefix, paths)| {
+                paths.retain(|p| {
+                    p.bgp
+                        .as_ref()
+                        .map(|b| {
+                            b.stale
+                                .map(|s| {
+                                    Utc::now().signed_duration_since(s)
+                                        < *self.stale_max.lock().unwrap()
+                                })
+                                .unwrap_or(true)
+                        })
+                        .unwrap_or(true)
+                })
+            });
     }
 }

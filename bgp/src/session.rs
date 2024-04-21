@@ -3,13 +3,14 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::clock::Clock;
+use crate::config::PeerConfig;
 use crate::connection::{BgpConnection, MAX_MD5SIG_KEYLEN};
 use crate::error::{Error, ExpectationMismatch};
 use crate::fanout::Fanout;
 use crate::messages::{
-    AddPathElement, Capability, Community, ErrorCode, ErrorSubcode, Message,
-    NotificationMessage, OpenMessage, OptionalParameter, PathAttributeValue,
-    UpdateMessage,
+    AddPathElement, Afi, Capability, Community, ErrorCode, ErrorSubcode,
+    Message, NotificationMessage, OpenMessage, OptionalParameter,
+    PathAttributeValue, RouteRefreshMessage, Safi, UpdateMessage,
 };
 use crate::policy::{CheckerResult, ShaperResult};
 use crate::router::Router;
@@ -20,7 +21,7 @@ use rdb::{Asn, BgpPathProperties, Db, Md5Key};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::fmt::{self, Display, Formatter};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -165,6 +166,9 @@ pub enum FsmEvent<Cnx: BgpConnection> {
     // Current checker is available in the router policy object.
     CheckerChanged(Option<rhai::AST>),
 
+    // Indicates the peer session should be reset.
+    Reset,
+
     /// Local system administrator manually starts the peer connection.
     ManualStart,
 
@@ -261,6 +265,12 @@ pub enum FsmEvent<Cnx: BgpConnection> {
 
     /// Fires when an invalid update message is received.
     UpdateMsgErr,
+
+    /// Fires when we need to ask the peer for a route refresh.
+    RouteRefreshNeeded,
+
+    /// Fires when path attributes have changed.
+    PathAttributesChanged,
 }
 
 impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
@@ -271,6 +281,7 @@ impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
             Self::Announce(update) => write!(f, "update {update:?}"),
             Self::ShaperChanged(_) => write!(f, "shaper changed"),
             Self::CheckerChanged(_) => write!(f, "checker changed"),
+            Self::Reset => write!(f, "reset"),
             Self::ManualStart => write!(f, "manual start"),
             Self::ManualStop => write!(f, "manual stop"),
             Self::AutomaticStart => write!(f, "automatic start"),
@@ -307,49 +318,27 @@ impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
             Self::KeepAliveMsg => write!(f, "keepalive message"),
             Self::UpdateMsg => write!(f, "update message"),
             Self::UpdateMsgErr => write!(f, "update message error"),
+            Self::RouteRefreshNeeded => write!(f, "route refresh needed"),
+            Self::PathAttributesChanged => write!(f, "path attributes changed"),
         }
     }
 }
 
 // TODO break up into config/state objects.
 /// Information about a session.
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[derive(Default, Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct SessionInfo {
     /// Track how many times a connection has been attempted.
     pub connect_retry_counter: u64,
 
-    /// Start the peer session automatically.
-    pub allow_automatic_start: bool,
-
-    /// Stop the peer automatically under certain conditions.
-    /// TODO: list conditions
-    pub allow_automatic_stop: bool,
-
-    /// Increase/decrease the idle_hold_timer in response to peer connectivity
-    /// flapping.
-    pub damp_peer_oscillations: bool,
-
-    /// Allow connections from peers that are not explicitly configured.
-    pub accept_connections_unconfigured_peers: bool,
-
-    /// Detect open message collisions when in the established state.
-    pub collision_detect_established_state: bool,
-
-    /// Delay sending out the initial open message.
-    pub delay_open: bool,
-
     /// Passively wait for the remote BGP peer to establish a TCP connection.
     pub passive_tcp_establishment: bool,
 
-    /// Allow sending notification messages without first sending an open
-    /// message.
-    pub send_notification_without_open: bool,
-
-    /// Enable fine-grained tracking and logging of TCP connection state.
-    pub track_tcp_state: bool,
-
     /// The ASN of the remote peer.
     pub remote_asn: Option<u32>,
+
+    /// The ASN of the remote peer.
+    pub remote_id: Option<u32>,
 
     /// Minimum acceptable TTL value for incomming BGP packets.
     pub min_ttl: Option<u8>,
@@ -365,46 +354,20 @@ pub struct SessionInfo {
     pub multi_exit_discriminator: Option<u32>,
 
     /// Communities to be attached to updates sent over this session.
-    pub communities: Vec<u32>,
+    pub communities: BTreeSet<u32>,
 
     /// Local preference attribute added to updates if this is an iBGP session
     pub local_pref: Option<u32>,
 
     /// Capabilities received from the peer.
-    pub capabilities_received: Vec<Capability>,
+    pub capabilities_received: BTreeSet<Capability>,
 
     /// Capabilities sent to the peer.
-    pub capabilities_sent: Vec<Capability>,
+    pub capabilities_sent: BTreeSet<Capability>,
 
     /// Ensure that routes received from eBGP peers have the peer's ASN as the
     /// first element in the AS path.
     pub enforce_first_as: bool,
-}
-
-impl Default for SessionInfo {
-    fn default() -> Self {
-        SessionInfo {
-            connect_retry_counter: 0,
-            allow_automatic_start: false,
-            allow_automatic_stop: false,
-            damp_peer_oscillations: false,
-            accept_connections_unconfigured_peers: false,
-            collision_detect_established_state: false,
-            delay_open: true,
-            passive_tcp_establishment: false,
-            send_notification_without_open: false,
-            track_tcp_state: false,
-            remote_asn: None,
-            min_ttl: None,
-            md5_auth_key: None,
-            multi_exit_discriminator: None,
-            communities: Vec::new(),
-            local_pref: None,
-            capabilities_received: Vec::new(),
-            capabilities_sent: Vec::new(),
-            enforce_first_as: false,
-        }
-    }
 }
 
 impl SessionInfo {
@@ -416,7 +379,7 @@ impl SessionInfo {
 /// Information about a neighbor (peer).
 #[derive(Debug, Clone)]
 pub struct NeighborInfo {
-    pub name: String,
+    pub name: Arc<Mutex<String>>,
     pub host: SocketAddr,
 }
 
@@ -462,6 +425,8 @@ impl MessageHistory {
 pub struct SessionCounters {
     pub keepalives_sent: AtomicU64,
     pub keepalives_received: AtomicU64,
+    pub route_refresh_sent: AtomicU64,
+    pub route_refresh_received: AtomicU64,
     pub opens_sent: AtomicU64,
     pub opens_received: AtomicU64,
     pub notifications_sent: AtomicU64,
@@ -490,6 +455,7 @@ pub struct SessionCounters {
     pub notification_send_failure: AtomicU64,
     pub open_send_failure: AtomicU64,
     pub keepalive_send_failure: AtomicU64,
+    pub route_refresh_send_failure: AtomicU64,
     pub update_send_failure: AtomicU64,
 }
 
@@ -698,7 +664,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     fn initialize_capabilities(&self) {
         let mut session = lock!(self.session);
-        session.capabilities_sent = vec![
+        session.capabilities_sent = BTreeSet::from([
             //Capability::RouteRefresh{},
             //Capability::EnhancedRouteRefresh{},
             Capability::MultiprotocolExtensions {
@@ -707,20 +673,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             },
             //Capability::GracefulRestart{},
             Capability::AddPath {
-                elements: vec![AddPathElement {
+                elements: BTreeSet::from([AddPathElement {
                     afi: 1,          //IP
                     safi: 1,         //NLRI for unicast
                     send_receive: 1, //receive
-                }],
+                }]),
             },
-        ];
+            Capability::RouteRefresh {},
+        ]);
     }
 
     /// Initial state. Refuse all incomming BGP connections. No resources
     /// allocated to peer.
     fn idle(&self) -> FsmState<Cnx> {
-        self.clock.timers.idle_hold_timer.reset();
-        self.clock.timers.idle_hold_timer.enable();
+        lock!(self.clock.timers.idle_hold_timer).enable();
 
         let event = match self.event_rx.recv() {
             Ok(event) => event,
@@ -738,10 +704,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.neighbor.host,
                         self.log.clone(),
                     );
-                    self.clock.timers.idle_hold_timer.disable();
+                    lock!(self.clock.timers.idle_hold_timer).disable();
                     FsmState::Active(conn)
                 } else {
-                    self.clock.timers.idle_hold_timer.disable();
+                    lock!(self.clock.timers.idle_hold_timer).disable();
                     FsmState::Connect
                 }
             }
@@ -750,7 +716,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .idle_hold_timer_expirations
                     .fetch_add(1, Ordering::Relaxed);
-                self.clock.timers.idle_hold_timer.disable();
+                lock!(self.clock.timers.idle_hold_timer).disable();
                 FsmState::Connect
             }
             FsmEvent::Message(Message::KeepAlive) => {
@@ -784,7 +750,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Waiting for the TCP connection to be completed.
     fn on_connect(&self) -> FsmState<Cnx> {
         lock!(self.session).connect_retry_counter = 0;
-        self.clock.timers.connect_retry_timer.enable();
+        lock!(self.clock.timers.connect_retry_timer).enable();
 
         // Start with an initial connection attempt
         let conn =
@@ -810,6 +776,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             };
             match event {
+                FsmEvent::Reset => {
+                    inf!(self; "exit connect due to reset");
+                    lock!(self.session).connect_retry_counter = 0;
+                    lock!(self.clock.timers.connect_retry_timer).disable();
+                    return FsmState::Idle;
+                }
                 // If the connect retry timer fires, try to connect again.
                 FsmEvent::ConnectRetryTimerExpires => {
                     self.counters
@@ -829,12 +801,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 // The underlying connection has accepted a TCP connection
                 // initiated by the peer.
                 FsmEvent::Connected(accepted) => {
+                    lock!(self.session).connect_retry_counter = 0;
+                    lock!(self.clock.timers.connect_retry_timer).disable();
                     if let Err(e) = self.ensure_connection_policy(&conn) {
                         err!(self; "{e}");
                         return FsmState::Idle;
                     }
                     inf!(self; "accepted connection from {}", accepted.peer());
-                    self.clock.timers.connect_retry_timer.disable();
                     if let Err(e) = self.send_open(&accepted) {
                         err!(self; "send open failed {e}");
                         return FsmState::Idle;
@@ -844,8 +817,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         ht.reset();
                         ht.enable();
                     }
-                    lock!(self.session).connect_retry_counter = 0;
-                    self.clock.timers.connect_retry_timer.disable();
                     self.counters
                         .passive_connections_accepted
                         .fetch_add(1, Ordering::Relaxed);
@@ -855,12 +826,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 // The the peer has accepted the TCP connection we have
                 // initiated.
                 FsmEvent::TcpConnectionConfirmed => {
+                    lock!(self.session).connect_retry_counter = 0;
+                    lock!(self.clock.timers.connect_retry_timer).disable();
                     if let Err(e) = self.ensure_connection_policy(&conn) {
                         err!(self; "{e}");
                         return FsmState::Idle;
                     }
                     inf!(self; "connected to {}", conn.peer());
-                    self.clock.timers.connect_retry_timer.disable();
                     if let Err(e) = self.send_open(&conn) {
                         err!(self; "send open failed {e}");
                         return FsmState::Idle;
@@ -870,8 +842,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         ht.reset();
                         ht.enable();
                     }
-                    lock!(self.session).connect_retry_counter = 0;
-                    self.clock.timers.connect_retry_timer.disable();
                     self.counters
                         .active_connections_accepted
                         .fetch_add(1, Ordering::Relaxed);
@@ -918,6 +888,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // The only thing we really care about in the active state is receiving
         // an open message from the peer.
         let om = match event {
+            FsmEvent::Reset => {
+                inf!(self; "exit active due to reset");
+                return FsmState::Idle;
+            }
             FsmEvent::Message(Message::Open(om)) => {
                 self.message_history
                     .lock()
@@ -945,14 +919,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     err!(self; "active: send open failed {e}");
                     return FsmState::Idle;
                 }
-                self.clock.timers.connect_retry_timer.disable();
+                lock!(self.clock.timers.connect_retry_timer).disable();
                 {
                     let ht = self.clock.timers.hold_timer.lock().unwrap();
                     ht.reset();
                     ht.enable();
                 }
                 lock!(self.session).connect_retry_counter = 0;
-                self.clock.timers.connect_retry_timer.disable();
+                lock!(self.clock.timers.connect_retry_timer).disable();
                 self.counters
                     .passive_connections_accepted
                     .fetch_add(1, Ordering::Relaxed);
@@ -1015,6 +989,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // The only thing we really care about in the open sent state is
         // receiving a reciprocal open message from the peer.
         let om = match event {
+            FsmEvent::Reset => {
+                inf!(self; "exit open sent due to reset");
+                return FsmState::Idle;
+            }
             FsmEvent::Message(Message::Open(om)) => {
                 self.message_history
                     .lock()
@@ -1050,7 +1028,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self;
                     "open sent: expected open, received {:#?}, ignoring", other
                 );
-                self.clock.timers.connect_retry_timer.enable();
+                lock!(self.clock.timers.connect_retry_timer).enable();
                 return FsmState::Active(conn);
             }
         };
@@ -1063,7 +1041,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     wrn!(self; "failed to handle open message: {e}");
                     //TODO send a notification to the peer letting them know we are
                     //     rejecting the open message?
-                    self.clock.timers.connect_retry_timer.enable();
+                    lock!(self.clock.timers.connect_retry_timer).enable();
                     self.counters
                         .open_handle_failures
                         .fetch_add(1, Ordering::Relaxed);
@@ -1087,6 +1065,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
         match event {
+            FsmEvent::Reset => {
+                inf!(self; "exit open confirm due to reset");
+                FsmState::Idle
+            }
             // The peer has ACK'd our open message with a keepalive. Start the
             // session timers and enter session setup.
             FsmEvent::Message(Message::KeepAlive) => {
@@ -1204,6 +1186,31 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         FsmState::Established(pc)
     }
 
+    fn originate_update(
+        &self,
+        pc: &PeerConnection<Cnx>,
+        sa: ShaperApplication,
+    ) -> anyhow::Result<()> {
+        let originated = match self.db.get_originated4() {
+            Ok(value) => value,
+            Err(e) => {
+                //TODO possible death loop. Should we just panic here?
+                anyhow::bail!("failed to get originated from db: {e}");
+            }
+        };
+        let mut update = UpdateMessage {
+            path_attributes: self.router.base_attributes(),
+            ..Default::default()
+        };
+        for p in originated {
+            update.nlri.push(p.into());
+        }
+        if let Err(e) = self.send_update(update, &pc.conn, sa) {
+            anyhow::bail!("shaper changed: sending update to peer failed {e}");
+        }
+        Ok(())
+    }
+
     /// Able to exchange update, notification and keepliave messages with peers.
     fn on_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         let event = match self.event_rx.recv() {
@@ -1217,6 +1224,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
         match event {
+            FsmEvent::Reset => {
+                inf!(self; "exit established due to reset");
+                self.exit_established(pc)
+            }
             // When the keepliave timer fires, send a keepliave to the peer.
             FsmEvent::KeepaliveTimerExpires => {
                 self.send_keepalive(&pc.conn);
@@ -1247,6 +1258,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .updates_received
                     .fetch_add(1, Ordering::Relaxed);
                 FsmState::Established(pc)
+            }
+
+            FsmEvent::Message(Message::RouteRefresh(m)) => {
+                self.clock.timers.hold_timer.lock().unwrap().reset();
+                inf!(self; "route refresh received: {m:#?}");
+                self.message_history
+                    .lock()
+                    .unwrap()
+                    .receive(m.clone().into());
+                self.counters
+                    .route_refresh_received
+                    .fetch_add(1, Ordering::Relaxed);
+                if let Err(e) = self.handle_refresh(m, &pc) {
+                    err!(self; "handle refresh: {e:}");
+                    self.exit_established(pc)
+                } else {
+                    FsmState::Established(pc)
+                }
             }
 
             // We've received a notification from the peer. They are displeased
@@ -1299,30 +1328,33 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
 
             FsmEvent::ShaperChanged(previous) => {
-                let originated = match self.db.get_originated4() {
-                    Ok(value) => value,
-                    Err(e) => {
-                        //TODO possible death loop. Should we just panic here?
-                        err!(self; "failed to get originated from db: {e}");
-                        return FsmState::SessionSetup(pc);
-                    }
-                };
-                let mut update = UpdateMessage {
-                    path_attributes: self.router.base_attributes(),
-                    ..Default::default()
-                };
-                for p in originated {
-                    update.nlri.push(p.into());
-                }
-                if let Err(e) = self.send_update(
-                    update,
-                    &pc.conn,
+                match self.originate_update(
+                    &pc,
                     ShaperApplication::Difference(previous),
                 ) {
-                    err!(self; "shaper changed: sending update to peer failed {e}");
-                    return self.exit_established(pc);
+                    Err(e) => {
+                        err!(self; "originate failed: {e}");
+                        self.exit_established(pc)
+                    }
+                    Ok(()) => FsmState::Established(pc),
                 }
-                //TODO
+            }
+
+            FsmEvent::PathAttributesChanged => {
+                match self.originate_update(&pc, ShaperApplication::Current) {
+                    Err(e) => {
+                        err!(self; "originate failed: {e}");
+                        self.exit_established(pc)
+                    }
+                    Ok(()) => FsmState::Established(pc),
+                }
+            }
+
+            FsmEvent::RouteRefreshNeeded => {
+                if let Some(remote_id) = lock!(self.session).remote_id {
+                    self.db.mark_bgp_id_stale(remote_id);
+                    self.send_route_refresh(&pc.conn);
+                }
                 FsmState::Established(pc)
             }
 
@@ -1363,6 +1395,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Handle an open message
     fn handle_open(&self, conn: &Cnx, om: &OpenMessage) -> Result<(), Error> {
         let mut remote_asn = om.asn as u32;
+        let remote_id = om.id;
         for p in &om.parameters {
             if let OptionalParameter::Capabilities(caps) = p {
                 for c in caps {
@@ -1411,6 +1444,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         {
             let mut session = lock!(self.session);
             session.remote_asn = Some(remote_asn);
+            session.remote_id = Some(remote_id);
             session.capabilities_received = om.get_capabilities();
         }
 
@@ -1443,6 +1477,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         trc!(self; "sending keepalive");
         if let Err(e) = conn.send(Message::KeepAlive) {
             err!(self; "failed to send keepalive {e}");
+            self.counters
+                .keepalive_send_failure
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.counters
+                .keepalives_sent
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn send_route_refresh(&self, conn: &Cnx) {
+        trc!(self; "sending route refresh");
+        if let Err(e) = conn.send(Message::RouteRefresh(RouteRefreshMessage {
+            afi: Afi::Ipv4 as u16,
+            safi: Safi::NlriUnicast as u8,
+        })) {
+            err!(self; "failed to send route refresh {e}");
             self.counters
                 .keepalive_send_failure
                 .fetch_add(1, Ordering::Relaxed);
@@ -1678,34 +1729,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             ShaperResult::Drop => return Ok(()),
         };
 
-        /*
-        let mut out = Message::from(update.clone());
-        if let Some(shaper) = self.router.policy.shaper.read().unwrap().as_ref()
-        {
-            let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
-            match crate::policy::shape_outgoing_update(
-                update.clone(),
-                shaper,
-                peer_as,
-                self.neighbor.host.ip(),
-                self.log.clone(),
-            ) {
-                Ok(result) => match result {
-                    ShaperResult::Emit(msg) => {
-                        out = msg;
-                    }
-                    ShaperResult::Drop => {
-                        return Ok(());
-                    }
-                },
-                Err(e) => {
-                    err!(self; "update shaper exec: {e}");
-                }
-            }
-        }
-        drop(update);
-        */
-
         self.message_history.lock().unwrap().send(out.clone());
 
         self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
@@ -1780,6 +1803,36 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         //    self.fanout_update(&update);
     }
 
+    fn handle_refresh(
+        &self,
+        msg: RouteRefreshMessage,
+        pc: &PeerConnection<Cnx>,
+    ) -> Result<(), Error> {
+        if msg.afi != Afi::Ipv4 as u16 {
+            return Ok(());
+        }
+        let originated = match self.db.get_originated4() {
+            Ok(value) => value,
+            Err(e) => {
+                err!(self; "failed to get originated from db: {e}");
+                // This is not a protocol level issue
+                return Ok(());
+            }
+        };
+        if !originated.is_empty() {
+            let mut update = UpdateMessage {
+                path_attributes: self.router.base_attributes(),
+                ..Default::default()
+            };
+            for p in originated {
+                update.nlri.push(p.into());
+            }
+            read_lock!(self.fanout).send_all(&update);
+            self.send_update(update, &pc.conn, ShaperApplication::Current)?;
+        }
+        Ok(())
+    }
+
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, id: u32, peer_as: u32) {
         for w in &update.withdrawn {
@@ -1829,8 +1882,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     local_pref: update.local_pref(),
                     bgp: Some(BgpPathProperties {
                         origin_as: peer_as,
-                        bgp_id: id,
                         med: update.multi_exit_discriminator(),
+                        stale: None,
+                        id,
                         as_path,
                     }),
                 };
@@ -1863,6 +1917,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn apply_static_update_policy(&self, update: &mut UpdateMessage) {
         if self.is_ebgp() {
             update.clear_local_pref()
+        }
+        if let Some(pref) = lock!(self.session).local_pref {
+            update.set_local_pref(pref);
         }
     }
 
@@ -1995,5 +2052,119 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         Ok(())
+    }
+
+    pub fn update_session_parameters(
+        &self,
+        cfg: PeerConfig,
+        info: SessionInfo,
+    ) -> Result<(), Error> {
+        let mut reset_needed = self.update_session_config(cfg)?;
+        reset_needed |= self.update_session_info(info)?;
+
+        if reset_needed {
+            self.event_tx
+                .send(FsmEvent::Reset)
+                .map_err(|e| Error::EventSend(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    pub fn update_session_config(
+        &self,
+        cfg: PeerConfig,
+    ) -> Result<bool, Error> {
+        *lock!(self.neighbor.name) = cfg.name;
+        let mut reset_needed = false;
+
+        if self.neighbor.host != cfg.host {
+            return Err(Error::PeerAddressUpdate);
+        }
+
+        if cfg.keepalive >= cfg.hold_time {
+            return Err(Error::KeepaliveLargerThanHoldTime);
+        }
+
+        let mut hold_time = lock!(self.clock.timers.hold_configured_interval);
+        if hold_time.as_secs() != cfg.hold_time {
+            *hold_time = Duration::from_secs(cfg.hold_time);
+            reset_needed = true;
+        }
+
+        let mut keepalive =
+            lock!(self.clock.timers.keepalive_configured_interval);
+        if keepalive.as_secs() != cfg.keepalive {
+            *keepalive = Duration::from_secs(cfg.keepalive);
+            reset_needed = true;
+        }
+
+        lock!(self.clock.timers.idle_hold_timer).interval =
+            Duration::from_secs(cfg.idle_hold_time);
+
+        lock!(self.clock.timers.delay_open_timer).interval =
+            Duration::from_secs(cfg.delay_open);
+
+        lock!(self.clock.timers.connect_retry_timer).interval =
+            Duration::from_secs(cfg.connect_retry);
+
+        Ok(reset_needed)
+    }
+
+    pub fn update_session_info(
+        &self,
+        info: SessionInfo,
+    ) -> Result<bool, Error> {
+        let mut reset_needed = false;
+        let mut path_attributes_changed = false;
+        let mut refresh_needed = false;
+        let mut current = lock!(self.session);
+
+        current.connect_retry_counter = info.connect_retry_counter;
+        current.passive_tcp_establishment = info.passive_tcp_establishment;
+
+        if current.min_ttl != info.min_ttl {
+            current.min_ttl = info.min_ttl;
+            reset_needed = true;
+        }
+
+        if current.md5_auth_key != info.md5_auth_key {
+            current.md5_auth_key = info.md5_auth_key;
+            reset_needed = true;
+        }
+
+        if current.multi_exit_discriminator != info.multi_exit_discriminator {
+            current.multi_exit_discriminator = info.multi_exit_discriminator;
+            path_attributes_changed = true;
+        }
+
+        if current.communities != info.communities {
+            current.communities = info.communities.clone();
+            path_attributes_changed = true;
+        }
+
+        if current.local_pref != info.local_pref {
+            current.local_pref = info.local_pref;
+            refresh_needed = true;
+        }
+
+        if current.enforce_first_as != info.enforce_first_as {
+            current.enforce_first_as = info.enforce_first_as;
+            reset_needed = true;
+        }
+
+        if path_attributes_changed {
+            self.event_tx
+                .send(FsmEvent::PathAttributesChanged)
+                .map_err(|e| Error::EventSend(e.to_string()))?;
+        }
+
+        if refresh_needed {
+            self.event_tx
+                .send(FsmEvent::RouteRefreshNeeded)
+                .map_err(|e| Error::EventSend(e.to_string()))?;
+        }
+
+        Ok(reset_needed)
     }
 }

@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::collections::BTreeSet;
+
 use crate::{
     messages::{
         Capability, CapabilityCode, Community, Message, OpenMessage, Prefix,
@@ -68,7 +70,9 @@ impl OpenMessage {
             Ok(asn) => asn,
             Err(_) => return, //TODO something better?
         };
-        self.add_capabilities(&[Capability::FourOctetAs { asn }]);
+        self.add_capabilities(&BTreeSet::from([Capability::FourOctetAs {
+            asn,
+        }]));
     }
     pub fn emit(&mut self) -> ShaperResult {
         ShaperResult::Emit(Message::Open(self.clone()))

@@ -28,14 +28,15 @@ pub enum Commands {
     /// Get the running set of BGP routers.
     GetRouters,
 
-    /// Add a BGP router.
-    AddRouter(RouterConfig),
+    /// Ensure the specified BGP router exists.
+    EnsureRouter(RouterConfig),
 
     /// Delete a BGP router.
     DeleteRouter { asn: u32 },
 
-    /// Add a neighbor to a BGP router.
-    AddNeighbor(Neighbor),
+    /// Ensure a neighbor is present BGP router. If the neighbor exists, its
+    /// settings will be updated.
+    EnsureNeighbor(Neighbor),
 
     /// Get neighbor details.
     NeighborInfo { asn: u32, addr: IpAddr },
@@ -228,9 +229,9 @@ impl From<Neighbor> for types::AddNeighborRequest {
 pub async fn commands(command: Commands, client: Client) -> Result<()> {
     match command {
         Commands::GetRouters => get_routers(client).await,
-        Commands::AddRouter(cfg) => add_router(cfg, client).await,
+        Commands::EnsureRouter(cfg) => ensure_router(cfg, client).await,
         Commands::DeleteRouter { asn } => delete_router(asn, client).await,
-        Commands::AddNeighbor(nbr) => add_neighbor(nbr, client).await,
+        Commands::EnsureNeighbor(nbr) => ensure_neighbor(nbr, client).await,
         Commands::DeleteNeighbor { asn, addr } => {
             delete_neighbor(asn, addr, client).await
         }
@@ -311,8 +312,8 @@ async fn get_routers(c: Client) {
     }
 }
 
-async fn add_router(cfg: RouterConfig, c: Client) {
-    c.new_router(&types::NewRouterRequest {
+async fn ensure_router(cfg: RouterConfig, c: Client) {
+    c.ensure_router(&types::NewRouterRequest {
         asn: cfg.asn,
         id: cfg.id,
         listen: cfg.listen,
@@ -364,8 +365,8 @@ async fn get_originated(c: Client, asn: u32) {
     tw.flush().unwrap();
 }
 
-async fn add_neighbor(nbr: Neighbor, c: Client) {
-    c.add_neighbor(&nbr.into()).await.unwrap();
+async fn ensure_neighbor(nbr: Neighbor, c: Client) {
+    c.ensure_neighbor(&nbr.into()).await.unwrap();
 }
 
 async fn delete_neighbor(asn: u32, addr: IpAddr, c: Client) {
@@ -471,7 +472,7 @@ fn print_rib(rib: Rib) {
         let mut tw = TabWriter::new(stdout());
         writeln!(
             &mut tw,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             "Prefix".dimmed(),
             "Nexthop".dimmed(),
             "Local Pref".dimmed(),
@@ -479,6 +480,7 @@ fn print_rib(rib: Rib) {
             "Peer ID".dimmed(),
             "MED".dimmed(),
             "AS Path".dimmed(),
+            "Stale".dimmed(),
         )
         .unwrap();
 
@@ -487,14 +489,15 @@ fn print_rib(rib: Rib) {
                 let bgp = path.bgp.as_ref().unwrap();
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}",
+                    "{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}",
                     prefix,
                     path.nexthop,
                     path.local_pref,
                     bgp.origin_as,
-                    Ipv4Addr::from(bgp.bgp_id),
+                    Ipv4Addr::from(bgp.id),
                     bgp.med,
                     bgp.as_path,
+                    bgp.stale,
                 )
                 .unwrap();
             }

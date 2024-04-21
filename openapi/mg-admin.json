@@ -1070,7 +1070,7 @@
               "minimum": 0
             }
           },
-          "bgp_id": {
+          "id": {
             "type": "integer",
             "format": "uint32",
             "minimum": 0
@@ -1085,11 +1085,16 @@
             "type": "integer",
             "format": "uint32",
             "minimum": 0
+          },
+          "stale": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time"
           }
         },
         "required": [
           "as_path",
-          "bgp_id",
+          "id",
           "origin_as"
         ]
       },
@@ -1226,7 +1231,7 @@
             "additionalProperties": false
           },
           {
-            "description": "Route refresh capability as defined in RFC 2918. Note this capability is not yet implemented.",
+            "description": "Route refresh capability as defined in RFC 2918.",
             "type": "object",
             "properties": {
               "route_refresh": {
@@ -1402,7 +1407,8 @@
                     "type": "array",
                     "items": {
                       "$ref": "#/components/schemas/AddPathElement"
-                    }
+                    },
+                    "uniqueItems": true
                   }
                 },
                 "required": [
@@ -2066,6 +2072,24 @@
             "required": [
               "type"
             ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "route_refresh"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/RouteRefreshMessage"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
           }
         ]
       },
@@ -2319,7 +2343,8 @@
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Capability"
-                }
+                },
+                "uniqueItems": true
               }
             },
             "required": [
@@ -2762,6 +2787,27 @@
           "uniqueItems": true
         }
       },
+      "RouteRefreshMessage": {
+        "type": "object",
+        "properties": {
+          "afi": {
+            "description": "Address family identifier.",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "safi": {
+            "description": "Subsequent address family identifier.",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "afi",
+          "safi"
+        ]
+      },
       "RouterInfo": {
         "type": "object",
         "properties": {
@@ -2790,35 +2836,21 @@
         "description": "Information about a session.",
         "type": "object",
         "properties": {
-          "accept_connections_unconfigured_peers": {
-            "description": "Allow connections from peers that are not explicitly configured.",
-            "type": "boolean"
-          },
-          "allow_automatic_start": {
-            "description": "Start the peer session automatically.",
-            "type": "boolean"
-          },
-          "allow_automatic_stop": {
-            "description": "Stop the peer automatically under certain conditions. TODO: list conditions",
-            "type": "boolean"
-          },
           "capabilities_received": {
             "description": "Capabilities received from the peer.",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Capability"
-            }
+            },
+            "uniqueItems": true
           },
           "capabilities_sent": {
             "description": "Capabilities sent to the peer.",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Capability"
-            }
-          },
-          "collision_detect_established_state": {
-            "description": "Detect open message collisions when in the established state.",
-            "type": "boolean"
+            },
+            "uniqueItems": true
           },
           "communities": {
             "description": "Communities to be attached to updates sent over this session.",
@@ -2827,21 +2859,14 @@
               "type": "integer",
               "format": "uint32",
               "minimum": 0
-            }
+            },
+            "uniqueItems": true
           },
           "connect_retry_counter": {
             "description": "Track how many times a connection has been attempted.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
-          },
-          "damp_peer_oscillations": {
-            "description": "Increase/decrease the idle_hold_timer in response to peer connectivity flapping.",
-            "type": "boolean"
-          },
-          "delay_open": {
-            "description": "Delay sending out the initial open message.",
-            "type": "boolean"
           },
           "enforce_first_as": {
             "description": "Ensure that routes received from eBGP peers have the peer's ASN as the first element in the AS path.",
@@ -2888,30 +2913,21 @@
             "format": "uint32",
             "minimum": 0
           },
-          "send_notification_without_open": {
-            "description": "Allow sending notification messages without first sending an open message.",
-            "type": "boolean"
-          },
-          "track_tcp_state": {
-            "description": "Enable fine-grained tracking and logging of TCP connection state.",
-            "type": "boolean"
+          "remote_id": {
+            "nullable": true,
+            "description": "The ASN of the remote peer.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
           }
         },
         "required": [
-          "accept_connections_unconfigured_peers",
-          "allow_automatic_start",
-          "allow_automatic_stop",
           "capabilities_received",
           "capabilities_sent",
-          "collision_detect_established_state",
           "communities",
           "connect_retry_counter",
-          "damp_peer_oscillations",
-          "delay_open",
           "enforce_first_as",
-          "passive_tcp_establishment",
-          "send_notification_without_open",
-          "track_tcp_state"
+          "passive_tcp_establishment"
         ]
       },
       "SessionMode": {

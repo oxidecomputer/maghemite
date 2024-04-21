@@ -25,6 +25,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
+use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::spawn;
 use std::time::Duration;
@@ -64,49 +65,6 @@ pub struct Router<Cnx: BgpConnection> {
     /// to all others. If/when we do that, there will need to be export
     /// policy that governs what updates fan out to what peers.
     fanout: Arc<RwLock<Fanout<Cnx>>>,
-}
-
-#[derive(Default, Clone)]
-pub struct Policy {
-    pub shaper: Arc<RwLock<Option<AST>>>,
-    pub checker: Arc<RwLock<Option<AST>>>,
-}
-
-impl Policy {
-    // Load a shaper and return the previously loaded shaper (if any).
-    pub fn load_shaper(
-        &self,
-        program_source: &str,
-    ) -> anyhow::Result<Option<AST>> {
-        let ast =
-            load_shaper(program_source).map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(self.shaper.write().unwrap().replace(ast))
-    }
-
-    pub fn shaper_source(&self) -> Option<String> {
-        self.shaper
-            .read()
-            .unwrap()
-            .clone()
-            .and_then(|ast| ast.source().map(|s| s.to_owned()))
-    }
-
-    pub fn load_checker(
-        &self,
-        program_source: &str,
-    ) -> anyhow::Result<Option<AST>> {
-        let ast =
-            load_checker(program_source).map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(self.checker.write().unwrap().replace(ast))
-    }
-
-    pub fn checker_source(&self) -> Option<String> {
-        self.checker
-            .read()
-            .unwrap()
-            .clone()
-            .and_then(|ast| ast.source().map(|s| s.to_owned()))
-    }
 }
 
 unsafe impl<Cnx: BgpConnection> Send for Router<Cnx> {}
@@ -170,6 +128,26 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         fanout.remove_egress(peer);
     }
 
+    pub fn ensure_session(
+        self: &Arc<Self>,
+        peer: PeerConfig,
+        bind_addr: SocketAddr,
+        event_tx: Sender<FsmEvent<Cnx>>,
+        event_rx: Receiver<FsmEvent<Cnx>>,
+        info: SessionInfo,
+    ) -> Result<EnsureSessionResult<Cnx>, Error> {
+        let a2s = lock!(self.addr_to_session);
+        if a2s.contains_key(&peer.host.ip()) {
+            Ok(EnsureSessionResult::Updated(
+                self.update_session(peer, info)?,
+            ))
+        } else {
+            Ok(EnsureSessionResult::New(self.new_session_locked(
+                a2s, peer, bind_addr, event_tx, event_rx, info,
+            )?))
+        }
+    }
+
     pub fn new_session(
         self: &Arc<Self>,
         peer: PeerConfig,
@@ -178,16 +156,30 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        let mut a2s = lock!(self.addr_to_session);
+        let a2s = lock!(self.addr_to_session);
         if a2s.contains_key(&peer.host.ip()) {
-            return Err(Error::PeerExists);
+            Err(Error::PeerExists)
+        } else {
+            self.new_session_locked(
+                a2s, peer, bind_addr, event_tx, event_rx, info,
+            )
         }
+    }
 
+    pub fn new_session_locked(
+        self: &Arc<Self>,
+        mut a2s: MutexGuard<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>,
+        peer: PeerConfig,
+        bind_addr: SocketAddr,
+        event_tx: Sender<FsmEvent<Cnx>>,
+        event_rx: Receiver<FsmEvent<Cnx>>,
+        info: SessionInfo,
+    ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         a2s.insert(peer.host.ip(), event_tx.clone());
         drop(a2s);
 
         let neighbor = NeighborInfo {
-            name: peer.name.clone(),
+            name: Arc::new(Mutex::new(peer.name.clone())),
             host: peer.host,
         };
 
@@ -226,6 +218,21 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         lock!(self.sessions).insert(neighbor.host.ip(), runner.clone());
 
         Ok(runner)
+    }
+
+    pub fn update_session(
+        self: &Arc<Self>,
+        peer: PeerConfig,
+        info: SessionInfo,
+    ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
+        let session = match lock!(self.sessions).get(&peer.host.ip()) {
+            None => return Err(Error::UnknownPeer(peer.host.ip())),
+            Some(s) => s.clone(),
+        };
+
+        session.update_session_parameters(peer, info)?;
+
+        Ok(session)
     }
 
     pub fn delete_session(&self, addr: IpAddr) {
@@ -350,5 +357,53 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         read_lock!(self.fanout).send_all(&update);
 
         Ok(())
+    }
+}
+
+pub enum EnsureSessionResult<Cnx: BgpConnection + 'static> {
+    New(Arc<SessionRunner<Cnx>>),
+    Updated(Arc<SessionRunner<Cnx>>),
+}
+
+#[derive(Default, Clone)]
+pub struct Policy {
+    pub shaper: Arc<RwLock<Option<AST>>>,
+    pub checker: Arc<RwLock<Option<AST>>>,
+}
+
+impl Policy {
+    // Load a shaper and return the previously loaded shaper (if any).
+    pub fn load_shaper(
+        &self,
+        program_source: &str,
+    ) -> anyhow::Result<Option<AST>> {
+        let ast =
+            load_shaper(program_source).map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(self.shaper.write().unwrap().replace(ast))
+    }
+
+    pub fn shaper_source(&self) -> Option<String> {
+        self.shaper
+            .read()
+            .unwrap()
+            .clone()
+            .and_then(|ast| ast.source().map(|s| s.to_owned()))
+    }
+
+    pub fn load_checker(
+        &self,
+        program_source: &str,
+    ) -> anyhow::Result<Option<AST>> {
+        let ast =
+            load_checker(program_source).map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(self.checker.write().unwrap().replace(ast))
+    }
+
+    pub fn checker_source(&self) -> Option<String> {
+        self.checker
+            .read()
+            .unwrap()
+            .clone()
+            .and_then(|ast| ast.source().map(|s| s.to_owned()))
     }
 }

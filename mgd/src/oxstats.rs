@@ -198,6 +198,8 @@ macro_rules! rib_quantity {
 // BGP
 counter!(KeepalivesSent);
 counter!(KeepalivesReceived);
+counter!(RouteRefreshSent);
+counter!(RouteRefreshReceived);
 counter!(OpensSent);
 counter!(OpensReceived);
 counter!(UpdatesSent);
@@ -337,6 +339,26 @@ impl Stats {
                     *addr,
                     KeepalivesReceived,
                     counters.keepalives_received
+                ));
+                samples.push(bgp_session_counter!(
+                    self.hostname.clone(),
+                    self.rack_id,
+                    self.sled_id,
+                    self.start_time,
+                    *asn,
+                    *addr,
+                    RouteRefreshSent,
+                    counters.route_refresh_sent
+                ));
+                samples.push(bgp_session_counter!(
+                    self.hostname.clone(),
+                    self.rack_id,
+                    self.sled_id,
+                    self.start_time,
+                    *asn,
+                    *addr,
+                    RouteRefreshReceived,
+                    counters.route_refresh_received
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone(),

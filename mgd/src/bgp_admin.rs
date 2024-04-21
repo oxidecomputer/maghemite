@@ -112,7 +112,12 @@ pub async fn get_routers(
                     duration_millis: dur as u64,
                     timers: PeerTimers {
                         hold: DynamicTimerInfo {
-                            configured: s.clock.timers.hold_configured_interval,
+                            configured: *s
+                                .clock
+                                .timers
+                                .hold_configured_interval
+                                .lock()
+                                .unwrap(),
                             negotiated: s
                                 .clock
                                 .timers
@@ -122,10 +127,12 @@ pub async fn get_routers(
                                 .interval,
                         },
                         keepalive: DynamicTimerInfo {
-                            configured: s
+                            configured: *s
                                 .clock
                                 .timers
-                                .keepalive_configured_interval,
+                                .keepalive_configured_interval
+                                .lock()
+                                .unwrap(),
                             negotiated: s
                                 .clock
                                 .timers
@@ -621,6 +628,8 @@ pub async fn get_shaper_source(
 }
 
 pub(crate) mod helpers {
+    use bgp::router::EnsureSessionResult;
+
     use super::*;
 
     pub(crate) async fn ensure_router(
@@ -664,33 +673,33 @@ pub(crate) mod helpers {
             min_ttl: rq.min_ttl,
             md5_auth_key: rq.md5_auth_key.clone(),
             multi_exit_discriminator: rq.multi_exit_discriminator,
-            communities: rq.communities.clone(),
+            communities: rq.communities.clone().into_iter().collect(),
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
             ..Default::default()
         };
 
-        match get_router!(&ctx, rq.asn)?.new_session(
-            rq.clone().into(),
-            DEFAULT_BGP_LISTEN,
-            event_tx.clone(),
-            event_rx,
-            info,
-        ) {
-            Ok(_) => {}
-            e @ Err(bgp::error::Error::PeerExists) => {
-                if ensure {
-                    return Ok(());
-                } else {
-                    e?;
-                }
+        let start_session = if ensure {
+            match get_router!(&ctx, rq.asn)?.ensure_session(
+                rq.clone().into(),
+                DEFAULT_BGP_LISTEN,
+                event_tx.clone(),
+                event_rx,
+                info,
+            )? {
+                EnsureSessionResult::New(_) => true,
+                EnsureSessionResult::Updated(_) => false,
             }
-            e @ Err(_) => {
-                e?;
-            }
+        } else {
+            get_router!(&ctx, rq.asn)?.new_session(
+                rq.clone().into(),
+                DEFAULT_BGP_LISTEN,
+                event_tx.clone(),
+                event_rx,
+                info,
+            )?;
+            true
         };
-
-        start_bgp_session(&event_tx)?;
 
         ctx.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
             asn: rq.asn,
@@ -713,7 +722,9 @@ pub(crate) mod helpers {
             enforce_first_as: rq.enforce_first_as,
         })?;
 
-        start_bgp_session(&event_tx)?;
+        if start_session {
+            start_bgp_session(&event_tx)?;
+        }
 
         Ok(())
     }

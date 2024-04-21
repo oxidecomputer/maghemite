@@ -2,7 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::error::Error;
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -11,8 +13,6 @@ use std::fmt::{self, Formatter};
 use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
-
-use crate::error::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct Path {
@@ -30,7 +30,16 @@ impl PartialOrd for Path {
 }
 impl Ord for Path {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.nexthop.cmp(&other.nexthop)
+        if self.nexthop != other.nexthop {
+            return self.nexthop.cmp(&other.nexthop);
+        }
+        if self.shutdown != other.shutdown {
+            return self.shutdown.cmp(&other.shutdown);
+        }
+        if self.local_pref != other.local_pref {
+            return self.local_pref.cmp(&other.local_pref);
+        }
+        self.bgp.cmp(&other.bgp)
     }
 }
 
@@ -48,9 +57,40 @@ impl Path {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct BgpPathProperties {
     pub origin_as: u32,
-    pub bgp_id: u32,
+    pub id: u32,
     pub med: Option<u32>,
     pub as_path: Vec<u32>,
+    pub stale: Option<DateTime<Utc>>,
+}
+
+impl BgpPathProperties {
+    pub fn as_stale(&self) -> Self {
+        let mut s = self.clone();
+        s.stale = Some(Utc::now());
+        s
+    }
+}
+
+impl PartialOrd for BgpPathProperties {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for BgpPathProperties {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.origin_as != other.origin_as {
+            return self.origin_as.cmp(&other.origin_as);
+        }
+        if self.id != other.id {
+            return self.id.cmp(&other.id);
+        }
+        // MED should *not* be used as a basis for comparison. Paths with
+        // distinct MED values are not distinct paths.
+        if self.as_path != other.as_path {
+            return self.as_path.cmp(&other.as_path);
+        }
+        self.stale.cmp(&other.stale)
+    }
 }
 
 #[derive(
@@ -417,7 +457,9 @@ pub enum SessionMode {
     MultiHop,
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Default, Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq,
+)]
 pub struct Md5Key {
     pub value: Vec<u8>,
 }

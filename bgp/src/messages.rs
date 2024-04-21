@@ -11,7 +11,10 @@ use num_enum::FromPrimitive;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::{
+    collections::BTreeSet,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+};
 
 pub const MAX_MESSAGE_SIZE: usize = 4096;
 
@@ -42,6 +45,12 @@ pub enum MessageType {
     ///
     /// RFC 4271 §4.4
     KeepAlive = 4,
+
+    /// When this message is received from a peer, we send that peer all
+    /// current outbound routes.
+    ///
+    /// RFC 2918
+    RouteRefresh = 5,
 }
 
 impl From<&Message> for MessageType {
@@ -51,6 +60,7 @@ impl From<&Message> for MessageType {
             Message::Update(_) => Self::Update,
             Message::Notification(_) => Self::Notification,
             Message::KeepAlive => Self::KeepAlive,
+            Message::RouteRefresh(_) => Self::RouteRefresh,
         }
     }
 }
@@ -64,6 +74,7 @@ pub enum Message {
     Update(UpdateMessage),
     Notification(NotificationMessage),
     KeepAlive,
+    RouteRefresh(RouteRefreshMessage),
 }
 
 impl Message {
@@ -73,6 +84,7 @@ impl Message {
             Self::Update(m) => m.to_wire(),
             Self::Notification(m) => m.to_wire(),
             Self::KeepAlive => Ok(Vec::new()),
+            Self::RouteRefresh(m) => m.to_wire(),
         }
     }
 }
@@ -95,14 +107,9 @@ impl From<NotificationMessage> for Message {
     }
 }
 
-impl TryFrom<Message> for OpenMessage {
-    type Error = MessageConvertError;
-    fn try_from(value: Message) -> Result<Self, Self::Error> {
-        if let Message::Open(msg) = value {
-            Ok(msg)
-        } else {
-            Err(MessageConvertError::NotAnOpen)
-        }
+impl From<RouteRefreshMessage> for Message {
+    fn from(m: RouteRefreshMessage) -> Message {
+        Message::RouteRefresh(m)
     }
 }
 
@@ -119,6 +126,20 @@ pub enum MessageConvertError {
 
     #[error("not a keepalive")]
     NotAKeepalive,
+
+    #[error("not a route refresh")]
+    NotARouteRefresh,
+}
+
+impl TryFrom<Message> for OpenMessage {
+    type Error = MessageConvertError;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::Open(msg) = value {
+            Ok(msg)
+        } else {
+            Err(MessageConvertError::NotAnOpen)
+        }
+    }
 }
 
 impl TryFrom<Message> for UpdateMessage {
@@ -139,6 +160,17 @@ impl TryFrom<Message> for NotificationMessage {
             Ok(msg)
         } else {
             Err(MessageConvertError::NotANotification)
+        }
+    }
+}
+
+impl TryFrom<Message> for RouteRefreshMessage {
+    type Error = MessageConvertError;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::RouteRefresh(msg) = value {
+            Ok(msg)
+        } else {
+            Err(MessageConvertError::NotARouteRefresh)
         }
     }
 }
@@ -280,33 +312,33 @@ impl OpenMessage {
             asn: AS_TRANS,
             hold_time,
             id,
-            parameters: vec![OptionalParameter::Capabilities(vec![
-                Capability::FourOctetAs { asn },
-            ])],
+            parameters: vec![OptionalParameter::Capabilities(BTreeSet::from(
+                [Capability::FourOctetAs { asn }],
+            ))],
         }
     }
 
-    pub fn add_capabilities(&mut self, capabilities: &[Capability]) {
+    pub fn add_capabilities(&mut self, capabilities: &BTreeSet<Capability>) {
         if capabilities.is_empty() {
             return;
         }
         for p in &mut self.parameters {
             if let OptionalParameter::Capabilities(cs) = p {
-                cs.extend_from_slice(capabilities);
+                cs.extend(capabilities.iter().cloned());
                 return;
             }
         }
         self.parameters
-            .push(OptionalParameter::Capabilities(capabilities.into()));
+            .push(OptionalParameter::Capabilities(capabilities.clone()));
     }
 
-    pub fn get_capabilities(&self) -> Vec<Capability> {
+    pub fn get_capabilities(&self) -> BTreeSet<Capability> {
         for p in self.parameters.iter() {
             if let OptionalParameter::Capabilities(caps) = p {
                 return caps.clone();
             }
         }
-        Vec::new()
+        BTreeSet::new()
     }
 
     pub fn has_capability(&self, code: CapabilityCode) -> bool {
@@ -574,6 +606,17 @@ impl UpdateMessage {
             }
         }
         None
+    }
+
+    pub fn set_local_pref(&mut self, value: u32) {
+        for a in &mut self.path_attributes {
+            if let PathAttributeValue::LocalPref(current) = &mut a.value {
+                *current = value;
+                return;
+            }
+        }
+        self.path_attributes
+            .push(PathAttributeValue::LocalPref(value).into());
     }
 
     pub fn clear_local_pref(&mut self) {
@@ -1445,6 +1488,32 @@ impl NotificationMessage {
     }
 }
 
+// A message sent between peers to ask for re-advertisement of all outbound
+// routes. Defined in RFC 2918.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RouteRefreshMessage {
+    /// Address family identifier.
+    pub afi: u16,
+    /// Subsequent address family identifier.
+    pub safi: u8,
+}
+
+impl RouteRefreshMessage {
+    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&self.afi.to_be_bytes());
+        buf.push(0); // reserved
+        buf.push(self.safi);
+        Ok(buf)
+    }
+    pub fn from_wire(input: &[u8]) -> Result<RouteRefreshMessage, Error> {
+        let (input, afi) = be_u16(input)?;
+        let (input, _reserved) = parse_u8(input)?;
+        let (_, safi) = parse_u8(input)?;
+        Ok(RouteRefreshMessage { afi, safi })
+    }
+}
+
 /// This enumeration contains possible notification error codes.
 #[derive(
     Debug,
@@ -1629,7 +1698,7 @@ pub enum OptionalParameter {
     Authentication, //TODO
 
     /// Code 2: RFC 5492
-    Capabilities(Vec<Capability>),
+    Capabilities(BTreeSet<Capability>),
 
     /// Unassigned
     Unassigned,
@@ -1680,10 +1749,10 @@ impl OptionalParameter {
                 Err(Error::ReservedOptionalParameter)
             }
             OptionalParameterCode::Capabilities => {
-                let mut result = Vec::new();
+                let mut result = BTreeSet::new();
                 while !cap_input.is_empty() {
                     let (out, cap) = Capability::from_wire(cap_input)?;
-                    result.push(cap);
+                    result.insert(cap);
                     cap_input = out;
                 }
                 Ok((input, OptionalParameter::Capabilities(result)))
@@ -1695,7 +1764,17 @@ impl OptionalParameter {
 
 /// The add path element comes as a BGP capability extension as described in
 /// RFC 7911.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    PartialOrd,
+    Ord,
+)]
 pub struct AddPathElement {
     /// Address family identifier.
     /// <https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml>
@@ -1713,7 +1792,17 @@ pub struct AddPathElement {
 // <https://github.com/oxidecomputer/maghemite/issues/80>
 
 /// Optional capabilities supported by a BGP implementation.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    PartialOrd,
+    Ord,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     /// Multiprotocol extensions as defined in RFC 2858
@@ -1722,9 +1811,7 @@ pub enum Capability {
         safi: u8,
     },
 
-    //TODO
-    /// Route refresh capability as defined in RFC 2918. Note this capability
-    /// is not yet implemented.
+    /// Route refresh capability as defined in RFC 2918.
     RouteRefresh {},
 
     //TODO
@@ -1784,7 +1871,7 @@ pub enum Capability {
 
     /// Add path capability as defined in RFC 7911.
     AddPath {
-        elements: Vec<AddPathElement>,
+        elements: BTreeSet<AddPathElement>,
     },
 
     //TODO
@@ -1865,7 +1952,6 @@ impl Capability {
                 Ok(buf)
             }
             Self::RouteRefresh {} => {
-                //TODO audit
                 let buf = vec![CapabilityCode::RouteRefresh as u8, 0];
                 Ok(buf)
             }
@@ -1921,7 +2007,6 @@ impl Capability {
                 Ok((input, Capability::MultiprotocolExtensions { afi, safi }))
             }
             CapabilityCode::RouteRefresh => {
-                //TODO handle for real, needed for arista
                 Ok((&input[len..], Capability::RouteRefresh {}))
             }
 
@@ -1934,12 +2019,12 @@ impl Capability {
                 Ok((input, Capability::FourOctetAs { asn }))
             }
             CapabilityCode::AddPath => {
-                let mut elements = Vec::new();
+                let mut elements = BTreeSet::new();
                 while !input.is_empty() {
                     let (remaining, afi) = be_u16(input)?;
                     let (remaining, safi) = be_u8(remaining)?;
                     let (remaining, send_receive) = be_u8(remaining)?;
-                    elements.push(AddPathElement {
+                    elements.insert(AddPathElement {
                         afi,
                         safi,
                         send_receive,
@@ -2460,6 +2545,22 @@ impl From<Capability> for CapabilityCode {
             Capability::Reserved { code: _ } => CapabilityCode::Reserved,
         }
     }
+}
+
+/// Address families supported by Maghemite BGP.
+#[repr(u16)]
+pub enum Afi {
+    /// Internet protocol version 4
+    Ipv4 = 1,
+    /// Internet protocol version 6
+    Ipv6 = 2,
+}
+
+/// Subsequent address families supported by Maghemite BGP.
+#[repr(u8)]
+pub enum Safi {
+    /// Network Layer Reachability Information used for unicast forwarding
+    NlriUnicast = 1,
 }
 
 #[cfg(test)]
