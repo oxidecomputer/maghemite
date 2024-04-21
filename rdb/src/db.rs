@@ -152,14 +152,6 @@ impl Db {
         rib
     }
 
-    // TODO return previous value if this is an update.
-    pub fn add_origin4(&self, p: Prefix4) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN)?;
-        tree.insert(p.db_key(), "")?;
-        tree.flush()?;
-        Ok(())
-    }
-
     pub fn add_bgp_router(
         &self,
         asn: u32,
@@ -321,13 +313,33 @@ impl Db {
         Ok(result)
     }
 
-    pub fn remove_origin4(&self, p: Prefix4) -> Result<(), Error> {
+    pub fn create_origin4(&self, ps: &[Prefix4]) -> Result<(), Error> {
+        let current = self.get_origin4()?;
+        if !current.is_empty() {
+            return Err(Error::Conflict("origin already exists".to_string()));
+        }
+
+        self.set_origin4(ps)
+    }
+
+    pub fn set_origin4(&self, ps: &[Prefix4]) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
-        tree.remove(p.db_key())?;
+        tree.clear()?;
+        for p in ps.iter() {
+            tree.insert(p.db_key(), "")?;
+        }
+        tree.flush()?;
         Ok(())
     }
 
-    pub fn get_originated4(&self) -> Result<Vec<Prefix4>, Error> {
+    pub fn clear_origin4(&self) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BGP_ORIGIN)?;
+        tree.clear()?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn get_origin4(&self) -> Result<Vec<Prefix4>, Error> {
         let tree = self.persistent.open_tree(BGP_ORIGIN)?;
         let result = tree
             .scan_prefix(vec![])

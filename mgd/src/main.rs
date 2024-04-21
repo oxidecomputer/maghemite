@@ -220,10 +220,11 @@ fn start_bgp_routers(
     for (asn, info) in routers {
         bgp_admin::helpers::add_router(
             context.clone(),
-            bgp_param::NewRouterRequest {
+            bgp_param::Router {
                 asn,
                 id: info.id,
                 listen: info.listen.clone(),
+                graceful_shutdown: info.graceful_shutdown,
             },
             &mut guard,
         )
@@ -234,7 +235,7 @@ fn start_bgp_routers(
     for nbr in neighbors {
         bgp_admin::helpers::add_neighbor(
             context.clone(),
-            bgp_param::AddNeighborRequest {
+            bgp_param::Neighbor {
                 asn: nbr.asn,
                 remote_asn: nbr.remote_asn,
                 min_ttl: nbr.min_ttl,

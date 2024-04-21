@@ -15,7 +15,13 @@ mod bgp;
 mod static_routing;
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None, styles = oxide_cli_style())]
+#[command(
+    version,
+    about,
+    long_about = None,
+    styles = oxide_cli_style(),
+    infer_subcommands = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

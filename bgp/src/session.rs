@@ -1141,7 +1141,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Sync up with peers.
     fn session_setup(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         // Collect the prefixes this router is originating.
-        let originated = match self.db.get_originated4() {
+        let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
                 //TODO possible death loop. Should we just panic here?
@@ -1191,7 +1191,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         pc: &PeerConnection<Cnx>,
         sa: ShaperApplication,
     ) -> anyhow::Result<()> {
-        let originated = match self.db.get_originated4() {
+        let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
                 //TODO possible death loop. Should we just panic here?
@@ -1811,7 +1811,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if msg.afi != Afi::Ipv4 as u16 {
             return Ok(());
         }
-        let originated = match self.db.get_originated4() {
+        let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
                 err!(self; "failed to get originated from db: {e}");
@@ -1839,7 +1839,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.db.remove_peer_prefix(id, w.as_prefix4().into());
         }
 
-        let originated = match self.db.get_originated4() {
+        let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
                 err!(self; "failed to get originated from db: {e}");

@@ -13,66 +13,207 @@ use std::collections::BTreeMap;
 use std::fs::read_to_string;
 use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::Duration;
 use tabwriter::TabWriter;
-
-fn to_prefix4(p: &types::Prefix4) -> Prefix4 {
-    Prefix4 {
-        value: p.value,
-        length: p.length,
-    }
-}
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Get the running set of BGP routers.
-    GetRouters,
+    /// Manage router configuration.
+    Config(ConfigSubcommand),
 
-    /// Ensure the specified BGP router exists.
-    EnsureRouter(RouterConfig),
+    /// View dynamic router state.
+    Status(StatusSubcommand),
 
-    /// Delete a BGP router.
-    DeleteRouter { asn: u32 },
+    /// Omicron control plane commands.
+    Omicron(OmicronSubcommand),
+}
 
-    /// Ensure a neighbor is present BGP router. If the neighbor exists, its
-    /// settings will be updated.
-    EnsureNeighbor(Neighbor),
+#[derive(Debug, Args)]
+pub struct ConfigSubcommand {
+    #[command(subcommand)]
+    command: ConfigCmd,
+}
 
-    /// Get neighbor details.
-    NeighborInfo { asn: u32, addr: IpAddr },
+#[derive(Subcommand, Debug)]
+pub enum ConfigCmd {
+    /// Router management commands.
+    Router(RouterSubcommand),
 
-    /// Remove a neighbor from a BGP router.
-    DeleteNeighbor { asn: u32, addr: IpAddr },
+    /// Neighbor mangement commands.
+    Neighbor(NeighborSubcommand),
 
-    /// Originate a set of prefixes from a BGP router.
-    Originate4(Originate4),
+    /// Origin management commands.
+    Origin(OriginSubcommand),
 
-    /// Withdraw a set of prefixes from a BGP router.
-    Withdraw4(Withdraw4),
+    /// Policy management commands.
+    Policy(PolicySubcommand),
+}
+
+#[derive(Debug, Args)]
+pub struct StatusSubcommand {
+    #[command(subcommand)]
+    command: StatusCmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum StatusCmd {
+    /// Get the status of a router's neighbors.
+    Neighbors { asn: u32 },
 
     /// Get the prefixes imported by a BGP router.
-    GetImported { asn: u32 },
+    Imported { asn: u32 },
 
     /// Get the selected paths chosen from imported paths.
-    GetSelected { asn: u32 },
+    Selected { asn: u32 },
+}
 
-    /// Get the prefixes originated by a BGP router.
-    GetOriginated { asn: u32 },
+#[derive(Debug, Args)]
+pub struct OmicronSubcommand {
+    #[command(subcommand)]
+    command: OmicronCmd,
+}
 
+#[derive(Subcommand, Debug)]
+pub enum OmicronCmd {
     /// Apply a BGP peer group configuration.
     Apply { filename: String },
+}
 
-    /// Initiate a graceful shutdown of a BGP router.
-    EnableGshut { asn: u32 },
+#[derive(Debug, Args)]
+pub struct RouterSubcommand {
+    #[command(subcommand)]
+    command: RouterCmd,
+}
 
-    /// Disable graceful shutdown of a BGP router.
-    DisableGshut { asn: u32 },
+#[derive(Subcommand, Debug)]
+pub enum RouterCmd {
+    /// Get the running set of BGP routers.
+    List,
 
-    /// Load a checker program for a BGP router.
-    LoadChecker { filename: String, asn: u32 },
+    /// Create a router configuration.
+    Create(RouterConfig),
 
-    /// Load a shaper program for a BGP router.
-    LoadShaper { filename: String, asn: u32 },
+    /// Read a router's configuration.
+    Read { asn: u32 },
+
+    /// Update a router's configuration.
+    Update(RouterConfig),
+
+    /// Delete a BGP router.
+    Delete { asn: u32 },
+}
+
+#[derive(Args, Debug)]
+pub struct NeighborSubcommand {
+    #[command(subcommand)]
+    command: NeighborCmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum NeighborCmd {
+    /// List the neighbors of a given router.
+    List { asn: u32 },
+
+    /// Create a neighbor configuration.
+    Create(Neighbor),
+
+    /// Read a neighbor configuration.
+    Read { asn: u32, addr: IpAddr },
+
+    /// Update a neighbor's configuration.
+    Update(Neighbor),
+
+    /// Delete a neighbor configuration
+    Delete { asn: u32, addr: IpAddr },
+}
+
+#[derive(Args, Debug)]
+pub struct OriginSubcommand {
+    #[command(subcommand)]
+    command: OriginCmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum OriginCmd {
+    Ipv4(Origin4Subcommand),
+    //Ipv6, TODO
+}
+
+#[derive(Args, Debug)]
+pub struct Origin4Subcommand {
+    #[command(subcommand)]
+    command: Origin4Cmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Origin4Cmd {
+    /// Originate a set of prefixes from a BGP router.
+    Create(Originate4),
+
+    /// Read originated prefexes for a BGP router.
+    Read { asn: u32 },
+
+    /// Update a routers originated prefixes.
+    Update(Originate4),
+
+    /// Delete a router's originated prefixes.
+    Delete { asn: u32 },
+}
+
+#[derive(Args, Debug)]
+pub struct PolicySubcommand {
+    #[command(subcommand)]
+    command: PolicyCmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PolicyCmd {
+    /// Manage the policy checker for a router.
+    Checker(CheckerSubcommand),
+
+    /// Manage the policy shaper for a router.
+    Shaper(ShaperSubcommand),
+}
+
+#[derive(Args, Debug)]
+pub struct CheckerSubcommand {
+    #[command(subcommand)]
+    command: CheckerCmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CheckerCmd {
+    /// Create a BGP policy checker for the specified router.
+    Create { file: String, asn: u32 },
+
+    /// Read a routers policy checker.
+    Read { asn: u32 },
+
+    /// Update the BGP policy checker for the specified router.
+    Update { file: String, asn: u32 },
+
+    /// Delete a routers policy checker.
+    Delete { asn: u32 },
+}
+
+#[derive(Args, Debug)]
+pub struct ShaperSubcommand {
+    #[command(subcommand)]
+    command: ShaperCmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ShaperCmd {
+    /// Create a BGP policy checker for the specified router.
+    Create { file: String, asn: u32 },
+
+    /// Read a routers policy checker.
+    Read { asn: u32 },
+
+    /// Update the BGP policy checker for the specified router.
+    Update { file: String, asn: u32 },
+
+    /// Delete a routers policy checker.
+    Delete { asn: u32 },
 }
 
 #[derive(Args, Debug)]
@@ -85,6 +226,10 @@ pub struct RouterConfig {
 
     /// Listening address `<addr>:<port>`
     pub listen: String,
+
+    /// Gracefully shut this router down according to RFC 8326
+    #[clap(long)]
+    pub graceful_shutdown: bool,
 }
 
 #[derive(Args, Debug)]
@@ -199,9 +344,9 @@ pub struct Neighbor {
     pub enforce_first_as: bool,
 }
 
-impl From<Neighbor> for types::AddNeighborRequest {
-    fn from(n: Neighbor) -> types::AddNeighborRequest {
-        types::AddNeighborRequest {
+impl From<Neighbor> for types::Neighbor {
+    fn from(n: Neighbor) -> types::Neighbor {
+        types::Neighbor {
             asn: n.asn,
             remote_asn: n.remote_asn,
             min_ttl: n.min_ttl,
@@ -226,41 +371,81 @@ impl From<Neighbor> for types::AddNeighborRequest {
     }
 }
 
-pub async fn commands(command: Commands, client: Client) -> Result<()> {
+pub async fn commands(command: Commands, c: Client) -> Result<()> {
     match command {
-        Commands::GetRouters => get_routers(client).await,
-        Commands::EnsureRouter(cfg) => ensure_router(cfg, client).await,
-        Commands::DeleteRouter { asn } => delete_router(asn, client).await,
-        Commands::EnsureNeighbor(nbr) => ensure_neighbor(nbr, client).await,
-        Commands::DeleteNeighbor { asn, addr } => {
-            delete_neighbor(asn, addr, client).await
-        }
-        Commands::NeighborInfo { asn, addr } => {
-            show_neighbor(asn, addr, client).await
-        }
-        Commands::Originate4(originate) => originate4(originate, client).await,
-        Commands::Withdraw4(withdraw) => withdraw4(withdraw, client).await,
-        Commands::GetImported { asn } => get_imported(client, asn).await,
-        Commands::GetSelected { asn } => get_selected(client, asn).await,
-        Commands::GetOriginated { asn } => get_originated(client, asn).await,
-        Commands::Apply { filename } => apply(filename, client).await,
-        Commands::EnableGshut { asn } => {
-            graceful_shutdown(asn, true, client).await
-        }
-        Commands::DisableGshut { asn } => {
-            graceful_shutdown(asn, false, client).await
-        }
-        Commands::LoadChecker { filename, asn } => {
-            load_checker(filename, asn, client).await
-        }
-        Commands::LoadShaper { filename, asn } => {
-            load_shaper(filename, asn, client).await
-        }
+        Commands::Config(cmd) => match cmd.command {
+            ConfigCmd::Router(cmd) => match cmd.command {
+                RouterCmd::List => read_routers(c).await,
+                RouterCmd::Create(cfg) => create_router(cfg, c).await,
+                RouterCmd::Read { asn } => read_router(asn, c).await,
+                RouterCmd::Update(cfg) => update_router(cfg, c).await,
+                RouterCmd::Delete { asn } => delete_router(asn, c).await,
+            },
+
+            ConfigCmd::Neighbor(cmd) => match cmd.command {
+                NeighborCmd::List { asn } => list_nbr(asn, c).await,
+                NeighborCmd::Create(nbr) => create_nbr(nbr, c).await,
+                NeighborCmd::Read { asn, addr } => read_nbr(asn, addr, c).await,
+                NeighborCmd::Update(nbr) => update_nbr(nbr, c).await,
+                NeighborCmd::Delete { asn, addr } => {
+                    delete_nbr(asn, addr, c).await
+                }
+            },
+
+            ConfigCmd::Origin(cmd) => match cmd.command {
+                OriginCmd::Ipv4(cmd) => match cmd.command {
+                    Origin4Cmd::Create(origin) => {
+                        create_origin4(origin, c).await
+                    }
+                    Origin4Cmd::Read { asn } => read_origin4(asn, c).await,
+                    Origin4Cmd::Update(origin) => {
+                        update_origin4(origin, c).await
+                    }
+                    Origin4Cmd::Delete { asn } => delete_origin4(asn, c).await,
+                },
+            },
+
+            ConfigCmd::Policy(cmd) => match cmd.command {
+                PolicyCmd::Checker(cmd) => match cmd.command {
+                    CheckerCmd::Create { file, asn } => {
+                        create_chk(file, asn, c).await
+                    }
+                    CheckerCmd::Read { asn } => read_chk(asn, c).await,
+                    CheckerCmd::Update { file, asn } => {
+                        update_chk(file, asn, c).await
+                    }
+                    CheckerCmd::Delete { asn } => delete_chk(asn, c).await,
+                },
+                PolicyCmd::Shaper(cmd) => match cmd.command {
+                    ShaperCmd::Create { file, asn } => {
+                        create_shp(file, asn, c).await
+                    }
+                    ShaperCmd::Read { asn } => read_shp(asn, c).await,
+                    ShaperCmd::Update { file, asn } => {
+                        update_shp(file, asn, c).await
+                    }
+                    ShaperCmd::Delete { asn } => delete_shp(asn, c).await,
+                },
+            },
+        },
+
+        Commands::Status(cmd) => match cmd.command {
+            StatusCmd::Neighbors { asn } => get_neighbors(c, asn).await,
+            StatusCmd::Imported { asn } => get_imported(c, asn).await,
+            StatusCmd::Selected { asn } => get_selected(c, asn).await,
+        },
+
+        Commands::Omicron(cmd) => match cmd.command {
+            OmicronCmd::Apply { filename } => apply(filename, c).await,
+        },
     }
     Ok(())
 }
 
-async fn get_routers(c: Client) {
+async fn read_routers(c: Client) {
+    let routers = c.read_routers().await.unwrap().into_inner();
+    println!("{routers:#?}");
+    /*
     let routers = c.get_routers().await.unwrap().into_inner();
     for r in &routers {
         let gshut = if r.graceful_shutdown {
@@ -310,22 +495,43 @@ async fn get_routers(c: Client) {
         tw.flush().unwrap();
         println!();
     }
+    */
 }
 
-async fn ensure_router(cfg: RouterConfig, c: Client) {
-    c.ensure_router(&types::NewRouterRequest {
+async fn create_router(cfg: RouterConfig, c: Client) {
+    c.create_router(&types::Router {
         asn: cfg.asn,
         id: cfg.id,
         listen: cfg.listen,
+        graceful_shutdown: cfg.graceful_shutdown,
     })
     .await
     .unwrap();
 }
 
+async fn update_router(cfg: RouterConfig, c: Client) {
+    c.update_router(&types::Router {
+        asn: cfg.asn,
+        id: cfg.id,
+        listen: cfg.listen,
+        graceful_shutdown: cfg.graceful_shutdown,
+    })
+    .await
+    .unwrap();
+}
+
+async fn read_router(asn: u32, c: Client) {
+    let response = c.read_router(asn).await.unwrap();
+    println!("{response:#?}");
+}
+
 async fn delete_router(asn: u32, c: Client) {
-    c.delete_router(&types::DeleteRouterRequest { asn })
-        .await
-        .unwrap();
+    c.delete_router(asn).await.unwrap();
+}
+
+async fn get_neighbors(c: Client, asn: u32) {
+    let result = c.get_neighbors(asn).await.unwrap();
+    println!("{result:#?}");
 }
 
 async fn get_imported(c: Client, asn: u32) {
@@ -348,45 +554,30 @@ async fn get_selected(c: Client, asn: u32) {
     print_rib(selected);
 }
 
-async fn get_originated(c: Client, asn: u32) {
-    let originated = c
-        .get_originated4(&types::GetOriginated4Request { asn })
-        .await
-        .unwrap()
-        .into_inner();
-
-    let mut tw = TabWriter::new(stdout());
-    writeln!(&mut tw, "{}", "Prefix".dimmed()).unwrap();
-
-    for prefix in &originated {
-        writeln!(&mut tw, "{}", to_prefix4(prefix)).unwrap();
-    }
-
-    tw.flush().unwrap();
+async fn list_nbr(asn: u32, c: Client) {
+    let nbrs = c.read_neighbors(asn).await.unwrap();
+    println!("{nbrs:#?}");
 }
 
-async fn ensure_neighbor(nbr: Neighbor, c: Client) {
-    c.ensure_neighbor(&nbr.into()).await.unwrap();
+async fn create_nbr(nbr: Neighbor, c: Client) {
+    c.create_neighbor(&nbr.into()).await.unwrap();
 }
 
-async fn delete_neighbor(asn: u32, addr: IpAddr, c: Client) {
-    c.delete_neighbor(&types::DeleteNeighborRequest { asn, addr })
-        .await
-        .unwrap();
-}
-
-async fn show_neighbor(asn: u32, addr: IpAddr, c: Client) {
-    let nbr = c
-        .neighbor_detail(&types::NeighborSelector { asn, addr })
-        .await
-        .unwrap()
-        .into_inner();
-
+async fn read_nbr(asn: u32, addr: IpAddr, c: Client) {
+    let nbr = c.read_neighbor(&addr, asn).await.unwrap().into_inner();
     println!("{nbr:#?}");
 }
 
-async fn originate4(originate: Originate4, c: Client) {
-    c.originate4(&types::Originate4Request {
+async fn update_nbr(nbr: Neighbor, c: Client) {
+    c.update_neighbor(&nbr.into()).await.unwrap();
+}
+
+async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) {
+    c.delete_neighbor(&addr, asn).await.unwrap();
+}
+
+async fn create_origin4(originate: Originate4, c: Client) {
+    c.create_origin4(&types::Origin4 {
         asn: originate.asn,
         prefixes: originate
             .prefixes
@@ -402,10 +593,10 @@ async fn originate4(originate: Originate4, c: Client) {
     .unwrap();
 }
 
-async fn withdraw4(withdraw: Withdraw4, c: Client) {
-    c.withdraw4(&types::Withdraw4Request {
-        asn: withdraw.asn,
-        prefixes: withdraw
+async fn update_origin4(originate: Originate4, c: Client) {
+    c.update_origin4(&types::Origin4 {
+        asn: originate.asn,
+        prefixes: originate
             .prefixes
             .clone()
             .into_iter()
@@ -419,6 +610,15 @@ async fn withdraw4(withdraw: Withdraw4, c: Client) {
     .unwrap();
 }
 
+async fn delete_origin4(asn: u32, c: Client) {
+    c.delete_origin4(asn).await.unwrap();
+}
+
+async fn read_origin4(asn: u32, c: Client) {
+    let o4 = c.read_origin4(asn).await.unwrap();
+    println!("{o4:#?}");
+}
+
 async fn apply(filename: String, c: Client) {
     let contents = read_to_string(filename).expect("read file");
     let request: types::ApplyRequest =
@@ -426,11 +626,6 @@ async fn apply(filename: String, c: Client) {
     c.bgp_apply(&request).await.expect("bgp apply");
 }
 
-async fn graceful_shutdown(asn: u32, enabled: bool, c: Client) {
-    c.graceful_shutdown(&types::GracefulShutdownRequest { asn, enabled })
-        .await
-        .unwrap();
-}
 fn print_rib(rib: Rib) {
     type CliRib = BTreeMap<String, Vec<Path>>;
 
@@ -508,24 +703,64 @@ fn print_rib(rib: Rib) {
     }
 }
 
-async fn load_checker(filename: String, asn: u32, c: Client) {
+async fn create_chk(filename: String, asn: u32, c: Client) {
     let code = std::fs::read_to_string(filename).unwrap();
 
     // check that the program is loadable first
     bgp::policy::load_checker(&code).unwrap();
 
-    c.load_checker(&types::LoadPolicyRequest { asn, code })
+    c.create_checker(&types::CheckerSource { asn, code })
         .await
         .unwrap();
 }
 
-async fn load_shaper(filename: String, asn: u32, c: Client) {
+async fn read_chk(asn: u32, c: Client) {
+    let result = c.read_checker(asn).await.unwrap();
+    print!("{result:#?}");
+}
+
+async fn update_chk(filename: String, asn: u32, c: Client) {
     let code = std::fs::read_to_string(filename).unwrap();
 
     // check that the program is loadable first
     bgp::policy::load_checker(&code).unwrap();
 
-    c.load_shaper(&types::LoadPolicyRequest { asn, code })
+    c.update_checker(&types::CheckerSource { asn, code })
         .await
         .unwrap();
+}
+
+async fn delete_chk(asn: u32, c: Client) {
+    c.delete_checker(asn).await.unwrap();
+}
+
+async fn create_shp(filename: String, asn: u32, c: Client) {
+    let code = std::fs::read_to_string(filename).unwrap();
+
+    // check that the program is loadable first
+    bgp::policy::load_shaper(&code).unwrap();
+
+    c.create_shaper(&types::ShaperSource { asn, code })
+        .await
+        .unwrap();
+}
+
+async fn read_shp(asn: u32, c: Client) {
+    let result = c.read_shaper(asn).await.unwrap();
+    print!("{result:#?}");
+}
+
+async fn update_shp(filename: String, asn: u32, c: Client) {
+    let code = std::fs::read_to_string(filename).unwrap();
+
+    // check that the program is loadable first
+    bgp::policy::load_shaper(&code).unwrap();
+
+    c.update_shaper(&types::ShaperSource { asn, code })
+        .await
+        .unwrap();
+}
+
+async fn delete_shp(asn: u32, c: Client) {
+    c.delete_shaper(asn).await.unwrap();
 }

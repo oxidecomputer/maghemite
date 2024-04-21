@@ -16,10 +16,12 @@ use crate::policy::load_checker;
 use crate::policy::load_shaper;
 use crate::session::{FsmEvent, NeighborInfo, SessionInfo, SessionRunner};
 use mg_common::{lock, read_lock, write_lock};
+use rdb::Prefix4;
 use rdb::{Asn, Db};
 use rhai::AST;
 use slog::Logger;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -250,40 +252,72 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    pub fn originate4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+    pub fn create_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+        let prefix4: Vec<Prefix4> =
+            prefixes.iter().cloned().map(|x| x.as_prefix4()).collect();
+        self.db.create_origin4(&prefix4)?;
+        self.announce_origin4(&prefixes);
+        Ok(())
+    }
+
+    pub fn set_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+        let origin4 = self.db.get_origin4()?;
+        let current: BTreeSet<&Prefix4> = origin4.iter().collect();
+
+        let prefix4: Vec<Prefix4> =
+            prefixes.iter().cloned().map(|x| x.as_prefix4()).collect();
+
+        let new: BTreeSet<&Prefix4> = prefix4.iter().collect();
+
+        let to_withdraw: Vec<_> =
+            new.difference(&current).map(|x| (**x).into()).collect();
+        let to_announce: Vec<_> =
+            current.difference(&new).map(|x| (**x).into()).collect();
+
+        self.db.set_origin4(&prefix4)?;
+
+        self.withdraw_origin4(&to_withdraw);
+        self.announce_origin4(&to_announce);
+        Ok(())
+    }
+
+    pub fn clear_origin4(&self) -> Result<(), Error> {
+        let current = self.db.get_origin4()?;
+        let prefix: Vec<Prefix> =
+            current.iter().cloned().map(Into::into).collect();
+        self.withdraw_origin4(&prefix);
+        self.db.clear_origin4()?;
+        Ok(())
+    }
+
+    fn announce_origin4(&self, prefixes: &Vec<Prefix>) {
         let mut update = UpdateMessage {
             path_attributes: self.base_attributes(),
             ..Default::default()
         };
 
-        for p in &prefixes {
+        for p in prefixes {
             update.nlri.push(p.clone());
-            self.db.add_origin4(p.as_prefix4())?;
         }
 
         if !update.nlri.is_empty() {
             read_lock!(self.fanout).send_all(&update);
         }
-
-        Ok(())
     }
 
-    pub fn withdraw4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+    pub fn withdraw_origin4(&self, prefixes: &Vec<Prefix>) {
         let mut update = UpdateMessage {
             path_attributes: self.base_attributes(),
             ..Default::default()
         };
 
-        for p in &prefixes {
+        for p in prefixes {
             update.withdrawn.push(p.clone());
-            self.db.remove_origin4(p.as_prefix4())?;
         }
 
         if !update.withdrawn.is_empty() {
             read_lock!(self.fanout).send_all(&update);
         }
-
-        Ok(())
     }
 
     pub fn base_attributes(&self) -> Vec<PathAttribute> {
@@ -335,8 +369,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn graceful_shutdown(&self, enabled: bool) -> Result<(), Error> {
-        self.graceful_shutdown.store(enabled, Ordering::Relaxed);
-        self.announce_all()
+        if enabled != self.graceful_shutdown.load(Ordering::Relaxed) {
+            self.graceful_shutdown.store(enabled, Ordering::Relaxed);
+            self.announce_all()?;
+        }
+        Ok(())
     }
 
     pub fn in_graceful_shutdown(&self) -> bool {
@@ -344,7 +381,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     fn announce_all(&self) -> Result<(), Error> {
-        let originated = self.db.get_originated4()?;
+        let originated = self.db.get_origin4()?;
 
         let mut update = UpdateMessage {
             path_attributes: self.base_attributes(),
@@ -352,7 +389,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         };
         for p in &originated {
             update.nlri.push((*p).into());
-            self.db.add_origin4(*p)?;
         }
         read_lock!(self.fanout).send_all(&update);
 
@@ -371,15 +407,43 @@ pub struct Policy {
     pub checker: Arc<RwLock<Option<AST>>>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum LoadPolicyError {
+    #[error("Policy program compilation error: {0}")]
+    Compilation(String),
+
+    #[error("Policy program already exists")]
+    Confilct,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum UnloadPolicyError {
+    #[error("Policy program not loaded")]
+    NotFound,
+}
+
 impl Policy {
     // Load a shaper and return the previously loaded shaper (if any).
     pub fn load_shaper(
         &self,
         program_source: &str,
-    ) -> anyhow::Result<Option<AST>> {
-        let ast =
-            load_shaper(program_source).map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(self.shaper.write().unwrap().replace(ast))
+        overwrite: bool,
+    ) -> Result<Option<AST>, LoadPolicyError> {
+        let mut current = self.shaper.write().unwrap();
+        if current.is_some() && !overwrite {
+            return Err(LoadPolicyError::Confilct);
+        }
+        let ast = load_shaper(program_source)
+            .map_err(|e| LoadPolicyError::Compilation(e.to_string()))?;
+        Ok(current.replace(ast))
+    }
+
+    pub fn unload_shaper(&self) -> Result<AST, UnloadPolicyError> {
+        let mut current = self.shaper.write().unwrap();
+        if current.is_none() {
+            return Err(UnloadPolicyError::NotFound);
+        }
+        Ok(current.take().unwrap())
     }
 
     pub fn shaper_source(&self) -> Option<String> {
@@ -393,10 +457,23 @@ impl Policy {
     pub fn load_checker(
         &self,
         program_source: &str,
-    ) -> anyhow::Result<Option<AST>> {
-        let ast =
-            load_checker(program_source).map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(self.checker.write().unwrap().replace(ast))
+        overwrite: bool,
+    ) -> Result<Option<AST>, LoadPolicyError> {
+        let mut current = self.checker.write().unwrap();
+        if current.is_some() && !overwrite {
+            return Err(LoadPolicyError::Confilct);
+        }
+        let ast = load_checker(program_source)
+            .map_err(|e| LoadPolicyError::Compilation(e.to_string()))?;
+        Ok(current.replace(ast))
+    }
+
+    pub fn unload_checker(&self) -> Result<AST, UnloadPolicyError> {
+        let mut current = self.checker.write().unwrap();
+        if current.is_none() {
+            return Err(UnloadPolicyError::NotFound);
+        }
+        Ok(current.take().unwrap())
     }
 
     pub fn checker_source(&self) -> Option<String> {

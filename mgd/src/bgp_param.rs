@@ -15,7 +15,7 @@ use std::{
 };
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct NewRouterRequest {
+pub struct Router {
     /// Autonomous system number for this router
     pub asn: u32,
 
@@ -24,6 +24,9 @@ pub struct NewRouterRequest {
 
     /// Listening address <addr>:<port>
     pub listen: String,
+
+    /// Gracefully shut this router down.
+    pub graceful_shutdown: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -39,7 +42,7 @@ pub struct NeighborSelector {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct AddNeighborRequest {
+pub struct Neighbor {
     pub asn: u32,
     pub name: String,
     pub host: SocketAddr,
@@ -60,8 +63,8 @@ pub struct AddNeighborRequest {
     pub enforce_first_as: bool,
 }
 
-impl From<AddNeighborRequest> for PeerConfig {
-    fn from(rq: AddNeighborRequest) -> Self {
+impl From<Neighbor> for PeerConfig {
+    fn from(rq: Neighbor) -> Self {
         Self {
             name: rq.name.clone(),
             host: rq.host,
@@ -75,7 +78,7 @@ impl From<AddNeighborRequest> for PeerConfig {
     }
 }
 
-impl AddNeighborRequest {
+impl Neighbor {
     pub fn from_bgp_peer_config(
         asn: u32,
         group: String,
@@ -98,6 +101,29 @@ impl AddNeighborRequest {
             md5_auth_key: rq.md5_auth_key,
             multi_exit_discriminator: rq.multi_exit_discriminator,
             communities: rq.communities,
+            local_pref: rq.local_pref,
+            enforce_first_as: rq.enforce_first_as,
+        }
+    }
+
+    pub fn from_rdb_neighbor_info(asn: u32, rq: &rdb::BgpNeighborInfo) -> Self {
+        Self {
+            asn,
+            remote_asn: rq.remote_asn,
+            min_ttl: rq.min_ttl,
+            name: rq.name.clone(),
+            host: rq.host,
+            hold_time: rq.hold_time,
+            idle_hold_time: rq.idle_hold_time,
+            delay_open: rq.delay_open,
+            connect_retry: rq.connect_retry,
+            keepalive: rq.keepalive,
+            resolution: rq.resolution,
+            passive: rq.passive,
+            group: rq.group.clone(),
+            md5_auth_key: rq.md5_auth_key.clone(),
+            multi_exit_discriminator: rq.multi_exit_discriminator,
+            communities: rq.communities.clone(),
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
         }
@@ -129,7 +155,7 @@ pub struct AddExportPolicyRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct Originate4Request {
+pub struct Origin4 {
     /// ASN of the router to originate from.
     pub asn: u32,
 
@@ -241,7 +267,7 @@ pub struct BgpPeerConfig {
     pub delay_open: u64,
     pub connect_retry: u64,
     pub keepalive: u64,
-    pub resolution: u64,
+    pub resolution: u64, //Create then read only
     pub passive: bool,
     pub remote_asn: Option<u32>,
     pub min_ttl: Option<u8>,
@@ -256,9 +282,25 @@ pub struct BgpPeerConfig {
 pub struct Rib(BTreeMap<String, BTreeSet<Path>>);
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct LoadPolicyRequest {
+pub struct CheckerSource {
     pub asn: u32,
     pub code: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct ShaperSource {
+    pub asn: u32,
+    pub code: String,
+}
+
+pub enum PolicySource {
+    Checker(String),
+    Shaper(String),
+}
+
+pub enum PolicyKind {
+    Checker,
+    Shaper,
 }
 
 impl From<rdb::db::Rib> for Rib {

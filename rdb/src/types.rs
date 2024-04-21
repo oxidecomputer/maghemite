@@ -413,6 +413,7 @@ impl OriginChangeSet {
 pub struct BgpRouterInfo {
     pub id: u32,
     pub listen: String,
+    pub graceful_shutdown: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]

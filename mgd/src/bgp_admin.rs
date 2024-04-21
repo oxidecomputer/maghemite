@@ -2,24 +2,25 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::bgp_param as resource;
 use crate::{admin::HandlerContext, bgp_param::*, error::Error, register};
+use bgp::router::LoadPolicyError;
 use bgp::{
     config::RouterConfig,
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
-    messages::Prefix,
     router::Router,
     session::{FsmEvent, SessionInfo},
     BGP_PORT,
 };
 use dropshot::{
     endpoint, ApiDescription, HttpError, HttpResponseDeleted, HttpResponseOk,
-    HttpResponseUpdatedNoContent, RequestContext, TypedBody,
+    HttpResponseUpdatedNoContent, Query, RequestContext, TypedBody,
 };
 use http::status::StatusCode;
-use rdb::{Asn, BgpRouterInfo, Prefix4};
+use rdb::{Asn, BgpRouterInfo};
 use slog::info;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::{
@@ -65,92 +66,79 @@ macro_rules! get_router {
 }
 
 pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
-    register!(api, get_routers);
-    register!(api, new_router);
-    register!(api, ensure_router);
+    //
+    // Config API
+    //
+
+    // Router configuration
+    register!(api, read_routers);
+    register!(api, create_router);
+    register!(api, read_router);
+    register!(api, update_router);
     register!(api, delete_router);
 
-    register!(api, add_neighbor);
-    register!(api, ensure_neighbor);
+    // Neighbor configuration
+    register!(api, read_neighbors);
+    register!(api, create_neighbor);
+    register!(api, read_neighbor);
+    register!(api, update_neighbor);
     register!(api, delete_neighbor);
-    register!(api, neighbor_detail);
 
-    register!(api, originate4);
-    register!(api, withdraw4);
-    register!(api, get_originated4);
+    // Origin configuration
+    register!(api, create_origin4);
+    register!(api, read_origin4);
+    register!(api, update_origin4);
+    register!(api, delete_origin4);
 
-    register!(api, get_imported);
-    register!(api, get_selected);
+    // Policy checker configuration
+    register!(api, create_checker);
+    register!(api, read_checker);
+    register!(api, update_checker);
+    register!(api, delete_checker);
 
+    // Policy shaper configuration
+    register!(api, create_shaper);
+    register!(api, read_shaper);
+    register!(api, update_shaper);
+    register!(api, delete_shaper);
+
+    // Omicron API XXX? use normal API now that it's somewhat civilized?
     register!(api, bgp_apply);
 
-    register!(api, load_checker);
-    register!(api, get_checker_source);
-    register!(api, load_shaper);
-    register!(api, get_shaper_source);
+    //
+    // Status API
+    //
 
-    register!(api, graceful_shutdown);
+    register!(api, get_neighbors);
+    register!(api, get_imported);
+    register!(api, get_selected);
     register!(api, message_history);
 }
 
-#[endpoint { method = GET, path = "/bgp/routers" }]
-pub async fn get_routers(
+#[endpoint { method = GET, path = "/bgp/config/routers" }]
+pub async fn read_routers(
     ctx: RequestContext<Arc<HandlerContext>>,
-) -> Result<HttpResponseOk<Vec<RouterInfo>>, HttpError> {
+) -> Result<HttpResponseOk<Vec<resource::Router>>, HttpError> {
     let rs = lock!(ctx.context().bgp.router);
     let mut result = Vec::new();
 
     for r in rs.values() {
-        let mut peers = BTreeMap::new();
-        for s in lock!(r.sessions).values() {
-            let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
-            peers.insert(
-                s.neighbor.host.ip(),
-                PeerInfo {
-                    state: s.state(),
-                    asn: s.remote_asn(),
-                    duration_millis: dur as u64,
-                    timers: PeerTimers {
-                        hold: DynamicTimerInfo {
-                            configured: *s
-                                .clock
-                                .timers
-                                .hold_configured_interval
-                                .lock()
-                                .unwrap(),
-                            negotiated: s
-                                .clock
-                                .timers
-                                .hold_timer
-                                .lock()
-                                .unwrap()
-                                .interval,
-                        },
-                        keepalive: DynamicTimerInfo {
-                            configured: *s
-                                .clock
-                                .timers
-                                .keepalive_configured_interval
-                                .lock()
-                                .unwrap(),
-                            negotiated: s
-                                .clock
-                                .timers
-                                .keepalive_timer
-                                .lock()
-                                .unwrap()
-                                .interval,
-                        },
-                    },
-                },
-            );
-        }
-        result.push(RouterInfo {
-            asn: match r.config.asn {
-                Asn::TwoOctet(asn) => asn.into(),
-                Asn::FourOctet(asn) => asn,
-            },
-            peers,
+        let ctx = ctx.context();
+        let routers = ctx
+            .db
+            .get_bgp_routers()
+            .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
+
+        let asn = r.config.asn.as_u32();
+        let info = routers.get(&asn).ok_or(HttpError::for_not_found(
+            None,
+            format!("asn: {asn} not found in db"),
+        ))?;
+
+        result.push(resource::Router {
+            asn,
+            id: r.config.id,
+            listen: info.listen.clone(),
             graceful_shutdown: r.in_graceful_shutdown(),
         });
     }
@@ -158,20 +146,10 @@ pub async fn get_routers(
     Ok(HttpResponseOk(result))
 }
 
-#[endpoint { method = PUT, path = "/bgp/router" }]
-pub async fn ensure_router(
+#[endpoint { method = PUT, path = "/bgp/config/router" }]
+pub async fn create_router(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<NewRouterRequest>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context();
-    let rq = request.into_inner();
-    Ok(helpers::ensure_router(ctx.clone(), rq).await?)
-}
-
-#[endpoint { method = POST, path = "/bgp/router" }]
-pub async fn new_router(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<NewRouterRequest>,
+    request: TypedBody<resource::Router>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
@@ -187,10 +165,28 @@ pub async fn new_router(
     Ok(helpers::add_router(ctx.clone(), rq, &mut guard)?)
 }
 
-#[endpoint { method = DELETE, path = "/bgp/router" }]
+#[endpoint { method = GET, path = "/bgp/config/router" }]
+pub async fn read_router(
+    _ctx: RequestContext<Arc<HandlerContext>>,
+    _request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<resource::Router>, HttpError> {
+    todo!();
+}
+
+#[endpoint { method = POST, path = "/bgp/config/router" }]
+pub async fn update_router(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<resource::Router>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context();
+    let rq = request.into_inner();
+    Ok(helpers::ensure_router(ctx.clone(), rq).await?)
+}
+
+#[endpoint { method = DELETE, path = "/bgp/config/router" }]
 pub async fn delete_router(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<DeleteRouterRequest>,
+    request: Query<AsnSelector>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let mut routers = lock!(ctx.context().bgp.router);
@@ -201,10 +197,32 @@ pub async fn delete_router(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-#[endpoint { method = POST, path = "/bgp/neighbor" }]
-pub async fn add_neighbor(
+#[endpoint { method = GET, path = "/bgp/config/neighbors" }]
+pub async fn read_neighbors(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AddNeighborRequest>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<Vec<resource::Neighbor>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let nbrs = ctx
+        .db
+        .get_bgp_neighbors()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    let result = nbrs
+        .into_iter()
+        .filter(|x| x.asn == rq.asn)
+        .map(|x| resource::Neighbor::from_rdb_neighbor_info(rq.asn, &x))
+        .collect();
+
+    Ok(HttpResponseOk(result))
+}
+
+#[endpoint { method = PUT, path = "/bgp/config/neighbor" }]
+pub async fn create_neighbor(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<resource::Neighbor>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -212,44 +230,32 @@ pub async fn add_neighbor(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-#[endpoint { method = GET, path = "/bgp/neighbor" }]
-pub async fn neighbor_detail(
+#[endpoint { method = GET, path = "/bgp/config/neighbor" }]
+pub async fn read_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<NeighborSelector>,
-) -> Result<HttpResponseOk<SessionInfo>, HttpError> {
+    request: Query<NeighborSelector>,
+) -> Result<HttpResponseOk<resource::Neighbor>, HttpError> {
     let rq = request.into_inner();
-    let routers = lock!(ctx.context().bgp.router);
-    match routers.get(&rq.asn) {
-        Some(rtr) => match lock!(rtr.sessions).get(&rq.addr) {
-            Some(session) => {
-                let mut info = lock!(session.session).clone();
-                if let Some(x) = info.md5_auth_key.as_mut() {
-                    x.value.clear()
-                }
-                Ok(HttpResponseOk(info))
-            }
-            None => {
-                Err(HttpError::for_not_found(None, "asn peer address".into()))
-            }
-        },
-        None => Err(HttpError::for_not_found(None, "asn".into())),
-    }
+    let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
+        HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
+    })?;
+    let neighbor_info = db_neighbors
+        .iter()
+        .find(|n| n.host.ip() == rq.addr)
+        .ok_or(HttpError::for_not_found(
+            None,
+            format!("neighbor {} not found in db", rq.addr),
+        ))?;
+
+    let result =
+        resource::Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+    Ok(HttpResponseOk(result))
 }
 
-#[endpoint { method = DELETE, path = "/bgp/neighbor" }]
-pub async fn delete_neighbor(
+#[endpoint { method = POST, path = "/bgp/config/neighbor" }]
+pub async fn update_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<DeleteNeighborRequest>,
-) -> Result<HttpResponseDeleted, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
-}
-
-#[endpoint { method = PUT, path = "/bgp/neighbor" }]
-pub async fn ensure_neighbor(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AddNeighborRequest>,
+    request: TypedBody<resource::Neighbor>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -257,53 +263,82 @@ pub async fn ensure_neighbor(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-#[endpoint { method = POST, path = "/bgp/originate4" }]
-pub async fn originate4(
+#[endpoint { method = DELETE, path = "/bgp/config/neighbor" }]
+pub async fn delete_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<Originate4Request>,
+    request: Query<NeighborSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
+}
+
+#[endpoint { method = PUT, path = "/bgp/config/origin4" }]
+pub async fn create_origin4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<resource::Origin4>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
-        .originate4(prefixes)
+        .create_origin4(prefixes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
 }
 
-#[endpoint { method = POST, path = "/bgp/withdraw4" }]
-pub async fn withdraw4(
+#[endpoint { method = GET, path = "/bgp/config/origin4" }]
+pub async fn read_origin4(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<Withdraw4Request>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq = request.into_inner();
-    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
-    let ctx = ctx.context();
-
-    get_router!(ctx, rq.asn)?
-        .withdraw4(prefixes)
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-#[endpoint { method = GET, path = "/bgp/originate4" }]
-pub async fn get_originated4(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<GetOriginated4Request>,
-) -> Result<HttpResponseOk<Vec<Prefix4>>, HttpError> {
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<resource::Origin4>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     let originated = get_router!(ctx, rq.asn)?
         .db
-        .get_originated4()
+        .get_origin4()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-    Ok(HttpResponseOk(originated))
+
+    Ok(HttpResponseOk(resource::Origin4 {
+        asn: rq.asn,
+        prefixes: originated,
+    }))
 }
 
-#[endpoint { method = GET, path = "/bgp/imported" }]
+#[endpoint { method = POST, path = "/bgp/config/origin4" }]
+pub async fn update_origin4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<resource::Origin4>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
+    let ctx = ctx.context();
+
+    get_router!(ctx, rq.asn)?
+        .set_origin4(prefixes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = DELETE, path = "/bgp/config/origin4" }]
+pub async fn delete_origin4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    get_router!(ctx, rq.asn)?
+        .clear_origin4()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    Ok(HttpResponseDeleted())
+}
+
+#[endpoint { method = GET, path = "/bgp/status/imported" }]
 pub async fn get_imported(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AsnSelector>,
@@ -314,7 +349,7 @@ pub async fn get_imported(
     Ok(HttpResponseOk(imported.into()))
 }
 
-#[endpoint { method = GET, path = "/bgp/selected" }]
+#[endpoint { method = GET, path = "/bgp/status/selected" }]
 pub async fn get_selected(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AsnSelector>,
@@ -326,20 +361,68 @@ pub async fn get_selected(
     Ok(HttpResponseOk(selected.into()))
 }
 
-#[endpoint { method = POST, path = "/bgp/graceful_shutdown" }]
-pub async fn graceful_shutdown(
+#[endpoint { method = GET, path = "/bgp/status/neighbors" }]
+pub async fn get_neighbors(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<GracefulShutdownRequest>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    get_router!(ctx, rq.asn)?
-        .graceful_shutdown(rq.enabled)
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-    Ok(HttpResponseUpdatedNoContent())
+
+    let mut peers = HashMap::new();
+    let routers = lock!(ctx.bgp.router);
+    let r = routers
+        .get(&rq.asn)
+        .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
+
+    for s in lock!(r.sessions).values() {
+        let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
+        peers.insert(
+            s.neighbor.host.ip(),
+            PeerInfo {
+                state: s.state(),
+                asn: s.remote_asn(),
+                duration_millis: dur as u64,
+                timers: PeerTimers {
+                    hold: DynamicTimerInfo {
+                        configured: *s
+                            .clock
+                            .timers
+                            .hold_configured_interval
+                            .lock()
+                            .unwrap(),
+                        negotiated: s
+                            .clock
+                            .timers
+                            .hold_timer
+                            .lock()
+                            .unwrap()
+                            .interval,
+                    },
+                    keepalive: DynamicTimerInfo {
+                        configured: *s
+                            .clock
+                            .timers
+                            .keepalive_configured_interval
+                            .lock()
+                            .unwrap(),
+                        negotiated: s
+                            .clock
+                            .timers
+                            .keepalive_timer
+                            .lock()
+                            .unwrap()
+                            .interval,
+                    },
+                },
+            },
+        );
+    }
+
+    Ok(HttpResponseOk(peers))
 }
 
-#[endpoint { method = POST, path = "/bgp/apply" }]
+#[endpoint { method = POST, path = "/bgp/omicron/apply" }]
 pub async fn bgp_apply(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<ApplyRequest>,
@@ -414,10 +497,11 @@ pub async fn bgp_apply(
 
         helpers::ensure_router(
             ctx.context().clone(),
-            NewRouterRequest {
+            resource::Router {
                 asn: rq.asn,
                 id: rq.asn,
                 listen: DEFAULT_BGP_LISTEN.to_string(), //TODO as parameter
+                graceful_shutdown: false,               // TODO as parameter
             },
         )
         .await?;
@@ -425,7 +509,7 @@ pub async fn bgp_apply(
         for (nbr, cfg) in nbr_config {
             helpers::add_neighbor(
                 ctx.context().clone(),
-                AddNeighborRequest::from_bgp_peer_config(
+                resource::Neighbor::from_bgp_peer_config(
                     nbr.asn,
                     group.clone(),
                     cfg.clone(),
@@ -451,37 +535,8 @@ pub async fn bgp_apply(
         }
     }
 
-    let current_originate: BTreeSet<Prefix4> = ctx
-        .context()
-        .db
-        .get_originated4()
-        .map_err(Error::Db)?
-        .into_iter()
-        .collect();
-
-    let specified_originate: BTreeSet<Prefix4> =
-        rq.originate.iter().cloned().collect();
-
-    let to_delete = current_originate
-        .difference(&specified_originate)
-        .map(|x| (*x).into())
-        .collect();
-
-    let to_add: Vec<Prefix> = specified_originate
-        .difference(&current_originate)
-        .map(|x| (*x).into())
-        .collect();
-
-    info!(log, "origin: current {current_originate:#?}");
-    info!(log, "origin: adding {to_add:#?}");
-    info!(log, "origin: removing {to_delete:#?}");
-
     get_router!(ctx.context(), rq.asn)?
-        .originate4(to_add)
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-
-    get_router!(ctx.context(), rq.asn)?
-        .withdraw4(to_delete)
+        .set_origin4(rq.originate.clone().into_iter().map(Into::into).collect())
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
@@ -506,11 +561,22 @@ pub async fn message_history(
     Ok(HttpResponseOk(MessageHistoryResponse { by_peer: result }))
 }
 
-#[endpoint { method = GET, path = "/bgp/checker" }]
-pub async fn get_checker_source(
+#[endpoint { method = PUT, path = "/bgp/checker" }]
+pub async fn create_checker(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
-) -> Result<HttpResponseOk<String>, HttpError> {
+    request: TypedBody<CheckerSource>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context();
+    let rq = request.into_inner();
+    helpers::load_policy(ctx, rq.asn, PolicySource::Checker(rq.code), false)
+        .await
+}
+
+#[endpoint { method = GET, path = "/bgp/checker" }]
+pub async fn read_checker(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<CheckerSource>, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
     match ctx.bgp.router.lock().unwrap().get(&rq.asn) {
@@ -519,7 +585,10 @@ pub async fn get_checker_source(
             String::from("ASN not found"),
         )),
         Some(rtr) => match rtr.policy.checker_source() {
-            Some(source) => Ok(HttpResponseOk(source)),
+            Some(source) => Ok(HttpResponseOk(CheckerSource {
+                code: source,
+                asn: rq.asn,
+            })),
             None => Err(HttpError::for_not_found(
                 None,
                 String::from("checker source not found"),
@@ -528,88 +597,43 @@ pub async fn get_checker_source(
     }
 }
 
-#[endpoint { method = PUT, path = "/bgp/checker" }]
-pub async fn load_checker(
+#[endpoint { method = POST, path = "/bgp/checker" }]
+pub async fn update_checker(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<LoadPolicyRequest>,
+    request: TypedBody<CheckerSource>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    match ctx.bgp.router.lock().unwrap().get(&rq.asn) {
-        None => {
-            return Err(HttpError::for_not_found(
-                None,
-                String::from("ASN not found"),
-            ));
-        }
-        Some(rtr) => {
-            match rtr.policy.load_checker(&rq.code) {
-                Err(e) => {
-                    // The program failed to compile, return a bad request error
-                    // with the error string from the compiler.
-                    return Err(HttpError::for_bad_request(
-                        None,
-                        e.to_string(),
-                    ));
-                }
-                Ok(previous) => {
-                    rtr.send_event(FsmEvent::CheckerChanged(previous))
-                        .map_err(|e| {
-                            HttpError::for_internal_error(format!(
-                                "send event: {e}"
-                            ))
-                        })?;
-                }
-            }
-        }
-    }
-    Ok(HttpResponseUpdatedNoContent())
+    helpers::load_policy(ctx, rq.asn, PolicySource::Checker(rq.code), true)
+        .await
+}
+
+#[endpoint { method = DELETE, path = "/bgp/checker" }]
+pub async fn delete_checker(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let ctx = ctx.context();
+    let rq = request.into_inner();
+    helpers::unload_policy(ctx, rq.asn, PolicyKind::Checker).await
 }
 
 #[endpoint { method = PUT, path = "/bgp/shaper" }]
-pub async fn load_shaper(
+pub async fn create_shaper(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<LoadPolicyRequest>,
+    request: TypedBody<ShaperSource>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    match ctx.bgp.router.lock().unwrap().get(&rq.asn) {
-        None => {
-            return Err(HttpError::for_not_found(
-                None,
-                String::from("ASN not found"),
-            ));
-        }
-        Some(rtr) => {
-            match rtr.policy.load_shaper(&rq.code) {
-                Err(e) => {
-                    // The program failed to compile, return a bad request error
-                    // with the error string from the compiler.
-                    return Err(HttpError::for_bad_request(
-                        None,
-                        e.to_string(),
-                    ));
-                }
-                Ok(previous) => {
-                    rtr.send_event(FsmEvent::ShaperChanged(previous)).map_err(
-                        |e| {
-                            HttpError::for_internal_error(format!(
-                                "send event: {e}"
-                            ))
-                        },
-                    )?;
-                }
-            }
-        }
-    }
-    Ok(HttpResponseUpdatedNoContent())
+    helpers::load_policy(ctx, rq.asn, PolicySource::Shaper(rq.code), false)
+        .await
 }
 
 #[endpoint { method = GET, path = "/bgp/shaper" }]
-pub async fn get_shaper_source(
+pub async fn read_shaper(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
-) -> Result<HttpResponseOk<String>, HttpError> {
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<ShaperSource>, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
     match ctx.bgp.router.lock().unwrap().get(&rq.asn) {
@@ -618,7 +642,10 @@ pub async fn get_shaper_source(
             String::from("ASN not found"),
         )),
         Some(rtr) => match rtr.policy.shaper_source() {
-            Some(source) => Ok(HttpResponseOk(source)),
+            Some(source) => Ok(HttpResponseOk(ShaperSource {
+                code: source,
+                asn: rq.asn,
+            })),
             None => Err(HttpError::for_not_found(
                 None,
                 String::from("shaper source not found"),
@@ -627,17 +654,38 @@ pub async fn get_shaper_source(
     }
 }
 
+#[endpoint { method = POST, path = "/bgp/shaper" }]
+pub async fn update_shaper(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<ShaperSource>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context();
+    let rq = request.into_inner();
+    helpers::load_policy(ctx, rq.asn, PolicySource::Shaper(rq.code), true).await
+}
+
+#[endpoint { method = DELETE, path = "/bgp/shaper" }]
+pub async fn delete_shaper(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let ctx = ctx.context();
+    let rq = request.into_inner();
+    helpers::unload_policy(ctx, rq.asn, PolicyKind::Shaper).await
+}
+
 pub(crate) mod helpers {
-    use bgp::router::EnsureSessionResult;
+    use bgp::router::{EnsureSessionResult, UnloadPolicyError};
 
     use super::*;
 
     pub(crate) async fn ensure_router(
         ctx: Arc<HandlerContext>,
-        rq: NewRouterRequest,
+        rq: resource::Router,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
         let mut guard = lock!(ctx.bgp.router);
-        if guard.get(&rq.asn).is_some() {
+        if let Some(current) = guard.get(&rq.asn) {
+            current.graceful_shutdown(rq.graceful_shutdown)?;
             return Ok(HttpResponseUpdatedNoContent());
         }
 
@@ -659,7 +707,7 @@ pub(crate) mod helpers {
 
     pub(crate) fn add_neighbor(
         ctx: Arc<HandlerContext>,
-        rq: AddNeighborRequest,
+        rq: resource::Neighbor,
         ensure: bool,
     ) -> Result<(), Error> {
         let log = &ctx.log;
@@ -731,7 +779,7 @@ pub(crate) mod helpers {
 
     pub(crate) fn add_router(
         ctx: Arc<HandlerContext>,
-        rq: NewRouterRequest,
+        rq: resource::Router,
         routers: &mut BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
         let cfg = RouterConfig {
@@ -756,6 +804,7 @@ pub(crate) mod helpers {
             BgpRouterInfo {
                 id: rq.id,
                 listen: rq.listen.clone(),
+                graceful_shutdown: rq.graceful_shutdown,
             },
         )?;
 
@@ -770,5 +819,95 @@ pub(crate) mod helpers {
                 "failed to start bgp session {e}",
             ))
         })
+    }
+
+    pub async fn load_policy(
+        ctx: &Arc<HandlerContext>,
+        asn: u32,
+        policy: PolicySource,
+        overwrite: bool,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        match ctx.bgp.router.lock().unwrap().get(&asn) {
+            None => {
+                return Err(HttpError::for_not_found(
+                    None,
+                    String::from("ASN not found"),
+                ));
+            }
+            Some(rtr) => {
+                let load_result = match policy {
+                    PolicySource::Checker(code) => {
+                        rtr.policy.load_checker(&code, overwrite)
+                    }
+                    PolicySource::Shaper(code) => {
+                        rtr.policy.load_shaper(&code, overwrite)
+                    }
+                };
+                match load_result {
+                    Err(LoadPolicyError::Compilation(e)) => {
+                        // The program failed to compile, return a bad request error
+                        // with the error string from the compiler.
+                        return Err(HttpError::for_bad_request(
+                            None,
+                            e.to_string(),
+                        ));
+                    }
+                    Err(LoadPolicyError::Confilct) => {
+                        return Err(HttpError::for_client_error(
+                            None,
+                            StatusCode::CONFLICT,
+                            "policy already loaded".to_string(),
+                        ));
+                    }
+                    Ok(previous) => {
+                        rtr.send_event(FsmEvent::ShaperChanged(previous))
+                            .map_err(|e| {
+                                HttpError::for_internal_error(format!(
+                                    "send event: {e}"
+                                ))
+                            })?;
+                    }
+                }
+            }
+        }
+        Ok(HttpResponseUpdatedNoContent())
+    }
+
+    pub async fn unload_policy(
+        ctx: &Arc<HandlerContext>,
+        asn: u32,
+        policy: PolicyKind,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        match ctx.bgp.router.lock().unwrap().get(&asn) {
+            None => {
+                return Err(HttpError::for_not_found(
+                    None,
+                    String::from("ASN not found"),
+                ));
+            }
+            Some(rtr) => {
+                let unload_result = match policy {
+                    PolicyKind::Checker => rtr.policy.unload_checker(),
+                    PolicyKind::Shaper => rtr.policy.unload_shaper(),
+                };
+                match unload_result {
+                    Err(UnloadPolicyError::NotFound) => {
+                        return Err(HttpError::for_not_found(
+                            None,
+                            "no policy loaded".to_string(),
+                        ));
+                    }
+                    Ok(previous) => {
+                        rtr.send_event(FsmEvent::ShaperChanged(Some(previous)))
+                            .map_err(|e| {
+                                HttpError::for_internal_error(format!(
+                                    "send event: {e}"
+                                ))
+                            })?;
+                    }
+                }
+            }
+        }
+        Ok(HttpResponseDeleted())
     }
 }
