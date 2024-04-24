@@ -196,8 +196,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             event_tx.clone(),
             neighbor.clone(),
             self.config.asn,
-            info.remote_asn,
-            info.min_ttl,
             self.config.id,
             Duration::from_millis(peer.resolution),
             Some(bind_addr),
@@ -206,7 +204,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             //TODO remove all the other self properties in favor just passing
             //     the router through.
             self.clone(),
-            info.md5_auth_key,
             self.log.clone(),
         ));
 

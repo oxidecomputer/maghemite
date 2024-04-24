@@ -90,7 +90,7 @@
         }
       }
     },
-    "/bgp/checker": {
+    "/bgp/config/checker": {
       "get": {
         "operationId": "read_checker",
         "parameters": [
@@ -617,66 +617,7 @@
         }
       }
     },
-    "/bgp/message-history": {
-      "get": {
-        "operationId": "message_history",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MessageHistoryRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MessageHistoryResponse"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/bgp/omicron/apply": {
-      "post": {
-        "operationId": "bgp_apply",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ApplyRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/bgp/shaper": {
+    "/bgp/config/shaper": {
       "get": {
         "operationId": "read_shaper",
         "parameters": [
@@ -777,6 +718,65 @@
         "responses": {
           "204": {
             "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/message-history": {
+      "get": {
+        "operationId": "message_history",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageHistoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageHistoryResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/omicron/apply": {
+      "post": {
+        "operationId": "bgp_apply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -1281,11 +1281,7 @@
           },
           "md5_auth_key": {
             "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Md5Key"
-              }
-            ]
+            "type": "string"
           },
           "min_ttl": {
             "nullable": true,
@@ -2054,22 +2050,6 @@
           "bad_message_type"
         ]
       },
-      "Md5Key": {
-        "type": "object",
-        "properties": {
-          "value": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint8",
-              "minimum": 0
-            }
-          }
-        },
-        "required": [
-          "value"
-        ]
-      },
       "Message": {
         "description": "Holds a BGP message. May be an Open, Update, Notification or Keep Alive message.",
         "oneOf": [
@@ -2285,11 +2265,7 @@
           },
           "md5_auth_key": {
             "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Md5Key"
-              }
-            ]
+            "type": "string"
           },
           "min_ttl": {
             "nullable": true,

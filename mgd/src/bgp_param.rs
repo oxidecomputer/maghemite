@@ -4,7 +4,7 @@
 
 use bgp::config::PeerConfig;
 use bgp::session::{FsmStateKind, MessageHistory};
-use rdb::{Md5Key, Path, PolicyAction, Prefix4};
+use rdb::{Path, PolicyAction, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -56,7 +56,7 @@ pub struct Neighbor {
     pub passive: bool,
     pub remote_asn: Option<u32>,
     pub min_ttl: Option<u8>,
-    pub md5_auth_key: Option<Md5Key>,
+    pub md5_auth_key: Option<String>,
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
@@ -271,7 +271,7 @@ pub struct BgpPeerConfig {
     pub passive: bool,
     pub remote_asn: Option<u32>,
     pub min_ttl: Option<u8>,
-    pub md5_auth_key: Option<Md5Key>,
+    pub md5_auth_key: Option<String>,
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,

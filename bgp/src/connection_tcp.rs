@@ -16,7 +16,6 @@ use libc::{
     c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, IP_MINTTL, TCP_MD5SIG,
 };
 use mg_common::lock;
-use rdb::Md5Key;
 use slog::{error, trace, warn, Logger};
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -101,7 +100,7 @@ impl BgpConnection for BgpConnectionTcp {
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
         ttl_sec: bool,
-        md5_key: Option<Md5Key>,
+        md5_key: Option<String>,
     ) -> Result<(), Error> {
         let s = match self.peer {
             SocketAddr::V4(_) => socket2::Socket::new(
@@ -120,8 +119,8 @@ impl BgpConnection for BgpConnectionTcp {
         if let Some(key) = md5_key {
             slog::info!(self.log, "setting md5 key: {:?}", key);
             let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
-            let len = key.value.len();
-            keyval[..len].copy_from_slice(key.value.as_slice());
+            let len = key.len();
+            keyval[..len].copy_from_slice(key.as_bytes());
             if let Err(e) =
                 set_md5_sig_fd(s.as_raw_fd(), len as u16, keyval, self.peer)
             {

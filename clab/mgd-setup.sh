@@ -13,8 +13,8 @@ addr=`host -t A -4 clab-pop-oxpop | awk '{print $4}'`
     --remote-asn 64500 \
     --min-ttl 255 \
     --md5-auth-key hypermuffin \
-    --hold-time 900 \
-    --keepalive-time 300 \
+    --hold-time 15 \
+    --keepalive-time 5 \
     --communities 1287493 \
     --med 99
 
@@ -24,8 +24,8 @@ addr=`host -t A -4 clab-pop-oxpop | awk '{print $4}'`
     --remote-asn 64501 \
     --min-ttl 255 \
     --md5-auth-key hypermuffin \
-    --hold-time 900 \
-    --keepalive-time 300 \
+    --hold-time 15 \
+    --keepalive-time 5 \
     --communities 3081893 \
     --med 99
 
@@ -35,8 +35,8 @@ addr=`host -t A -4 clab-pop-oxpop | awk '{print $4}'`
     --remote-asn 64502 \
     --min-ttl 255 \
     --md5-auth-key hypermuffin \
-    --hold-time 900 \
-    --keepalive-time 300 \
+    --hold-time 15 \
+    --keepalive-time 5 \
     --communities 8675309 \
     --med 99
 
@@ -46,8 +46,8 @@ addr=`host -t A -4 clab-pop-oxpop | awk '{print $4}'`
     --remote-asn 64502 \
     --min-ttl 255 \
     --md5-auth-key hypermuffin \
-    --hold-time 900 \
-    --keepalive-time 300 \
+    --hold-time 15 \
+    --keepalive-time 5 \
     --communities 8675309 \
     --med 99
 

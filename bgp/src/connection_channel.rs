@@ -12,7 +12,6 @@ use crate::error::Error;
 use crate::messages::Message;
 use crate::session::FsmEvent;
 use mg_common::lock;
-use rdb::Md5Key;
 use slog::debug;
 use slog::error;
 use slog::Logger;
@@ -161,7 +160,7 @@ impl BgpConnection for BgpConnectionChannel {
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
         _ttl_sec: bool,
-        _md5_key: Option<Md5Key>,
+        _md5_key: Option<String>,
     ) -> Result<(), Error> {
         debug!(self.log, "[{}] connecting", self.peer);
         let (local, remote) = channel();

@@ -27,7 +27,7 @@ struct Cli {
     command: Commands,
 
     /// Address of admin interface
-    #[arg(short, long, default_value = "::1")]
+    #[arg(short, env, long, default_value = "::1")]
     address: IpAddr,
 
     /// TCP port for admin interface

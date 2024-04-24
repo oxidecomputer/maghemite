@@ -4,4 +4,4 @@
 ./cdn-set-config.sh
 ./pcwest-set-config.sh
 ./pceast-set-config.sh
-./mgd-setup.sh
+#./mgd-setup.sh

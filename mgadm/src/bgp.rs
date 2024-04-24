@@ -5,14 +5,15 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use colored::*;
+use mg_admin_client::types::Rib;
 use mg_admin_client::types::{self, Path};
-use mg_admin_client::types::{Md5Key, Rib};
 use mg_admin_client::Client;
 use rdb::types::{PolicyAction, Prefix4};
 use std::collections::BTreeMap;
 use std::fs::read_to_string;
 use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::Duration;
 use tabwriter::TabWriter;
 
 #[derive(Subcommand, Debug)]
@@ -57,13 +58,22 @@ pub struct StatusSubcommand {
 #[derive(Subcommand, Debug)]
 pub enum StatusCmd {
     /// Get the status of a router's neighbors.
-    Neighbors { asn: u32 },
+    Neighbors {
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Get the prefixes imported by a BGP router.
-    Imported { asn: u32 },
+    Imported {
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Get the selected paths chosen from imported paths.
-    Selected { asn: u32 },
+    Selected {
+        #[clap(env)]
+        asn: u32,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -93,13 +103,19 @@ pub enum RouterCmd {
     Create(RouterConfig),
 
     /// Read a router's configuration.
-    Read { asn: u32 },
+    Read {
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Update a router's configuration.
     Update(RouterConfig),
 
     /// Delete a BGP router.
-    Delete { asn: u32 },
+    Delete {
+        #[clap(env)]
+        asn: u32,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -111,19 +127,30 @@ pub struct NeighborSubcommand {
 #[derive(Subcommand, Debug)]
 pub enum NeighborCmd {
     /// List the neighbors of a given router.
-    List { asn: u32 },
+    List {
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Create a neighbor configuration.
     Create(Neighbor),
 
     /// Read a neighbor configuration.
-    Read { asn: u32, addr: IpAddr },
+    Read {
+        addr: IpAddr,
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Update a neighbor's configuration.
     Update(Neighbor),
 
     /// Delete a neighbor configuration
-    Delete { asn: u32, addr: IpAddr },
+    Delete {
+        addr: IpAddr,
+        #[clap(env)]
+        asn: u32,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -150,13 +177,19 @@ pub enum Origin4Cmd {
     Create(Originate4),
 
     /// Read originated prefexes for a BGP router.
-    Read { asn: u32 },
+    Read {
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Update a routers originated prefixes.
     Update(Originate4),
 
     /// Delete a router's originated prefixes.
-    Delete { asn: u32 },
+    Delete {
+        #[clap(env)]
+        asn: u32,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -183,16 +216,30 @@ pub struct CheckerSubcommand {
 #[derive(Subcommand, Debug)]
 pub enum CheckerCmd {
     /// Create a BGP policy checker for the specified router.
-    Create { file: String, asn: u32 },
+    Create {
+        file: String,
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Read a routers policy checker.
-    Read { asn: u32 },
+    Read {
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Update the BGP policy checker for the specified router.
-    Update { file: String, asn: u32 },
+    Update {
+        file: String,
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Delete a routers policy checker.
-    Delete { asn: u32 },
+    Delete {
+        #[clap(env)]
+        asn: u32,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -204,23 +251,34 @@ pub struct ShaperSubcommand {
 #[derive(Subcommand, Debug)]
 pub enum ShaperCmd {
     /// Create a BGP policy checker for the specified router.
-    Create { file: String, asn: u32 },
+    Create {
+        file: String,
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Read a routers policy checker.
-    Read { asn: u32 },
+    Read {
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Update the BGP policy checker for the specified router.
-    Update { file: String, asn: u32 },
+    Update {
+        file: String,
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Delete a routers policy checker.
-    Delete { asn: u32 },
+    Delete {
+        #[clap(env)]
+        asn: u32,
+    },
 }
 
 #[derive(Args, Debug)]
 pub struct RouterConfig {
-    /// Autonomous system number for this router
-    pub asn: u32,
-
     /// Id for this router
     pub id: u32,
 
@@ -230,13 +288,14 @@ pub struct RouterConfig {
     /// Gracefully shut this router down according to RFC 8326
     #[clap(long)]
     pub graceful_shutdown: bool,
+
+    /// Autonomous system number for this router
+    #[clap(env)]
+    pub asn: u32,
 }
 
 #[derive(Args, Debug)]
 pub struct ExportPolicy {
-    /// Autonomous system number for the router to add the export policy to.
-    pub asn: u32,
-
     /// Address of the peer to apply this policy to.
     pub addr: IpAddr,
 
@@ -248,31 +307,34 @@ pub struct ExportPolicy {
 
     /// The policy action to apply.
     pub action: PolicyAction,
+
+    /// Autonomous system number for the router to add the export policy to.
+    #[clap(env)]
+    pub asn: u32,
 }
 
 #[derive(Args, Debug)]
 pub struct Originate4 {
-    /// Autonomous system number for the router to originated the prefixes from.
-    pub asn: u32,
-
     /// Set of prefixes to originate.
     pub prefixes: Vec<Prefix4>,
+
+    /// Autonomous system number for the router to originated the prefixes from.
+    #[clap(env)]
+    pub asn: u32,
 }
 
 #[derive(Args, Debug)]
 pub struct Withdraw4 {
-    /// Autonomous system number for the router to originated the prefixes from.
-    pub asn: u32,
-
     /// Set of prefixes to originate.
     pub prefixes: Vec<Prefix4>,
+
+    /// Autonomous system number for the router to originated the prefixes from.
+    #[clap(env)]
+    pub asn: u32,
 }
 
 #[derive(Args, Debug)]
 pub struct Neighbor {
-    /// Autonomous system number for the router to add the neighbor to.
-    pub asn: u32,
-
     /// Name for this neighbor
     name: String,
 
@@ -342,6 +404,10 @@ pub struct Neighbor {
     /// first element in the AS path.
     #[arg(long)]
     pub enforce_first_as: bool,
+
+    /// Autonomous system number for the router to add the neighbor to.
+    #[clap(env)]
+    pub asn: u32,
 }
 
 impl From<Neighbor> for types::Neighbor {
@@ -360,9 +426,7 @@ impl From<Neighbor> for types::Neighbor {
             resolution: n.resolution,
             group: n.group,
             passive: n.passive_connection,
-            md5_auth_key: n.md5_auth_key.map(|k| Md5Key {
-                value: k.clone().into_bytes(),
-            }),
+            md5_auth_key: n.md5_auth_key.clone(),
             multi_exit_discriminator: n.med,
             communities: n.communities,
             local_pref: n.local_pref,
@@ -445,57 +509,6 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
 async fn read_routers(c: Client) {
     let routers = c.read_routers().await.unwrap().into_inner();
     println!("{routers:#?}");
-    /*
-    let routers = c.get_routers().await.unwrap().into_inner();
-    for r in &routers {
-        let gshut = if r.graceful_shutdown {
-            " graceful shutdown".yellow()
-        } else {
-            "".normal()
-        };
-        println!("{}: {}{gshut}", "ASN".dimmed(), r.asn);
-        let mut tw = TabWriter::new(stdout());
-        writeln!(
-            &mut tw,
-            "{}\t{}\t{}\t{}\t{}\t{}",
-            "Peer Address".dimmed(),
-            "Peer ASN".dimmed(),
-            "State".dimmed(),
-            "State Duration".dimmed(),
-            "Hold".dimmed(),
-            "Keepalive".dimmed(),
-        )
-        .unwrap();
-
-        for (addr, info) in &r.peers {
-            writeln!(
-                &mut tw,
-                "{}\t{:?}\t{:?}\t{:}\t{}/{}\t{}/{}",
-                addr,
-                info.asn,
-                info.state,
-                humantime::Duration::from(Duration::from_millis(
-                    info.duration_millis
-                ),),
-                humantime::Duration::from(Duration::from_secs(
-                    info.timers.hold.configured.secs
-                )),
-                humantime::Duration::from(Duration::from_secs(
-                    info.timers.hold.negotiated.secs
-                )),
-                humantime::Duration::from(Duration::from_secs(
-                    info.timers.keepalive.configured.secs,
-                )),
-                humantime::Duration::from(Duration::from_secs(
-                    info.timers.keepalive.negotiated.secs,
-                )),
-            )
-            .unwrap();
-        }
-        tw.flush().unwrap();
-        println!();
-    }
-    */
 }
 
 async fn create_router(cfg: RouterConfig, c: Client) {
@@ -531,7 +544,46 @@ async fn delete_router(asn: u32, c: Client) {
 
 async fn get_neighbors(c: Client, asn: u32) {
     let result = c.get_neighbors(asn).await.unwrap();
-    println!("{result:#?}");
+    //println!("{result:#?}");
+    let mut tw = TabWriter::new(stdout());
+    writeln!(
+        &mut tw,
+        "{}\t{}\t{}\t{}\t{}\t{}",
+        "Peer Address".dimmed(),
+        "Peer ASN".dimmed(),
+        "State".dimmed(),
+        "State Duration".dimmed(),
+        "Hold".dimmed(),
+        "Keepalive".dimmed(),
+    )
+    .unwrap();
+
+    for (addr, info) in result.iter() {
+        writeln!(
+            &mut tw,
+            "{}\t{:?}\t{:?}\t{:}\t{}/{}\t{}/{}",
+            addr,
+            info.asn,
+            info.state,
+            humantime::Duration::from(Duration::from_millis(
+                info.duration_millis
+            ),),
+            humantime::Duration::from(Duration::from_secs(
+                info.timers.hold.configured.secs
+            )),
+            humantime::Duration::from(Duration::from_secs(
+                info.timers.hold.negotiated.secs
+            )),
+            humantime::Duration::from(Duration::from_secs(
+                info.timers.keepalive.configured.secs,
+            )),
+            humantime::Duration::from(Duration::from_secs(
+                info.timers.keepalive.negotiated.secs,
+            )),
+        )
+        .unwrap();
+    }
+    tw.flush().unwrap();
 }
 
 async fn get_imported(c: Client, asn: u32) {

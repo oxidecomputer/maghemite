@@ -5,7 +5,6 @@
 use crate::error::Error;
 use crate::messages::Message;
 use crate::session::FsmEvent;
-use rdb::Md5Key;
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
@@ -59,7 +58,7 @@ pub trait BgpConnection: Send + Clone {
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
         ttl_sec: bool,
-        md5_key: Option<Md5Key>,
+        md5_key: Option<String>,
     ) -> Result<(), Error>
     where
         Self: Sized;

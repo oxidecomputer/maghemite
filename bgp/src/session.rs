@@ -17,7 +17,7 @@ use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
-use rdb::{Asn, BgpPathProperties, Db, Md5Key};
+use rdb::{Asn, BgpPathProperties, Db};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -344,7 +344,7 @@ pub struct SessionInfo {
     pub min_ttl: Option<u8>,
 
     /// Md5 peer authentication key
-    pub md5_auth_key: Option<Md5Key>,
+    pub md5_auth_key: Option<String>,
 
     /// Multi-exit discriminator. This an optional attribute that is intended to
     /// be used on external eBGP sessions to discriminate among multiple exit or
@@ -498,11 +498,6 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     fanout: Arc<RwLock<Fanout<Cnx>>>,
     router: Arc<Router<Cnx>>,
 
-    // options
-    remote_asn: Option<u32>,
-    min_ttl: Option<u8>,
-    md5_auth_key: Option<Md5Key>,
-
     log: Logger,
 }
 
@@ -524,15 +519,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         neighbor: NeighborInfo,
         asn: Asn,
-        remote_asn: Option<u32>,
-        min_ttl: Option<u8>,
         id: u32,
         resolution: Duration,
         bind_addr: Option<SocketAddr>,
         db: Db,
         fanout: Arc<RwLock<Fanout<Cnx>>>,
         router: Arc<Router<Cnx>>,
-        md5_auth_key: Option<Md5Key>,
         log: Logger,
     ) -> SessionRunner<Cnx> {
         SessionRunner {
@@ -540,8 +532,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             event_rx,
             event_tx: event_tx.clone(),
             asn,
-            remote_asn,
-            min_ttl,
             id,
             neighbor,
             state: Arc::new(Mutex::new(FsmStateKind::Idle)),
@@ -564,7 +554,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             router,
             message_history: Arc::new(Mutex::new(MessageHistory::default())),
             counters: Arc::new(SessionCounters::default()),
-            md5_auth_key,
             db,
         }
     }
@@ -752,14 +741,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         lock!(self.session).connect_retry_counter = 0;
         lock!(self.clock.timers.connect_retry_timer).enable();
 
+        let min_ttl = lock!(self.session).min_ttl.is_some();
+        let md5_auth_key = lock!(self.session).md5_auth_key.clone();
+
         // Start with an initial connection attempt
         let conn =
             Cnx::new(self.bind_addr, self.neighbor.host, self.log.clone());
         if let Err(e) = conn.connect(
             self.event_tx.clone(),
             self.clock.resolution,
-            self.min_ttl.is_some(),
-            self.md5_auth_key.clone(),
+            min_ttl,
+            md5_auth_key.clone(),
         ) {
             wrn!(self; "initial connect attempt failed: {e}");
         }
@@ -790,8 +782,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     if let Err(e) = conn.connect(
                         self.event_tx.clone(),
                         self.clock.resolution,
-                        self.min_ttl.is_some(),
-                        self.md5_auth_key.clone(),
+                        min_ttl,
+                        md5_auth_key.clone(),
                     ) {
                         wrn!(self; "connect attempt failed: {e}");
                     }
@@ -1405,7 +1397,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             }
         }
-        if let Some(expected_remote_asn) = self.remote_asn {
+        if let Some(expected_remote_asn) = lock!(self.session).remote_asn {
             if remote_asn != expected_remote_asn {
                 self.send_notification(
                     conn,
@@ -1450,6 +1442,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         {
             let mut ht = self.clock.timers.hold_timer.lock().unwrap();
+            let mut kt = self.clock.timers.keepalive_timer.lock().unwrap();
+            let mut theirs = false;
             let requested = u64::from(om.hold_time);
             if requested > 0 {
                 if requested < 3 {
@@ -1459,14 +1453,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     return Err(Error::HoldTimeTooSmall);
                 }
                 if requested < ht.interval.as_secs() {
+                    theirs = true;
                     ht.interval = Duration::from_secs(requested);
                     ht.reset();
-                    let mut kt =
-                        self.clock.timers.keepalive_timer.lock().unwrap();
                     // per BGP RFC section 10
                     kt.interval = Duration::from_secs(requested / 3);
                     kt.reset();
                 }
+            }
+            if !theirs {
+                ht.interval =
+                    *lock!(self.clock.timers.hold_configured_interval);
+                ht.reset();
+                kt.interval =
+                    *lock!(self.clock.timers.keepalive_configured_interval);
+                kt.reset();
             }
         }
         Ok(())
@@ -1545,10 +1546,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 asn,
                 self.clock
                     .timers
-                    .hold_timer
+                    .hold_configured_interval
                     .lock()
                     .unwrap()
-                    .interval
                     .as_secs() as u16,
                 self.id,
             ),
@@ -1556,10 +1556,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 asn,
                 self.clock
                     .timers
-                    .hold_timer
+                    .hold_configured_interval
                     .lock()
                     .unwrap()
-                    .interval
                     .as_secs() as u16,
                 self.id,
             ),
@@ -2031,21 +2030,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     pub fn ensure_connection_policy(&self, conn: &Cnx) -> anyhow::Result<()> {
-        if let Some(md5_key) = self.md5_auth_key.as_ref() {
+        if let Some(md5_key) = lock!(self.session).md5_auth_key.clone() {
             let mut key = [0u8; MAX_MD5SIG_KEYLEN];
-            let len = md5_key.value.len();
+            let len = md5_key.len();
             if len > MAX_MD5SIG_KEYLEN {
                 return Err(anyhow::anyhow!(
                     "md5 key too long, max size is {}",
                     MAX_MD5SIG_KEYLEN
                 ));
             }
-            key[..len].copy_from_slice(md5_key.value.as_slice());
+            key[..len].copy_from_slice(md5_key.as_bytes());
             if let Err(e) = conn.set_md5_sig(len as u16, key) {
                 return Err(anyhow::anyhow!("failed to set md5 key: {e}"));
             }
         }
-        if let Some(ttl) = self.min_ttl {
+        if let Some(ttl) = lock!(self.session).min_ttl {
             if let Err(e) = conn.set_min_ttl(ttl) {
                 return Err(anyhow::anyhow!("failed to set min ttl: {e}"));
             }
@@ -2122,6 +2121,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         current.connect_retry_counter = info.connect_retry_counter;
         current.passive_tcp_establishment = info.passive_tcp_establishment;
+
+        if current.remote_asn != info.remote_asn {
+            current.remote_asn = info.remote_asn;
+            reset_needed = true;
+        }
 
         if current.min_ttl != info.min_ttl {
             current.min_ttl = info.min_ttl;

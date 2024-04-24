@@ -119,27 +119,19 @@ pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
 pub async fn read_routers(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<Vec<resource::Router>>, HttpError> {
-    let rs = lock!(ctx.context().bgp.router);
+    let ctx = ctx.context();
+    let routers = ctx
+        .db
+        .get_bgp_routers()
+        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
     let mut result = Vec::new();
 
-    for r in rs.values() {
-        let ctx = ctx.context();
-        let routers = ctx
-            .db
-            .get_bgp_routers()
-            .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
-
-        let asn = r.config.asn.as_u32();
-        let info = routers.get(&asn).ok_or(HttpError::for_not_found(
-            None,
-            format!("asn: {asn} not found in db"),
-        ))?;
-
+    for (asn, info) in routers.iter() {
         result.push(resource::Router {
-            asn,
-            id: r.config.id,
+            asn: *asn,
+            id: info.id,
             listen: info.listen.clone(),
-            graceful_shutdown: r.in_graceful_shutdown(),
+            graceful_shutdown: info.graceful_shutdown,
         });
     }
 
@@ -167,10 +159,28 @@ pub async fn create_router(
 
 #[endpoint { method = GET, path = "/bgp/config/router" }]
 pub async fn read_router(
-    _ctx: RequestContext<Arc<HandlerContext>>,
-    _request: Query<AsnSelector>,
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
 ) -> Result<HttpResponseOk<resource::Router>, HttpError> {
-    todo!();
+    let ctx = ctx.context();
+    let rq = request.into_inner();
+
+    let routers = ctx
+        .db
+        .get_bgp_routers()
+        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
+
+    let info = routers.get(&rq.asn).ok_or(HttpError::for_not_found(
+        None,
+        format!("asn: {} not found in db", rq.asn),
+    ))?;
+
+    Ok(HttpResponseOk(resource::Router {
+        asn: rq.asn,
+        id: info.id,
+        listen: info.listen.clone(),
+        graceful_shutdown: info.graceful_shutdown,
+    }))
 }
 
 #[endpoint { method = POST, path = "/bgp/config/router" }]
@@ -296,10 +306,13 @@ pub async fn read_origin4(
 ) -> Result<HttpResponseOk<resource::Origin4>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let originated = get_router!(ctx, rq.asn)?
+    let mut originated = get_router!(ctx, rq.asn)?
         .db
         .get_origin4()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    // stable output order for clients
+    originated.sort();
 
     Ok(HttpResponseOk(resource::Origin4 {
         asn: rq.asn,
@@ -561,7 +574,7 @@ pub async fn message_history(
     Ok(HttpResponseOk(MessageHistoryResponse { by_peer: result }))
 }
 
-#[endpoint { method = PUT, path = "/bgp/checker" }]
+#[endpoint { method = PUT, path = "/bgp/config/checker" }]
 pub async fn create_checker(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<CheckerSource>,
@@ -572,7 +585,7 @@ pub async fn create_checker(
         .await
 }
 
-#[endpoint { method = GET, path = "/bgp/checker" }]
+#[endpoint { method = GET, path = "/bgp/config/checker" }]
 pub async fn read_checker(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
@@ -597,7 +610,7 @@ pub async fn read_checker(
     }
 }
 
-#[endpoint { method = POST, path = "/bgp/checker" }]
+#[endpoint { method = POST, path = "/bgp/config/checker" }]
 pub async fn update_checker(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<CheckerSource>,
@@ -608,7 +621,7 @@ pub async fn update_checker(
         .await
 }
 
-#[endpoint { method = DELETE, path = "/bgp/checker" }]
+#[endpoint { method = DELETE, path = "/bgp/config/checker" }]
 pub async fn delete_checker(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
@@ -618,7 +631,7 @@ pub async fn delete_checker(
     helpers::unload_policy(ctx, rq.asn, PolicyKind::Checker).await
 }
 
-#[endpoint { method = PUT, path = "/bgp/shaper" }]
+#[endpoint { method = PUT, path = "/bgp/config/shaper" }]
 pub async fn create_shaper(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<ShaperSource>,
@@ -629,7 +642,7 @@ pub async fn create_shaper(
         .await
 }
 
-#[endpoint { method = GET, path = "/bgp/shaper" }]
+#[endpoint { method = GET, path = "/bgp/config/shaper" }]
 pub async fn read_shaper(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
@@ -654,7 +667,7 @@ pub async fn read_shaper(
     }
 }
 
-#[endpoint { method = POST, path = "/bgp/shaper" }]
+#[endpoint { method = POST, path = "/bgp/config/shaper" }]
 pub async fn update_shaper(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<ShaperSource>,
@@ -664,7 +677,7 @@ pub async fn update_shaper(
     helpers::load_policy(ctx, rq.asn, PolicySource::Shaper(rq.code), true).await
 }
 
-#[endpoint { method = DELETE, path = "/bgp/shaper" }]
+#[endpoint { method = DELETE, path = "/bgp/config/shaper" }]
 pub async fn delete_shaper(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
@@ -835,12 +848,12 @@ pub(crate) mod helpers {
                 ));
             }
             Some(rtr) => {
-                let load_result = match policy {
+                let load_result = match &policy {
                     PolicySource::Checker(code) => {
-                        rtr.policy.load_checker(&code, overwrite)
+                        rtr.policy.load_checker(code, overwrite)
                     }
                     PolicySource::Shaper(code) => {
-                        rtr.policy.load_shaper(&code, overwrite)
+                        rtr.policy.load_shaper(code, overwrite)
                     }
                 };
                 match load_result {
@@ -859,14 +872,24 @@ pub(crate) mod helpers {
                             "policy already loaded".to_string(),
                         ));
                     }
-                    Ok(previous) => {
-                        rtr.send_event(FsmEvent::ShaperChanged(previous))
-                            .map_err(|e| {
+                    Ok(previous) => match &policy {
+                        PolicySource::Checker(_) => {
+                            rtr.send_event(FsmEvent::CheckerChanged(previous))
+                                .map_err(|e| {
+                                    HttpError::for_internal_error(format!(
+                                        "send event: {e}"
+                                    ))
+                                })?;
+                        }
+                        PolicySource::Shaper(_) => {
+                            rtr.send_event(FsmEvent::ShaperChanged(previous))
+                                .map_err(|e| {
                                 HttpError::for_internal_error(format!(
                                     "send event: {e}"
                                 ))
                             })?;
-                    }
+                        }
+                    },
                 }
             }
         }

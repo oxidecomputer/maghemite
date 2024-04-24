@@ -179,9 +179,9 @@ pub fn new_rhai_engine() -> Engine {
         );
 
     engine
-        .register_type_with_name::<CheckerResult>("PolicyResult")
+        .register_type_with_name::<CheckerResult>("CheckerResult")
         .register_static_module(
-            "PolicyResult",
+            "CheckerResult",
             rhai::exported_module!(checker_result_module).into(),
         );
 
@@ -374,7 +374,8 @@ pub fn load_shaper(program_source: &str) -> Result<AST, Error> {
 
 pub fn load_checker(program_source: &str) -> Result<AST, Error> {
     let engine = new_rhai_engine();
-    let ast = engine.compile(program_source)?;
+    let mut ast = engine.compile(program_source)?;
+    ast.set_source(program_source);
 
     match ast.iter_functions().find(|f| f.name == "open") {
         Some(open) => {
