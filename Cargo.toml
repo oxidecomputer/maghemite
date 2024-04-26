@@ -79,7 +79,7 @@ humantime = "2.1"
 rand = "0.8"
 backoff = "0.4"
 mg-common = { path = "mg-common" }
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4.38", features = ["serde"] }
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch= "main"}
 omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch= "main"}
