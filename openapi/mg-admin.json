@@ -1025,6 +1025,15 @@
             "format": "uint32",
             "minimum": 0
           },
+          "checker": {
+            "nullable": true,
+            "description": "Checker rhai code to apply to ingress open and update messages.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CheckerSource"
+              }
+            ]
+          },
           "originate": {
             "description": "Complete set of prefixes to originate. Any active prefixes not in this list will be removed. All prefixes in this list are ensured to be in the originating set.",
             "type": "array",
@@ -1041,6 +1050,15 @@
                 "$ref": "#/components/schemas/BgpPeerConfig"
               }
             }
+          },
+          "shaper": {
+            "nullable": true,
+            "description": "Checker rhai code to apply to egress open and update messages.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShaperSource"
+              }
+            ]
           }
         },
         "required": [

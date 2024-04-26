@@ -17,7 +17,7 @@ resource "maghemite_bgp_router" "oxpop" {
 
 resource "maghemite_bgp_origin4" "oxpop" {
   asn = 65547
-  prefixes = ["198.41.100.0/24", "192.168.12.0/24"]
+  prefixes = ["198.51.100.0/24", "192.168.12.0/24"]
 
   depends_on = [maghemite_bgp_router.oxpop]
 }

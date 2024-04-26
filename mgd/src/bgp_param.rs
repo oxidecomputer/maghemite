@@ -236,6 +236,13 @@ pub struct ApplyRequest {
     /// list will be removed. All prefixes in this list are ensured to be in
     /// the originating set.
     pub originate: Vec<Prefix4>,
+
+    /// Checker rhai code to apply to ingress open and update messages.
+    pub checker: Option<CheckerSource>,
+
+    /// Checker rhai code to apply to egress open and update messages.
+    pub shaper: Option<ShaperSource>,
+
     /// Lists of peers indexed by peer group. Set's within a peer group key are
     /// a total set. For example, the value
     ///
@@ -246,16 +253,6 @@ pub struct ApplyRequest {
     /// `d`. If there is a peer `c` currently in the peer group "foo", it will
     /// be removed.
     pub peers: HashMap<String, Vec<BgpPeerConfig>>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema, Clone)]
-pub struct MessageHistoryRequest {
-    pub asn: u32,
-}
-
-#[derive(Debug, Serialize, JsonSchema, Clone)]
-pub struct MessageHistoryResponse {
-    pub by_peer: HashMap<IpAddr, MessageHistory>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
@@ -276,6 +273,16 @@ pub struct BgpPeerConfig {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Clone)]
+pub struct MessageHistoryRequest {
+    pub asn: u32,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct MessageHistoryResponse {
+    pub by_peer: HashMap<IpAddr, MessageHistory>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
