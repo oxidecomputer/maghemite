@@ -267,9 +267,10 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let new: BTreeSet<&Prefix4> = prefix4.iter().collect();
 
         let to_withdraw: Vec<_> =
-            new.difference(&current).map(|x| (**x).into()).collect();
-        let to_announce: Vec<_> =
             current.difference(&new).map(|x| (**x).into()).collect();
+
+        let to_announce: Vec<_> =
+            new.difference(&current).map(|x| (**x).into()).collect();
 
         self.db.set_origin4(&prefix4)?;
 

@@ -198,8 +198,6 @@ macro_rules! rib_quantity {
 // BGP
 counter!(KeepalivesSent);
 counter!(KeepalivesReceived);
-counter!(RouteRefreshSent);
-counter!(RouteRefreshReceived);
 counter!(OpensSent);
 counter!(OpensReceived);
 counter!(UpdatesSent);
@@ -339,26 +337,6 @@ impl Stats {
                     *addr,
                     KeepalivesReceived,
                     counters.keepalives_received
-                ));
-                samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
-                    *asn,
-                    *addr,
-                    RouteRefreshSent,
-                    counters.route_refresh_sent
-                ));
-                samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
-                    *asn,
-                    *addr,
-                    RouteRefreshReceived,
-                    counters.route_refresh_received
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone(),
@@ -823,7 +801,8 @@ pub(crate) fn start_server(
         id: registry.producer_id(),
         kind: ProducerKind::Service,
         address: sa,
-        base_route: "/collect".to_string(),
+        // NOTE: This is now unused and will be removed in the future.
+        base_route: String::new(),
         interval: Duration::from_secs(1),
     };
 
