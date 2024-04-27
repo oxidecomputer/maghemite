@@ -47,7 +47,7 @@ slog-async = "2.8"
 slog-bunyan = "2.5"
 socket2 = { version = "0.5", features = ["all"] }
 ispf = { git = "https://github.com/oxidecomputer/ispf" }
-serde = { version = "1.0.198", features = ["derive"] }
+serde = { version = "1.0.199", features = ["derive"] }
 hostname = "0.3"
 thiserror = "1.0"
 dropshot = { git = "https://github.com/oxidecomputer/dropshot", branch = "main" }
