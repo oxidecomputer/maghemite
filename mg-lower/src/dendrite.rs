@@ -313,8 +313,16 @@ pub(crate) fn get_routes_for_prefix(
                 prefix: p.value,
                 prefix_len: p.length,
             };
-            let dpd_routes = rt
-                .block_on(async { dpd.route_ipv4_get(&cidr).await })?
+            let dpd_routes =
+                match rt.block_on(async { dpd.route_ipv4_get(&cidr).await }) {
+                    Ok(routes) => routes,
+                    Err(e) => {
+                        if e.status() == Some(StatusCode::NOT_FOUND) {
+                            return Ok(HashSet::new());
+                        }
+                        return Err(e.into());
+                    }
+                }
                 .into_inner();
 
             let mut result: Vec<RouteHash> = Vec::new();
