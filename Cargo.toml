@@ -92,11 +92,11 @@ rhai = { version = "1", features = ["metadata", "sync"] }
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-branch = "master"
+rev = "7ee353a470ea59529ee1b34729681da887aa88ce"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-branch = "master"
+rev = "7ee353a470ea59529ee1b34729681da887aa88ce"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
