@@ -562,7 +562,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=main#183f9b8c26e08344ddbf9bc384f806f712d204b9"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=vlan#60a8d5b3cd66347e1cfa074dd7c01ab3507fa658"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1007,7 +1007,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=main#183f9b8c26e08344ddbf9bc384f806f712d204b9"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=vlan#60a8d5b3cd66347e1cfa074dd7c01ab3507fa658"
 dependencies = [
  "async-trait",
  "chrono",

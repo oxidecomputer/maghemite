@@ -34,6 +34,7 @@ pub(crate) struct RouteHash {
     pub(crate) port_id: PortId,
     pub(crate) link_id: types::LinkId,
     pub(crate) nexthop: IpAddr,
+    pub(crate) vlan_id: Option<u16>,
 }
 
 impl RouteHash {
@@ -42,6 +43,7 @@ impl RouteHash {
         port_id: PortId,
         link_id: types::LinkId,
         nexthop: IpAddr,
+        vlan_id: Option<u16>,
     ) -> Result<Self, &'static str> {
         match (cidr, nexthop) {
             (Cidr::V4(_), IpAddr::V4(_)) | (Cidr::V6(_), IpAddr::V6(_)) => {
@@ -50,6 +52,7 @@ impl RouteHash {
                     port_id,
                     link_id,
                     nexthop,
+                    vlan_id,
                 })
             }
             _ => Err("mismatched subnet and target"),
@@ -77,6 +80,7 @@ impl RouteHash {
             port_id,
             link_id,
             nexthop: path.nexthop,
+            vlan_id: path.vlan_id,
         };
 
         Ok(rh)
@@ -166,6 +170,7 @@ where
         let tag = dpd.inner().tag.clone();
         let port_id = r.port_id;
         let link_id = r.link_id;
+        let vlan_id = r.vlan_id;
 
         let target = match (r.cidr, r.nexthop) {
             (Cidr::V4(c), IpAddr::V4(tgt_ip)) => {
@@ -191,6 +196,7 @@ where
                     port_id,
                     link_id,
                     tgt_ip,
+                    vlan_id,
                 }
                 .into()
             }
@@ -217,6 +223,7 @@ where
                     port_id,
                     link_id,
                     tgt_ip,
+                    vlan_id,
                 }
                 .into()
             }
@@ -360,6 +367,7 @@ pub(crate) fn get_routes_for_prefix(
                     r.port_id,
                     r.link_id,
                     r.tgt_ip.into(),
+                    r.vlan_id,
                 ) {
                     Ok(rh) => result.push(rh),
                     Err(e) => {
@@ -380,6 +388,7 @@ pub(crate) fn get_routes_for_prefix(
                         r.port_id,
                         r.link_id,
                         r.tgt_ip.into(),
+                        r.vlan_id,
                     )
                     .unwrap()
                 })
@@ -402,6 +411,7 @@ pub(crate) fn get_routes_for_prefix(
                         r.port_id,
                         r.link_id,
                         r.tgt_ip.into(),
+                        r.vlan_id,
                     )
                     .unwrap()
                 })

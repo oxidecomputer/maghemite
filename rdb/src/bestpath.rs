@@ -112,6 +112,7 @@ mod test {
                 stale: None,
                 as_path: vec![64500, 64501, 64502],
             }),
+            vlan_id: None,
         };
         rib.insert(target.into(), BTreeSet::from([path1.clone()]));
 
@@ -131,6 +132,7 @@ mod test {
                 stale: None,
                 as_path: vec![64500, 64501, 64502],
             }),
+            vlan_id: None,
         };
         rib.get_mut(&Prefix::V4(target))
             .unwrap()
@@ -153,6 +155,7 @@ mod test {
                 stale: None,
                 as_path: vec![64500, 64501, 64502],
             }),
+            vlan_id: None,
         };
         rib.get_mut(&Prefix::V4(target))
             .unwrap()

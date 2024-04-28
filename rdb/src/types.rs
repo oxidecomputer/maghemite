@@ -20,6 +20,7 @@ pub struct Path {
     pub shutdown: bool,
     pub local_pref: Option<u32>,
     pub bgp: Option<BgpPathProperties>,
+    pub vlan_id: Option<u16>,
 }
 
 // Define a basic ordering on paths so bestpath selection is deterministic
@@ -44,9 +45,10 @@ impl Ord for Path {
 }
 
 impl Path {
-    pub fn for_static(nexthop: IpAddr) -> Self {
+    pub fn for_static(nexthop: IpAddr, vlan_id: Option<u16>) -> Self {
         Self {
             nexthop,
+            vlan_id,
             shutdown: false,
             local_pref: None,
             bgp: None,
@@ -99,6 +101,7 @@ impl Ord for BgpPathProperties {
 pub struct StaticRouteKey {
     pub prefix: Prefix,
     pub nexthop: IpAddr,
+    pub vlan_id: Option<u16>,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -436,6 +439,7 @@ pub struct BgpNeighborInfo {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
+    pub vlan_id: Option<u16>,
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]
