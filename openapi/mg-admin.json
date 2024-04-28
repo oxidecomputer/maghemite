@@ -1252,6 +1252,12 @@
       "BgpPeerConfig": {
         "type": "object",
         "properties": {
+          "allow_export": {
+            "$ref": "#/components/schemas/ImportExportPolicy"
+          },
+          "allow_import": {
+            "$ref": "#/components/schemas/ImportExportPolicy"
+          },
           "communities": {
             "type": "array",
             "items": {
@@ -1329,9 +1335,17 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
           }
         },
         "required": [
+          "allow_export",
+          "allow_import",
           "communities",
           "connect_retry",
           "delay_open",
@@ -2068,6 +2082,32 @@
           "bad_message_type"
         ]
       },
+      "ImportExportPolicy": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "NoFiltering"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Allow": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Prefix"
+                },
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "Allow"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
       "Message": {
         "description": "Holds a BGP message. May be an Open, Update, Notification or Keep Alive message.",
         "oneOf": [
@@ -2228,6 +2268,12 @@
       "Neighbor": {
         "type": "object",
         "properties": {
+          "allow_export": {
+            "$ref": "#/components/schemas/ImportExportPolicy"
+          },
+          "allow_import": {
+            "$ref": "#/components/schemas/ImportExportPolicy"
+          },
           "asn": {
             "type": "integer",
             "format": "uint32",
@@ -2313,9 +2359,17 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
           }
         },
         "required": [
+          "allow_export",
+          "allow_import",
           "asn",
           "communities",
           "connect_retry",
@@ -2557,6 +2611,12 @@
           },
           "shutdown": {
             "type": "boolean"
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
           }
         },
         "required": [
@@ -2865,6 +2925,34 @@
         ]
       },
       "Prefix": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "V4": {
+                "$ref": "#/components/schemas/Prefix4"
+              }
+            },
+            "required": [
+              "V4"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "V6": {
+                "$ref": "#/components/schemas/Prefix6"
+              }
+            },
+            "required": [
+              "V6"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Prefix2": {
         "description": "This data structure captures a network prefix as it's laid out in a BGP message. There is a prefix length followed by a variable number of bytes. Just enough bytes to express the prefix.",
         "type": "object",
         "properties": {
@@ -2898,6 +2986,24 @@
           "value": {
             "type": "string",
             "format": "ipv4"
+          }
+        },
+        "required": [
+          "length",
+          "value"
+        ]
+      },
+      "Prefix6": {
+        "type": "object",
+        "properties": {
+          "length": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "value": {
+            "type": "string",
+            "format": "ipv6"
           }
         },
         "required": [
@@ -3000,6 +3106,12 @@
           },
           "prefix": {
             "$ref": "#/components/schemas/Prefix4"
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
           }
         },
         "required": [
@@ -3046,7 +3158,7 @@
           "nlri": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix"
+              "$ref": "#/components/schemas/Prefix2"
             }
           },
           "path_attributes": {
@@ -3058,7 +3170,7 @@
           "withdrawn": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix"
+              "$ref": "#/components/schemas/Prefix2"
             }
           }
         },

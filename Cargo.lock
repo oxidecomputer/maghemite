@@ -118,7 +118,7 @@ checksum = "f538837af36e6f6a9be0faa67f9a314f8119e4e4b5867c6ab40ed60360142519"
 [[package]]
 name = "api_identity"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#bd40fc89c053c8b56fe4a60f70b44e3258dfa3aa"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#50cd41c4f3e613a97b2139e64ac6751f46083163"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -562,7 +562,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=main#183f9b8c26e08344ddbf9bc384f806f712d204b9"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=vlan#bc73cc7f2b0401c2c72c9408347c79687b0bab5c"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1007,7 +1007,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=main#183f9b8c26e08344ddbf9bc384f806f712d204b9"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=vlan#bc73cc7f2b0401c2c72c9408347c79687b0bab5c"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1029,7 +1029,7 @@ dependencies = [
 [[package]]
 name = "dropshot"
 version = "0.10.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#17e8fee4c5753c617b27510e57048710ffd421cd"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#33e158ba518a9b42aa036a0f6b605d73f11d8b23"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1074,7 +1074,7 @@ dependencies = [
 [[package]]
 name = "dropshot_endpoint"
 version = "0.10.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#17e8fee4c5753c617b27510e57048710ffd421cd"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#33e158ba518a9b42aa036a0f6b605d73f11d8b23"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2607,7 +2607,7 @@ dependencies = [
 [[package]]
 name = "omicron-common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#bd40fc89c053c8b56fe4a60f70b44e3258dfa3aa"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#50cd41c4f3e613a97b2139e64ac6751f46083163"
 dependencies = [
  "anyhow",
  "api_identity",
@@ -2662,7 +2662,7 @@ dependencies = [
 [[package]]
 name = "omicron-uuid-kinds"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#bd40fc89c053c8b56fe4a60f70b44e3258dfa3aa"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#50cd41c4f3e613a97b2139e64ac6751f46083163"
 dependencies = [
  "newtype-uuid",
  "paste",
@@ -2830,7 +2830,7 @@ dependencies = [
 [[package]]
 name = "oximeter"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#bd40fc89c053c8b56fe4a60f70b44e3258dfa3aa"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#50cd41c4f3e613a97b2139e64ac6751f46083163"
 dependencies = [
  "bytes",
  "chrono",
@@ -2850,7 +2850,7 @@ dependencies = [
 [[package]]
 name = "oximeter-macro-impl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#bd40fc89c053c8b56fe4a60f70b44e3258dfa3aa"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#50cd41c4f3e613a97b2139e64ac6751f46083163"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -3181,7 +3181,7 @@ dependencies = [
 [[package]]
 name = "progenitor"
 version = "0.6.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#b0fdd988378204813b104ab5aadc0d4b92b41381"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#0f0b1062f471f33d4d42273c03c4079f6ebf4ad9"
 dependencies = [
  "progenitor-client",
  "progenitor-impl",
@@ -3192,7 +3192,7 @@ dependencies = [
 [[package]]
 name = "progenitor-client"
 version = "0.6.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#b0fdd988378204813b104ab5aadc0d4b92b41381"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#0f0b1062f471f33d4d42273c03c4079f6ebf4ad9"
 dependencies = [
  "bytes",
  "futures-core",
@@ -3206,7 +3206,7 @@ dependencies = [
 [[package]]
 name = "progenitor-impl"
 version = "0.6.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#b0fdd988378204813b104ab5aadc0d4b92b41381"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#0f0b1062f471f33d4d42273c03c4079f6ebf4ad9"
 dependencies = [
  "getopts",
  "heck 0.5.0",
@@ -3228,7 +3228,7 @@ dependencies = [
 [[package]]
 name = "progenitor-macro"
 version = "0.6.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#b0fdd988378204813b104ab5aadc0d4b92b41381"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#0f0b1062f471f33d4d42273c03c4079f6ebf4ad9"
 dependencies = [
  "openapiv3",
  "proc-macro2",
@@ -3765,9 +3765,9 @@ dependencies = [
 
 [[package]]
 name = "schemars"
-version = "0.8.16"
+version = "0.8.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45a28f4c49489add4ce10783f7911893516f15afe45d015608d41faca6bc4d29"
+checksum = "7f55c82c700538496bdc329bb4918a81f87cc8888811bd123cf325a0f2f8d309"
 dependencies = [
  "bytes",
  "chrono",
@@ -3781,14 +3781,14 @@ dependencies = [
 
 [[package]]
 name = "schemars_derive"
-version = "0.8.16"
+version = "0.8.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c767fd6fa65d9ccf9cf026122c1b555f2ef9a4f0cea69da4d7dbc3e258d30967"
+checksum = "83263746fe5e32097f06356968a077f96089739c927a61450efa069905eec108"
 dependencies = [
  "proc-macro2",
  "quote",
  "serde_derive_internals",
- "syn 1.0.109",
+ "syn 2.0.60",
 ]
 
 [[package]]
@@ -3867,9 +3867,15 @@ dependencies = [
 
 [[package]]
 name = "serde"
+<<<<<<< HEAD
 version = "1.0.199"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9f6e76df036c77cd94996771fb40db98187f096dd0b9af39c6c6e452ba966a"
+=======
+version = "1.0.200"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddc6f9cc94d67c0e21aaf7eda3a010fd3af78ebf6e096aa6e2e13c79749cce4f"
+>>>>>>> 964d17a (vlan plumbing)
 dependencies = [
  "serde_derive",
 ]
@@ -3885,9 +3891,15 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
+<<<<<<< HEAD
 version = "1.0.199"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11bd257a6541e141e42ca6d24ae26f7714887b47e89aa739099104c7e4d3b7fc"
+=======
+version = "1.0.200"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "856f046b9400cee3c8c94ed572ecdb752444c24528c035cd35882aad6f492bcb"
+>>>>>>> 964d17a (vlan plumbing)
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3896,13 +3908,13 @@ dependencies = [
 
 [[package]]
 name = "serde_derive_internals"
-version = "0.26.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85bf8229e7920a9f636479437026331ce11aa132b4dde37d121944a44d6e5f3c"
+checksum = "330f01ce65a3a5fe59a60c82f3c9a024b573b8a6e875bd233fe5f934e71d54e3"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.109",
+ "syn 2.0.60",
 ]
 
 [[package]]
@@ -4984,7 +4996,7 @@ checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
 [[package]]
 name = "typify"
 version = "0.0.16"
-source = "git+https://github.com/oxidecomputer/typify#3dc9e213e0488901df42ac3c72e29eb5f05fe38e"
+source = "git+https://github.com/oxidecomputer/typify#f7442947ca90eb97af6446a90e73600a7adc191b"
 dependencies = [
  "typify-impl",
  "typify-macro",
@@ -4993,7 +5005,7 @@ dependencies = [
 [[package]]
 name = "typify-impl"
 version = "0.0.16"
-source = "git+https://github.com/oxidecomputer/typify#3dc9e213e0488901df42ac3c72e29eb5f05fe38e"
+source = "git+https://github.com/oxidecomputer/typify#f7442947ca90eb97af6446a90e73600a7adc191b"
 dependencies = [
  "heck 0.5.0",
  "log",
@@ -5010,7 +5022,7 @@ dependencies = [
 [[package]]
 name = "typify-macro"
 version = "0.0.16"
-source = "git+https://github.com/oxidecomputer/typify#3dc9e213e0488901df42ac3c72e29eb5f05fe38e"
+source = "git+https://github.com/oxidecomputer/typify#f7442947ca90eb97af6446a90e73600a7adc191b"
 dependencies = [
  "proc-macro2",
  "quote",

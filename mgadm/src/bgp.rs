@@ -5,8 +5,8 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use colored::*;
-use mg_admin_client::types::Rib;
 use mg_admin_client::types::{self, Path};
+use mg_admin_client::types::{ImportExportPolicy, Rib};
 use mg_admin_client::Client;
 use rdb::types::{PolicyAction, Prefix4};
 use std::collections::BTreeMap;
@@ -405,6 +405,15 @@ pub struct Neighbor {
     #[arg(long)]
     pub enforce_first_as: bool,
 
+    #[arg(long)]
+    pub vlan_id: Option<u16>,
+
+    #[arg(long)]
+    pub allow_export: Option<Vec<Prefix4>>,
+
+    #[arg(long)]
+    pub allow_import: Option<Vec<Prefix4>>,
+
     /// Autonomous system number for the router to add the neighbor to.
     #[clap(env)]
     pub asn: u32,
@@ -431,6 +440,37 @@ impl From<Neighbor> for types::Neighbor {
             communities: n.communities,
             local_pref: n.local_pref,
             enforce_first_as: n.enforce_first_as,
+            allow_export: match n.allow_export {
+                Some(prefixes) => ImportExportPolicy::Allow(
+                    prefixes
+                        .clone()
+                        .into_iter()
+                        .map(|x| {
+                            types::Prefix::V4(types::Prefix4 {
+                                length: x.length,
+                                value: x.value,
+                            })
+                        })
+                        .collect(),
+                ),
+                None => ImportExportPolicy::NoFiltering,
+            },
+            allow_import: match n.allow_import {
+                Some(prefixes) => ImportExportPolicy::Allow(
+                    prefixes
+                        .clone()
+                        .into_iter()
+                        .map(|x| {
+                            types::Prefix::V4(types::Prefix4 {
+                                length: x.length,
+                                value: x.value,
+                            })
+                        })
+                        .collect(),
+                ),
+                None => ImportExportPolicy::NoFiltering,
+            },
+            vlan_id: n.vlan_id,
         }
     }
 }

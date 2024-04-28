@@ -31,6 +31,7 @@ pub struct StaticRoute4List {
 pub struct StaticRoute4 {
     pub prefix: Prefix4,
     pub nexthop: Ipv4Addr,
+    pub vlan_id: Option<u16>,
 }
 
 impl From<StaticRoute4> for StaticRouteKey {
@@ -38,6 +39,7 @@ impl From<StaticRoute4> for StaticRouteKey {
         StaticRouteKey {
             prefix: val.prefix.into(),
             nexthop: val.nexthop.into(),
+            vlan_id: val.vlan_id,
         }
     }
 }
@@ -61,7 +63,7 @@ pub async fn static_add_v4_route(
         .map(Into::into)
         .collect();
     for r in routes {
-        let path = Path::for_static(r.nexthop);
+        let path = Path::for_static(r.nexthop, r.vlan_id);
         ctx.context()
             .db
             .add_prefix_path(r.prefix, path, true)
@@ -83,7 +85,7 @@ pub async fn static_remove_v4_route(
         .map(Into::into)
         .collect();
     for r in routes {
-        let path = Path::for_static(r.nexthop);
+        let path = Path::for_static(r.nexthop, r.vlan_id);
         ctx.context()
             .db
             .remove_prefix_path(r.prefix, path, true)

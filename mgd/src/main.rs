@@ -256,6 +256,7 @@ fn start_bgp_routers(
                 enforce_first_as: nbr.enforce_first_as,
                 allow_import: nbr.allow_import.clone(),
                 allow_export: nbr.allow_export.clone(),
+                vlan_id: nbr.vlan_id,
             },
             true,
         )
@@ -279,7 +280,7 @@ fn initialize_static_routes(db: &rdb::Db) {
         .get_static4()
         .expect("failed to get static routes from db");
     for route in &routes {
-        let path = Path::for_static(route.nexthop);
+        let path = Path::for_static(route.nexthop, route.vlan_id);
         db.add_prefix_path(route.prefix, path, true)
             .unwrap_or_else(|e| {
                 panic!("failed to initialize static route {route:#?}: {e}")

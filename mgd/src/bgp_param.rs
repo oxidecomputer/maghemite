@@ -63,6 +63,7 @@ pub struct Neighbor {
     pub enforce_first_as: bool,
     pub allow_import: ImportExportPolicy,
     pub allow_export: ImportExportPolicy,
+    pub vlan_id: Option<u16>,
 }
 
 impl From<Neighbor> for PeerConfig {
@@ -107,6 +108,7 @@ impl Neighbor {
             enforce_first_as: rq.enforce_first_as,
             allow_import: rq.allow_import,
             allow_export: rq.allow_export,
+            vlan_id: rq.vlan_id,
         }
     }
 
@@ -132,6 +134,7 @@ impl Neighbor {
             enforce_first_as: rq.enforce_first_as,
             allow_import: rq.allow_import.clone(),
             allow_export: rq.allow_export.clone(),
+            vlan_id: rq.vlan_id,
         }
     }
 }
@@ -281,6 +284,7 @@ pub struct BgpPeerConfig {
     pub enforce_first_as: bool,
     pub allow_import: ImportExportPolicy,
     pub allow_export: ImportExportPolicy,
+    pub vlan_id: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Clone)]

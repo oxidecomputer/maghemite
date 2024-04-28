@@ -378,6 +378,9 @@ pub struct SessionInfo {
 
     /// Policy governing exported routes.
     pub allow_export: ImportExportPolicy,
+
+    /// Vlan tag to assign to data plane routes created by this session.
+    pub vlan_id: Option<u16>,
 }
 
 impl SessionInfo {
@@ -2074,6 +2077,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         id,
                         as_path,
                     }),
+                    vlan_id: lock!(self.session).vlan_id,
                 };
 
                 if let Err(e) =
