@@ -1955,9 +1955,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 continue;
             }
             let first = prefix.value[0];
-            // check 127.0.0.0/8, 224.0.0.0/4, 240.0.0.0/4
-            if (first == 127) || (first & 0xf0 == 224) || (first & 0xf0 == 240)
-            {
+            // check 127.0.0.0/8, 224.0.0.0/4
+            if (first == 127) || (first & 0xf0 == 224) {
                 return Err(Error::InvalidNlriPrefix(prefix.as_prefix4()));
             }
         }
