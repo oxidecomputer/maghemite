@@ -220,7 +220,6 @@ pub fn add_routes_dendrite(
             port_id,
             link_id,
             tgt_ip: gw,
-            vlan_id: None,
         };
         let route_set = types::RouteSet {
             cidr: cidr.into(),

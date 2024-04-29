@@ -33,7 +33,6 @@ pub enum Ipv4PrefixParseError {
 pub struct StaticRoute4 {
     pub destination: Ipv4Prefix,
     pub nexthop: Ipv4Addr,
-    pub vlan_id: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,7 +72,6 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                             length: route.destination.len,
                         },
                         nexthop: route.nexthop,
-                        vlan_id: route.vlan_id,
                     }],
                 },
             };
@@ -88,7 +86,6 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                             length: route.destination.len,
                         },
                         nexthop: route.nexthop,
-                        vlan_id: route.vlan_id,
                     }],
                 },
             };

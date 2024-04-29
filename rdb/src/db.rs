@@ -416,7 +416,6 @@ impl Db {
             let srk = StaticRouteKey {
                 prefix,
                 nexthop: path.nexthop,
-                vlan_id: path.vlan_id,
             };
             let key = serde_json::to_string(&srk)?;
             tree.insert(key.as_str(), "")?;
@@ -531,7 +530,6 @@ impl Db {
             let srk = StaticRouteKey {
                 prefix,
                 nexthop: path.nexthop,
-                vlan_id: path.vlan_id,
             };
             let key = serde_json::to_string(&srk)?;
             tree.remove(key.as_str())?;

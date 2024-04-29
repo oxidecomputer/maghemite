@@ -2557,12 +2557,6 @@
           },
           "shutdown": {
             "type": "boolean"
-          },
-          "vlan_id": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
           }
         },
         "required": [
@@ -3006,12 +3000,6 @@
           },
           "prefix": {
             "$ref": "#/components/schemas/Prefix4"
-          },
-          "vlan_id": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
           }
         },
         "required": [

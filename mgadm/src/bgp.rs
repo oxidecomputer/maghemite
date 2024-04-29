@@ -405,9 +405,6 @@ pub struct Neighbor {
     #[arg(long)]
     pub enforce_first_as: bool,
 
-    #[arg(long)]
-    pub vlan_id: u16,
-
     /// Autonomous system number for the router to add the neighbor to.
     #[clap(env)]
     pub asn: u32,

@@ -61,7 +61,6 @@ pub struct Neighbor {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
-    pub vlan_id: Option<u16>,
 }
 
 impl From<Neighbor> for PeerConfig {
@@ -104,7 +103,6 @@ impl Neighbor {
             communities: rq.communities,
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
-            vlan_id: rq.vlan_id,
         }
     }
 
@@ -128,7 +126,6 @@ impl Neighbor {
             communities: rq.communities.clone(),
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
-            vlan_id: rq.vlan_id,
         }
     }
 }
@@ -276,7 +273,6 @@ pub struct BgpPeerConfig {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
-    pub vlan_id: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
