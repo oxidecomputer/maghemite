@@ -11,10 +11,11 @@ use crate::messages::{
 use crate::session::FsmEvent;
 use crate::to_canonical;
 use libc::{c_int, sockaddr_storage};
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use libc::{c_void, IPPROTO_IP, IPPROTO_IPV6};
 #[cfg(target_os = "linux")]
-use libc::{
-    c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, IP_MINTTL, TCP_MD5SIG,
-};
+use libc::{IPPROTO_TCP, IP_MINTTL, TCP_MD5SIG};
+
 use mg_common::lock;
 use slog::{error, trace, warn, Logger};
 use std::collections::BTreeMap;
@@ -27,6 +28,9 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 use std::time::Duration;
+
+#[cfg(target_os = "illumos")]
+const IP_MINTTL: i32 = 0x1c;
 
 pub struct BgpListenerTcp {
     addr: SocketAddr,
@@ -99,7 +103,7 @@ impl BgpConnection for BgpConnectionTcp {
         &self,
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
-        ttl_sec: bool,
+        min_ttl: Option<u8>,
         md5_key: Option<String>,
     ) -> Result<(), Error> {
         let s = match self.peer {
@@ -134,8 +138,8 @@ impl BgpConnection for BgpConnectionTcp {
             Ok(()) => {
                 let new_conn: TcpStream = s.into();
                 lock!(self.conn).replace(new_conn.try_clone()?);
-                if ttl_sec {
-                    self.set_min_ttl(255)?;
+                if let Some(ttl) = min_ttl {
+                    self.set_min_ttl(ttl)?;
                 }
                 Self::recv(
                     self.peer,
@@ -200,9 +204,8 @@ impl BgpConnection for BgpConnectionTcp {
             Some(conn) => {
                 conn.set_ttl(ttl.into())?;
                 let fd = conn.as_raw_fd();
-                let min_ttl: u32 = 255;
-                //see: https://www.illumos.org/issues/16454
-                #[cfg(target_os = "linux")]
+                let min_ttl = ttl as u32;
+                #[cfg(any(target_os = "linux", target_os = "illumos"))]
                 unsafe {
                     if self.peer().is_ipv4()
                         && libc::setsockopt(

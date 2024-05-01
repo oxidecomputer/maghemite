@@ -57,7 +57,7 @@ pub trait BgpConnection: Send + Clone {
         &self,
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
-        ttl_sec: bool,
+        min_ttl: Option<u8>,
         md5_key: Option<String>,
     ) -> Result<(), Error>
     where

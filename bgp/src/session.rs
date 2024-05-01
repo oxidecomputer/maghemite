@@ -675,7 +675,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Initial state. Refuse all incomming BGP connections. No resources
     /// allocated to peer.
     fn idle(&self) -> FsmState<Cnx> {
-        lock!(self.clock.timers.idle_hold_timer).enable();
+        if lock!(self.clock.timers.idle_hold_timer).interval.is_zero() {
+            return FsmState::Connect;
+        } else {
+            lock!(self.clock.timers.idle_hold_timer).enable();
+        }
 
         let event = match self.event_rx.recv() {
             Ok(event) => event,
@@ -741,7 +745,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         lock!(self.session).connect_retry_counter = 0;
         lock!(self.clock.timers.connect_retry_timer).enable();
 
-        let min_ttl = lock!(self.session).min_ttl.is_some();
+        let min_ttl = lock!(self.session).min_ttl;
         let md5_auth_key = lock!(self.session).md5_auth_key.clone();
 
         // Start with an initial connection attempt
@@ -790,12 +794,40 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     lock!(self.session).connect_retry_counter += 1;
                 }
 
+                FsmEvent::Message(Message::Open(om)) => {
+                    self.message_history
+                        .lock()
+                        .unwrap()
+                        .receive(om.clone().into());
+                    self.counters
+                        .opens_received
+                        .fetch_add(1, Ordering::Relaxed);
+                    if let Err(e) = self.handle_open(&conn, &om) {
+                        wrn!(self; "failed to handle open message: {e}");
+                        //TODO send a notification to the peer letting them know we are
+                        //     rejecting the open message?
+                        return FsmState::Active(conn);
+                    }
+
+                    // ACK the open with a reciprocal open and a keepalive and transition
+                    // to open confirm.
+                    if let Err(e) = self.send_open(&conn) {
+                        err!(self; "send open failed {e}");
+                        return FsmState::Idle;
+                    }
+                    self.send_keepalive(&conn);
+                    return FsmState::OpenConfirm(PeerConnection {
+                        conn,
+                        id: om.id,
+                    });
+                }
+
                 // The underlying connection has accepted a TCP connection
                 // initiated by the peer.
                 FsmEvent::Connected(accepted) => {
                     lock!(self.session).connect_retry_counter = 0;
                     lock!(self.clock.timers.connect_retry_timer).disable();
-                    if let Err(e) = self.ensure_connection_policy(&conn) {
+                    if let Err(e) = self.ensure_connection_policy(&accepted) {
                         err!(self; "{e}");
                         return FsmState::Idle;
                     }
@@ -844,12 +876,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .unexpected_keepalive_message
                         .fetch_add(1, Ordering::Relaxed);
                     wrn!(self; "unexpected keep alive message in connect");
-                }
-                FsmEvent::Message(Message::Open(_)) => {
-                    self.counters
-                        .unexpected_open_message
-                        .fetch_add(1, Ordering::Relaxed);
-                    wrn!(self; "unexpected open message in connect");
                 }
                 FsmEvent::Message(Message::Update(_)) => {
                     self.counters
@@ -902,7 +928,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // The underlying connection has accepted a TCP connection
             // initiated by the peer.
             FsmEvent::Connected(accepted) => {
-                if let Err(e) = self.ensure_connection_policy(&conn) {
+                if let Err(e) = self.ensure_connection_policy(&accepted) {
                     err!(self; "{e}");
                     return FsmState::Idle;
                 }
@@ -1015,6 +1041,33 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 wrn!(self; "unexpected update message in open sent");
                 return FsmState::Active(conn);
             }
+            FsmEvent::Connected(accepted) => {
+                // collision detection RFC 4271 6.8
+                if lock!(self.session).remote_id.unwrap_or(0) > self.id {
+                    lock!(self.session).connect_retry_counter = 0;
+                    lock!(self.clock.timers.connect_retry_timer).disable();
+                    if let Err(e) = self.ensure_connection_policy(&accepted) {
+                        err!(self; "{e}");
+                        return FsmState::Idle;
+                    }
+                    inf!(self; "accepted connection from {}", accepted.peer());
+                    if let Err(e) = self.send_open(&accepted) {
+                        err!(self; "send open failed {e}");
+                        return FsmState::Idle;
+                    }
+                    {
+                        let ht = self.clock.timers.hold_timer.lock().unwrap();
+                        ht.reset();
+                        ht.enable();
+                    }
+                    self.counters
+                        .passive_connections_accepted
+                        .fetch_add(1, Ordering::Relaxed);
+                    return FsmState::OpenSent(accepted);
+                } else {
+                    return FsmState::Active(conn);
+                }
+            }
             other => {
                 wrn!(
                     self;
@@ -1118,6 +1171,33 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .fetch_add(1, Ordering::Relaxed);
                 wrn!(self; "unexpected update message in open confirm");
                 FsmState::Idle
+            }
+            FsmEvent::Connected(accepted) => {
+                // collision detection RFC 4271 6.8
+                if lock!(self.session).remote_id.unwrap_or(0) > self.id {
+                    lock!(self.session).connect_retry_counter = 0;
+                    lock!(self.clock.timers.connect_retry_timer).disable();
+                    if let Err(e) = self.ensure_connection_policy(&accepted) {
+                        err!(self; "{e}");
+                        return FsmState::Idle;
+                    }
+                    inf!(self; "accepted connection from {}", accepted.peer());
+                    if let Err(e) = self.send_open(&accepted) {
+                        err!(self; "send open failed {e}");
+                        return FsmState::Idle;
+                    }
+                    {
+                        let ht = self.clock.timers.hold_timer.lock().unwrap();
+                        ht.reset();
+                        ht.enable();
+                    }
+                    self.counters
+                        .passive_connections_accepted
+                        .fetch_add(1, Ordering::Relaxed);
+                    FsmState::OpenSent(accepted)
+                } else {
+                    FsmState::OpenConfirm(pc)
+                }
             }
             // An event we are not expecting, log it and re-enter this state.
             other => {

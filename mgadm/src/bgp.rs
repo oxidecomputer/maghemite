@@ -353,7 +353,7 @@ pub struct Neighbor {
     hold_time: u64,
 
     /// How long a peer is kept in idle before automatic restart (s).
-    #[arg(long, default_value_t = 6)]
+    #[arg(long, default_value_t = 0)]
     idle_hold_time: u64,
 
     /// How long to wait between connection retries (s).

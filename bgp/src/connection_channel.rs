@@ -159,7 +159,7 @@ impl BgpConnection for BgpConnectionChannel {
         &self,
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
-        _ttl_sec: bool,
+        _ttl_sec: Option<u8>,
         _md5_key: Option<String>,
     ) -> Result<(), Error> {
         debug!(self.log, "[{}] connecting", self.peer);
