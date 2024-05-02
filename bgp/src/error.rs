@@ -196,6 +196,9 @@ pub enum Error {
 
     #[error("Invalid keepalive time, must be smaller than hold time")]
     KeepaliveLargerThanHoldTime,
+
+    #[error("Feature not yet supported")]
+    FeatureNotSupported,
 }
 
 #[derive(Debug)]

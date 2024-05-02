@@ -138,7 +138,7 @@ impl BgpConnection for BgpConnectionTcp {
         #[cfg(target_os = "illumos")]
         if let Some(key) = md5_key {
             // TODO This will come later for illumos
-            todo!();
+            return Err(Error::FeatureNotSupported);
         }
 
         let sa: socket2::SockAddr = self.peer.into();
@@ -289,7 +289,7 @@ impl BgpConnection for BgpConnectionTcp {
         _keylen: u16,
         _key: [u8; MAX_MD5SIG_KEYLEN],
     ) -> Result<(), Error> {
-        todo!();
+        return Err(Error::FeatureNotSupported);
     }
 }
 

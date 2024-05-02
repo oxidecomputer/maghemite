@@ -439,17 +439,6 @@ impl State for Down {
         counters: Arc<SessionCounters>,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
         db.disable_nexthop(self.peer);
-        /*
-        match self.peer {
-            IpAddr::V4(addr) => db.disable_nexthop4(addr),
-            IpAddr::V6(addr) => {
-                warn!(
-                    self.log,
-                    "{addr} is down but active mode ipv6 not implemented yet"
-                )
-            }
-        }
-        */
         loop {
             // Get an incoming message
             let (_addr, msg) = match self.recv(

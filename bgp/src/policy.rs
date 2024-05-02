@@ -63,9 +63,9 @@ pub enum ShaperResult {
     Drop,
 }
 
+// TODO this is too general, we really only need to perform differences on
+// updates
 impl ShaperResult {
-    // TODO this is too general, we really only need to perform differences on
-    // updates
     pub fn difference(&self, other: &ShaperResult) -> ShaperResult {
         match (self, other) {
             (ShaperResult::Drop, ShaperResult::Drop) => ShaperResult::Drop,
@@ -108,6 +108,9 @@ impl ShaperResult {
                 Self::diff_emit_to_emit_update(a, b).into()
             }
             (Message::Open(_), m @ Message::Open(_)) => m.clone(),
+            // See todo above on this entire impl. The programmable policy
+            // framework is not yet accessible from omicron so this code is
+            // not reachable.
             _ => todo!(),
         }
     }
