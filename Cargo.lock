@@ -562,7 +562,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=vlan#bc73cc7f2b0401c2c72c9408347c79687b0bab5c"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=main#3b84ea6516cafb4595a6f2a668df16c1a501b687"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1007,7 +1007,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=vlan#bc73cc7f2b0401c2c72c9408347c79687b0bab5c"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=main#3b84ea6516cafb4595a6f2a668df16c1a501b687"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1987,7 +1987,7 @@ checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://www.github.com/oxidecomputer/netadm-sys.git?branch=compile-macos#ae8c28932f5c1ab92abde051e9db0b167ac0306b"
+source = "git+https://www.github.com/oxidecomputer/netadm-sys.git?branch=main#4ceaf96e02acb8258ea4aa403326c08932324835"
 dependencies = [
  "anyhow",
  "cfg-if",

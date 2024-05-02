@@ -100,13 +100,13 @@ rev = "7ee353a470ea59529ee1b34729681da887aa88ce"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "vlan"
+branch = "main"
 package = "dpd-client"
 
 [workspace.dependencies.dendrite-common]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "vlan"
+branch = "main"
 package = "common"
 
 [patch."https://github.com/oxidecomputer/netadm-sys"]
-libnet = { git = "https://www.github.com/oxidecomputer/netadm-sys.git", branch = "compile-macos" }
+libnet = { git = "https://www.github.com/oxidecomputer/netadm-sys.git", branch = "main" }
