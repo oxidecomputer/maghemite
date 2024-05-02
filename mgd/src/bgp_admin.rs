@@ -737,6 +737,8 @@ pub(crate) mod helpers {
             communities: rq.communities.clone().into_iter().collect(),
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
+            allow_import: rq.allow_import.clone(),
+            allow_export: rq.allow_export.clone(),
             ..Default::default()
         };
 
@@ -781,6 +783,8 @@ pub(crate) mod helpers {
             communities: rq.communities,
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
+            allow_import: rq.allow_import.clone(),
+            allow_export: rq.allow_export.clone(),
         })?;
 
         if start_session {

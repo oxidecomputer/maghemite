@@ -416,6 +416,15 @@ pub struct BgpRouterInfo {
     pub graceful_shutdown: bool,
 }
 
+#[derive(
+    Default, Debug, Serialize, Deserialize, Clone, JsonSchema, Eq, PartialEq,
+)]
+pub enum ImportExportPolicy {
+    #[default]
+    NoFiltering,
+    Allow(BTreeSet<Prefix>),
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
 pub struct BgpNeighborInfo {
     pub asn: u32,
@@ -436,6 +445,8 @@ pub struct BgpNeighborInfo {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
+    pub allow_import: ImportExportPolicy,
+    pub allow_export: ImportExportPolicy,
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]

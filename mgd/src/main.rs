@@ -254,6 +254,8 @@ fn start_bgp_routers(
                 communities: nbr.communities.clone(),
                 local_pref: nbr.local_pref,
                 enforce_first_as: nbr.enforce_first_as,
+                allow_import: nbr.allow_import.clone(),
+                allow_export: nbr.allow_export.clone(),
             },
             true,
         )

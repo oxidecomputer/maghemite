@@ -672,7 +672,16 @@ impl UpdateMessage {
 /// message. There is a prefix length followed by a variable number of bytes.
 /// Just enough bytes to express the prefix.
 #[derive(
-    Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, JsonSchema,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    Ord,
+    PartialOrd,
 )]
 pub struct Prefix {
     pub length: u8,

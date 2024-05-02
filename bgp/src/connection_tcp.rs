@@ -12,9 +12,9 @@ use crate::session::FsmEvent;
 use crate::to_canonical;
 use libc::{c_int, sockaddr_storage};
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
-use libc::{c_void, IPPROTO_IP, IPPROTO_IPV6};
+use libc::{c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP};
 #[cfg(target_os = "linux")]
-use libc::{IPPROTO_TCP, IP_MINTTL, TCP_MD5SIG};
+use libc::{IP_MINTTL, TCP_MD5SIG};
 
 use mg_common::lock;
 use slog::{error, trace, warn, Logger};
@@ -31,6 +31,8 @@ use std::time::Duration;
 
 #[cfg(target_os = "illumos")]
 const IP_MINTTL: i32 = 0x1c;
+#[cfg(target_os = "illumos")]
+const TCP_MD5SIG: i32 = 0x27;
 
 pub struct BgpListenerTcp {
     addr: SocketAddr,
@@ -131,6 +133,12 @@ impl BgpConnection for BgpConnectionTcp {
                 error!(self.log, "set md5 key for tcp conn failed: {e}");
                 return Err(e);
             }
+        }
+
+        #[cfg(target_os = "illumos")]
+        if let Some(key) = md5_key {
+            // TODO This will come later for illumos
+            todo!();
         }
 
         let sa: socket2::SockAddr = self.peer.into();
@@ -254,10 +262,25 @@ impl BgpConnection for BgpConnectionTcp {
     #[cfg(target_os = "illumos")]
     fn set_md5_sig(
         &self,
-        _keylen: u16,
-        _key: [u8; MAX_MD5SIG_KEYLEN],
+        keylen: u16,
+        key: [u8; MAX_MD5SIG_KEYLEN],
     ) -> Result<(), Error> {
-        todo!();
+        slog::info!(self.log, "setting md5 auth for {}", self.peer);
+        let conn = self.conn.lock().unwrap();
+        match conn.as_ref() {
+            None => return Err(Error::NotConnected),
+            Some(c) => {
+                let local = c.local_addr()?;
+                let peer = c.peer_addr()?;
+                let s = String::from_utf8_lossy(&key[..keylen as usize])
+                    .to_string();
+                if let Err(e) = set_md5_sig_fd(c.as_raw_fd(), &s, local, peer) {
+                    error!(self.log, "set md5 key for tcp conn failed: {e}");
+                    return Err(e);
+                }
+            }
+        };
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]
@@ -520,6 +543,62 @@ fn set_md5_sig_fd(
             IPPROTO_TCP,
             TCP_MD5SIG,
             &sig as *const TcpMd5Sig as *const c_void,
+            std::mem::size_of::<TcpMd5Sig>() as u32,
+        ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
+
+    Ok(())
+}
+
+// TODO use actual kernel interfaces instead of this puddle of perl pretending
+// to be rust.
+#[cfg(target_os = "illumos")]
+fn set_md5_sig_fd(
+    fd: i32,
+    key: &str,
+    local: SocketAddr,
+    peer: SocketAddr,
+) -> Result<(), Error> {
+    {
+        use std::{
+            io::BufWriter,
+            process::{Command, Stdio},
+        };
+
+        let tcpkey = Command::new("/usr/sbin/tcpkey")
+            .stdin(Stdio::piped())
+            .spawn()?;
+        let mut tcpkey_in = tcpkey.stdin.unwrap();
+        let mut writer = BufWriter::new(&mut tcpkey_in);
+
+        writeln!(
+            writer,
+            "add src {} dst {} dport {} authalg md5 authstring {}\n",
+            local.ip(),
+            peer.ip(),
+            peer.port(),
+            key
+        )?;
+        writeln!(
+            writer,
+            "add src {} dst {} sport {} authalg md5 authstring {}",
+            local.ip(),
+            peer.ip(),
+            peer.port(),
+            key
+        )?;
+    }
+
+    let yes = true;
+    unsafe {
+        if libc::setsockopt(
+            fd,
+            IPPROTO_TCP,
+            TCP_MD5SIG,
+            &yes as *const bool as *const c_void,
             std::mem::size_of::<TcpMd5Sig>() as u32,
         ) != 0
         {

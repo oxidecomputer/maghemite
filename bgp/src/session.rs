@@ -17,7 +17,7 @@ use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
 pub use rdb::DEFAULT_ROUTE_PRIORITY;
-use rdb::{Asn, BgpPathProperties, Db};
+use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -162,6 +162,9 @@ pub enum FsmEvent<Cnx: BgpConnection> {
     // Current shaper is available in the router policy object.
     ShaperChanged(Option<rhai::AST>),
 
+    /// Fires when export policy has changed.
+    ExportPolicyChanged(ImportExportPolicy),
+
     // The checker for the router has changed. Event contains previous checker.
     // Current checker is available in the router policy object.
     CheckerChanged(Option<rhai::AST>),
@@ -281,6 +284,7 @@ impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
             Self::Announce(update) => write!(f, "update {update:?}"),
             Self::ShaperChanged(_) => write!(f, "shaper changed"),
             Self::CheckerChanged(_) => write!(f, "checker changed"),
+            Self::ExportPolicyChanged(_) => write!(f, "export policy changed"),
             Self::Reset => write!(f, "reset"),
             Self::ManualStart => write!(f, "manual start"),
             Self::ManualStop => write!(f, "manual stop"),
@@ -368,6 +372,12 @@ pub struct SessionInfo {
     /// Ensure that routes received from eBGP peers have the peer's ASN as the
     /// first element in the AS path.
     pub enforce_first_as: bool,
+
+    /// Policy governing imported routes.
+    pub allow_import: ImportExportPolicy,
+
+    /// Policy governing exported routes.
+    pub allow_export: ImportExportPolicy,
 }
 
 impl SessionInfo {
@@ -1412,6 +1422,72 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             }
 
+            FsmEvent::ExportPolicyChanged(previous) => {
+                let originated = match self.db.get_origin4() {
+                    Ok(value) => value,
+                    Err(e) => {
+                        //TODO possible death loop. Should we just panic here?
+                        err!(self; "failed to get originated from db: {e}");
+                        return FsmState::SessionSetup(pc);
+                    }
+                };
+                let originated_before: BTreeSet<Prefix4> = match previous {
+                    ImportExportPolicy::NoFiltering => {
+                        originated.iter().cloned().collect()
+                    }
+                    ImportExportPolicy::Allow(list) => originated
+                        .clone()
+                        .into_iter()
+                        .filter(|x| list.contains(&Prefix::from(*x)))
+                        .collect(),
+                };
+                let session = lock!(self.session);
+                let current = &session.allow_export;
+                let originated_after: BTreeSet<Prefix4> = match current {
+                    ImportExportPolicy::NoFiltering => {
+                        originated.iter().cloned().collect()
+                    }
+                    ImportExportPolicy::Allow(list) => originated
+                        .clone()
+                        .into_iter()
+                        .filter(|x| list.contains(&Prefix::from(*x)))
+                        .collect(),
+                };
+
+                let to_withdraw: BTreeSet<&Prefix4> =
+                    originated_before.difference(&originated_after).collect();
+
+                let to_announce: BTreeSet<&Prefix4> =
+                    originated_after.difference(&originated_before).collect();
+
+                if to_withdraw.is_empty() && to_announce.is_empty() {
+                    return FsmState::Established(pc);
+                }
+
+                let update = UpdateMessage {
+                    path_attributes: self.router.base_attributes(),
+                    withdrawn: to_withdraw
+                        .into_iter()
+                        .map(|x| crate::messages::Prefix::from(*x))
+                        .collect(),
+                    nlri: to_announce
+                        .into_iter()
+                        .map(|x| crate::messages::Prefix::from(*x))
+                        .collect(),
+                };
+
+                if let Err(e) = self.send_update(
+                    update,
+                    &pc.conn,
+                    ShaperApplication::Current,
+                ) {
+                    err!(self; "sending update to peer failed {e}");
+                    return self.exit_established(pc);
+                }
+
+                FsmState::Established(pc)
+            }
+
             FsmEvent::PathAttributesChanged => {
                 match self.originate_update(&pc, ShaperApplication::Current) {
                     Err(e) => {
@@ -1803,6 +1879,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .push(PathAttributeValue::Communities(cs).into())
         }
 
+        if let ImportExportPolicy::Allow(ref policy) =
+            lock!(self.session).allow_export
+        {
+            let message_policy = policy
+                .iter()
+                .filter_map(|x| match x {
+                    rdb::Prefix::V4(x) => Some(x),
+                    _ => None,
+                })
+                .map(|x| crate::messages::Prefix::from(*x))
+                .collect::<BTreeSet<crate::messages::Prefix>>();
+
+            update.nlri.retain(|x| message_policy.contains(x));
+            update.withdrawn.retain(|x| message_policy.contains(x));
+        };
+
         let out = match self.shape_update(update, shaper_application)? {
             ShaperResult::Emit(msg) => msg,
             ShaperResult::Drop => return Ok(()),
@@ -1872,6 +1964,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             }
         }
+
+        if let ImportExportPolicy::Allow(ref policy) =
+            lock!(self.session).allow_import
+        {
+            let message_policy = policy
+                .iter()
+                .filter_map(|x| match x {
+                    rdb::Prefix::V4(x) => Some(x),
+                    _ => None,
+                })
+                .map(|x| crate::messages::Prefix::from(*x))
+                .collect::<BTreeSet<crate::messages::Prefix>>();
+
+            update.nlri.retain(|x| message_policy.contains(x));
+            update.withdrawn.retain(|x| message_policy.contains(x));
+        };
 
         self.update_rib(&update, id, peer_as);
 
@@ -2234,6 +2342,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if current.enforce_first_as != info.enforce_first_as {
             current.enforce_first_as = info.enforce_first_as;
             reset_needed = true;
+        }
+
+        if current.allow_import != info.allow_import {
+            current.allow_import = info.allow_import;
+            refresh_needed = true;
+        }
+
+        if current.allow_export != info.allow_export {
+            let previous = current.allow_export.clone();
+            current.allow_export = info.allow_export;
+            self.event_tx
+                .send(FsmEvent::ExportPolicyChanged(previous))
+                .map_err(|e| Error::EventSend(e.to_string()))?;
         }
 
         if path_attributes_changed {

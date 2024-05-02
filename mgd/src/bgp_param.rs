@@ -4,7 +4,7 @@
 
 use bgp::config::PeerConfig;
 use bgp::session::{FsmStateKind, MessageHistory};
-use rdb::{Path, PolicyAction, Prefix4};
+use rdb::{ImportExportPolicy, Path, PolicyAction, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -61,6 +61,8 @@ pub struct Neighbor {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
+    pub allow_import: ImportExportPolicy,
+    pub allow_export: ImportExportPolicy,
 }
 
 impl From<Neighbor> for PeerConfig {
@@ -103,6 +105,8 @@ impl Neighbor {
             communities: rq.communities,
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
+            allow_import: rq.allow_import,
+            allow_export: rq.allow_export,
         }
     }
 
@@ -126,6 +130,8 @@ impl Neighbor {
             communities: rq.communities.clone(),
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
+            allow_import: rq.allow_import.clone(),
+            allow_export: rq.allow_export.clone(),
         }
     }
 }
@@ -273,6 +279,8 @@ pub struct BgpPeerConfig {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
+    pub allow_import: ImportExportPolicy,
+    pub allow_export: ImportExportPolicy,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
