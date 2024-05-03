@@ -10,7 +10,7 @@
   <service_fmri value='svc:/milestone/network:default' />
   </dependency>
 
-  <dependency name='zone_network_setup' grouping='require_all' restart_on='none' type='service'>
+  <dependency name='zone_network_setup' grouping='optional_all' restart_on='none' type='service'>
     <service_fmri value='svc:/oxide/zone-network-setup:default' />
   </dependency>
 
