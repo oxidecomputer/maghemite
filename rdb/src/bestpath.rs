@@ -9,7 +9,7 @@ use itertools::Itertools;
 
 /// The bestpath algorithms chooses the best set of up to `max` paths for a
 /// particular prefix from the RIB. The set of paths chosen will all have
-/// equal MED, local_pref, AS path lenght and shutdown status. The bestpath
+/// equal MED, local_pref, AS path length and shutdown status. The bestpath
 /// algorithm performs path filtering in the following ordered sequece of
 /// operations.
 ///
@@ -19,7 +19,7 @@ use itertools::Itertools;
 /// - filter the selection group to the set of paths with the smallest
 ///   local preference
 /// - filter the selection group to the set of paths with the smallest
-///   AS path lenght
+///   AS path length
 /// - filter the selection group to the set of paths with the smallest
 ///   multi-exit discriminator (MED) on a per-AS basis.
 ///
@@ -41,12 +41,11 @@ pub fn bestpaths(
     // only have shutdown routes then use those. Otherwise use active routes
     let (active, shutdown): (BTreeSet<&Path>, BTreeSet<&Path>) =
         candidates.iter().partition(|x| x.shutdown);
-    let candidates = match (active.len(), shutdown.len()) {
-        (0, _) => shutdown,
-        (_, _) => active,
-    };
+    let candidates = if active.is_empty() { shutdown } else { active };
 
-    // Filter down to paths that are not stale
+    // Filter down to paths that are not stale. The `min_set_by_key` method
+    // allows us to assign "not stale" paths to the `0` set, and "stale" paths
+    // to the `1` set. The method will then return the `0` set.
     let candidates = candidates.into_iter().min_set_by_key(|x| match x.bgp {
         Some(ref bgp) => match bgp.stale {
             Some(_) => 1,
