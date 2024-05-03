@@ -84,7 +84,7 @@ pub struct OmicronSubcommand {
 
 #[derive(Subcommand, Debug)]
 pub enum OmicronCmd {
-    /// Apply a BGP peer group configuration.
+    /// Apply an Omicron BGP configuration.
     Apply { filename: String },
 }
 
