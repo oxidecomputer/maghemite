@@ -90,85 +90,634 @@
         }
       }
     },
-    "/bgp/apply": {
-      "post": {
-        "operationId": "bgp_apply",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ApplyRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/bgp/graceful_shutdown": {
-      "post": {
-        "operationId": "graceful_shutdown",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GracefulShutdownRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/bgp/imported4": {
+    "/bgp/config/checker": {
       "get": {
-        "operationId": "get_imported4",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GetImported4Request"
-              }
+        "operationId": "read_checker",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
             }
-          },
-          "required": true
-        },
+          }
+        ],
         "responses": {
           "200": {
             "description": "successful operation",
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Array_of_Route4ImportKey",
+                  "$ref": "#/components/schemas/CheckerSource"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "create_checker",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckerSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "update_checker",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckerSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_checker",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/config/neighbor": {
+      "get": {
+        "operationId": "read_neighbor",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "asn",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Neighbor"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "create_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Neighbor"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "update_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Neighbor"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_neighbor",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "asn",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/config/neighbors": {
+      "get": {
+        "operationId": "read_neighbors",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_Neighbor",
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Route4ImportKey"
+                    "$ref": "#/components/schemas/Neighbor"
                   }
                 }
               }
             }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/config/origin4": {
+      "get": {
+        "operationId": "read_origin4",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Origin4"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "create_origin4",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Origin4"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "update_origin4",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Origin4"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_origin4",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/config/router": {
+      "get": {
+        "operationId": "read_router",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Router"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "create_router",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Router"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "update_router",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Router"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_router",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/config/routers": {
+      "get": {
+        "operationId": "read_routers",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_Router",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Router"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/config/shaper": {
+      "get": {
+        "operationId": "read_shaper",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShaperSource"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "create_shaper",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShaperSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "update_shaper",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShaperSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_shaper",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "successful deletion"
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -212,38 +761,14 @@
         }
       }
     },
-    "/bgp/neighbor": {
-      "put": {
-        "operationId": "ensure_neighbor_handler",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AddNeighborRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
+    "/bgp/omicron/apply": {
       "post": {
-        "operationId": "add_neighbor_handler",
+        "operationId": "bgp_apply",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AddNeighborRequest"
+                "$ref": "#/components/schemas/ApplyRequest"
               }
             }
           },
@@ -252,30 +777,6 @@
         "responses": {
           "204": {
             "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "delete": {
-        "operationId": "delete_neighbor",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DeleteNeighborRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "successful deletion"
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -286,14 +787,14 @@
         }
       }
     },
-    "/bgp/originate4": {
+    "/bgp/status/imported": {
       "get": {
-        "operationId": "get_originated4",
+        "operationId": "get_imported",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/GetOriginated4Request"
+                "$ref": "#/components/schemas/AsnSelector"
               }
             }
           },
@@ -305,11 +806,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Array_of_Prefix4",
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Prefix4"
-                  }
+                  "$ref": "#/components/schemas/Rib"
                 }
               }
             }
@@ -321,119 +818,34 @@
             "$ref": "#/components/responses/Error"
           }
         }
-      },
-      "post": {
-        "operationId": "originate4",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Originate4Request"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
       }
     },
-    "/bgp/router": {
-      "put": {
-        "operationId": "ensure_router_handler",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NewRouterRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "post": {
-        "operationId": "new_router",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NewRouterRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "delete": {
-        "operationId": "delete_router",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DeleteRouterRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/bgp/routers": {
+    "/bgp/status/neighbors": {
       "get": {
-        "operationId": "get_routers",
+        "operationId": "get_neighbors",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "successful operation",
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Array_of_RouterInfo",
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RouterInfo"
+                  "title": "Map_of_PeerInfo",
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/PeerInfo"
                   }
                 }
               }
@@ -448,22 +860,29 @@
         }
       }
     },
-    "/bgp/withdraw4": {
-      "post": {
-        "operationId": "withdraw4",
+    "/bgp/status/selected": {
+      "get": {
+        "operationId": "get_selected",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Withdraw4Request"
+                "$ref": "#/components/schemas/AsnSelector"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "204": {
-            "description": "resource updated"
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rib"
+                }
+              }
+            }
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -483,7 +902,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StaticRoute4List"
+                  "title": "Map_of_Set_of_Path",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Path"
+                    },
+                    "uniqueItems": true
+                  }
                 }
               }
             }
@@ -548,71 +975,6 @@
   },
   "components": {
     "schemas": {
-      "AddNeighborRequest": {
-        "type": "object",
-        "properties": {
-          "asn": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "connect_retry": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "delay_open": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "group": {
-            "type": "string"
-          },
-          "hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "host": {
-            "type": "string"
-          },
-          "idle_hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "keepalive": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "name": {
-            "type": "string"
-          },
-          "passive": {
-            "type": "boolean"
-          },
-          "resolution": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "asn",
-          "connect_retry",
-          "delay_open",
-          "group",
-          "hold_time",
-          "host",
-          "idle_hold_time",
-          "keepalive",
-          "name",
-          "passive",
-          "resolution"
-        ]
-      },
       "AddPathElement": {
         "description": "The add path element comes as a BGP capability extension as described in RFC 7911.",
         "type": "object",
@@ -663,6 +1025,15 @@
             "format": "uint32",
             "minimum": 0
           },
+          "checker": {
+            "nullable": true,
+            "description": "Checker rhai code to apply to ingress open and update messages.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CheckerSource"
+              }
+            ]
+          },
           "originate": {
             "description": "Complete set of prefixes to originate. Any active prefixes not in this list will be removed. All prefixes in this list are ensured to be in the originating set.",
             "type": "array",
@@ -679,6 +1050,15 @@
                 "$ref": "#/components/schemas/BgpPeerConfig"
               }
             }
+          },
+          "shaper": {
+            "nullable": true,
+            "description": "Checker rhai code to apply to egress open and update messages.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShaperSource"
+              }
+            ]
           }
         },
         "required": [
@@ -724,6 +1104,20 @@
               "as_sequence"
             ]
           }
+        ]
+      },
+      "AsnSelector": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "ASN of the router to get imported prefixes from.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "asn"
         ]
       },
       "BfdPeerConfig": {
@@ -816,9 +1210,62 @@
           }
         ]
       },
+      "BgpPathProperties": {
+        "type": "object",
+        "properties": {
+          "as_path": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "id": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "med": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "origin_as": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "stale": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "as_path",
+          "id",
+          "origin_as"
+        ]
+      },
       "BgpPeerConfig": {
         "type": "object",
         "properties": {
+          "allow_export": {
+            "$ref": "#/components/schemas/ImportExportPolicy"
+          },
+          "allow_import": {
+            "$ref": "#/components/schemas/ImportExportPolicy"
+          },
+          "communities": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
           "connect_retry": {
             "type": "integer",
             "format": "uint64",
@@ -828,6 +1275,9 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "enforce_first_as": {
+            "type": "boolean"
           },
           "hold_time": {
             "type": "integer",
@@ -847,21 +1297,59 @@
             "format": "uint64",
             "minimum": 0
           },
+          "local_pref": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "md5_auth_key": {
+            "nullable": true,
+            "type": "string"
+          },
+          "min_ttl": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "multi_exit_discriminator": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "name": {
             "type": "string"
           },
           "passive": {
             "type": "boolean"
           },
+          "remote_asn": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "resolution": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
           }
         },
         "required": [
+          "allow_export",
+          "allow_import",
+          "communities",
           "connect_retry",
           "delay_open",
+          "enforce_first_as",
           "hold_time",
           "host",
           "idle_hold_time",
@@ -904,7 +1392,7 @@
             "additionalProperties": false
           },
           {
-            "description": "Route refresh capability as defined in RFC 2918. Note this capability is not yet implemented.",
+            "description": "Route refresh capability as defined in RFC 2918.",
             "type": "object",
             "properties": {
               "route_refresh": {
@@ -1080,7 +1568,8 @@
                     "type": "array",
                     "items": {
                       "$ref": "#/components/schemas/AddPathElement"
-                    }
+                    },
+                    "uniqueItems": true
                   }
                 },
                 "required": [
@@ -1292,8 +1781,40 @@
           }
         ]
       },
+      "CeaseErrorSubcode": {
+        "description": "Cease error subcode types from RFC 4486",
+        "type": "string",
+        "enum": [
+          "unspecific",
+          "maximum_numberof_prefixes_reached",
+          "administrative_shutdown",
+          "peer_deconfigured",
+          "administrative_reset",
+          "connection_rejected",
+          "other_configuration_change",
+          "connection_collision_resolution",
+          "out_of_resources"
+        ]
+      },
+      "CheckerSource": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asn",
+          "code"
+        ]
+      },
       "Community": {
-        "description": "BGP communities recognized by this BGP implementation.",
+        "description": "BGP community value",
         "oneOf": [
           {
             "description": "All routes received carrying a communities attribute containing this value MUST NOT be advertised outside a BGP confederation boundary (a stand-alone autonomous system that is not part of a confederation should be considered a confederation itself)",
@@ -1322,39 +1843,22 @@
             "enum": [
               "graceful_shutdown"
             ]
-          }
-        ]
-      },
-      "DeleteNeighborRequest": {
-        "type": "object",
-        "properties": {
-          "addr": {
-            "type": "string",
-            "format": "ip"
           },
-          "asn": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
+          {
+            "description": "A user defined community",
+            "type": "object",
+            "properties": {
+              "user_defined": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "user_defined"
+            ],
+            "additionalProperties": false
           }
-        },
-        "required": [
-          "addr",
-          "asn"
-        ]
-      },
-      "DeleteRouterRequest": {
-        "type": "object",
-        "properties": {
-          "asn": {
-            "description": "Autonomous system number for the router to remove",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "asn"
         ]
       },
       "DeleteStaticRoute4Request": {
@@ -1366,6 +1870,40 @@
         },
         "required": [
           "routes"
+        ]
+      },
+      "Duration": {
+        "type": "object",
+        "properties": {
+          "nanos": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "secs": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "nanos",
+          "secs"
+        ]
+      },
+      "DynamicTimerInfo": {
+        "type": "object",
+        "properties": {
+          "configured": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "negotiated": {
+            "$ref": "#/components/schemas/Duration"
+          }
+        },
+        "required": [
+          "configured",
+          "negotiated"
         ]
       },
       "Error": {
@@ -1470,9 +2008,7 @@
             "type": "object",
             "properties": {
               "cease": {
-                "type": "integer",
-                "format": "uint8",
-                "minimum": 0
+                "$ref": "#/components/schemas/CeaseErrorSubcode"
               }
             },
             "required": [
@@ -1536,53 +2072,6 @@
           }
         ]
       },
-      "GetImported4Request": {
-        "type": "object",
-        "properties": {
-          "asn": {
-            "description": "ASN of the router to get imported prefixes from.",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "asn"
-        ]
-      },
-      "GetOriginated4Request": {
-        "type": "object",
-        "properties": {
-          "asn": {
-            "description": "ASN of the router to get originated prefixes from.",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "asn"
-        ]
-      },
-      "GracefulShutdownRequest": {
-        "type": "object",
-        "properties": {
-          "asn": {
-            "description": "ASN of the router to gracefully shut down.",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "enabled": {
-            "description": "Set whether or not graceful shutdown is initiated from this router.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "asn",
-          "enabled"
-        ]
-      },
       "HeaderErrorSubcode": {
         "description": "Header error subcode types",
         "type": "string",
@@ -1591,6 +2080,32 @@
           "connection_not_synchronized",
           "bad_message_length",
           "bad_message_type"
+        ]
+      },
+      "ImportExportPolicy": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "NoFiltering"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Allow": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Prefix"
+                },
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "Allow"
+            ],
+            "additionalProperties": false
+          }
         ]
       },
       "Message": {
@@ -1663,6 +2178,24 @@
             "required": [
               "type"
             ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "route_refresh"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/RouteRefreshMessage"
+              }
+            },
+            "required": [
+              "type",
+              "value"
+            ]
           }
         ]
       },
@@ -1732,30 +2265,124 @@
           "by_peer"
         ]
       },
-      "NewRouterRequest": {
+      "Neighbor": {
         "type": "object",
         "properties": {
+          "allow_export": {
+            "$ref": "#/components/schemas/ImportExportPolicy"
+          },
+          "allow_import": {
+            "$ref": "#/components/schemas/ImportExportPolicy"
+          },
           "asn": {
-            "description": "Autonomous system number for this router",
             "type": "integer",
             "format": "uint32",
             "minimum": 0
           },
-          "id": {
-            "description": "Id for this router",
+          "communities": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "connect_retry": {
             "type": "integer",
-            "format": "uint32",
+            "format": "uint64",
             "minimum": 0
           },
-          "listen": {
-            "description": "Listening address <addr>:<port>",
+          "delay_open": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "enforce_first_as": {
+            "type": "boolean"
+          },
+          "group": {
             "type": "string"
+          },
+          "hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "host": {
+            "type": "string"
+          },
+          "idle_hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "keepalive": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "local_pref": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "md5_auth_key": {
+            "nullable": true,
+            "type": "string"
+          },
+          "min_ttl": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "multi_exit_discriminator": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "passive": {
+            "type": "boolean"
+          },
+          "remote_asn": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "resolution": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
           }
         },
         "required": [
+          "allow_export",
+          "allow_import",
           "asn",
-          "id",
-          "listen"
+          "communities",
+          "connect_retry",
+          "delay_open",
+          "enforce_first_as",
+          "group",
+          "hold_time",
+          "host",
+          "idle_hold_time",
+          "keepalive",
+          "name",
+          "passive",
+          "resolution"
         ]
       },
       "NotificationMessage": {
@@ -1898,7 +2525,8 @@
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Capability"
-                }
+                },
+                "uniqueItems": true
               }
             },
             "required": [
@@ -1938,7 +2566,7 @@
           }
         ]
       },
-      "Originate4Request": {
+      "Origin4": {
         "type": "object",
         "properties": {
           "asn": {
@@ -1958,6 +2586,42 @@
         "required": [
           "asn",
           "prefixes"
+        ]
+      },
+      "Path": {
+        "type": "object",
+        "properties": {
+          "bgp": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BgpPathProperties"
+              }
+            ]
+          },
+          "local_pref": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "nexthop": {
+            "type": "string",
+            "format": "ip"
+          },
+          "shutdown": {
+            "type": "boolean"
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "nexthop",
+          "shutdown"
         ]
       },
       "PathAttribute": {
@@ -2234,14 +2898,61 @@
           },
           "state": {
             "$ref": "#/components/schemas/FsmStateKind"
+          },
+          "timers": {
+            "$ref": "#/components/schemas/PeerTimers"
           }
         },
         "required": [
           "duration_millis",
-          "state"
+          "state",
+          "timers"
+        ]
+      },
+      "PeerTimers": {
+        "type": "object",
+        "properties": {
+          "hold": {
+            "$ref": "#/components/schemas/DynamicTimerInfo"
+          },
+          "keepalive": {
+            "$ref": "#/components/schemas/DynamicTimerInfo"
+          }
+        },
+        "required": [
+          "hold",
+          "keepalive"
         ]
       },
       "Prefix": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "V4": {
+                "$ref": "#/components/schemas/Prefix4"
+              }
+            },
+            "required": [
+              "V4"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "V6": {
+                "$ref": "#/components/schemas/Prefix6"
+              }
+            },
+            "required": [
+              "V6"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Prefix2": {
         "description": "This data structure captures a network prefix as it's laid out in a BGP message. There is a prefix length followed by a variable number of bytes. Just enough bytes to express the prefix.",
         "type": "object",
         "properties": {
@@ -2282,64 +2993,84 @@
           "value"
         ]
       },
-      "Route4ImportKey": {
+      "Prefix6": {
         "type": "object",
         "properties": {
-          "id": {
-            "description": "A BGP route identifier.",
+          "length": {
             "type": "integer",
-            "format": "uint32",
+            "format": "uint8",
             "minimum": 0
           },
-          "nexthop": {
-            "description": "The nexthop/gateway for the route.",
+          "value": {
             "type": "string",
-            "format": "ipv4"
+            "format": "ipv6"
+          }
+        },
+        "required": [
+          "length",
+          "value"
+        ]
+      },
+      "Rib": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/Path"
           },
-          "prefix": {
-            "description": "The destination prefix of the route.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Prefix4"
-              }
-            ]
-          },
-          "priority": {
-            "description": "Local priority/preference for the route.",
+          "uniqueItems": true
+        }
+      },
+      "RouteRefreshMessage": {
+        "type": "object",
+        "properties": {
+          "afi": {
+            "description": "Address family identifier.",
             "type": "integer",
-            "format": "uint64",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "safi": {
+            "description": "Subsequent address family identifier.",
+            "type": "integer",
+            "format": "uint8",
             "minimum": 0
           }
         },
         "required": [
-          "id",
-          "nexthop",
-          "prefix",
-          "priority"
+          "afi",
+          "safi"
         ]
       },
-      "RouterInfo": {
+      "Router": {
         "type": "object",
         "properties": {
           "asn": {
+            "description": "Autonomous system number for this router",
             "type": "integer",
             "format": "uint32",
             "minimum": 0
           },
           "graceful_shutdown": {
+            "description": "Gracefully shut this router down.",
             "type": "boolean"
           },
-          "peers": {
-            "type": "object",
-            "additionalProperties": {
-              "$ref": "#/components/schemas/PeerInfo"
-            }
+          "id": {
+            "description": "Id for this router",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "listen": {
+            "description": "Listening address <addr>:<port>",
+            "type": "string"
           }
         },
         "required": [
           "asn",
           "graceful_shutdown",
-          "peers"
+          "id",
+          "listen"
         ]
       },
       "SessionMode": {
@@ -2347,6 +3078,23 @@
         "enum": [
           "SingleHop",
           "MultiHop"
+        ]
+      },
+      "ShaperSource": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asn",
+          "code"
         ]
       },
       "StaticRoute4": {
@@ -2358,6 +3106,12 @@
           },
           "prefix": {
             "$ref": "#/components/schemas/Prefix4"
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
           }
         },
         "required": [
@@ -2404,7 +3158,7 @@
           "nlri": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix"
+              "$ref": "#/components/schemas/Prefix2"
             }
           },
           "path_attributes": {
@@ -2416,7 +3170,7 @@
           "withdrawn": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix"
+              "$ref": "#/components/schemas/Prefix2"
             }
           }
         },
@@ -2424,28 +3178,6 @@
           "nlri",
           "path_attributes",
           "withdrawn"
-        ]
-      },
-      "Withdraw4Request": {
-        "type": "object",
-        "properties": {
-          "asn": {
-            "description": "ASN of the router to originate from.",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "prefixes": {
-            "description": "Set of prefixes to originate.",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Prefix4"
-            }
-          }
-        },
-        "required": [
-          "asn",
-          "prefixes"
         ]
       }
     },

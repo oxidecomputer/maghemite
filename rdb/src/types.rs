@@ -2,56 +2,109 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::error::Error;
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::cmp::Ordering;
+use std::collections::{BTreeSet, HashSet};
+use std::fmt::{self, Formatter};
+use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
-use crate::error::Error;
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
+pub struct Path {
+    pub nexthop: IpAddr,
+    pub shutdown: bool,
+    pub local_pref: Option<u32>,
+    pub bgp: Option<BgpPathProperties>,
+    pub vlan_id: Option<u16>,
+}
 
-#[derive(Copy, Clone, Eq, Serialize, Deserialize, JsonSchema, Debug)]
-pub struct Route4ImportKey {
-    /// The destination prefix of the route.
-    pub prefix: Prefix4,
+// Define a basic ordering on paths so bestpath selection is deterministic
+impl PartialOrd for Path {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Path {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.nexthop != other.nexthop {
+            return self.nexthop.cmp(&other.nexthop);
+        }
+        if self.shutdown != other.shutdown {
+            return self.shutdown.cmp(&other.shutdown);
+        }
+        if self.local_pref != other.local_pref {
+            return self.local_pref.cmp(&other.local_pref);
+        }
+        self.bgp.cmp(&other.bgp)
+    }
+}
 
-    /// The nexthop/gateway for the route.
-    pub nexthop: Ipv4Addr,
+impl Path {
+    pub fn for_static(nexthop: IpAddr, vlan_id: Option<u16>) -> Self {
+        Self {
+            nexthop,
+            vlan_id,
+            shutdown: false,
+            local_pref: None,
+            bgp: None,
+        }
+    }
+}
 
-    /// A BGP route identifier.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
+pub struct BgpPathProperties {
+    pub origin_as: u32,
     pub id: u32,
-
-    /// Local priority/preference for the route.
-    pub priority: u64,
+    pub med: Option<u32>,
+    pub as_path: Vec<u32>,
+    pub stale: Option<DateTime<Utc>>,
 }
 
-impl Route4ImportKey {
-    pub fn with_priority(&self, priority: u64) -> Self {
-        let mut x = *self;
-        x.priority = priority;
-        x
+impl BgpPathProperties {
+    pub fn as_stale(&self) -> Self {
+        let mut s = self.clone();
+        s.stale = Some(Utc::now());
+        s
     }
 }
 
-impl Hash for Route4ImportKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.prefix.hash(state);
-        self.nexthop.hash(state);
+impl PartialOrd for BgpPathProperties {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
-
-impl PartialEq for Route4ImportKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.prefix == other.prefix && self.nexthop == other.nexthop
+impl Ord for BgpPathProperties {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.origin_as != other.origin_as {
+            return self.origin_as.cmp(&other.origin_as);
+        }
+        if self.id != other.id {
+            return self.id.cmp(&other.id);
+        }
+        // MED should *not* be used as a basis for comparison. Paths with
+        // distinct MED values are not distinct paths.
+        if self.as_path != other.as_path {
+            return self.as_path.cmp(&other.as_path);
+        }
+        self.stale.cmp(&other.stale)
     }
 }
 
 #[derive(
-    Copy, Clone, Hash, Eq, PartialEq, Serialize, Deserialize, JsonSchema,
+    Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Debug,
 )]
+pub struct StaticRouteKey {
+    pub prefix: Prefix,
+    pub nexthop: IpAddr,
+    pub vlan_id: Option<u16>,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Route4Key {
     pub prefix: Prefix4,
     pub nexthop: Ipv4Addr,
@@ -121,11 +174,25 @@ impl Policy4Key {
 }
 
 #[derive(
-    Debug, Copy, Clone, Serialize, Deserialize, Hash, Eq, PartialEq, JsonSchema,
+    Debug, Copy, Clone, Serialize, Deserialize, Eq, PartialEq, JsonSchema,
 )]
 pub struct Prefix4 {
     pub value: Ipv4Addr,
     pub length: u8,
+}
+
+impl PartialOrd for Prefix4 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Prefix4 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.value != other.value {
+            return self.value.cmp(&other.value);
+        }
+        self.length.cmp(&other.length)
+    }
 }
 
 impl Prefix4 {
@@ -174,15 +241,69 @@ impl FromStr for Prefix4 {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(
+    Debug, Copy, Clone, Serialize, Deserialize, Hash, Eq, PartialEq, JsonSchema,
+)]
 pub struct Prefix6 {
     pub value: Ipv6Addr,
     pub length: u8,
 }
 
+impl PartialOrd for Prefix6 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Prefix6 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.value != other.value {
+            return self.value.cmp(&other.value);
+        }
+        self.length.cmp(&other.length)
+    }
+}
+
 impl fmt::Display for Prefix6 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}", self.value, self.length)
+    }
+}
+
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    JsonSchema,
+    PartialOrd,
+    Ord,
+)]
+pub enum Prefix {
+    V4(Prefix4),
+    V6(Prefix6),
+}
+
+impl std::fmt::Display for Prefix {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Prefix::V4(p) => p.fmt(f),
+            Prefix::V6(p) => p.fmt(f),
+        }
+    }
+}
+
+impl From<Prefix4> for Prefix {
+    fn from(value: Prefix4) -> Self {
+        Self::V4(value)
+    }
+}
+
+impl From<Prefix6> for Prefix {
+    fn from(value: Prefix6) -> Self {
+        Self::V6(value)
     }
 }
 
@@ -225,6 +346,15 @@ impl From<u16> for Asn {
     }
 }
 
+impl Asn {
+    pub fn as_u32(&self) -> u32 {
+        match self {
+            Self::TwoOctet(value) => u32::from(*value),
+            Self::FourOctet(value) => *value,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub enum Status {
     Up,
@@ -262,27 +392,6 @@ pub struct Policy {
 }
 
 #[derive(Clone, Default, Debug)]
-pub struct ImportChangeSet {
-    pub added: HashSet<Route4ImportKey>,
-    pub removed: HashSet<Route4ImportKey>,
-}
-
-impl ImportChangeSet {
-    pub fn added<V: Into<HashSet<Route4ImportKey>>>(v: V) -> Self {
-        Self {
-            added: v.into(),
-            ..Default::default()
-        }
-    }
-    pub fn removed<V: Into<HashSet<Route4ImportKey>>>(v: V) -> Self {
-        Self {
-            removed: v.into(),
-            ..Default::default()
-        }
-    }
-}
-
-#[derive(Clone, Default, Debug)]
 pub struct OriginChangeSet {
     pub added: HashSet<Prefix4>,
     pub removed: HashSet<Prefix4>,
@@ -303,35 +412,20 @@ impl OriginChangeSet {
     }
 }
 
-#[derive(Clone, Default, Debug)]
-pub struct ChangeSet {
-    pub generation: u64,
-    pub import: ImportChangeSet,
-    pub origin: OriginChangeSet,
-}
-
-impl ChangeSet {
-    pub fn from_origin(origin: OriginChangeSet, generation: u64) -> Self {
-        Self {
-            generation,
-            origin,
-            ..Default::default()
-        }
-    }
-
-    pub fn from_import(import: ImportChangeSet, generation: u64) -> Self {
-        Self {
-            generation,
-            import,
-            ..Default::default()
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
 pub struct BgpRouterInfo {
     pub id: u32,
     pub listen: String,
+    pub graceful_shutdown: bool,
+}
+
+#[derive(
+    Default, Debug, Serialize, Deserialize, Clone, JsonSchema, Eq, PartialEq,
+)]
+pub enum ImportExportPolicy {
+    #[default]
+    NoFiltering,
+    Allow(BTreeSet<Prefix>),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
@@ -347,6 +441,16 @@ pub struct BgpNeighborInfo {
     pub resolution: u64,
     pub group: String,
     pub passive: bool,
+    pub remote_asn: Option<u32>,
+    pub min_ttl: Option<u8>,
+    pub md5_auth_key: Option<String>,
+    pub multi_exit_discriminator: Option<u32>,
+    pub communities: Vec<u32>,
+    pub local_pref: Option<u32>,
+    pub enforce_first_as: bool,
+    pub allow_import: ImportExportPolicy,
+    pub allow_export: ImportExportPolicy,
+    pub vlan_id: Option<u16>,
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]
@@ -367,4 +471,33 @@ pub struct BfdPeerConfig {
 pub enum SessionMode {
     SingleHop,
     MultiHop,
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct PrefixChangeNotification {
+    pub changed: BTreeSet<Prefix>,
+}
+
+impl From<Prefix> for PrefixChangeNotification {
+    fn from(value: Prefix) -> Self {
+        Self {
+            changed: BTreeSet::from([value]),
+        }
+    }
+}
+
+impl From<Prefix4> for PrefixChangeNotification {
+    fn from(value: Prefix4) -> Self {
+        Self {
+            changed: BTreeSet::from([value.into()]),
+        }
+    }
+}
+
+impl From<Prefix6> for PrefixChangeNotification {
+    fn from(value: Prefix6) -> Self {
+        Self {
+            changed: BTreeSet::from([value.into()]),
+        }
+    }
 }

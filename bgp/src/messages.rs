@@ -7,10 +7,14 @@ use nom::{
     bytes::complete::{tag, take},
     number::complete::{be_u16, be_u32, be_u8, u8 as parse_u8},
 };
+use num_enum::FromPrimitive;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr};
+use std::{
+    collections::BTreeSet,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+};
 
 pub const MAX_MESSAGE_SIZE: usize = 4096;
 
@@ -41,6 +45,12 @@ pub enum MessageType {
     ///
     /// RFC 4271 §4.4
     KeepAlive = 4,
+
+    /// When this message is received from a peer, we send that peer all
+    /// current outbound routes.
+    ///
+    /// RFC 2918
+    RouteRefresh = 5,
 }
 
 impl From<&Message> for MessageType {
@@ -50,6 +60,7 @@ impl From<&Message> for MessageType {
             Message::Update(_) => Self::Update,
             Message::Notification(_) => Self::Notification,
             Message::KeepAlive => Self::KeepAlive,
+            Message::RouteRefresh(_) => Self::RouteRefresh,
         }
     }
 }
@@ -63,6 +74,7 @@ pub enum Message {
     Update(UpdateMessage),
     Notification(NotificationMessage),
     KeepAlive,
+    RouteRefresh(RouteRefreshMessage),
 }
 
 impl Message {
@@ -72,6 +84,7 @@ impl Message {
             Self::Update(m) => m.to_wire(),
             Self::Notification(m) => m.to_wire(),
             Self::KeepAlive => Ok(Vec::new()),
+            Self::RouteRefresh(m) => m.to_wire(),
         }
     }
 }
@@ -91,6 +104,74 @@ impl From<UpdateMessage> for Message {
 impl From<NotificationMessage> for Message {
     fn from(m: NotificationMessage) -> Message {
         Message::Notification(m)
+    }
+}
+
+impl From<RouteRefreshMessage> for Message {
+    fn from(m: RouteRefreshMessage) -> Message {
+        Message::RouteRefresh(m)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum MessageConvertError {
+    #[error("not an update")]
+    NotAnUpdate,
+
+    #[error("not a notification")]
+    NotANotification,
+
+    #[error("not an open")]
+    NotAnOpen,
+
+    #[error("not a keepalive")]
+    NotAKeepalive,
+
+    #[error("not a route refresh")]
+    NotARouteRefresh,
+}
+
+impl TryFrom<Message> for OpenMessage {
+    type Error = MessageConvertError;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::Open(msg) = value {
+            Ok(msg)
+        } else {
+            Err(MessageConvertError::NotAnOpen)
+        }
+    }
+}
+
+impl TryFrom<Message> for UpdateMessage {
+    type Error = MessageConvertError;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::Update(msg) = value {
+            Ok(msg)
+        } else {
+            Err(MessageConvertError::NotAnUpdate)
+        }
+    }
+}
+
+impl TryFrom<Message> for NotificationMessage {
+    type Error = MessageConvertError;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::Notification(msg) = value {
+            Ok(msg)
+        } else {
+            Err(MessageConvertError::NotANotification)
+        }
+    }
+}
+
+impl TryFrom<Message> for RouteRefreshMessage {
+    type Error = MessageConvertError;
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        if let Message::RouteRefresh(msg) = value {
+            Ok(msg)
+        } else {
+            Err(MessageConvertError::NotARouteRefresh)
+        }
     }
 }
 
@@ -231,24 +312,39 @@ impl OpenMessage {
             asn: AS_TRANS,
             hold_time,
             id,
-            parameters: vec![OptionalParameter::Capabilities(vec![
-                Capability::FourOctetAs { asn },
-            ])],
+            parameters: vec![OptionalParameter::Capabilities(BTreeSet::from(
+                [Capability::FourOctetAs { asn }],
+            ))],
         }
     }
 
-    pub fn add_capabilities(&mut self, capabilities: &[Capability]) {
+    pub fn add_capabilities(&mut self, capabilities: &BTreeSet<Capability>) {
         if capabilities.is_empty() {
             return;
         }
         for p in &mut self.parameters {
             if let OptionalParameter::Capabilities(cs) = p {
-                cs.extend_from_slice(capabilities);
+                cs.extend(capabilities.iter().cloned());
                 return;
             }
         }
         self.parameters
-            .push(OptionalParameter::Capabilities(capabilities.into()));
+            .push(OptionalParameter::Capabilities(capabilities.clone()));
+    }
+
+    pub fn get_capabilities(&self) -> BTreeSet<Capability> {
+        for p in self.parameters.iter() {
+            if let OptionalParameter::Capabilities(caps) = p {
+                return caps.clone();
+            }
+        }
+        BTreeSet::new()
+    }
+
+    pub fn has_capability(&self, code: CapabilityCode) -> bool {
+        self.get_capabilities()
+            .into_iter()
+            .any(|x| CapabilityCode::from(x) == code)
     }
 
     /// Serialize an open message to wire format.
@@ -483,37 +579,110 @@ impl UpdateMessage {
 
     pub fn nexthop4(&self) -> Option<Ipv4Addr> {
         for a in &self.path_attributes {
-            match a.value {
-                PathAttributeValue::NextHop(IpAddr::V4(addr)) => {
-                    return Some(addr);
-                }
-                _ => continue,
+            if let PathAttributeValue::NextHop(IpAddr::V4(addr)) = a.value {
+                return Some(addr);
             }
         }
         None
     }
 
     pub fn graceful_shutdown(&self) -> bool {
+        self.has_community(Community::GracefulShutdown)
+    }
+
+    pub fn multi_exit_discriminator(&self) -> Option<u32> {
         for a in &self.path_attributes {
-            match &a.value {
-                PathAttributeValue::Communities(communities) => {
-                    for c in communities {
-                        if *c == Community::GracefulShutdown {
-                            return true;
-                        }
+            if let PathAttributeValue::MultiExitDisc(med) = &a.value {
+                return Some(*med);
+            }
+        }
+        None
+    }
+
+    pub fn local_pref(&self) -> Option<u32> {
+        for a in &self.path_attributes {
+            if let PathAttributeValue::LocalPref(value) = &a.value {
+                return Some(*value);
+            }
+        }
+        None
+    }
+
+    pub fn set_local_pref(&mut self, value: u32) {
+        for a in &mut self.path_attributes {
+            if let PathAttributeValue::LocalPref(current) = &mut a.value {
+                *current = value;
+                return;
+            }
+        }
+        self.path_attributes
+            .push(PathAttributeValue::LocalPref(value).into());
+    }
+
+    pub fn clear_local_pref(&mut self) {
+        self.path_attributes
+            .retain(|a| a.typ.type_code != PathAttributeTypeCode::LocalPref);
+    }
+
+    pub fn as_path(&self) -> Option<Vec<As4PathSegment>> {
+        for a in &self.path_attributes {
+            if let PathAttributeValue::AsPath(path) = &a.value {
+                return Some(path.clone());
+            }
+            if let PathAttributeValue::As4Path(path) = &a.value {
+                return Some(path.clone());
+            }
+        }
+        None
+    }
+
+    pub fn path_len(&self) -> Option<usize> {
+        self.as_path()
+            .map(|p| p.iter().fold(0, |a, b| a + b.value.len()))
+    }
+
+    pub fn has_community(&self, community: Community) -> bool {
+        for a in &self.path_attributes {
+            if let PathAttributeValue::Communities(communities) = &a.value {
+                for c in communities {
+                    if *c == community {
+                        return true;
                     }
                 }
-                _ => continue,
             }
         }
         false
+    }
+
+    pub fn add_community(&mut self, community: Community) {
+        for a in &mut self.path_attributes {
+            if let PathAttributeValue::Communities(ref mut communities) =
+                &mut a.value
+            {
+                communities.push(community);
+                return;
+            }
+        }
+        self.path_attributes
+            .push(PathAttributeValue::Communities(vec![community]).into());
     }
 }
 
 /// This data structure captures a network prefix as it's laid out in a BGP
 /// message. There is a prefix length followed by a variable number of bytes.
 /// Just enough bytes to express the prefix.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    Ord,
+    PartialOrd,
+)]
 pub struct Prefix {
     pub length: u8,
     pub value: Vec<u8>,
@@ -541,6 +710,176 @@ impl Prefix {
             },
         ))
     }
+
+    pub fn as_prefix4(&self) -> rdb::Prefix4 {
+        let v = &self.value;
+        match self.length {
+            0 => rdb::Prefix4 {
+                value: Ipv4Addr::UNSPECIFIED,
+                length: 0,
+            },
+            x if x <= 8 => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], 0, 0, 0]),
+                length: x,
+            },
+            x if x <= 16 => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], v[1], 0, 0]),
+                length: x,
+            },
+            x if x <= 24 => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], v[1], v[2], 0]),
+                length: x,
+            },
+            x => rdb::Prefix4 {
+                value: Ipv4Addr::from([v[0], v[1], v[2], v[3]]),
+                length: x,
+            },
+        }
+    }
+
+    pub fn as_prefix6(&self) -> rdb::Prefix6 {
+        let v = &self.value;
+        match self.length {
+            0 => rdb::Prefix6 {
+                value: Ipv6Addr::UNSPECIFIED,
+                length: 0,
+            },
+            x if x <= 8 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 16 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 24 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 32 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 40 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0,
+                ]),
+                length: x,
+            },
+            x if x <= 48 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 56 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], 0, 0, 0, 0, 0, 0,
+                    0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 64 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], 0, 0, 0, 0,
+                    0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 72 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], 0, 0,
+                    0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 80 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    0, 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 88 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], 0, 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 96 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], v[11], 0, 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 104 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], v[11], v[12], 0, 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 112 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], v[11], v[12], v[13], 0, 0,
+                ]),
+                length: x,
+            },
+            x if x <= 120 => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], v[11], v[12], v[13], v[14], 0,
+                ]),
+                length: x,
+            },
+            x => rdb::Prefix6 {
+                value: Ipv6Addr::from([
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
+                    v[10], v[11], v[12], v[13], v[14], v[15],
+                ]),
+                length: x,
+            },
+        }
+    }
+
+    pub fn within(&self, x: &Prefix) -> bool {
+        if self.length > 128 || x.length > 128 {
+            return false;
+        }
+        if self.length < x.length {
+            return false;
+        }
+        if self.value.len() > 16 || x.value.len() > 16 {
+            return false;
+        }
+
+        let mut a = self.value.clone();
+        a.resize(16, 0);
+        let mut a = u128::from_le_bytes(a.try_into().unwrap());
+
+        let mut b = x.value.clone();
+        b.resize(16, 0);
+        let mut b = u128::from_le_bytes(b.try_into().unwrap());
+
+        let mask = (1u128 << x.length) - 1;
+        a &= mask;
+        b &= mask;
+
+        a == b
+    }
 }
 
 impl std::str::FromStr for Prefix {
@@ -564,36 +903,6 @@ impl std::str::FromStr for Prefix {
             IpAddr::V6(a) => a.octets().to_vec(),
         };
         Ok(Self { value, length })
-    }
-}
-
-/// The BGP prefix format only contains enough bytes to describe the prefix
-/// so we need to be careful about transferring into fixed width IP addresses.
-impl From<&Prefix> for rdb::Prefix4 {
-    fn from(p: &Prefix) -> Self {
-        let v = &p.value;
-        match p.length {
-            0 => rdb::Prefix4 {
-                value: Ipv4Addr::UNSPECIFIED,
-                length: 0,
-            },
-            x if x <= 8 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], 0, 0, 0]),
-                length: x,
-            },
-            x if x <= 16 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], 0, 0]),
-                length: x,
-            },
-            x if x <= 24 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], v[2], 0]),
-                length: x,
-            },
-            x => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], v[2], v[3]]),
-                length: x,
-            },
-        }
     }
 }
 
@@ -623,6 +932,9 @@ impl From<PathAttributeValue> for PathAttribute {
             PathAttributeValue::AsPath(_) => path_attribute_flags::TRANSITIVE,
             PathAttributeValue::As4Path(_) => path_attribute_flags::TRANSITIVE,
             PathAttributeValue::NextHop(_) => path_attribute_flags::TRANSITIVE,
+            PathAttributeValue::LocalPref(_) => {
+                path_attribute_flags::TRANSITIVE
+            }
             PathAttributeValue::Communities(_) => {
                 path_attribute_flags::OPTIONAL
                     | path_attribute_flags::TRANSITIVE
@@ -837,6 +1149,8 @@ impl PathAttributeValue {
                 }
                 Ok(buf)
             }
+            Self::LocalPref(value) => Ok(value.to_be_bytes().into()),
+            Self::MultiExitDisc(value) => Ok(value.to_be_bytes().into()),
             x => Err(Error::UnsupportedPathAttributeValue(x.clone())),
         }
     }
@@ -891,24 +1205,28 @@ impl PathAttributeValue {
                         break;
                     }
                     let (out, v) = be_u32(input)?;
-                    communities.push(Community::try_from(v)?);
+                    communities.push(Community::from(v));
                     input = out;
                 }
                 Ok(PathAttributeValue::Communities(communities))
+            }
+            PathAttributeTypeCode::LocalPref => {
+                let (_input, v) = be_u32(input)?;
+                Ok(PathAttributeValue::LocalPref(v))
             }
             x => Err(Error::UnsupportedPathAttributeTypeCode(x)),
         }
     }
 }
 
-/// BGP communities recognized by this BGP implementation.
+/// BGP community value
 #[derive(
     Debug,
     PartialEq,
     Eq,
     Clone,
     Copy,
-    TryFromPrimitive,
+    FromPrimitive,
     IntoPrimitive,
     Serialize,
     Deserialize,
@@ -939,6 +1257,10 @@ pub enum Community {
     /// containing this value must set the local preference for
     /// the received routes to a low value, preferably zero.
     GracefulShutdown = 0xFFFF0000,
+
+    /// A user defined community
+    #[num_enum(catch_all)]
+    UserDefined(u32),
 }
 
 /// An enumeration indicating the origin type of a path.
@@ -1163,13 +1485,41 @@ impl NotificationMessage {
                 ErrorSubcode::HoldTime(error_subcode)
             }
             ErrorCode::Fsm => ErrorSubcode::Fsm(error_subcode),
-            ErrorCode::Cease => ErrorSubcode::Cease(error_subcode),
+            ErrorCode::Cease => {
+                CeaseErrorSubcode::try_from(error_subcode)?.into()
+            }
         };
         Ok(NotificationMessage {
             error_code,
             error_subcode,
             data: input.to_owned(),
         })
+    }
+}
+
+// A message sent between peers to ask for re-advertisement of all outbound
+// routes. Defined in RFC 2918.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RouteRefreshMessage {
+    /// Address family identifier.
+    pub afi: u16,
+    /// Subsequent address family identifier.
+    pub safi: u8,
+}
+
+impl RouteRefreshMessage {
+    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&self.afi.to_be_bytes());
+        buf.push(0); // reserved
+        buf.push(self.safi);
+        Ok(buf)
+    }
+    pub fn from_wire(input: &[u8]) -> Result<RouteRefreshMessage, Error> {
+        let (input, afi) = be_u16(input)?;
+        let (input, _reserved) = parse_u8(input)?;
+        let (_, safi) = parse_u8(input)?;
+        Ok(RouteRefreshMessage { afi, safi })
     }
 }
 
@@ -1205,7 +1555,7 @@ pub enum ErrorSubcode {
     Update(UpdateErrorSubcode),
     HoldTime(u8),
     Fsm(u8),
-    Cease(u8),
+    Cease(CeaseErrorSubcode),
 }
 
 impl From<HeaderErrorSubcode> for ErrorSubcode {
@@ -1226,6 +1576,12 @@ impl From<UpdateErrorSubcode> for ErrorSubcode {
     }
 }
 
+impl From<CeaseErrorSubcode> for ErrorSubcode {
+    fn from(x: CeaseErrorSubcode) -> ErrorSubcode {
+        ErrorSubcode::Cease(x)
+    }
+}
+
 impl ErrorSubcode {
     fn as_u8(&self) -> u8 {
         match self {
@@ -1234,7 +1590,7 @@ impl ErrorSubcode {
             Self::Update(u) => *u as u8,
             Self::HoldTime(x) => *x,
             Self::Fsm(x) => *x,
-            Self::Cease(x) => *x,
+            Self::Cease(x) => *x as u8,
         }
     }
 }
@@ -1314,6 +1670,32 @@ pub enum UpdateErrorSubcode {
     MalformedAsPath,
 }
 
+/// Cease error subcode types from RFC 4486
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    TryFromPrimitive,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[repr(u8)]
+#[serde(rename_all = "snake_case")]
+pub enum CeaseErrorSubcode {
+    Unspecific = 0,
+    MaximumNumberofPrefixesReached,
+    AdministrativeShutdown,
+    PeerDeconfigured,
+    AdministrativeReset,
+    ConnectionRejected,
+    OtherConfigurationChange,
+    ConnectionCollisionResolution,
+    OutOfResources,
+}
+
 /// The IANA/IETF currently defines the following optional parameter types.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
@@ -1325,7 +1707,7 @@ pub enum OptionalParameter {
     Authentication, //TODO
 
     /// Code 2: RFC 5492
-    Capabilities(Vec<Capability>),
+    Capabilities(BTreeSet<Capability>),
 
     /// Unassigned
     Unassigned,
@@ -1376,10 +1758,10 @@ impl OptionalParameter {
                 Err(Error::ReservedOptionalParameter)
             }
             OptionalParameterCode::Capabilities => {
-                let mut result = Vec::new();
+                let mut result = BTreeSet::new();
                 while !cap_input.is_empty() {
                     let (out, cap) = Capability::from_wire(cap_input)?;
-                    result.push(cap);
+                    result.insert(cap);
                     cap_input = out;
                 }
                 Ok((input, OptionalParameter::Capabilities(result)))
@@ -1391,7 +1773,17 @@ impl OptionalParameter {
 
 /// The add path element comes as a BGP capability extension as described in
 /// RFC 7911.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    PartialOrd,
+    Ord,
+)]
 pub struct AddPathElement {
     /// Address family identifier.
     /// <https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml>
@@ -1409,7 +1801,17 @@ pub struct AddPathElement {
 // <https://github.com/oxidecomputer/maghemite/issues/80>
 
 /// Optional capabilities supported by a BGP implementation.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    PartialOrd,
+    Ord,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     /// Multiprotocol extensions as defined in RFC 2858
@@ -1418,9 +1820,7 @@ pub enum Capability {
         safi: u8,
     },
 
-    //TODO
-    /// Route refresh capability as defined in RFC 2918. Note this capability
-    /// is not yet implemented.
+    /// Route refresh capability as defined in RFC 2918.
     RouteRefresh {},
 
     //TODO
@@ -1480,7 +1880,7 @@ pub enum Capability {
 
     /// Add path capability as defined in RFC 7911.
     AddPath {
-        elements: Vec<AddPathElement>,
+        elements: BTreeSet<AddPathElement>,
     },
 
     //TODO
@@ -1561,7 +1961,6 @@ impl Capability {
                 Ok(buf)
             }
             Self::RouteRefresh {} => {
-                //TODO audit
                 let buf = vec![CapabilityCode::RouteRefresh as u8, 0];
                 Ok(buf)
             }
@@ -1617,7 +2016,6 @@ impl Capability {
                 Ok((input, Capability::MultiprotocolExtensions { afi, safi }))
             }
             CapabilityCode::RouteRefresh => {
-                //TODO handle for real, needed for arista
                 Ok((&input[len..], Capability::RouteRefresh {}))
             }
 
@@ -1630,12 +2028,12 @@ impl Capability {
                 Ok((input, Capability::FourOctetAs { asn }))
             }
             CapabilityCode::AddPath => {
-                let mut elements = Vec::new();
+                let mut elements = BTreeSet::new();
                 while !input.is_empty() {
                     let (remaining, afi) = be_u16(input)?;
                     let (remaining, safi) = be_u8(remaining)?;
                     let (remaining, send_receive) = be_u8(remaining)?;
-                    elements.push(AddPathElement {
+                    elements.insert(AddPathElement {
                         afi,
                         safi,
                         send_receive,
@@ -1909,7 +2307,7 @@ impl Capability {
 }
 
 /// The set of capability codes supported by this BGP implementation
-#[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
+#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Copy, Clone)]
 #[repr(u8)]
 pub enum CapabilityCode {
     /// RFC 5492
@@ -2042,6 +2440,138 @@ pub enum CapabilityCode {
     Experimental51,
 }
 
+impl From<Capability> for CapabilityCode {
+    fn from(value: Capability) -> Self {
+        match value {
+            Capability::MultiprotocolExtensions { afi: _, safi: _ } => {
+                CapabilityCode::MultiprotocolExtensions
+            }
+            Capability::RouteRefresh {} => CapabilityCode::RouteRefresh,
+            Capability::OutboundRouteFiltering {} => {
+                CapabilityCode::OutboundRouteFiltering
+            }
+            Capability::MultipleRoutesToDestination {} => {
+                CapabilityCode::MultipleRoutesToDestination
+            }
+            Capability::ExtendedNextHopEncoding {} => {
+                CapabilityCode::ExtendedNextHopEncoding
+            }
+            Capability::BGPExtendedMessage {} => {
+                CapabilityCode::BGPExtendedMessage
+            }
+            Capability::BgpSec {} => CapabilityCode::BgpSec,
+            Capability::MultipleLabels {} => CapabilityCode::MultipleLabels,
+            Capability::BgpRole {} => CapabilityCode::BgpRole,
+            Capability::GracefulRestart {} => CapabilityCode::GracefulRestart,
+            Capability::FourOctetAs { asn: _ } => CapabilityCode::FourOctetAs,
+            Capability::DynamicCapability {} => {
+                CapabilityCode::DynamicCapability
+            }
+            Capability::MultisessionBgp {} => CapabilityCode::MultisessionBgp,
+            Capability::AddPath { elements: _ } => CapabilityCode::AddPath,
+            Capability::EnhancedRouteRefresh {} => {
+                CapabilityCode::EnhancedRouteRefresh
+            }
+            Capability::LongLivedGracefulRestart {} => {
+                CapabilityCode::LongLivedGracefulRestart
+            }
+            Capability::RoutingPolicyDistribution {} => {
+                CapabilityCode::RoutingPolicyDistribution
+            }
+            Capability::Fqdn {} => CapabilityCode::Fqdn,
+            Capability::PrestandardRouteRefresh {} => {
+                CapabilityCode::PrestandardRouteRefresh
+            }
+            Capability::PrestandardOrfAndPd {} => {
+                CapabilityCode::PrestandardOrfAndPd
+            }
+            Capability::PrestandardOutboundRouteFiltering {} => {
+                CapabilityCode::PrestandardOutboundRouteFiltering
+            }
+            Capability::PrestandardMultisession {} => {
+                CapabilityCode::PrestandardMultisession
+            }
+            Capability::PrestandardFqdn {} => CapabilityCode::PrestandardFqdn,
+            Capability::PrestandardOperationalMessage {} => {
+                CapabilityCode::PrestandardOperationalMessage
+            }
+            Capability::Experimental { code } => match code {
+                0 => CapabilityCode::Experimental0,
+                1 => CapabilityCode::Experimental1,
+                2 => CapabilityCode::Experimental2,
+                3 => CapabilityCode::Experimental3,
+                4 => CapabilityCode::Experimental4,
+                5 => CapabilityCode::Experimental5,
+                6 => CapabilityCode::Experimental6,
+                7 => CapabilityCode::Experimental7,
+                8 => CapabilityCode::Experimental8,
+                9 => CapabilityCode::Experimental9,
+                10 => CapabilityCode::Experimental10,
+                11 => CapabilityCode::Experimental11,
+                12 => CapabilityCode::Experimental12,
+                13 => CapabilityCode::Experimental13,
+                14 => CapabilityCode::Experimental14,
+                15 => CapabilityCode::Experimental15,
+                16 => CapabilityCode::Experimental16,
+                17 => CapabilityCode::Experimental17,
+                18 => CapabilityCode::Experimental18,
+                19 => CapabilityCode::Experimental19,
+                20 => CapabilityCode::Experimental20,
+                21 => CapabilityCode::Experimental21,
+                22 => CapabilityCode::Experimental22,
+                23 => CapabilityCode::Experimental23,
+                24 => CapabilityCode::Experimental24,
+                25 => CapabilityCode::Experimental25,
+                26 => CapabilityCode::Experimental26,
+                27 => CapabilityCode::Experimental27,
+                28 => CapabilityCode::Experimental28,
+                29 => CapabilityCode::Experimental29,
+                30 => CapabilityCode::Experimental30,
+                31 => CapabilityCode::Experimental31,
+                32 => CapabilityCode::Experimental32,
+                33 => CapabilityCode::Experimental33,
+                34 => CapabilityCode::Experimental34,
+                35 => CapabilityCode::Experimental35,
+                36 => CapabilityCode::Experimental36,
+                37 => CapabilityCode::Experimental37,
+                38 => CapabilityCode::Experimental38,
+                39 => CapabilityCode::Experimental39,
+                40 => CapabilityCode::Experimental40,
+                41 => CapabilityCode::Experimental41,
+                42 => CapabilityCode::Experimental42,
+                43 => CapabilityCode::Experimental43,
+                44 => CapabilityCode::Experimental44,
+                45 => CapabilityCode::Experimental45,
+                46 => CapabilityCode::Experimental46,
+                47 => CapabilityCode::Experimental47,
+                48 => CapabilityCode::Experimental48,
+                49 => CapabilityCode::Experimental49,
+                50 => CapabilityCode::Experimental50,
+                51 => CapabilityCode::Experimental51,
+                _ => CapabilityCode::Experimental0,
+            },
+            Capability::Unassigned { code: _ } => CapabilityCode::Reserved,
+            Capability::Reserved { code: _ } => CapabilityCode::Reserved,
+        }
+    }
+}
+
+/// Address families supported by Maghemite BGP.
+#[repr(u16)]
+pub enum Afi {
+    /// Internet protocol version 4
+    Ipv4 = 1,
+    /// Internet protocol version 6
+    Ipv6 = 2,
+}
+
+/// Subsequent address families supported by Maghemite BGP.
+#[repr(u8)]
+pub enum Safi {
+    /// Network Layer Reachability Information used for unicast forwarding
+    NlriUnicast = 1,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2119,5 +2649,35 @@ mod tests {
         let um1 =
             UpdateMessage::from_wire(&buf).expect("update message from wire");
         assert_eq!(um0, um1);
+    }
+
+    #[test]
+    fn prefix_within() {
+        let prefixes: &[Prefix] = &[
+            "10.10.10.10/32".parse().unwrap(),
+            "10.10.10.0/24".parse().unwrap(),
+            "10.10.0.0/16".parse().unwrap(),
+            "10.0.0.0/8".parse().unwrap(),
+        ];
+
+        for i in 0..prefixes.len() {
+            for j in i..prefixes.len() {
+                // shorter prefixes contain longer or equal
+                assert!(prefixes[i].within(&prefixes[j]));
+                if i != j {
+                    // longer prefixes should not contain shorter
+                    assert!(!prefixes[j].within(&prefixes[i]))
+                }
+            }
+        }
+
+        let a: Prefix = "10.10.0.0/16".parse().unwrap();
+        let b: Prefix = "10.20.0.0/16".parse().unwrap();
+        assert!(!a.within(&b));
+        let a: Prefix = "10.10.0.0/24".parse().unwrap();
+        assert!(!a.within(&b));
+
+        let b: Prefix = "0.0.0.0/0".parse().unwrap();
+        assert!(a.within(&b));
     }
 }

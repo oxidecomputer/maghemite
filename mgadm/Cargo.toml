@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bgp = { path = "../bgp" }
 rdb = { path = "../rdb" }
 mg-common = { path = "../mg-common" }
 mg-admin-client = { path = "../mg-admin-client" }

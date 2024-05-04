@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+#![allow(clippy::large_enum_variant)]
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use mg_admin_client::Client;
@@ -15,13 +17,19 @@ mod bgp;
 mod static_routing;
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None, styles = oxide_cli_style())]
+#[command(
+    version,
+    about,
+    long_about = None,
+    styles = oxide_cli_style(),
+    infer_subcommands = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 
     /// Address of admin interface
-    #[arg(short, long, default_value = "::1")]
+    #[arg(short, env, long, default_value = "::1")]
     address: IpAddr,
 
     /// TCP port for admin interface

@@ -57,6 +57,7 @@ pub fn start_server(
     }))
 }
 
+#[macro_export]
 macro_rules! register {
     ($api:expr, $endpoint:expr) => {
         $api.register($endpoint).expect(stringify!($endpoint))
@@ -66,31 +67,9 @@ macro_rules! register {
 pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     let mut api = ApiDescription::new();
 
-    // bgp
-    register!(api, bgp_admin::get_routers);
-    register!(api, bgp_admin::new_router);
-    register!(api, bgp_admin::ensure_router_handler);
-    register!(api, bgp_admin::delete_router);
-    register!(api, bgp_admin::add_neighbor_handler);
-    register!(api, bgp_admin::ensure_neighbor_handler);
-    register!(api, bgp_admin::delete_neighbor);
-    register!(api, bgp_admin::originate4);
-    register!(api, bgp_admin::withdraw4);
-    register!(api, bgp_admin::get_originated4);
-    register!(api, bgp_admin::get_imported4);
-    register!(api, bgp_admin::bgp_apply);
-    register!(api, bgp_admin::graceful_shutdown);
-    register!(api, bgp_admin::message_history);
-
-    // static
-    register!(api, static_admin::static_add_v4_route);
-    register!(api, static_admin::static_remove_v4_route);
-    register!(api, static_admin::static_list_v4_routes);
-
-    // bfd
-    register!(api, bfd_admin::get_bfd_peers);
-    register!(api, bfd_admin::add_bfd_peer);
-    register!(api, bfd_admin::remove_bfd_peer);
+    bgp_admin::api_description(&mut api);
+    static_admin::api_description(&mut api);
+    bfd_admin::api_description(&mut api);
 
     api
 }

@@ -7,7 +7,7 @@
 /// code in this file is to implement BgpListener and BgpConnection such that
 /// the core functionality of the BGP upper-half in `session.rs` may be tested
 /// rapidly using a simulated network.
-use crate::connection::{BgpConnection, BgpListener};
+use crate::connection::{BgpConnection, BgpListener, MAX_MD5SIG_KEYLEN};
 use crate::error::Error;
 use crate::messages::Message;
 use crate::session::FsmEvent;
@@ -159,6 +159,8 @@ impl BgpConnection for BgpConnectionChannel {
         &self,
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
+        _ttl_sec: Option<u8>,
+        _md5_key: Option<String>,
     ) -> Result<(), Error> {
         debug!(self.log, "[{}] connecting", self.peer);
         let (local, remote) = channel();
@@ -208,6 +210,18 @@ impl BgpConnection for BgpConnectionChannel {
 
     fn local(&self) -> Option<SocketAddr> {
         Some(self.addr)
+    }
+
+    fn set_min_ttl(&self, _ttl: u8) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn set_md5_sig(
+        &self,
+        _keylen: u16,
+        _key: [u8; MAX_MD5SIG_KEYLEN],
+    ) -> Result<(), Error> {
+        Ok(())
     }
 }
 

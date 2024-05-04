@@ -1,0 +1,1 @@
+routing-policy policy all default-action bgp med set 99

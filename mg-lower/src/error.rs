@@ -6,4 +6,13 @@
 pub enum Error {
     #[error("dpd error {0}")]
     Dpd(#[from] dpd_client::Error<dpd_client::types::Error>),
+
+    #[error("tfport error {0}")]
+    Tfport(String),
+
+    #[error("no nexthop route {0}")]
+    NoNexthopRoute(String),
+
+    #[error("libnet error route {0}")]
+    LibnetRoute(#[from] libnet::route::Error),
 }

@@ -2,13 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::admin::HandlerContext;
-use bgp::session::DEFAULT_ROUTE_PRIORITY;
+use crate::{admin::HandlerContext, register};
 use dropshot::{
-    endpoint, HttpError, HttpResponseDeleted, HttpResponseOk,
+    endpoint, ApiDescription, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use rdb::{Prefix4, Route4ImportKey};
+use rdb::{db::Rib, Path, Prefix4, StaticRouteKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{net::Ipv4Addr, sync::Arc};
@@ -32,30 +31,23 @@ pub struct StaticRoute4List {
 pub struct StaticRoute4 {
     pub prefix: Prefix4,
     pub nexthop: Ipv4Addr,
+    pub vlan_id: Option<u16>,
 }
 
-impl From<StaticRoute4> for Route4ImportKey {
+impl From<StaticRoute4> for StaticRouteKey {
     fn from(val: StaticRoute4) -> Self {
-        Route4ImportKey {
-            prefix: val.prefix,
-            nexthop: val.nexthop,
-            // Having an ID of zero indicates this entry did not come from BGP.
-            // TODO: this could likely be done in a more rust-y way, or just
-            //       have a cleaner data structure organization.
-            id: 0,
-            //
-            priority: DEFAULT_ROUTE_PRIORITY,
+        StaticRouteKey {
+            prefix: val.prefix.into(),
+            nexthop: val.nexthop.into(),
+            vlan_id: val.vlan_id,
         }
     }
 }
 
-impl From<Route4ImportKey> for StaticRoute4 {
-    fn from(value: Route4ImportKey) -> Self {
-        Self {
-            prefix: value.prefix,
-            nexthop: value.nexthop,
-        }
-    }
+pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
+    register!(api, static_add_v4_route);
+    register!(api, static_remove_v4_route);
+    register!(api, static_list_v4_routes);
 }
 
 #[endpoint { method = PUT, path = "/static/route4" }]
@@ -63,7 +55,7 @@ pub async fn static_add_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddStaticRoute4Request>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let routes: Vec<Route4ImportKey> = request
+    let routes: Vec<StaticRouteKey> = request
         .into_inner()
         .routes
         .list
@@ -71,9 +63,10 @@ pub async fn static_add_v4_route(
         .map(Into::into)
         .collect();
     for r in routes {
+        let path = Path::for_static(r.nexthop, r.vlan_id);
         ctx.context()
             .db
-            .set_nexthop4(r, true)
+            .add_prefix_path(r.prefix, path, true)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     }
     Ok(HttpResponseUpdatedNoContent())
@@ -84,7 +77,7 @@ pub async fn static_remove_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<DeleteStaticRoute4Request>,
 ) -> Result<HttpResponseDeleted, HttpError> {
-    let routes: Vec<Route4ImportKey> = request
+    let routes: Vec<StaticRouteKey> = request
         .into_inner()
         .routes
         .list
@@ -92,9 +85,10 @@ pub async fn static_remove_v4_route(
         .map(Into::into)
         .collect();
     for r in routes {
+        let path = Path::for_static(r.nexthop, r.vlan_id);
         ctx.context()
             .db
-            .remove_nexthop4(r, true)
+            .remove_prefix_path(r.prefix, path, true)
             .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     }
     Ok(HttpResponseDeleted())
@@ -103,14 +97,7 @@ pub async fn static_remove_v4_route(
 #[endpoint { method = GET, path = "/static/route4" }]
 pub async fn static_list_v4_routes(
     ctx: RequestContext<Arc<HandlerContext>>,
-) -> Result<HttpResponseOk<StaticRoute4List>, HttpError> {
-    let list = ctx
-        .context()
-        .db
-        .get_imported4()
-        .into_iter()
-        .filter(|x| x.id == 0) // indicates not from bgp
-        .map(Into::into)
-        .collect();
-    Ok(HttpResponseOk(StaticRoute4List { list }))
+) -> Result<HttpResponseOk<Rib>, HttpError> {
+    let static_rib = ctx.context().db.static_rib();
+    Ok(HttpResponseOk(static_rib))
 }

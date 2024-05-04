@@ -12,6 +12,15 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
+pub const MAX_MD5SIG_KEYLEN: usize = libc::TCP_MD5SIG_MAXKEYLEN;
+
+#[cfg(target_os = "illumos")]
+pub const MAX_MD5SIG_KEYLEN: usize = 80;
+
+#[cfg(target_os = "macos")]
+pub const MAX_MD5SIG_KEYLEN: usize = 80;
+
 /// Implementors of this trait listen to and accept BGP connections.
 pub trait BgpListener<Cnx: BgpConnection> {
     /// Bind to an address and listen for connections.
@@ -48,6 +57,8 @@ pub trait BgpConnection: Send + Clone {
         &self,
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
+        min_ttl: Option<u8>,
+        md5_key: Option<String>,
     ) -> Result<(), Error>
     where
         Self: Sized;
@@ -61,4 +72,12 @@ pub trait BgpConnection: Send + Clone {
 
     // Return the local address being used for the connection.
     fn local(&self) -> Option<SocketAddr>;
+
+    fn set_min_ttl(&self, ttl: u8) -> Result<(), Error>;
+
+    fn set_md5_sig(
+        &self,
+        keylen: u16,
+        key: [u8; MAX_MD5SIG_KEYLEN],
+    ) -> Result<(), Error>;
 }

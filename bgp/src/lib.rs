@@ -13,8 +13,11 @@ pub mod error;
 pub mod fanout;
 pub mod log;
 pub mod messages;
+pub mod policy;
 pub mod router;
 pub mod session;
+
+mod rhai_integration;
 
 #[cfg(test)]
 #[macro_use]

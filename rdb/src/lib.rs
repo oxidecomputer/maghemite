@@ -7,7 +7,8 @@ pub mod types;
 
 pub use db::Db;
 pub use types::*;
+pub mod bestpath;
 pub mod error;
 
 /// The priority routes default to.
-pub const DEFAULT_ROUTE_PRIORITY: u64 = 100;
+pub const DEFAULT_ROUTE_PRIORITY: u64 = u64::MAX;

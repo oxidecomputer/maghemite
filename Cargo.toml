@@ -57,11 +57,11 @@ serde_repr = "0.1"
 anyhow = "1.0.82"
 hyper = "0.14.28"
 serde_json = "1.0.116"
-libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
 percent-encoding = "2.3.1"
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "compile-macos" }
 reqwest = { version = "0.11", features = ["json", "stream", "rustls-tls"] }
 progenitor = { git = "https://github.com/oxidecomputer/progenitor", branch = "main" }
-clap = { version = "4.5.4", features = ["derive", "unstable-styles"] }
+clap = { version = "4.5.4", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "2.1"
 ctrlc = { version = "3.4.4", features = ["termination"] }
@@ -86,14 +86,17 @@ omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch= "ma
 internal-dns = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
+libc = "0.2"
+itertools = "0.12"
+rhai = { version = "1", features = ["metadata", "sync"] }
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-branch = "master"
+rev = "7ee353a470ea59529ee1b34729681da887aa88ce"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-branch = "master"
+rev = "7ee353a470ea59529ee1b34729681da887aa88ce"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
@@ -104,3 +107,6 @@ package = "dpd-client"
 git = "https://github.com/oxidecomputer/dendrite"
 branch = "main"
 package = "common"
+
+[patch."https://github.com/oxidecomputer/netadm-sys"]
+libnet = { git = "https://www.github.com/oxidecomputer/netadm-sys.git", branch = "main" }

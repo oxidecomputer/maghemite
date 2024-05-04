@@ -4,9 +4,7 @@
 
 use crate::{admin::RouterStats, sm::SmContext};
 use chrono::{DateTime, Utc};
-use dropshot::{
-    ConfigDropshot, ConfigLogging, ConfigLoggingLevel, HandlerTaskMode,
-};
+use dropshot::{ConfigLogging, ConfigLoggingLevel};
 use mg_common::{
     counter,
     nexus::{local_underlay_address, resolve_nexus, run_oximeter},
@@ -291,11 +289,6 @@ pub fn start_server(
 ) -> anyhow::Result<JoinHandle<()>> {
     let addr = local_underlay_address()?;
     let sa = SocketAddr::new(addr, port);
-    let dropshot = ConfigDropshot {
-        bind_address: sa,
-        request_body_max_bytes: 1024 * 1024 * 1024,
-        default_handler_task_mode: HandlerTaskMode::Detached,
-    };
     let log_config = LogConfig::Config(ConfigLogging::StderrTerminal {
         level: ConfigLoggingLevel::Debug,
     });
@@ -315,7 +308,8 @@ pub fn start_server(
         id: registry.producer_id(),
         kind: ProducerKind::Service,
         address: sa,
-        base_route: "/collect".to_string(),
+        // NOTE: This is now unused and will be removed in the future.
+        base_route: String::new(),
         interval: Duration::from_secs(1),
     };
 
@@ -323,9 +317,9 @@ pub fn start_server(
         let nexus_addr = resolve_nexus(log.clone(), &dns_servers).await;
         let config = oximeter_producer::Config {
             server_info: producer_info,
-            registration_address: nexus_addr,
+            registration_address: Some(nexus_addr),
             log: log_config,
-            dropshot,
+            request_body_max_bytes: 1024 * 1024 * 1024,
         };
         run_oximeter(registry.clone(), config.clone(), log.clone()).await
     }))

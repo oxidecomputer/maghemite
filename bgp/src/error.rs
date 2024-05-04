@@ -2,9 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::net::IpAddr;
+use std::{fmt::Display, net::IpAddr};
 
 use num_enum::TryFromPrimitiveError;
+use rdb::Prefix4;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -101,11 +102,13 @@ pub enum Error {
         #[from] TryFromPrimitiveError<crate::messages::UpdateErrorSubcode>,
     ),
 
+    #[error("Cease error subcode")]
+    CeaseSubcode(
+        #[from] TryFromPrimitiveError<crate::messages::CeaseErrorSubcode>,
+    ),
+
     #[error("Path origin error")]
     PathOrigin(#[from] TryFromPrimitiveError<crate::messages::PathOrigin>),
-
-    #[error("Community value error")]
-    Community(#[from] TryFromPrimitiveError<crate::messages::Community>),
 
     #[error("message parse error")]
     Parse(nom::Err<(Vec<u8>, nom::error::ErrorKind)>),
@@ -143,6 +146,15 @@ pub enum Error {
     #[error("Self loop detected")]
     SelfLoopDetected,
 
+    #[error("AS path missing")]
+    MissingAsPath,
+
+    #[error("AS path is empty")]
+    EmptyAsPath,
+
+    #[error("Enforce-first-AS check failed: expected: {0}, found: {1:?}")]
+    EnforceAsFirst(u32, Vec<u32>),
+
     #[error("Invalid address")]
     InvalidAddress(String),
 
@@ -151,6 +163,54 @@ pub enum Error {
 
     #[error("Internal communication error {0}")]
     InternalCommunication(String),
+
+    #[error("Unexpected ASN {0}")]
+    UnexpectedAsn(ExpectationMismatch<u32>),
+
+    #[error("Hold time too small")]
+    HoldTimeTooSmall,
+
+    #[error("Invalid NLRI prefix")]
+    InvalidNlriPrefix(Prefix4),
+
+    #[error("Nexthop cannot equal prefix")]
+    NexthopSelf(IpAddr),
+
+    #[error("Nexthop missing")]
+    MissingNexthop,
+
+    #[error("Drop due to user defined policy")]
+    PolicyCheckFailed,
+
+    #[error("Policy error {0}")]
+    PolicyError(#[from] crate::policy::Error),
+
+    #[error("Message conversion: {0}")]
+    MessageConversion(#[from] crate::messages::MessageConvertError),
+
+    #[error("Changing peer address is not supported. Delete and recreate.")]
+    PeerAddressUpdate,
+
+    #[error("Failed to send event: {0}")]
+    EventSend(String),
+
+    #[error("Invalid keepalive time, must be smaller than hold time")]
+    KeepaliveLargerThanHoldTime,
+
+    #[error("Feature not yet supported")]
+    FeatureNotSupported,
+}
+
+#[derive(Debug)]
+pub struct ExpectationMismatch<T: Display> {
+    pub expected: T,
+    pub got: T,
+}
+
+impl<T: Display> Display for ExpectationMismatch<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "expected: {} got: {}", self.expected, self.got)
+    }
 }
 
 impl<'a> From<nom::Err<(&'a [u8], nom::error::ErrorKind)>> for Error {

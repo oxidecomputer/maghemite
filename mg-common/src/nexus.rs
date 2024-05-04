@@ -58,26 +58,10 @@ pub async fn run_oximeter(
     log: Logger,
 ) {
     let op = || async {
-        match oximeter_producer::Server::with_registry(
-            registry.clone(),
-            &config,
-        )
-        .await
-        {
-            Ok(s) => Ok(s),
-            Err(e) => {
-                if let oximeter_producer::Error::RegistrationError {
-                    retryable,
-                    msg: _,
-                } = &e
-                {
-                    if !retryable {
-                        return Err(backoff::Error::Permanent(e));
-                    }
-                }
-                Err(e.into())
-            }
-        }
+        oximeter_producer::Server::with_registry(registry.clone(), &config)
+            .map_err(|e| {
+                omicron_common::backoff::BackoffError::transient(e.to_string())
+            })
     };
 
     let log_failure = |e, delay| {

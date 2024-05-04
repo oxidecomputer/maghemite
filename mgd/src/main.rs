@@ -11,10 +11,10 @@ use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
 use mg_common::stats::MgLowerStats;
 use rand::Fill;
-use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
+use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo, Path};
 use signal::handle_signals;
 use slog::{error, Logger};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
@@ -23,6 +23,7 @@ use uuid::Uuid;
 mod admin;
 mod bfd_admin;
 mod bgp_admin;
+mod bgp_param;
 mod error;
 mod oxstats;
 mod signal;
@@ -211,18 +212,19 @@ fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
 
 fn start_bgp_routers(
     context: Arc<HandlerContext>,
-    routers: HashMap<u32, BgpRouterInfo>,
+    routers: BTreeMap<u32, BgpRouterInfo>,
     neighbors: Vec<BgpNeighborInfo>,
 ) {
     slog::info!(context.log, "bgp routers: {:#?}", routers);
     let mut guard = context.bgp.router.lock().expect("lock bgp routers");
     for (asn, info) in routers {
-        bgp_admin::add_router(
+        bgp_admin::helpers::add_router(
             context.clone(),
-            bgp_admin::NewRouterRequest {
+            bgp_param::Router {
                 asn,
                 id: info.id,
                 listen: info.listen.clone(),
+                graceful_shutdown: info.graceful_shutdown,
             },
             &mut guard,
         )
@@ -231,10 +233,12 @@ fn start_bgp_routers(
     drop(guard);
 
     for nbr in neighbors {
-        bgp_admin::ensure_neighbor(
+        bgp_admin::helpers::add_neighbor(
             context.clone(),
-            bgp_admin::AddNeighborRequest {
+            bgp_param::Neighbor {
                 asn: nbr.asn,
+                remote_asn: nbr.remote_asn,
+                min_ttl: nbr.min_ttl,
                 name: nbr.name.clone(),
                 host: nbr.host,
                 hold_time: nbr.hold_time,
@@ -245,7 +249,16 @@ fn start_bgp_routers(
                 resolution: nbr.resolution,
                 group: nbr.group.clone(),
                 passive: nbr.passive,
+                md5_auth_key: nbr.md5_auth_key.clone(),
+                multi_exit_discriminator: nbr.multi_exit_discriminator,
+                communities: nbr.communities.clone(),
+                local_pref: nbr.local_pref,
+                enforce_first_as: nbr.enforce_first_as,
+                allow_import: nbr.allow_import.clone(),
+                allow_export: nbr.allow_export.clone(),
+                vlan_id: nbr.vlan_id,
             },
+            true,
         )
         .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
     }
@@ -267,9 +280,11 @@ fn initialize_static_routes(db: &rdb::Db) {
         .get_static4()
         .expect("failed to get static routes from db");
     for route in &routes {
-        db.set_nexthop4(*route, false).unwrap_or_else(|e| {
-            panic!("failed to initialize static route {route:#?}: {e}")
-        });
+        let path = Path::for_static(route.nexthop, route.vlan_id);
+        db.add_prefix_path(route.prefix, path, true)
+            .unwrap_or_else(|e| {
+                panic!("failed to initialize static route {route:#?}: {e}")
+            })
     }
 }
 

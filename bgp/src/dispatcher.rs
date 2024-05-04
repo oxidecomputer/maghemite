@@ -51,7 +51,7 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                     continue;
                 }
             };
-            let conn = match listener.accept(
+            let accepted = match listener.accept(
                 self.log.clone(),
                 self.addr_to_session.clone(),
                 Duration::from_millis(100),
@@ -65,13 +65,13 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                     continue;
                 }
             };
-            let addr = conn.peer().ip();
+            let addr = accepted.peer().ip();
             match lock!(self.addr_to_session).get(&addr) {
                 Some(tx) => {
-                    if let Err(e) = tx.send(FsmEvent::Connected(conn)) {
+                    if let Err(e) = tx.send(FsmEvent::Connected(accepted)) {
                         slog::error!(
                             self.log,
-                            "failed to send connected envent to session: {e}",
+                            "failed to send connected event to session: {e}",
                         );
                         continue;
                     }

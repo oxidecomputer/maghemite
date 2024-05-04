@@ -7,20 +7,27 @@ use crate::config::RouterConfig;
 use crate::connection::BgpConnection;
 use crate::error::Error;
 use crate::fanout::{Egress, Fanout};
+use crate::messages::PathOrigin;
 use crate::messages::{
     As4PathSegment, AsPathType, Community, PathAttribute, PathAttributeValue,
-    PathOrigin, Prefix, UpdateMessage,
+    Prefix, UpdateMessage,
 };
+use crate::policy::load_checker;
+use crate::policy::load_shaper;
 use crate::session::{FsmEvent, NeighborInfo, SessionInfo, SessionRunner};
 use mg_common::{lock, read_lock, write_lock};
+use rdb::Prefix4;
 use rdb::{Asn, Db};
+use rhai::AST;
 use slog::Logger;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
+use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::spawn;
 use std::time::Duration;
@@ -36,6 +43,9 @@ pub struct Router<Cnx: BgpConnection> {
 
     /// A set of BGP session runners indexed by peer IP address.
     pub sessions: Mutex<BTreeMap<IpAddr, Arc<SessionRunner<Cnx>>>>,
+
+    /// Compiled policy programs.
+    pub policy: Policy,
 
     /// The logger used by this router.
     log: Logger,
@@ -78,6 +88,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             db,
             sessions: Mutex::new(BTreeMap::new()),
             fanout: Arc::new(RwLock::new(Fanout::default())),
+            policy: Policy::default(),
         }
     }
 
@@ -119,6 +130,26 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         fanout.remove_egress(peer);
     }
 
+    pub fn ensure_session(
+        self: &Arc<Self>,
+        peer: PeerConfig,
+        bind_addr: SocketAddr,
+        event_tx: Sender<FsmEvent<Cnx>>,
+        event_rx: Receiver<FsmEvent<Cnx>>,
+        info: SessionInfo,
+    ) -> Result<EnsureSessionResult<Cnx>, Error> {
+        let a2s = lock!(self.addr_to_session);
+        if a2s.contains_key(&peer.host.ip()) {
+            Ok(EnsureSessionResult::Updated(
+                self.update_session(peer, info)?,
+            ))
+        } else {
+            Ok(EnsureSessionResult::New(self.new_session_locked(
+                a2s, peer, bind_addr, event_tx, event_rx, info,
+            )?))
+        }
+    }
+
     pub fn new_session(
         self: &Arc<Self>,
         peer: PeerConfig,
@@ -127,16 +158,30 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        let mut a2s = lock!(self.addr_to_session);
+        let a2s = lock!(self.addr_to_session);
         if a2s.contains_key(&peer.host.ip()) {
-            return Err(Error::PeerExists);
+            Err(Error::PeerExists)
+        } else {
+            self.new_session_locked(
+                a2s, peer, bind_addr, event_tx, event_rx, info,
+            )
         }
+    }
 
+    pub fn new_session_locked(
+        self: &Arc<Self>,
+        mut a2s: MutexGuard<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>,
+        peer: PeerConfig,
+        bind_addr: SocketAddr,
+        event_tx: Sender<FsmEvent<Cnx>>,
+        event_rx: Receiver<FsmEvent<Cnx>>,
+        info: SessionInfo,
+    ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         a2s.insert(peer.host.ip(), event_tx.clone());
         drop(a2s);
 
         let neighbor = NeighborInfo {
-            name: peer.name.clone(),
+            name: Arc::new(Mutex::new(peer.name.clone())),
             host: peer.host,
         };
 
@@ -146,7 +191,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             Duration::from_secs(peer.hold_time),
             Duration::from_secs(peer.idle_hold_time),
             Duration::from_secs(peer.delay_open),
-            Arc::new(Mutex::new(info)),
+            Arc::new(Mutex::new(info.clone())),
             event_rx,
             event_tx.clone(),
             neighbor.clone(),
@@ -174,6 +219,21 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(runner)
     }
 
+    pub fn update_session(
+        self: &Arc<Self>,
+        peer: PeerConfig,
+        info: SessionInfo,
+    ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
+        let session = match lock!(self.sessions).get(&peer.host.ip()) {
+            None => return Err(Error::UnknownPeer(peer.host.ip())),
+            Some(s) => s.clone(),
+        };
+
+        session.update_session_parameters(peer, info)?;
+
+        Ok(session)
+    }
+
     pub fn delete_session(&self, addr: IpAddr) {
         lock!(self.addr_to_session).remove(&addr);
         self.remove_fanout(addr);
@@ -189,47 +249,78 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    pub fn originate4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+    pub fn create_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+        let prefix4: Vec<Prefix4> =
+            prefixes.iter().cloned().map(|x| x.as_prefix4()).collect();
+        self.db.create_origin4(&prefix4)?;
+        self.announce_origin4(&prefixes);
+        Ok(())
+    }
+
+    pub fn set_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+        let origin4 = self.db.get_origin4()?;
+        let current: BTreeSet<&Prefix4> = origin4.iter().collect();
+
+        let prefix4: Vec<Prefix4> =
+            prefixes.iter().cloned().map(|x| x.as_prefix4()).collect();
+
+        let new: BTreeSet<&Prefix4> = prefix4.iter().collect();
+
+        let to_withdraw: Vec<_> =
+            current.difference(&new).map(|x| (**x).into()).collect();
+
+        let to_announce: Vec<_> =
+            new.difference(&current).map(|x| (**x).into()).collect();
+
+        self.db.set_origin4(&prefix4)?;
+
+        self.withdraw_origin4(&to_withdraw);
+        self.announce_origin4(&to_announce);
+        Ok(())
+    }
+
+    pub fn clear_origin4(&self) -> Result<(), Error> {
+        let current = self.db.get_origin4()?;
+        let prefix: Vec<Prefix> =
+            current.iter().cloned().map(Into::into).collect();
+        self.withdraw_origin4(&prefix);
+        self.db.clear_origin4()?;
+        Ok(())
+    }
+
+    fn announce_origin4(&self, prefixes: &Vec<Prefix>) {
         let mut update = UpdateMessage {
             path_attributes: self.base_attributes(),
             ..Default::default()
         };
 
-        for p in &prefixes {
+        for p in prefixes {
             update.nlri.push(p.clone());
-            self.db.add_origin4(p.into())?;
         }
 
         if !update.nlri.is_empty() {
             read_lock!(self.fanout).send_all(&update);
         }
-
-        Ok(())
     }
 
-    pub fn withdraw4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+    pub fn withdraw_origin4(&self, prefixes: &Vec<Prefix>) {
         let mut update = UpdateMessage {
             path_attributes: self.base_attributes(),
             ..Default::default()
         };
 
-        for p in &prefixes {
+        for p in prefixes {
             update.withdrawn.push(p.clone());
-            self.db.remove_origin4(p.into())?;
         }
 
         if !update.withdrawn.is_empty() {
             read_lock!(self.fanout).send_all(&update);
         }
-
-        Ok(())
     }
 
     pub fn base_attributes(&self) -> Vec<PathAttribute> {
-        let mut path_attributes = vec![
-            //TODO hardcode
-            PathAttributeValue::Origin(PathOrigin::Egp).into(),
-        ];
+        let mut path_attributes =
+            vec![PathAttributeValue::Origin(PathOrigin::Igp).into()];
 
         if self.graceful_shutdown.load(Ordering::Relaxed) {
             path_attributes.push(
@@ -276,8 +367,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn graceful_shutdown(&self, enabled: bool) -> Result<(), Error> {
-        self.graceful_shutdown.store(enabled, Ordering::Relaxed);
-        self.announce_all()
+        if enabled != self.graceful_shutdown.load(Ordering::Relaxed) {
+            self.graceful_shutdown.store(enabled, Ordering::Relaxed);
+            self.announce_all()?;
+        }
+        Ok(())
     }
 
     pub fn in_graceful_shutdown(&self) -> bool {
@@ -285,7 +379,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     fn announce_all(&self) -> Result<(), Error> {
-        let originated = self.db.get_originated4()?;
+        let originated = self.db.get_origin4()?;
 
         let mut update = UpdateMessage {
             path_attributes: self.base_attributes(),
@@ -293,10 +387,98 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         };
         for p in &originated {
             update.nlri.push((*p).into());
-            self.db.add_origin4(*p)?;
         }
         read_lock!(self.fanout).send_all(&update);
 
         Ok(())
+    }
+}
+
+pub enum EnsureSessionResult<Cnx: BgpConnection + 'static> {
+    New(Arc<SessionRunner<Cnx>>),
+    Updated(Arc<SessionRunner<Cnx>>),
+}
+
+#[derive(Default, Clone)]
+pub struct Policy {
+    pub shaper: Arc<RwLock<Option<AST>>>,
+    pub checker: Arc<RwLock<Option<AST>>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum LoadPolicyError {
+    #[error("Policy program compilation error: {0}")]
+    Compilation(String),
+
+    #[error("Policy program already exists")]
+    Confilct,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum UnloadPolicyError {
+    #[error("Policy program not loaded")]
+    NotFound,
+}
+
+impl Policy {
+    // Load a shaper and return the previously loaded shaper (if any).
+    pub fn load_shaper(
+        &self,
+        program_source: &str,
+        overwrite: bool,
+    ) -> Result<Option<AST>, LoadPolicyError> {
+        let mut current = self.shaper.write().unwrap();
+        if current.is_some() && !overwrite {
+            return Err(LoadPolicyError::Confilct);
+        }
+        let ast = load_shaper(program_source)
+            .map_err(|e| LoadPolicyError::Compilation(e.to_string()))?;
+        Ok(current.replace(ast))
+    }
+
+    pub fn unload_shaper(&self) -> Result<AST, UnloadPolicyError> {
+        let mut current = self.shaper.write().unwrap();
+        if current.is_none() {
+            return Err(UnloadPolicyError::NotFound);
+        }
+        Ok(current.take().unwrap())
+    }
+
+    pub fn shaper_source(&self) -> Option<String> {
+        self.shaper
+            .read()
+            .unwrap()
+            .clone()
+            .and_then(|ast| ast.source().map(|s| s.to_owned()))
+    }
+
+    pub fn load_checker(
+        &self,
+        program_source: &str,
+        overwrite: bool,
+    ) -> Result<Option<AST>, LoadPolicyError> {
+        let mut current = self.checker.write().unwrap();
+        if current.is_some() && !overwrite {
+            return Err(LoadPolicyError::Confilct);
+        }
+        let ast = load_checker(program_source)
+            .map_err(|e| LoadPolicyError::Compilation(e.to_string()))?;
+        Ok(current.replace(ast))
+    }
+
+    pub fn unload_checker(&self) -> Result<AST, UnloadPolicyError> {
+        let mut current = self.checker.write().unwrap();
+        if current.is_none() {
+            return Err(UnloadPolicyError::NotFound);
+        }
+        Ok(current.take().unwrap())
+    }
+
+    pub fn checker_source(&self) -> Option<String> {
+        self.checker
+            .read()
+            .unwrap()
+            .clone()
+            .and_then(|ast| ast.source().map(|s| s.to_owned()))
     }
 }

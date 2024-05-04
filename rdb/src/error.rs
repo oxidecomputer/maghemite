@@ -15,4 +15,7 @@ pub enum Error {
 
     #[error("db value error {0}")]
     DbValue(String),
+
+    #[error("Conflict {0}")]
+    Conflict(String),
 }

@@ -1,0 +1,36 @@
+name: pop
+topology:
+  nodes:
+    transit:
+      kind: nokia_srlinux
+      image: ghcr.io/nokia/srlinux
+    cdn:
+      kind: nokia_srlinux
+      image: ghcr.io/nokia/srlinux
+    pcwest:
+      kind: nokia_srlinux
+      image: ghcr.io/nokia/srlinux
+    pceast:
+      kind: nokia_srlinux
+      image: ghcr.io/nokia/srlinux
+    oxpop:
+      kind: linux
+      image: ubuntu:22.04
+      binds:
+        - /home/ry/src/maghemite/target/debug/mgd:/opt/oxide/mgd
+        - ./run-mgd.sh:/opt/oxide/run-mgd.sh
+      ports:
+        - 4676:4676/tcp
+      cmd: /opt/oxide/run-mgd.sh
+  links:
+    - endpoints: ["transit:e1-1", "oxpop:eth1"]
+    - endpoints: ["transit:e1-2", "host:transit_e1-2"]
+
+    - endpoints: ["cdn:e1-1", "oxpop:eth2"]
+    - endpoints: ["cdn:e1-2", "host:cdn_e1-2"]
+
+    - endpoints: ["pcwest:e1-1", "oxpop:eth3"]
+    - endpoints: ["pcwest:e1-2", "host:pcwest_e1-2"]
+
+    - endpoints: ["pceast:e1-1", "oxpop:eth4"]
+    - endpoints: ["pceast:e1-2", "host:pceast_e1-2"]

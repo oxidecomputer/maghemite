@@ -29,7 +29,7 @@ macro_rules! trc {
         slog::trace!(
             $self.log,
             "[{}] {}",
-            $self.neighbor.name,
+            lock!($self.neighbor.name),
             format!($($args)+)
         )
     }
@@ -41,7 +41,7 @@ macro_rules! dbg {
         slog::debug!(
             $self.log,
             "[{}] {}",
-            $self.neighbor.name,
+            lock!($self.neighbor.name),
             format!($($args)+)
         )
     }
@@ -53,7 +53,7 @@ macro_rules! inf {
         slog::info!(
             $self.log,
             "[{}] {}",
-            $self.neighbor.name,
+            lock!($self.neighbor.name),
             format!($($args)+)
         )
     }
@@ -65,7 +65,7 @@ macro_rules! wrn {
         slog::warn!(
             $self.log,
             "[{}] {}",
-            $self.neighbor.name,
+            lock!($self.neighbor.name),
             format!($($args)+)
         )
     }
@@ -77,7 +77,7 @@ macro_rules! err {
         slog::error!(
             $self.log,
             "[{}] {}",
-            $self.neighbor.name,
+            lock!($self.neighbor.name),
             format!($($args)+)
         )
     }
