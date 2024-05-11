@@ -122,7 +122,7 @@ pub(crate) fn add_peer(
     let dispatcher = ctx.bfd.dispatcher.clone();
     let db = ctx.db.clone();
 
-    if daemon.sessions.get(&rq.peer).is_some() {
+    if daemon.sessions.contains_key(&rq.peer) {
         return Ok(());
     }
 

@@ -776,7 +776,7 @@ fn handle_underlay_update(update: &UnderlayUpdate, ctx: &HandlerContext) {
             prefix.destination.len,
             ctx.peer.into(),
         );
-        r.ifname = ctx.ctx.config.if_name.clone();
+        r.ifname.clone_from(&ctx.ctx.config.if_name);
         add.push(r);
     }
     db.import(&import);
@@ -814,7 +814,7 @@ fn handle_underlay_update(update: &UnderlayUpdate, ctx: &HandlerContext) {
                 w.destination.len,
                 w.nexthop.into(),
             );
-            r.ifname = ctx.ctx.config.if_name.clone();
+            r.ifname.clone_from(&ctx.ctx.config.if_name);
             del.push(r);
         }
     }

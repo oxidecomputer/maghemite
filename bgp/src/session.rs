@@ -2334,7 +2334,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         if current.communities != info.communities {
-            current.communities = info.communities.clone();
+            current.communities.clone_from(&info.communities);
             path_attributes_changed = true;
         }
 

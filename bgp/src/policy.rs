@@ -97,7 +97,7 @@ impl ShaperResult {
         // if we were emitting before and dropping now, that means all nlris
         // need to be sent out as withdraws.
         let mut new = b.clone();
-        new.withdrawn = new.nlri.clone();
+        new.withdrawn.clone_from(&new.nlri);
         new.nlri.clear();
         new
     }
