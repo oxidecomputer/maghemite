@@ -289,7 +289,7 @@ impl BgpConnection for BgpConnectionTcp {
         _keylen: u16,
         _key: [u8; MAX_MD5SIG_KEYLEN],
     ) -> Result<(), Error> {
-        return Err(Error::FeatureNotSupported);
+        Err(Error::FeatureNotSupported)
     }
 }
 

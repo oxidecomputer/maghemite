@@ -9,6 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
+use std::fmt::Display;
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -110,9 +111,9 @@ pub struct Route4Key {
     pub nexthop: Ipv4Addr,
 }
 
-impl ToString for Route4Key {
-    fn to_string(&self) -> String {
-        format!("{}/{}", self.nexthop, self.prefix)
+impl Display for Route4Key {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.nexthop, self.prefix)
     }
 }
 
@@ -143,9 +144,9 @@ pub struct Route4MetricKey {
     pub metric: String,
 }
 
-impl ToString for Route4MetricKey {
-    fn to_string(&self) -> String {
-        format!("{}/{}", self.route.to_string(), self.metric,)
+impl Display for Route4MetricKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.route, self.metric,)
     }
 }
 
@@ -161,9 +162,9 @@ pub struct Policy4Key {
     pub tag: String,
 }
 
-impl ToString for Policy4Key {
-    fn to_string(&self) -> String {
-        format!("{}/{}/{}", self.peer, self.prefix, self.tag,)
+impl Display for Policy4Key {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}/{}", self.peer, self.prefix, self.tag,)
     }
 }
 

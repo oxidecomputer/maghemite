@@ -256,7 +256,7 @@ impl State for Init {
                     continue;
                 }
             };
-            self.ctx.config.if_name = info.ifname.clone();
+            self.ctx.config.if_name.clone_from(&info.ifname);
             self.ctx.config.if_index = info.index as u32;
             self.ctx.config.addr = addr;
             inf!(
@@ -457,7 +457,7 @@ impl Exchange {
         let mut routes: Vec<crate::sys::Route> = Vec::new();
         for x in &to_remove {
             let mut r: crate::sys::Route = x.clone().into();
-            r.ifname = self.ctx.config.if_name.clone();
+            r.ifname.clone_from(&self.ctx.config.if_name);
             routes.push(r);
         }
         crate::sys::remove_underlay_routes(
