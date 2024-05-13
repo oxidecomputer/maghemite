@@ -119,12 +119,12 @@ checksum = "25bdb32cbbdce2b519a9cd7df3a678443100e265d5e25ca763b7572a5104f5f3"
 [[package]]
 name = "api_identity"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -176,7 +176,7 @@ checksum = "16e62a023e7c117e27523144c5d2459f4397fcc3cab0085af8e2224f643a0193"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -187,7 +187,7 @@ checksum = "c6fa2087f2753a7da8cc1c0dbfcf89579dd57458e36769de5ac750b4671737ca"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -473,7 +473,7 @@ dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -694,7 +694,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "strsim 0.10.0",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -705,7 +705,7 @@ checksum = "a668eda54683121533a393014d8692171709ff57a7d61f187b6e782719f8933f"
 dependencies = [
  "darling_core",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -721,12 +721,12 @@ dependencies = [
  "anyhow",
  "chrono",
  "common",
- "dpd-client 0.1.0 (git+https://github.com/oxidecomputer/dendrite?branch=main)",
+ "dpd-client",
  "dropshot",
  "hostname 0.3.1",
  "hyper",
  "ispf",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "mg-common",
  "omicron-common",
  "opte-ioctl",
@@ -786,9 +786,9 @@ dependencies = [
  "anyhow",
  "clap",
  "ddm",
- "dpd-client 0.1.0 (git+https://github.com/oxidecomputer/dendrite?branch=main)",
+ "dpd-client",
  "hostname 0.3.1",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "mg-common",
  "slog",
  "slog-async",
@@ -806,9 +806,9 @@ checksum = "ffe7ed1d93f4553003e20b629abe9085e1e81b1429520f897f8f8860bc6dfc21"
 
 [[package]]
 name = "defmt"
-version = "0.3.6"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3939552907426de152b3c2c6f51ed53f98f448babd26f28694c95f5906194595"
+checksum = "a22725573c1874522d6b853e12cb6c3c08cea5ff79fdc69be544087ac7080439"
 dependencies = [
  "bitflags 1.3.2",
  "defmt-macros",
@@ -816,15 +816,15 @@ dependencies = [
 
 [[package]]
 name = "defmt-macros"
-version = "0.3.7"
+version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18bdc7a7b92ac413e19e95240e75d3a73a8d8e78aa24a594c22cbb4d44b4bbda"
+checksum = "00b2cc6a76c0932c749dfe6f8191040c880830aa80c07143cd1d0adb5717abd6"
 dependencies = [
  "defmt-parser",
  "proc-macro-error",
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -854,7 +854,7 @@ dependencies = [
  "darling",
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -911,7 +911,7 @@ dependencies = [
 [[package]]
 name = "dns-service-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -962,36 +962,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "dpd-client"
-version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
-dependencies = [
- "anyhow",
- "chrono",
- "futures",
- "http 0.2.12",
- "ipnetwork",
- "omicron-workspace-hack",
- "omicron-zone-package",
- "progenitor",
- "progenitor-client",
- "quote",
- "rand",
- "regress",
- "reqwest",
- "rustfmt-wrapper",
- "schemars",
- "serde",
- "serde_json",
- "slog",
- "toml 0.8.12",
- "uuid",
-]
-
-[[package]]
 name = "dropshot"
 version = "0.10.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#283d8978abfcfa9b720a155b18cc124c82cb29c9"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#123b96d1942ffb48a8b1065360c44ae9aacb44eb"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1037,13 +1010,13 @@ dependencies = [
 [[package]]
 name = "dropshot_endpoint"
 version = "0.10.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#283d8978abfcfa9b720a155b18cc124c82cb29c9"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#123b96d1942ffb48a8b1065360c44ae9aacb44eb"
 dependencies = [
  "proc-macro2",
  "quote",
  "serde",
  "serde_tokenstream",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -1196,7 +1169,7 @@ checksum = "1a5c6c585bc94aaf2c7b51dd4c2ba22680844aba4c687be581871a6f518c5742"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -1286,7 +1259,7 @@ checksum = "87750cf4b7a4c0625b1529e4c543c2182106e4dedc60a2a6455e00d212c489ac"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -1331,7 +1304,7 @@ dependencies = [
 [[package]]
 name = "gateway-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1507,15 +1480,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "home"
-version = "0.5.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3d1354bf6b7235cb4a0576c2619fd4ed18183f689b12b006a0ee7329eeff9a5"
-dependencies = [
- "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1752,7 +1716,7 @@ dependencies = [
 [[package]]
 name = "internal-dns"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1861,7 +1825,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/opte?rev=4cc823b50d3e4a629cdfaab2b3d3382514174ba9#4cc823b50d3e4a629cdfaab2b3d3382514174ba9"
 dependencies = [
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -1902,7 +1866,7 @@ dependencies = [
  "colored",
  "futures",
  "libc",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "portpicker",
  "propolis-client",
  "propolis-server-config",
@@ -1934,7 +1898,26 @@ checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://www.github.com/oxidecomputer/netadm-sys.git?branch=main#4ceaf96e02acb8258ea4aa403326c08932324835"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#4ceaf96e02acb8258ea4aa403326c08932324835"
+dependencies = [
+ "anyhow",
+ "cfg-if",
+ "colored",
+ "dlpi",
+ "libc",
+ "num_enum 0.5.11",
+ "nvpair",
+ "nvpair-sys",
+ "rusty-doors",
+ "socket2 0.4.10",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "libnet"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/netadm-sys#4ceaf96e02acb8258ea4aa403326c08932324835"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -2099,7 +2082,7 @@ dependencies = [
  "backoff",
  "clap",
  "internal-dns",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "omicron-common",
  "oximeter",
  "oximeter-producer",
@@ -2130,9 +2113,9 @@ dependencies = [
  "anyhow",
  "common",
  "ddm-admin-client",
- "dpd-client 0.1.0 (git+https://github.com/oxidecomputer/dendrite?branch=main)",
+ "dpd-client",
  "http 0.2.12",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "mg-common",
  "rdb",
  "slog",
@@ -2156,7 +2139,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ddm-admin-client",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -2319,7 +2302,7 @@ dependencies = [
 [[package]]
 name = "nexus-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "chrono",
  "futures",
@@ -2342,7 +2325,7 @@ dependencies = [
 [[package]]
 name = "nexus-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "anyhow",
  "api_identity",
@@ -2513,7 +2496,7 @@ dependencies = [
  "proc-macro-crate 3.1.0",
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -2552,7 +2535,7 @@ dependencies = [
 [[package]]
 name = "omicron-common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "anyhow",
  "api_identity",
@@ -2560,7 +2543,6 @@ dependencies = [
  "backoff",
  "camino",
  "chrono",
- "dpd-client 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
  "dropshot",
  "futures",
  "hex",
@@ -2594,7 +2576,7 @@ dependencies = [
 [[package]]
 name = "omicron-passwords"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "argon2",
  "omicron-workspace-hack",
@@ -2608,7 +2590,7 @@ dependencies = [
 [[package]]
 name = "omicron-uuid-kinds"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "newtype-uuid",
  "paste",
@@ -2693,7 +2675,7 @@ checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -2750,7 +2732,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/opte?rev=4cc823b50d3e4a629cdfaab2b3d3382514174ba9#4cc823b50d3e4a629cdfaab2b3d3382514174ba9"
 dependencies = [
  "libc",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
  "opte",
  "oxide-vpc",
  "postcard",
@@ -2776,7 +2758,7 @@ dependencies = [
 [[package]]
 name = "oximeter"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "bytes",
  "chrono",
@@ -2796,18 +2778,18 @@ dependencies = [
 [[package]]
 name = "oximeter-macro-impl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
 name = "oximeter-producer"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "chrono",
  "dropshot",
@@ -2906,7 +2888,7 @@ dependencies = [
  "regex",
  "regex-syntax",
  "structmeta",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -2963,7 +2945,7 @@ dependencies = [
  "pest_meta",
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -3127,7 +3109,7 @@ dependencies = [
 [[package]]
 name = "progenitor"
 version = "0.6.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#0aeb3a723ec515561a93ab38ae4da5cbf071306f"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#c5e9390b94117fd7d184bb8776956affaa749d40"
 dependencies = [
  "progenitor-client",
  "progenitor-impl",
@@ -3138,7 +3120,7 @@ dependencies = [
 [[package]]
 name = "progenitor-client"
 version = "0.6.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#0aeb3a723ec515561a93ab38ae4da5cbf071306f"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#c5e9390b94117fd7d184bb8776956affaa749d40"
 dependencies = [
  "bytes",
  "futures-core",
@@ -3152,7 +3134,7 @@ dependencies = [
 [[package]]
 name = "progenitor-impl"
 version = "0.6.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#0aeb3a723ec515561a93ab38ae4da5cbf071306f"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#c5e9390b94117fd7d184bb8776956affaa749d40"
 dependencies = [
  "getopts",
  "heck 0.5.0",
@@ -3165,7 +3147,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "syn 2.0.62",
+ "syn 2.0.63",
  "thiserror",
  "typify",
  "unicode-ident",
@@ -3174,7 +3156,7 @@ dependencies = [
 [[package]]
 name = "progenitor-macro"
 version = "0.6.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#0aeb3a723ec515561a93ab38ae4da5cbf071306f"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#c5e9390b94117fd7d184bb8776956affaa749d40"
 dependencies = [
  "openapiv3",
  "proc-macro2",
@@ -3185,7 +3167,7 @@ dependencies = [
  "serde_json",
  "serde_tokenstream",
  "serde_yaml",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -3463,7 +3445,7 @@ checksum = "59aecf17969c04b9c0c5d21f6bc9da9fec9dd4980e64d1871443a476589d8c86"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -3520,19 +3502,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c5f5376ea5e30ce23c03eb77cbe4962b988deead10910c372b226388b594c084"
 dependencies = [
  "semver 0.1.20",
-]
-
-[[package]]
-name = "rustfmt-wrapper"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1adc9dfed5cc999077978cc7163b9282c5751c8d39827c4ea8c8c220ca5a440"
-dependencies = [
- "serde",
- "tempfile",
- "thiserror",
- "toml 0.8.12",
- "toolchain_find",
 ]
 
 [[package]]
@@ -3692,7 +3661,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_derive_internals",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -3718,7 +3687,7 @@ checksum = "7f81c2fde025af7e69b1d1420531c8a8811ca898919db177141a85313b1cb932"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -3786,7 +3755,7 @@ checksum = "c5e405930b9796f1c00bee880d03fc7e0bb4b9a11afc776885ffe84320da2865"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -3797,7 +3766,7 @@ checksum = "330f01ce65a3a5fe59a60c82f3c9a024b573b8a6e875bd233fe5f934e71d54e3"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -3838,7 +3807,7 @@ checksum = "6c64451ba24fc7a6a2d60fc75dd9c83c90903b19028d4eff35e88fc1e86564e9"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -3859,7 +3828,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -3901,7 +3870,7 @@ dependencies = [
  "darling",
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -3982,7 +3951,7 @@ dependencies = [
 [[package]]
 name = "sled-agent-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#c472464a4972e91a576f439de3866829b19f807b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c1374bfed1ad30d35b97261be8259ada944163e3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4076,7 +4045,7 @@ source = "git+https://github.com/oxidecomputer/slog-error-chain?branch=main#15f6
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -4268,7 +4237,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "structmeta-derive",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -4279,7 +4248,7 @@ checksum = "152a0b65a590ff6c3da95cabe2353ee04e6167c896b28e3b14478c2636c922fc"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -4301,7 +4270,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -4314,7 +4283,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -4336,9 +4305,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.62"
+version = "2.0.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f660c3bfcefb88c538776b6685a0c472e3128b51e74d48793dc2a488196e8eb"
+checksum = "bf5be731623ca1a1fb7d8be6f261a3be6d3e2337b8a1f97be944d020c8fcb704"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4481,7 +4450,7 @@ checksum = "e2470041c06ec3ac1ab38d0356a6119054dedaea53e12fbefc0de730a1c08524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -4588,7 +4557,7 @@ checksum = "5b8a1e28f2deaa14e508979454cb3a223b10b938b45af148bc0986de36f1923b"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -4730,19 +4699,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "toolchain_find"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebc8c9a7f0a2966e1acdaf0461023d0b01471eeead645370cf4c3f5cff153f2a"
-dependencies = [
- "home",
- "once_cell",
- "regex",
- "semver 1.0.23",
- "walkdir",
-]
-
-[[package]]
 name = "topological-sort"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4773,7 +4729,7 @@ checksum = "34704c8d6ebcbc939824180af020566b01a7c01f80641264eba0999f6c2b6be7"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -4882,8 +4838,8 @@ checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
 
 [[package]]
 name = "typify"
-version = "0.0.16"
-source = "git+https://github.com/oxidecomputer/typify#336a042b8242587f57c5e8ec3ac0e54d3610e59c"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/typify#ad1296f6ceb998ae8c247d999b7828703a232bdd"
 dependencies = [
  "typify-impl",
  "typify-macro",
@@ -4891,8 +4847,8 @@ dependencies = [
 
 [[package]]
 name = "typify-impl"
-version = "0.0.16"
-source = "git+https://github.com/oxidecomputer/typify#336a042b8242587f57c5e8ec3ac0e54d3610e59c"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/typify#ad1296f6ceb998ae8c247d999b7828703a232bdd"
 dependencies = [
  "heck 0.5.0",
  "log",
@@ -4900,24 +4856,27 @@ dependencies = [
  "quote",
  "regress",
  "schemars",
+ "semver 1.0.23",
+ "serde",
  "serde_json",
- "syn 2.0.62",
+ "syn 2.0.63",
  "thiserror",
  "unicode-ident",
 ]
 
 [[package]]
 name = "typify-macro"
-version = "0.0.16"
-source = "git+https://github.com/oxidecomputer/typify#336a042b8242587f57c5e8ec3ac0e54d3610e59c"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/typify#ad1296f6ceb998ae8c247d999b7828703a232bdd"
 dependencies = [
  "proc-macro2",
  "quote",
  "schemars",
+ "semver 1.0.23",
  "serde",
  "serde_json",
  "serde_tokenstream",
- "syn 2.0.62",
+ "syn 2.0.63",
  "typify-impl",
 ]
 
@@ -5015,7 +4974,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_tokenstream",
- "syn 2.0.62",
+ "syn 2.0.63",
  "usdt-impl",
 ]
 
@@ -5033,7 +4992,7 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
- "syn 2.0.62",
+ "syn 2.0.63",
  "thiserror",
  "thread-id",
  "version_check",
@@ -5049,7 +5008,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_tokenstream",
- "syn 2.0.62",
+ "syn 2.0.63",
  "usdt-impl",
 ]
 
@@ -5070,7 +5029,7 @@ name = "util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -5155,7 +5114,7 @@ dependencies = [
  "once_cell",
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
  "wasm-bindgen-shared",
 ]
 
@@ -5189,7 +5148,7 @@ checksum = "e94f17b526d0a461a191c78ea52bbce64071ed5c04c9ffe424dcb38f74171bb7"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
  "wasm-bindgen-backend",
  "wasm-bindgen-shared",
 ]
@@ -5497,7 +5456,7 @@ checksum = "125139de3f6b9d625c39e2efdd73d41bdac468ccd556556440e322be0e1bbd91"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -5508,7 +5467,7 @@ checksum = "15e934569e47891f7d9411f1a451d947a60e000ab3bd24fbb970f000387d1b3b"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.62",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -5569,7 +5528,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/falcon?branch=main#f68c1f4714e7852b103e6dbfdf213bd43851d2bf"
 dependencies = [
  "anyhow",
- "libnet",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "tokio",
  "zone 0.3.0",
 ]
