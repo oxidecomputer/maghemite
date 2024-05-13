@@ -58,7 +58,7 @@ anyhow = "1.0.83"
 hyper = "0.14.28"
 serde_json = "1.0.117"
 percent-encoding = "2.3.1"
-libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "compile-macos" }
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
 reqwest = { version = "0.11", features = ["json", "stream", "rustls-tls"] }
 progenitor = { git = "https://github.com/oxidecomputer/progenitor", branch = "main" }
 clap = { version = "4.5.4", features = ["derive", "unstable-styles", "env"] }
@@ -81,8 +81,8 @@ backoff = "0.4"
 mg-common = { path = "mg-common" }
 chrono = { version = "0.4.38", features = ["serde"] }
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
-oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch= "main"}
-omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch= "main"}
+oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
+omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 internal-dns = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
@@ -107,6 +107,3 @@ package = "dpd-client"
 git = "https://github.com/oxidecomputer/dendrite"
 branch = "main"
 package = "common"
-
-[patch."https://github.com/oxidecomputer/netadm-sys"]
-libnet = { git = "https://www.github.com/oxidecomputer/netadm-sys.git", branch = "main" }
