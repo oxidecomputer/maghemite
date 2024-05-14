@@ -9,7 +9,7 @@ use crate::messages::{
     OpenMessage, RouteRefreshMessage, UpdateMessage,
 };
 use crate::session::FsmEvent;
-use crate::to_canonical;
+use crate::{sa_to_canonical, to_canonical};
 use libc::{c_int, sockaddr_storage};
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
 use libc::{c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP};
@@ -59,7 +59,42 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
             .ok_or(Error::InvalidAddress(
                 "at least one address required".into(),
             ))?;
-        let listener = TcpListener::bind(addr)?;
+
+        let addr = sa_to_canonical(addr);
+
+        let s = match addr {
+            SocketAddr::V4(_) => {
+                println!("LISTEN V4");
+                socket2::Socket::new(
+                    socket2::Domain::IPV4,
+                    socket2::Type::STREAM,
+                    None,
+                )?
+            }
+            SocketAddr::V6(_) => {
+                println!("LISTEN V6");
+                socket2::Socket::new(
+                    socket2::Domain::IPV6,
+                    socket2::Type::STREAM,
+                    None,
+                )?
+            }
+        };
+        if let Err(e) = s.set_ttl(1) {
+            println!("TTL FAIL: {e}");
+            Err(e)?;
+        }
+        if let Err(e) = s.bind(&addr.into()) {
+            println!("BIND FAIL: {e}");
+            Err(e)?;
+        }
+        if let Err(e) = s.listen(128) {
+            println!("LISTEN FAIL: {e}");
+            Err(e)?;
+        }
+
+        //let listener = TcpListener::bind(addr)?;
+        let listener: TcpListener = s.into();
         Ok(Self { listener, addr })
     }
 
@@ -72,7 +107,6 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         _timeout: Duration, //TODO implement
     ) -> Result<BgpConnectionTcp, Error> {
         let (conn, mut peer) = self.listener.accept()?;
-
         let ip = to_canonical(peer.ip());
         peer.set_ip(ip);
 
@@ -121,6 +155,11 @@ impl BgpConnection for BgpConnectionTcp {
             )?,
         };
 
+        if let Err(e) = s.set_ttl(1) {
+            slog::error!(self.log, "set ttl=1: {e}");
+            Err(e)?;
+        }
+
         #[cfg(target_os = "linux")]
         if let Some(key) = md5_key {
             slog::info!(self.log, "setting md5 key: {:?}", key);
@@ -142,7 +181,8 @@ impl BgpConnection for BgpConnectionTcp {
         }
 
         let sa: socket2::SockAddr = self.peer.into();
-        match s.connect_timeout(&sa, timeout) {
+        match s.connect_timeout(&sa, Duration::from_secs(1)) {
+            //match s.connect_timeout(&sa, timeout) {
             Ok(()) => {
                 let new_conn: TcpStream = s.into();
                 lock!(self.conn).replace(new_conn.try_clone()?);

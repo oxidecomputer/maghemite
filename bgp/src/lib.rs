@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 
 pub mod clock;
 pub mod config;
@@ -39,5 +39,15 @@ pub fn to_canonical(addr: IpAddr) -> IpAddr {
             None => v6,
         },
         v4 @ IpAddr::V4(_) => v4,
+    }
+}
+
+pub fn sa_to_canonical(sa: SocketAddr) -> SocketAddr {
+    match sa {
+        v6 @ SocketAddr::V6(s6) => match s6.ip().to_ipv4() {
+            Some(v4) => SocketAddr::V4(SocketAddrV4::new(v4, sa.port())),
+            None => v6,
+        },
+        v4 @ SocketAddr::V4(_) => v4,
     }
 }
