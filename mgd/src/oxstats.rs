@@ -801,8 +801,6 @@ pub(crate) fn start_server(
         id: registry.producer_id(),
         kind: ProducerKind::Service,
         address: sa,
-        // NOTE: This is now unused and will be removed in the future.
-        base_route: String::new(),
         interval: Duration::from_secs(1),
     };
 
