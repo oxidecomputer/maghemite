@@ -294,7 +294,7 @@ fn parse_tfport_name(name: &str) -> Result<(u8, u8, Option<u16>), Error> {
 
     let vlan = match fields.len() {
         1 => Ok(None),
-        2 => fields[1].parse::<u16>().map(|v| Some(v)).map_err(|_| {
+        2 => fields[1].parse::<u16>().map(Some).map_err(|_| {
             Error::Tfport(format!("{} has invalid vlan {}", name, fields[1]))
         }),
         _ => Err(Error::Tfport(format!(
