@@ -65,7 +65,6 @@ impl RouteHash {
     ) -> Result<RouteHash, Error> {
         let (port_id, link_id) = get_port_and_link(path.nexthop)?;
 
-        // XXX: verify that the link vlan ID matches the route's vlan ID?
         let rh = RouteHash {
             cidr: match prefix {
                 Prefix::V4(p) => Ipv4Cidr {
