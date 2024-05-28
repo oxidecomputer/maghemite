@@ -87,7 +87,7 @@ internal-dns = { git = "https://github.com/oxidecomputer/omicron", branch = "mai
 uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
 libc = "0.2"
-itertools = "0.12"
+itertools = "0.13"
 rhai = { version = "1", features = ["metadata", "sync"] }
 
 [workspace.dependencies.opte-ioctl]
