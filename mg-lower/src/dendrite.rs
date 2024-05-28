@@ -64,6 +64,7 @@ impl RouteHash {
         path: Path,
     ) -> Result<RouteHash, Error> {
         let (port_id, link_id) = get_port_and_link(path.nexthop)?;
+
         let rh = RouteHash {
             cidr: match prefix {
                 Prefix::V4(p) => Ipv4Cidr {
@@ -265,6 +266,70 @@ where
     Ok(())
 }
 
+// Translate a tfport name into the underlying (port, link, vlan) tuple.
+//    tfportqsfp10_0 would translate to (10, 0, None)
+//    tfportqsfp10_0.100 would translate to (10, 0, Some(100))
+// TODO this is gross, use link type properties rather than futzing
+// around with strings.
+fn parse_tfport_name(name: &str) -> Result<(u8, u8, Option<u16>), Error> {
+    let body =
+        name.strip_prefix(TFPORT_QSFP_DEVICE_PREFIX)
+            .ok_or(Error::Tfport(format!(
+                "{} missing expected prefix {}",
+                name, TFPORT_QSFP_DEVICE_PREFIX
+            )))?;
+    let fields: Vec<&str> = body.split('.').collect();
+    let (port, link) = fields[0]
+        .split_once('_')
+        .ok_or(Error::Tfport(format!("{} has no link id", name)))?;
+
+    let port = port.parse::<u8>().map_err(|_| {
+        Error::Tfport(format!("{} has invalid port {}", name, port))
+    })?;
+
+    let link = link.parse::<u8>().map_err(|_| {
+        Error::Tfport(format!("{} has invalid link id {}", name, link))
+    })?;
+
+    let vlan = match fields.len() {
+        1 => Ok(None),
+        2 => fields[1].parse::<u16>().map(Some).map_err(|_| {
+            Error::Tfport(format!("{} has invalid vlan {}", name, fields[1]))
+        }),
+        _ => Err(Error::Tfport(format!(
+            "{} has multiple vlan deliminators",
+            name
+        ))),
+    }?;
+
+    Ok((port, link, vlan))
+}
+
+#[test]
+fn test_tfport_parser() {
+    // Test valid names
+    assert_eq!(parse_tfport_name("tfportqsfp10_0").unwrap(), (10, 0, None));
+    assert_eq!(
+        parse_tfport_name("tfportqsfp10_0.100").unwrap(),
+        (10, 0, Some(100))
+    );
+    assert_eq!(parse_tfport_name("tfportqsfp1_1").unwrap(), (1, 1, None));
+
+    // test malformed names
+    assert!(parse_tfport_name("fportqsfp10_0").is_err());
+    assert!(parse_tfport_name("10_0").is_err());
+    assert!(parse_tfport_name("tfportqsfp10").is_err());
+    assert!(parse_tfport_name("tfportqsfp_10").is_err());
+    assert!(parse_tfport_name("tfportqsfp0_").is_err());
+    assert!(parse_tfport_name("tfportqsfp10_10_10").is_err());
+    assert!(parse_tfport_name("tfportqsfp10.100_0").is_err());
+
+    // test invalid components
+    assert!(parse_tfport_name("tfportqsfp1X_0.100").is_err());
+    assert!(parse_tfport_name("tfportqsfp10_X.100").is_err());
+    assert!(parse_tfport_name("tfportqsfp10_0.X").is_err());
+}
+
 fn get_port_and_link(
     nexthop: IpAddr,
 ) -> Result<(PortId, types::LinkId), Error> {
@@ -284,27 +349,14 @@ fn get_port_and_link(
         }
     };
 
-    // TODO this is gross, use link type properties rather than futzing
-    // around with strings.
-    let Some(egress_port_num) = ifname
-        .strip_prefix(TFPORT_QSFP_DEVICE_PREFIX)
-        .and_then(|x| x.strip_suffix("_0"))
-        .map(|x| x.trim())
-        .and_then(|x| x.parse::<u8>().ok())
-    else {
-        return Err(Error::Tfport(format!(
-            "expected {}$M_0, got {}",
-            TFPORT_QSFP_DEVICE_PREFIX, ifname
-        )));
-    };
-
-    let port_id = match QsfpPort::try_from(egress_port_num) {
+    let (port, link, _vlan) = parse_tfport_name(&ifname)?;
+    let port_id = match QsfpPort::try_from(port) {
         Ok(qsfp) => PortId::Qsfp(qsfp),
         Err(e) => return Err(Error::Tfport(format!("bad port name: {e}"))),
     };
 
     // TODO breakout considerations
-    let link_id = dpd_client::types::LinkId(0);
+    let link_id = dpd_client::types::LinkId(link);
     Ok((port_id, link_id))
 }
 
