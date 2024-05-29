@@ -501,7 +501,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+ssh://git@github.com/oxidecomputer/dendrite?branch=main#6334bf74fa21790c15f1c4e494ea2ec0edd1c83c"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=main#6334bf74fa21790c15f1c4e494ea2ec0edd1c83c"
 dependencies = [
  "anyhow",
  "chrono",
@@ -955,7 +955,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+ssh://git@github.com/oxidecomputer/dendrite?branch=main#6334bf74fa21790c15f1c4e494ea2ec0edd1c83c"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=main#6334bf74fa21790c15f1c4e494ea2ec0edd1c83c"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1606,7 +1606,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "socket2 0.4.10",
+ "socket2 0.5.7",
  "tokio",
  "tower-service",
  "tracing",
@@ -1813,6 +1813,15 @@ name = "itertools"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
 dependencies = [
  "either",
 ]
@@ -3290,7 +3299,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "ciborium",
- "itertools 0.12.1",
+ "itertools 0.13.0",
  "mg-common",
  "schemars",
  "serde",
