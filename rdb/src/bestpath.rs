@@ -66,7 +66,7 @@ pub fn bestpaths(
     });
 
     // Group candidates by AS for MED selection
-    let as_groups = candidates.into_iter().group_by(|path| match path.bgp {
+    let as_groups = candidates.into_iter().chunk_by(|path| match path.bgp {
         Some(ref bgp) => bgp.origin_as,
         None => 0,
     });
