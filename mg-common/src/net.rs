@@ -9,12 +9,12 @@ use thiserror::Error;
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
-pub enum IpPrefix {
-    V4(Ipv4Prefix),
-    V6(Ipv6Prefix),
+pub enum IpNet {
+    V4(Ipv4Net),
+    V6(Ipv6Net),
 }
 
-impl std::fmt::Display for IpPrefix {
+impl std::fmt::Display for IpNet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::V4(p) => p.fmt(f),
@@ -23,7 +23,7 @@ impl std::fmt::Display for IpPrefix {
     }
 }
 
-impl IpPrefix {
+impl IpNet {
     pub fn addr(&self) -> IpAddr {
         match self {
             Self::V4(s) => s.addr.into(),
@@ -48,26 +48,26 @@ pub enum IpPrefixParseError {
     V6(#[from] Ipv6PrefixParseError),
 }
 
-impl std::str::FromStr for IpPrefix {
+impl std::str::FromStr for IpNet {
     type Err = IpPrefixParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(result) = Ipv4Prefix::from_str(s) {
-            return Ok(IpPrefix::V4(result));
+        if let Ok(result) = Ipv4Net::from_str(s) {
+            return Ok(IpNet::V4(result));
         }
-        Ok(IpPrefix::V6(Ipv6Prefix::from_str(s)?))
+        Ok(IpNet::V6(Ipv6Net::from_str(s)?))
     }
 }
 
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
-pub struct Ipv4Prefix {
+pub struct Ipv4Net {
     pub addr: Ipv4Addr,
     pub len: u8,
 }
 
-impl std::fmt::Display for Ipv4Prefix {
+impl std::fmt::Display for Ipv4Net {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.addr, self.len)
     }
@@ -85,7 +85,7 @@ pub enum Ipv4PrefixParseError {
     Mask(#[from] ParseIntError),
 }
 
-impl std::str::FromStr for Ipv4Prefix {
+impl std::str::FromStr for Ipv4Net {
     type Err = Ipv4PrefixParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -94,7 +94,7 @@ impl std::str::FromStr for Ipv4Prefix {
             return Err(Ipv4PrefixParseError::Cidr);
         }
 
-        Ok(Ipv4Prefix {
+        Ok(Ipv4Net {
             addr: Ipv4Addr::from_str(parts[0])?,
             len: u8::from_str(parts[1])?,
         })
@@ -104,12 +104,12 @@ impl std::str::FromStr for Ipv4Prefix {
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
-pub struct Ipv6Prefix {
+pub struct Ipv6Net {
     pub addr: Ipv6Addr,
     pub len: u8,
 }
 
-impl std::fmt::Display for Ipv6Prefix {
+impl std::fmt::Display for Ipv6Net {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.addr, self.len)
     }
@@ -127,7 +127,7 @@ pub enum Ipv6PrefixParseError {
     Mask(#[from] ParseIntError),
 }
 
-impl std::str::FromStr for Ipv6Prefix {
+impl std::str::FromStr for Ipv6Net {
     type Err = Ipv6PrefixParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -136,7 +136,7 @@ impl std::str::FromStr for Ipv6Prefix {
             return Err(Ipv6PrefixParseError::Cidr);
         }
 
-        Ok(Ipv6Prefix {
+        Ok(Ipv6Net {
             addr: Ipv6Addr::from_str(parts[0])?,
             len: u8::from_str(parts[1])?,
         })
@@ -147,7 +147,7 @@ impl std::str::FromStr for Ipv6Prefix {
     Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct TunnelOrigin {
-    pub overlay_prefix: IpPrefix,
+    pub overlay_prefix: IpNet,
     pub boundary_addr: Ipv6Addr,
     pub vni: u32,
     #[serde(default)]

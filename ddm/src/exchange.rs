@@ -31,7 +31,7 @@ use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use hyper::body::Bytes;
-use mg_common::net::{Ipv6Prefix, TunnelOrigin};
+use mg_common::net::{Ipv6Net, TunnelOrigin};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -131,7 +131,7 @@ impl From<HashSet<PathVector>> for PullResponse {
     Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
 )]
 pub struct PathVector {
-    pub destination: Ipv6Prefix,
+    pub destination: Ipv6Net,
     pub path: Vec<String>,
 }
 

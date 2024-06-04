@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use mg_common::net::{IpPrefix, Ipv6Prefix, TunnelOrigin};
+use mg_common::net::{IpNet, Ipv6Net, TunnelOrigin};
 use schemars::{JsonSchema, JsonSchema_repr};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -105,10 +105,7 @@ impl Db {
         }
     }
 
-    pub fn originate(
-        &self,
-        prefixes: &HashSet<Ipv6Prefix>,
-    ) -> Result<(), Error> {
+    pub fn originate(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
         let tree = self.persistent_data.open_tree(ORIGINATE)?;
         for p in prefixes {
             tree.insert(p.db_key(), "")?;
@@ -130,7 +127,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn originated(&self) -> Result<HashSet<Ipv6Prefix>, Error> {
+    pub fn originated(&self) -> Result<HashSet<Ipv6Net>, Error> {
         let tree = self.persistent_data.open_tree(ORIGINATE)?;
         let result = tree
             .scan_prefix(vec![])
@@ -145,7 +142,7 @@ impl Db {
                         return None;
                     }
                 };
-                Some(match Ipv6Prefix::from_db_key(&key) {
+                Some(match Ipv6Net::from_db_key(&key) {
                     Ok(item) => item,
                     Err(e) => {
                         error!(
@@ -200,10 +197,7 @@ impl Db {
         Ok(self.originated_tunnel()?.len())
     }
 
-    pub fn withdraw(
-        &self,
-        prefixes: &HashSet<Ipv6Prefix>,
-    ) -> Result<(), Error> {
+    pub fn withdraw(&self, prefixes: &HashSet<Ipv6Net>) -> Result<(), Error> {
         let tree = self.persistent_data.open_tree(ORIGINATE)?;
         for p in prefixes {
             tree.remove(p.db_key())?;
@@ -269,7 +263,7 @@ impl Db {
 
     pub fn routes_by_vector(
         &self,
-        dst: Ipv6Prefix,
+        dst: Ipv6Net,
         nexthop: Ipv6Addr,
     ) -> Vec<Route> {
         let data = self.data.lock().unwrap();
@@ -356,7 +350,7 @@ pub struct TunnelRoute {
     Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct Route {
-    pub destination: Ipv6Prefix,
+    pub destination: Ipv6Net,
     pub nexthop: Ipv6Addr,
     pub ifname: String,
     pub path: Vec<String>,
@@ -390,7 +384,7 @@ impl EffectiveTunnelRouteSet {
 pub fn effective_route_set(
     full: &HashSet<TunnelRoute>,
 ) -> HashSet<TunnelRoute> {
-    let mut sets = HashMap::<IpPrefix, EffectiveTunnelRouteSet>::new();
+    let mut sets = HashMap::<IpNet, EffectiveTunnelRouteSet>::new();
     for x in full.iter() {
         match sets.get_mut(&x.origin.overlay_prefix) {
             Some(set) => {
@@ -458,7 +452,7 @@ trait DbKey: Sized {
     fn from_db_key(v: &[u8]) -> Result<Self, Error>;
 }
 
-impl DbKey for Ipv6Prefix {
+impl DbKey for Ipv6Net {
     fn db_key(&self) -> Vec<u8> {
         let mut buf: Vec<u8> = self.addr.octets().into();
         buf.push(self.len);
@@ -494,7 +488,7 @@ impl From<crate::db::TunnelRoute> for TunnelOrigin {
 #[cfg(test)]
 mod test {
     use super::*;
-    use mg_common::net::{IpPrefix, Ipv4Prefix};
+    use mg_common::net::{IpNet, Ipv4Net};
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
 
@@ -503,7 +497,7 @@ mod test {
         let mut before = HashSet::<TunnelRoute>::new();
         before.insert(TunnelRoute {
             origin: TunnelOrigin {
-                overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                overlay_prefix: IpNet::V4(Ipv4Net {
                     addr: "0.0.0.0".parse().unwrap(),
                     len: 0,
                 }),
@@ -515,7 +509,7 @@ mod test {
         });
         before.insert(TunnelRoute {
             origin: TunnelOrigin {
-                overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                overlay_prefix: IpNet::V4(Ipv4Net {
                     addr: "0.0.0.0".parse().unwrap(),
                     len: 0,
                 }),
@@ -530,7 +524,7 @@ mod test {
         let mut after = HashSet::<TunnelRoute>::new();
         after.insert(TunnelRoute {
             origin: TunnelOrigin {
-                overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                overlay_prefix: IpNet::V4(Ipv4Net {
                     addr: "0.0.0.0".parse().unwrap(),
                     len: 0,
                 }),
@@ -542,7 +536,7 @@ mod test {
         });
         after.insert(TunnelRoute {
             origin: TunnelOrigin {
-                overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                overlay_prefix: IpNet::V4(Ipv4Net {
                     addr: "0.0.0.0".parse().unwrap(),
                     len: 0,
                 }),
@@ -570,7 +564,7 @@ mod test {
         let mut expected_del = HashSet::<TunnelRoute>::new();
         expected_del.insert(TunnelRoute {
             origin: TunnelOrigin {
-                overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                overlay_prefix: IpNet::V4(Ipv4Net {
                     addr: "0.0.0.0".parse().unwrap(),
                     len: 0,
                 }),

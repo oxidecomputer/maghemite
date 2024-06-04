@@ -17,7 +17,7 @@ use dropshot::HttpServerStarter;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
-use mg_common::net::{Ipv6Prefix, TunnelOrigin};
+use mg_common::net::{Ipv6Net, TunnelOrigin};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{error, info, warn, Logger};
@@ -125,7 +125,7 @@ type PrefixMap = BTreeMap<Ipv6Addr, HashSet<PathVector>>;
 #[endpoint { method = GET, path = "/originated" }]
 async fn get_originated(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-) -> Result<HttpResponseOk<HashSet<Ipv6Prefix>>, HttpError> {
+) -> Result<HttpResponseOk<HashSet<Ipv6Net>>, HttpError> {
     let ctx = ctx.context().lock().unwrap();
     let originated = ctx
         .db
@@ -186,7 +186,7 @@ async fn get_tunnel_endpoints(
 #[endpoint { method = PUT, path = "/prefix" }]
 async fn advertise_prefixes(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-    request: TypedBody<HashSet<Ipv6Prefix>>,
+    request: TypedBody<HashSet<Ipv6Net>>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().unwrap();
     let prefixes = request.into_inner();
@@ -258,7 +258,7 @@ async fn advertise_tunnel_endpoints(
 #[endpoint { method = DELETE, path = "/prefix" }]
 async fn withdraw_prefixes(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-    request: TypedBody<HashSet<Ipv6Prefix>>,
+    request: TypedBody<HashSet<Ipv6Net>>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let ctx = ctx.context().lock().unwrap();
     let prefixes = request.into_inner();

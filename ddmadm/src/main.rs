@@ -7,7 +7,7 @@ use clap::Parser;
 use colored::*;
 use ddm_admin_client::{types, Client};
 use mg_common::cli::oxide_cli_style;
-use mg_common::net::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
+use mg_common::net::{IpNet, Ipv4Net, Ipv6Net};
 use slog::{Drain, Logger};
 use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -66,13 +66,13 @@ enum SubCommand {
 
 #[derive(Debug, Parser)]
 struct Prefixes {
-    prefixes: Vec<Ipv6Prefix>,
+    prefixes: Vec<Ipv6Net>,
 }
 
 #[derive(Debug, Parser)]
 struct TunnelEndpoint {
     #[arg(short, long)]
-    pub overlay_prefix: IpPrefix,
+    pub overlay_prefix: IpNet,
 
     #[arg(short, long)]
     pub boundary_addr: Ipv6Addr,
@@ -275,44 +275,44 @@ fn init_logger() -> Logger {
     slog::Logger::root(drain, slog::o!())
 }
 
-fn to_ipv6_prefix(x: &types::Ipv6Prefix) -> Ipv6Prefix {
-    Ipv6Prefix {
+fn to_ipv6_prefix(x: &types::Ipv6Prefix) -> Ipv6Net {
+    Ipv6Net {
         addr: x.addr,
         len: x.len,
     }
 }
 
-fn to_ipv4_prefix(x: &types::Ipv4Prefix) -> Ipv4Prefix {
-    Ipv4Prefix {
+fn to_ipv4_prefix(x: &types::Ipv4Prefix) -> Ipv4Net {
+    Ipv4Net {
         addr: x.addr,
         len: x.len,
     }
 }
 
-fn to_ip_prefix(x: &types::IpPrefix) -> IpPrefix {
+fn to_ip_prefix(x: &types::IpPrefix) -> IpNet {
     match x {
-        types::IpPrefix::V4(p) => IpPrefix::V4(to_ipv4_prefix(p)),
-        types::IpPrefix::V6(p) => IpPrefix::V6(to_ipv6_prefix(p)),
+        types::IpPrefix::V4(p) => IpNet::V4(to_ipv4_prefix(p)),
+        types::IpPrefix::V6(p) => IpNet::V6(to_ipv6_prefix(p)),
     }
 }
 
-fn to_types_ipv6_prefix(x: &Ipv6Prefix) -> types::Ipv6Prefix {
+fn to_types_ipv6_prefix(x: &Ipv6Net) -> types::Ipv6Prefix {
     types::Ipv6Prefix {
         addr: x.addr,
         len: x.len,
     }
 }
 
-fn to_types_ipv4_prefix(x: &Ipv4Prefix) -> types::Ipv4Prefix {
+fn to_types_ipv4_prefix(x: &Ipv4Net) -> types::Ipv4Prefix {
     types::Ipv4Prefix {
         addr: x.addr,
         len: x.len,
     }
 }
 
-fn to_types_ip_prefix(x: &IpPrefix) -> types::IpPrefix {
+fn to_types_ip_prefix(x: &IpNet) -> types::IpPrefix {
     match x {
-        IpPrefix::V4(p) => types::IpPrefix::V4(to_types_ipv4_prefix(p)),
-        IpPrefix::V6(p) => types::IpPrefix::V6(to_types_ipv6_prefix(p)),
+        IpNet::V4(p) => types::IpPrefix::V4(to_types_ipv4_prefix(p)),
+        IpNet::V6(p) => types::IpPrefix::V6(to_types_ipv6_prefix(p)),
     }
 }
