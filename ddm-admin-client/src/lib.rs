@@ -12,70 +12,13 @@ progenitor::generate_api!(
             "body" => ?&request.body(),
         );
     }),
+    crates = {
+        "oxnet" = "0.1.0",
+    },
     post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
         slog::trace!(log, "client response"; "result" => ?result);
     })
 );
-
-impl Copy for types::Ipv4Net {}
-impl Copy for types::Ipv6Net {}
-impl Copy for types::IpNet {}
-
-impl std::cmp::PartialEq for types::Ipv4Net {
-    fn eq(&self, other: &Self) -> bool {
-        self.addr.eq(&other.addr) && self.len.eq(&other.len)
-    }
-}
-
-impl std::cmp::Eq for types::Ipv4Net {}
-
-impl std::hash::Hash for types::Ipv4Net {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.addr.hash(state);
-        self.len.hash(state);
-    }
-}
-
-impl std::cmp::PartialEq for types::Ipv6Net {
-    fn eq(&self, other: &Self) -> bool {
-        self.addr.eq(&other.addr) && self.len.eq(&other.len)
-    }
-}
-
-impl std::cmp::Eq for types::Ipv6Net {}
-
-impl std::hash::Hash for types::Ipv6Net {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.addr.hash(state);
-        self.len.hash(state);
-    }
-}
-
-impl std::cmp::PartialEq for types::IpNet {
-    fn eq(&self, other: &Self) -> bool {
-        match self {
-            types::IpNet::V4(x) => match other {
-                types::IpNet::V4(y) => x.eq(y),
-                _ => false,
-            },
-            types::IpNet::V6(x) => match other {
-                types::IpNet::V6(y) => x.eq(y),
-                _ => false,
-            },
-        }
-    }
-}
-
-impl std::hash::Hash for types::IpNet {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            types::IpNet::V4(x) => x.hash(state),
-            types::IpNet::V6(x) => x.hash(state),
-        }
-    }
-}
-
-impl std::cmp::Eq for types::IpNet {}
 
 impl std::cmp::PartialEq for types::TunnelOrigin {
     fn eq(&self, other: &Self) -> bool {

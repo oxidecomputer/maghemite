@@ -750,6 +750,7 @@ dependencies = [
 name = "ddm-admin-client"
 version = "0.1.0"
 dependencies = [
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet?branch=main)",
  "percent-encoding",
  "progenitor",
  "reqwest",
