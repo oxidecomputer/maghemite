@@ -7,7 +7,7 @@ use clap::Parser;
 use colored::*;
 use ddm_admin_client::{types, Client};
 use mg_common::cli::oxide_cli_style;
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+use oxnet::{IpNet, Ipv6Net};
 use slog::{Drain, Logger};
 use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -258,45 +258,3 @@ fn init_logger() -> Logger {
     let drain = slog_async::Async::new(drain).build().fuse();
     slog::Logger::root(drain, slog::o!())
 }
-
-// fn to_ipv6_prefix(x: &types::Ipv6Net) -> Ipv6Net {
-//     Ipv6Net {
-//         addr: x.addr,
-//         len: x.len,
-//     }
-// }
-
-// fn to_ipv4_prefix(x: &types::Ipv4Net) -> Ipv4Net {
-//     Ipv4Net {
-//         addr: x.addr,
-//         len: x.len,
-//     }
-// }
-
-// fn to_ip_prefix(x: &types::IpNet) -> IpNet {
-//     match x {
-//         types::IpNet::V4(p) => IpNet::V4(to_ipv4_prefix(p)),
-//         types::IpNet::V6(p) => IpNet::V6(to_ipv6_prefix(p)),
-//     }
-// }
-
-// fn to_types_ipv6_prefix(x: &Ipv6Net) -> types::Ipv6Net {
-//     types::Ipv6Net {
-//         addr: x.addr,
-//         len: x.len,
-//     }
-// }
-
-// fn to_types_ipv4_prefix(x: &Ipv4Net) -> types::Ipv4Net {
-//     types::Ipv4Net {
-//         addr: x.addr,
-//         len: x.len,
-//     }
-// }
-
-// fn to_types_ip_prefix(x: &IpNet) -> types::IpNet {
-//     match x {
-//         IpNet::V4(p) => types::IpNet::V4(to_types_ipv4_prefix(p)),
-//         IpNet::V6(p) => types::IpNet::V6(to_types_ipv6_prefix(p)),
-//     }
-// }

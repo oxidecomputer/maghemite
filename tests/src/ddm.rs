@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::{anyhow, Result};
-use ddm_admin_client::types::{IpNet, Ipv4Net, Ipv6Net, TunnelOrigin};
+use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client;
 use slog::{Drain, Logger};
 use std::env;
@@ -450,11 +450,8 @@ async fn run_trio_tests(
 
     println!("initial peering test passed");
 
-    s1.advertise_prefixes(&vec![Ipv6Net {
-        addr: "fd00:1::".parse().unwrap(),
-        len: 64,
-    }])
-    .await?;
+    s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+        .await?;
 
     wait_for_eq!(prefix_count(&s1).await?, 0);
     wait_for_eq!(prefix_count(&s2).await?, 1);
@@ -462,11 +459,8 @@ async fn run_trio_tests(
 
     println!("advertise from one passed");
 
-    s2.advertise_prefixes(&vec![Ipv6Net {
-        addr: "fd00:2::".parse().unwrap(),
-        len: 64,
-    }])
-    .await?;
+    s2.advertise_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
+        .await?;
 
     wait_for_eq!(prefix_count(&s1).await?, 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
@@ -505,11 +499,8 @@ async fn run_trio_tests(
         wait_for_eq!(prefix_count(&t1).await?, 2);
     }
 
-    s1.advertise_prefixes(&vec![Ipv6Net {
-        addr: "fd00:1::".parse().unwrap(),
-        len: 64,
-    }])
-    .await?;
+    s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+        .await?;
 
     wait_for_eq!(prefix_count(&s1).await?, 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
@@ -532,21 +523,15 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 2);
 
-    s2.withdraw_prefixes(&vec![Ipv6Net {
-        addr: "fd00:2::".parse().unwrap(),
-        len: 64,
-    }])
-    .await?;
+    s2.withdraw_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
+        .await?;
 
     wait_for_eq!(prefix_count(&s1).await?, 0);
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 1);
 
-    s2.advertise_prefixes(&vec![Ipv6Net {
-        addr: "fd00:2::".parse().unwrap(),
-        len: 64,
-    }])
-    .await?;
+    s2.advertise_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
+        .await?;
 
     wait_for_eq!(prefix_count(&s1).await?, 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
@@ -557,18 +542,9 @@ async fn run_trio_tests(
     // ensure that when an advertisement with a duplicate route is made, all
     // routes make it in the kernel of receivers.
     s2.advertise_prefixes(&vec![
-        Ipv6Net {
-            addr: "fd00:2::".parse().unwrap(),
-            len: 64,
-        },
-        Ipv6Net {
-            addr: "fd00:3::".parse().unwrap(),
-            len: 64,
-        },
-        Ipv6Net {
-            addr: "fd00:4::".parse().unwrap(),
-            len: 64,
-        },
+        "fd00:2::/64".parse().unwrap(),
+        "fd00:3::/64".parse().unwrap(),
+        "fd00:4::/64".parse().unwrap(),
     ])
     .await?;
     wait_for_eq!(prefix_count(&s1).await?, 3);
@@ -582,10 +558,7 @@ async fn run_trio_tests(
         wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
 
         t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
-            overlay_prefix: IpNet::V4(Ipv4Net {
-                addr: "203.0.113.0".parse().unwrap(),
-                len: 24,
-            }),
+            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
             vni: 47,
             metric: 0,
@@ -602,10 +575,7 @@ async fn run_trio_tests(
         // redudant advertise should not change things
 
         t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
-            overlay_prefix: IpNet::V4(Ipv4Net {
-                addr: "203.0.113.0".parse().unwrap(),
-                len: 24,
-            }),
+            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
             vni: 47,
             metric: 0,
@@ -631,10 +601,7 @@ async fn run_trio_tests(
         println!("tunnel router restart passed");
 
         t1.withdraw_tunnel_endpoints(&vec![TunnelOrigin {
-            overlay_prefix: IpNet::V4(Ipv4Net {
-                addr: "203.0.113.0".parse().unwrap(),
-                len: 24,
-            }),
+            overlay_prefix: "203.0.113.0/24".parse().unwrap(),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
             vni: 47,
             metric: 0,
@@ -779,17 +746,11 @@ async fn run_quartet_tests(
 
     println!("initial peering test passed");
 
-    s1.advertise_prefixes(&vec![Ipv6Net {
-        addr: "fd00:1::".parse().unwrap(),
-        len: 64,
-    }])
-    .await?;
+    s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+        .await?;
 
-    s3.advertise_prefixes(&vec![Ipv6Net {
-        addr: "fd00:3::".parse().unwrap(),
-        len: 64,
-    }])
-    .await?;
+    s3.advertise_prefixes(&vec!["fd00:3::/64".parse().unwrap()])
+        .await?;
 
     // s1/s3 should now have 1 prefix
     wait_for_eq!(prefix_count(&s1).await?, 1);
@@ -799,30 +760,21 @@ async fn run_quartet_tests(
     zs3.zexec("ping fd00:1::1")?;
 
     // s2 hijacks s1's prefix
-    s2.advertise_prefixes(&vec![Ipv6Net {
-        addr: "fd00:1::".parse().unwrap(),
-        len: 64,
-    }])
-    .await?;
+    s2.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+        .await?;
 
     // s3 should now have 2 prefixes
     wait_for_eq!(prefix_count(&s3).await?, 2);
 
-    s2.withdraw_prefixes(&vec![Ipv6Net {
-        addr: "fd00:1::".parse().unwrap(),
-        len: 64,
-    }])
-    .await?;
+    s2.withdraw_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+        .await?;
 
     // wait for withdraw propagation
     sleep(Duration::from_secs(5));
 
     // unhijack
-    s1.advertise_prefixes(&vec![Ipv6Net {
-        addr: "fd00:1::".parse().unwrap(),
-        len: 64,
-    }])
-    .await?;
+    s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+        .await?;
     sleep(Duration::from_secs(5));
 
     // s3 should still have 1 prefix left
