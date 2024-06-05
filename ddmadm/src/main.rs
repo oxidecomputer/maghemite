@@ -156,9 +156,7 @@ async fn run() -> Result<()> {
                     writeln!(
                         &mut tw,
                         "{}\t{}\t{}",
-                        to_ipv6_prefix(&pv.destination),
-                        nexthop,
-                        strpath,
+                        &pv.destination, nexthop, strpath,
                     )?;
                 }
             }
@@ -169,29 +167,15 @@ async fn run() -> Result<()> {
             let mut tw = TabWriter::new(stdout());
             writeln!(&mut tw, "{}", "Prefix".dimmed(),)?;
             for prefix in msg.into_inner() {
-                writeln!(&mut tw, "{}", to_ipv6_prefix(&prefix))?;
+                writeln!(&mut tw, "{}", &prefix)?;
             }
             tw.flush()?;
         }
         SubCommand::AdvertisePrefixes(ac) => {
-            let mut prefixes: Vec<types::Ipv6Net> = Vec::new();
-            for p in ac.prefixes {
-                prefixes.push(types::Ipv6Net {
-                    addr: p.addr(),
-                    len: p.width(),
-                });
-            }
-            client.advertise_prefixes(&prefixes).await?;
+            client.advertise_prefixes(&ac.prefixes).await?;
         }
         SubCommand::WithdrawPrefixes(ac) => {
-            let mut prefixes: Vec<types::Ipv6Net> = Vec::new();
-            for p in ac.prefixes {
-                prefixes.push(types::Ipv6Net {
-                    addr: p.addr(),
-                    len: p.width(),
-                });
-            }
-            client.withdraw_prefixes(&prefixes).await?;
+            client.withdraw_prefixes(&ac.prefixes).await?;
         }
         SubCommand::TunnelImported => {
             let msg = client.get_tunnel_endpoints().await?;
@@ -208,7 +192,7 @@ async fn run() -> Result<()> {
                 writeln!(
                     &mut tw,
                     "{}\t{}\t{}\t{}",
-                    to_ip_prefix(&endpoint.origin.overlay_prefix),
+                    &endpoint.origin.overlay_prefix,
                     endpoint.origin.boundary_addr,
                     endpoint.origin.vni,
                     endpoint.origin.metric,
@@ -231,7 +215,7 @@ async fn run() -> Result<()> {
                 writeln!(
                     &mut tw,
                     "{}\t{}\t{}\t{}",
-                    to_ip_prefix(&endpoint.overlay_prefix),
+                    &endpoint.overlay_prefix,
                     endpoint.boundary_addr,
                     endpoint.vni,
                     endpoint.metric,
@@ -242,7 +226,7 @@ async fn run() -> Result<()> {
         SubCommand::TunnelAdvertise(ep) => {
             client
                 .advertise_tunnel_endpoints(&vec![types::TunnelOrigin {
-                    overlay_prefix: to_types_ip_prefix(&ep.overlay_prefix),
+                    overlay_prefix: ep.overlay_prefix,
                     boundary_addr: ep.boundary_addr,
                     vni: ep.vni,
                     metric: ep.metric,
@@ -252,7 +236,7 @@ async fn run() -> Result<()> {
         SubCommand::TunnelWithdraw(ep) => {
             client
                 .withdraw_tunnel_endpoints(&vec![types::TunnelOrigin {
-                    overlay_prefix: to_types_ip_prefix(&ep.overlay_prefix),
+                    overlay_prefix: ep.overlay_prefix,
                     boundary_addr: ep.boundary_addr,
                     vni: ep.vni,
                     metric: ep.metric,
@@ -275,44 +259,44 @@ fn init_logger() -> Logger {
     slog::Logger::root(drain, slog::o!())
 }
 
-fn to_ipv6_prefix(x: &types::Ipv6Net) -> Ipv6Net {
-    Ipv6Net {
-        addr: x.addr,
-        len: x.len,
-    }
-}
+// fn to_ipv6_prefix(x: &types::Ipv6Net) -> Ipv6Net {
+//     Ipv6Net {
+//         addr: x.addr,
+//         len: x.len,
+//     }
+// }
 
-fn to_ipv4_prefix(x: &types::Ipv4Net) -> Ipv4Net {
-    Ipv4Net {
-        addr: x.addr,
-        len: x.len,
-    }
-}
+// fn to_ipv4_prefix(x: &types::Ipv4Net) -> Ipv4Net {
+//     Ipv4Net {
+//         addr: x.addr,
+//         len: x.len,
+//     }
+// }
 
-fn to_ip_prefix(x: &types::IpNet) -> IpNet {
-    match x {
-        types::IpNet::V4(p) => IpNet::V4(to_ipv4_prefix(p)),
-        types::IpNet::V6(p) => IpNet::V6(to_ipv6_prefix(p)),
-    }
-}
+// fn to_ip_prefix(x: &types::IpNet) -> IpNet {
+//     match x {
+//         types::IpNet::V4(p) => IpNet::V4(to_ipv4_prefix(p)),
+//         types::IpNet::V6(p) => IpNet::V6(to_ipv6_prefix(p)),
+//     }
+// }
 
-fn to_types_ipv6_prefix(x: &Ipv6Net) -> types::Ipv6Net {
-    types::Ipv6Net {
-        addr: x.addr,
-        len: x.len,
-    }
-}
+// fn to_types_ipv6_prefix(x: &Ipv6Net) -> types::Ipv6Net {
+//     types::Ipv6Net {
+//         addr: x.addr,
+//         len: x.len,
+//     }
+// }
 
-fn to_types_ipv4_prefix(x: &Ipv4Net) -> types::Ipv4Net {
-    types::Ipv4Net {
-        addr: x.addr,
-        len: x.len,
-    }
-}
+// fn to_types_ipv4_prefix(x: &Ipv4Net) -> types::Ipv4Net {
+//     types::Ipv4Net {
+//         addr: x.addr,
+//         len: x.len,
+//     }
+// }
 
-fn to_types_ip_prefix(x: &IpNet) -> types::IpNet {
-    match x {
-        IpNet::V4(p) => types::IpNet::V4(to_types_ipv4_prefix(p)),
-        IpNet::V6(p) => types::IpNet::V6(to_types_ipv6_prefix(p)),
-    }
-}
+// fn to_types_ip_prefix(x: &IpNet) -> types::IpNet {
+//     match x {
+//         IpNet::V4(p) => types::IpNet::V4(to_types_ipv4_prefix(p)),
+//         IpNet::V6(p) => types::IpNet::V6(to_types_ipv6_prefix(p)),
+//     }
+// }
