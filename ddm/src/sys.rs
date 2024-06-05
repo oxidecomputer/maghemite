@@ -272,7 +272,8 @@ pub fn add_tunnel_routes(
     routes: &HashSet<TunnelRoute>,
 ) -> Result<(), String> {
     use oxide_vpc::api::{
-        IpCidr, Ipv4Cidr, Ipv4NetLen, Ipv6Cidr, Ipv6NetLen, SetVirt2BoundaryReq,
+        IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr, Ipv6PrefixLen,
+        SetVirt2BoundaryReq,
     };
     let hdl = OpteHdl::open(OpteHdl::XDE_CTL).map_err(|e| e.to_string())?;
 
@@ -290,11 +291,11 @@ pub fn add_tunnel_routes(
         let vip = match pfx {
             mg_common::net::IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
-                Ipv4NetLen::new(p.len).unwrap(),
+                Ipv4PrefixLen::new(p.len).unwrap(),
             )),
             mg_common::net::IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
                 p.addr.into(),
-                Ipv6NetLen::new(p.len).unwrap(),
+                Ipv6PrefixLen::new(p.len).unwrap(),
             )),
         };
         let req = SetVirt2BoundaryReq { vip, tep };
@@ -322,8 +323,8 @@ pub fn remove_tunnel_routes(
     routes: &HashSet<TunnelRoute>,
 ) -> Result<(), String> {
     use oxide_vpc::api::{
-        ClearVirt2BoundaryReq, IpCidr, Ipv4Cidr, Ipv4NetLen, Ipv6Cidr,
-        Ipv6NetLen,
+        ClearVirt2BoundaryReq, IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr,
+        Ipv6PrefixLen,
     };
     let hdl = OpteHdl::open(OpteHdl::XDE_CTL).map_err(|e| e.to_string())?;
     for (pfx, tep) in tunnel_route_update_map(routes) {
@@ -340,11 +341,11 @@ pub fn remove_tunnel_routes(
         let vip = match pfx {
             mg_common::net::IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
-                Ipv4NetLen::new(p.len).unwrap(),
+                Ipv4PrefixLen::new(p.len).unwrap(),
             )),
             mg_common::net::IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
                 p.addr.into(),
-                Ipv6NetLen::new(p.len).unwrap(),
+                Ipv6PrefixLen::new(p.len).unwrap(),
             )),
         };
         let req = ClearVirt2BoundaryReq { vip, tep };
