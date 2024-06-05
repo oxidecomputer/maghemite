@@ -289,12 +289,12 @@ pub fn add_tunnel_routes(
         }
         let vip = match pfx {
             IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
-                p.addr.into(),
-                Ipv4PrefixLen::new(p.len).unwrap(),
+                p.addr().into(),
+                Ipv4PrefixLen::new(p.width()).unwrap(),
             )),
             IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
-                p.addr.into(),
-                Ipv6PrefixLen::new(p.len).unwrap(),
+                p.addr().into(),
+                Ipv6PrefixLen::new(p.width()).unwrap(),
             )),
         };
         let req = SetVirt2BoundaryReq { vip, tep };
@@ -339,12 +339,12 @@ pub fn remove_tunnel_routes(
         }
         let vip = match pfx {
             IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
-                p.addr.into(),
-                Ipv4PrefixLen::new(p.len).unwrap(),
+                p.addr().into(),
+                Ipv4PrefixLen::new(p.width()).unwrap(),
             )),
             IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
-                p.addr.into(),
-                Ipv6PrefixLen::new(p.len).unwrap(),
+                p.addr().into(),
+                Ipv6PrefixLen::new(p.width()).unwrap(),
             )),
         };
         let req = ClearVirt2BoundaryReq { vip, tep };
