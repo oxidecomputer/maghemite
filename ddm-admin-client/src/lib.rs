@@ -17,65 +17,65 @@ progenitor::generate_api!(
     })
 );
 
-impl Copy for types::Ipv4Prefix {}
-impl Copy for types::Ipv6Prefix {}
-impl Copy for types::IpPrefix {}
+impl Copy for types::Ipv4Net {}
+impl Copy for types::Ipv6Net {}
+impl Copy for types::IpNet {}
 
-impl std::cmp::PartialEq for types::Ipv4Prefix {
+impl std::cmp::PartialEq for types::Ipv4Net {
     fn eq(&self, other: &Self) -> bool {
         self.addr.eq(&other.addr) && self.len.eq(&other.len)
     }
 }
 
-impl std::cmp::Eq for types::Ipv4Prefix {}
+impl std::cmp::Eq for types::Ipv4Net {}
 
-impl std::hash::Hash for types::Ipv4Prefix {
+impl std::hash::Hash for types::Ipv4Net {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.addr.hash(state);
         self.len.hash(state);
     }
 }
 
-impl std::cmp::PartialEq for types::Ipv6Prefix {
+impl std::cmp::PartialEq for types::Ipv6Net {
     fn eq(&self, other: &Self) -> bool {
         self.addr.eq(&other.addr) && self.len.eq(&other.len)
     }
 }
 
-impl std::cmp::Eq for types::Ipv6Prefix {}
+impl std::cmp::Eq for types::Ipv6Net {}
 
-impl std::hash::Hash for types::Ipv6Prefix {
+impl std::hash::Hash for types::Ipv6Net {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.addr.hash(state);
         self.len.hash(state);
     }
 }
 
-impl std::cmp::PartialEq for types::IpPrefix {
+impl std::cmp::PartialEq for types::IpNet {
     fn eq(&self, other: &Self) -> bool {
         match self {
-            types::IpPrefix::V4(x) => match other {
-                types::IpPrefix::V4(y) => x.eq(y),
+            types::IpNet::V4(x) => match other {
+                types::IpNet::V4(y) => x.eq(y),
                 _ => false,
             },
-            types::IpPrefix::V6(x) => match other {
-                types::IpPrefix::V6(y) => x.eq(y),
+            types::IpNet::V6(x) => match other {
+                types::IpNet::V6(y) => x.eq(y),
                 _ => false,
             },
         }
     }
 }
 
-impl std::hash::Hash for types::IpPrefix {
+impl std::hash::Hash for types::IpNet {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
-            types::IpPrefix::V4(x) => x.hash(state),
-            types::IpPrefix::V6(x) => x.hash(state),
+            types::IpNet::V4(x) => x.hash(state),
+            types::IpNet::V6(x) => x.hash(state),
         }
     }
 }
 
-impl std::cmp::Eq for types::IpPrefix {}
+impl std::cmp::Eq for types::IpNet {}
 
 impl std::cmp::PartialEq for types::TunnelOrigin {
     fn eq(&self, other: &Self) -> bool {

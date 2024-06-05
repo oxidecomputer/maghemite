@@ -7,7 +7,7 @@ use clap::Parser;
 use colored::*;
 use ddm_admin_client::{types, Client};
 use mg_common::cli::oxide_cli_style;
-use mg_common::net::{IpNet, Ipv4Net, Ipv6Net};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use slog::{Drain, Logger};
 use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -174,21 +174,21 @@ async fn run() -> Result<()> {
             tw.flush()?;
         }
         SubCommand::AdvertisePrefixes(ac) => {
-            let mut prefixes: Vec<types::Ipv6Prefix> = Vec::new();
+            let mut prefixes: Vec<types::Ipv6Net> = Vec::new();
             for p in ac.prefixes {
-                prefixes.push(types::Ipv6Prefix {
-                    addr: p.addr,
-                    len: p.len,
+                prefixes.push(types::Ipv6Net {
+                    addr: p.addr(),
+                    len: p.width(),
                 });
             }
             client.advertise_prefixes(&prefixes).await?;
         }
         SubCommand::WithdrawPrefixes(ac) => {
-            let mut prefixes: Vec<types::Ipv6Prefix> = Vec::new();
+            let mut prefixes: Vec<types::Ipv6Net> = Vec::new();
             for p in ac.prefixes {
-                prefixes.push(types::Ipv6Prefix {
-                    addr: p.addr,
-                    len: p.len,
+                prefixes.push(types::Ipv6Net {
+                    addr: p.addr(),
+                    len: p.width(),
                 });
             }
             client.withdraw_prefixes(&prefixes).await?;
@@ -275,44 +275,44 @@ fn init_logger() -> Logger {
     slog::Logger::root(drain, slog::o!())
 }
 
-fn to_ipv6_prefix(x: &types::Ipv6Prefix) -> Ipv6Net {
+fn to_ipv6_prefix(x: &types::Ipv6Net) -> Ipv6Net {
     Ipv6Net {
         addr: x.addr,
         len: x.len,
     }
 }
 
-fn to_ipv4_prefix(x: &types::Ipv4Prefix) -> Ipv4Net {
+fn to_ipv4_prefix(x: &types::Ipv4Net) -> Ipv4Net {
     Ipv4Net {
         addr: x.addr,
         len: x.len,
     }
 }
 
-fn to_ip_prefix(x: &types::IpPrefix) -> IpNet {
+fn to_ip_prefix(x: &types::IpNet) -> IpNet {
     match x {
-        types::IpPrefix::V4(p) => IpNet::V4(to_ipv4_prefix(p)),
-        types::IpPrefix::V6(p) => IpNet::V6(to_ipv6_prefix(p)),
+        types::IpNet::V4(p) => IpNet::V4(to_ipv4_prefix(p)),
+        types::IpNet::V6(p) => IpNet::V6(to_ipv6_prefix(p)),
     }
 }
 
-fn to_types_ipv6_prefix(x: &Ipv6Net) -> types::Ipv6Prefix {
-    types::Ipv6Prefix {
+fn to_types_ipv6_prefix(x: &Ipv6Net) -> types::Ipv6Net {
+    types::Ipv6Net {
         addr: x.addr,
         len: x.len,
     }
 }
 
-fn to_types_ipv4_prefix(x: &Ipv4Net) -> types::Ipv4Prefix {
-    types::Ipv4Prefix {
+fn to_types_ipv4_prefix(x: &Ipv4Net) -> types::Ipv4Net {
+    types::Ipv4Net {
         addr: x.addr,
         len: x.len,
     }
 }
 
-fn to_types_ip_prefix(x: &IpNet) -> types::IpPrefix {
+fn to_types_ip_prefix(x: &IpNet) -> types::IpNet {
     match x {
-        IpNet::V4(p) => types::IpPrefix::V4(to_types_ipv4_prefix(p)),
-        IpNet::V6(p) => types::IpPrefix::V6(to_types_ipv6_prefix(p)),
+        IpNet::V4(p) => types::IpNet::V4(to_types_ipv4_prefix(p)),
+        IpNet::V6(p) => types::IpNet::V6(to_types_ipv6_prefix(p)),
     }
 }

@@ -56,10 +56,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Set_of_Ipv6Prefix",
+                  "title": "Set_of_Ipv6Net",
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Ipv6Prefix"
+                    "$ref": "#/components/schemas/Ipv6Net"
                   },
                   "uniqueItems": true
                 }
@@ -164,10 +164,10 @@
           "content": {
             "application/json": {
               "schema": {
-                "title": "Set_of_Ipv6Prefix",
+                "title": "Set_of_Ipv6Net",
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/Ipv6Prefix"
+                  "$ref": "#/components/schemas/Ipv6Net"
                 },
                 "uniqueItems": true
               }
@@ -193,10 +193,10 @@
           "content": {
             "application/json": {
               "schema": {
-                "title": "Set_of_Ipv6Prefix",
+                "title": "Set_of_Ipv6Net",
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/Ipv6Prefix"
+                  "$ref": "#/components/schemas/Ipv6Net"
                 },
                 "uniqueItems": true
               }
@@ -403,13 +403,13 @@
           "request_id"
         ]
       },
-      "IpPrefix": {
+      "IpNet": {
         "oneOf": [
           {
             "type": "object",
             "properties": {
               "V4": {
-                "$ref": "#/components/schemas/Ipv4Prefix"
+                "$ref": "#/components/schemas/Ipv4Net"
               }
             },
             "required": [
@@ -421,7 +421,7 @@
             "type": "object",
             "properties": {
               "V6": {
-                "$ref": "#/components/schemas/Ipv6Prefix"
+                "$ref": "#/components/schemas/Ipv6Net"
               }
             },
             "required": [
@@ -431,7 +431,7 @@
           }
         ]
       },
-      "Ipv4Prefix": {
+      "Ipv4Net": {
         "type": "object",
         "properties": {
           "addr": {
@@ -449,7 +449,7 @@
           "len"
         ]
       },
-      "Ipv6Prefix": {
+      "Ipv6Net": {
         "type": "object",
         "properties": {
           "addr": {
@@ -471,7 +471,7 @@
         "type": "object",
         "properties": {
           "destination": {
-            "$ref": "#/components/schemas/Ipv6Prefix"
+            "$ref": "#/components/schemas/Ipv6Net"
           },
           "path": {
             "type": "array",
@@ -538,7 +538,7 @@
             "minimum": 0
           },
           "overlay_prefix": {
-            "$ref": "#/components/schemas/IpPrefix"
+            "$ref": "#/components/schemas/IpNet"
           },
           "vni": {
             "type": "integer",

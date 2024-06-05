@@ -2,7 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use mg_common::net::{IpNet, Ipv6Net, TunnelOrigin};
+use libnet::{IpNet, Ipv6Net};
+use mg_common::net::TunnelOrigin;
 use schemars::{JsonSchema, JsonSchema_repr};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -454,22 +455,23 @@ trait DbKey: Sized {
 
 impl DbKey for Ipv6Net {
     fn db_key(&self) -> Vec<u8> {
-        let mut buf: Vec<u8> = self.addr.octets().into();
-        buf.push(self.len);
+        let mut buf: Vec<u8> = self.addr().octets().into();
+        buf.push(self.width());
         buf
     }
 
     fn from_db_key(v: &[u8]) -> Result<Self, Error> {
         if v.len() < 17 {
             Err(Error::DbKey(format!(
-                "buffer to short for prefix 6 key {} < 17",
+                "buffer too short for prefix 6 key {} < 17",
                 v.len()
             )))
         } else {
-            Ok(Self {
-                addr: Ipv6Addr::from(<[u8; 16]>::try_from(&v[..16]).unwrap()),
-                len: v[16],
-            })
+            Self::new(
+                Ipv6Addr::from(<[u8; 16]>::try_from(&v[..16]).unwrap()),
+                v[16],
+            )
+            .map_err(|e| Error::DbKey(e.to_string()))
         }
     }
 }
@@ -488,7 +490,6 @@ impl From<crate::db::TunnelRoute> for TunnelOrigin {
 #[cfg(test)]
 mod test {
     use super::*;
-    use mg_common::net::{IpNet, Ipv4Net};
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
 
@@ -497,10 +498,7 @@ mod test {
         let mut before = HashSet::<TunnelRoute>::new();
         before.insert(TunnelRoute {
             origin: TunnelOrigin {
-                overlay_prefix: IpNet::V4(Ipv4Net {
-                    addr: "0.0.0.0".parse().unwrap(),
-                    len: 0,
-                }),
+                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
                 boundary_addr: "fd00:a::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,
@@ -509,10 +507,7 @@ mod test {
         });
         before.insert(TunnelRoute {
             origin: TunnelOrigin {
-                overlay_prefix: IpNet::V4(Ipv4Net {
-                    addr: "0.0.0.0".parse().unwrap(),
-                    len: 0,
-                }),
+                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
                 boundary_addr: "fd00:b::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,
@@ -524,10 +519,7 @@ mod test {
         let mut after = HashSet::<TunnelRoute>::new();
         after.insert(TunnelRoute {
             origin: TunnelOrigin {
-                overlay_prefix: IpNet::V4(Ipv4Net {
-                    addr: "0.0.0.0".parse().unwrap(),
-                    len: 0,
-                }),
+                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
                 boundary_addr: "fd00:a::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,
@@ -536,10 +528,7 @@ mod test {
         });
         after.insert(TunnelRoute {
             origin: TunnelOrigin {
-                overlay_prefix: IpNet::V4(Ipv4Net {
-                    addr: "0.0.0.0".parse().unwrap(),
-                    len: 0,
-                }),
+                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
                 boundary_addr: "fd00:b::1".parse().unwrap(),
                 vni: 99,
                 metric: 100,
@@ -564,10 +553,7 @@ mod test {
         let mut expected_del = HashSet::<TunnelRoute>::new();
         expected_del.insert(TunnelRoute {
             origin: TunnelOrigin {
-                overlay_prefix: IpNet::V4(Ipv4Net {
-                    addr: "0.0.0.0".parse().unwrap(),
-                    len: 0,
-                }),
+                overlay_prefix: "0.0.0.0/0".parse().unwrap(),
                 boundary_addr: "fd00:a::1".parse().unwrap(),
                 vni: 99,
                 metric: 0,

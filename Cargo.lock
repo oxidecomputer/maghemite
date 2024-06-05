@@ -770,6 +770,7 @@ dependencies = [
  "ddm",
  "ddm-admin-client",
  "mg-common",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet?branch=main)",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -1879,7 +1880,7 @@ source = "git+https://github.com/oxidecomputer/dlpi-sys#1d587ea98cf2d36f1b1624b0
 [[package]]
 name = "libfalcon"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=main#e665229882ff55977436d8ef7e329b0fbf0e76bd"
+source = "git+https://github.com/oxidecomputer/falcon?branch=main#84b8147e03290fa96d8693e5b668e6d032542907"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -1920,7 +1921,7 @@ checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#4ceaf96e02acb8258ea4aa403326c08932324835"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#b76542f77c566690cda628b1f86bfb2021a1a066"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -1930,6 +1931,7 @@ dependencies = [
  "num_enum 0.5.11",
  "nvpair",
  "nvpair-sys",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet)",
  "rusty-doors",
  "socket2 0.4.10",
  "thiserror",
@@ -2108,6 +2110,7 @@ dependencies = [
  "omicron-common",
  "oximeter",
  "oximeter-producer",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet?branch=main)",
  "schemars",
  "serde",
  "slog",
@@ -2139,6 +2142,7 @@ dependencies = [
  "http 0.2.12",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "mg-common",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet?branch=main)",
  "rdb",
  "slog",
  "thiserror",
@@ -2332,7 +2336,7 @@ dependencies = [
  "omicron-passwords",
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
- "oxnet",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet?branch=main)",
  "progenitor",
  "regress",
  "reqwest",
@@ -2366,7 +2370,7 @@ dependencies = [
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
  "openssl",
- "oxnet",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet?branch=main)",
  "parse-display",
  "schemars",
  "serde",
@@ -2576,7 +2580,7 @@ dependencies = [
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
  "once_cell",
- "oxnet",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet?branch=main)",
  "parse-display",
  "progenitor",
  "progenitor-client",
@@ -2833,7 +2837,18 @@ dependencies = [
 [[package]]
 name = "oxnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/oxnet?branch=main#5d09ba3c465337e29edc5830c950b8a77931fdfd"
+source = "git+https://github.com/oxidecomputer/oxnet?branch=main#2612d2203effcfdcbf83778a77f1bfd03fe6ed24"
+dependencies = [
+ "ipnetwork",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "oxnet"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/oxnet#2612d2203effcfdcbf83778a77f1bfd03fe6ed24"
 dependencies = [
  "ipnetwork",
  "schemars",
@@ -3132,7 +3147,7 @@ dependencies = [
 [[package]]
 name = "progenitor"
 version = "0.7.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#55d8b98eac9ca85ba9770b608f7ef62d33140217"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#1ca04dedc3227be7204e61982006c13a89b5a486"
 dependencies = [
  "progenitor-client",
  "progenitor-impl",
@@ -3143,7 +3158,7 @@ dependencies = [
 [[package]]
 name = "progenitor-client"
 version = "0.7.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#55d8b98eac9ca85ba9770b608f7ef62d33140217"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#1ca04dedc3227be7204e61982006c13a89b5a486"
 dependencies = [
  "bytes",
  "futures-core",
@@ -3157,7 +3172,7 @@ dependencies = [
 [[package]]
 name = "progenitor-impl"
 version = "0.7.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#55d8b98eac9ca85ba9770b608f7ef62d33140217"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#1ca04dedc3227be7204e61982006c13a89b5a486"
 dependencies = [
  "getopts",
  "heck 0.5.0",
@@ -3179,7 +3194,7 @@ dependencies = [
 [[package]]
 name = "progenitor-macro"
 version = "0.7.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#55d8b98eac9ca85ba9770b608f7ef62d33140217"
+source = "git+https://github.com/oxidecomputer/progenitor?branch=main#1ca04dedc3227be7204e61982006c13a89b5a486"
 dependencies = [
  "openapiv3",
  "proc-macro2",
@@ -3991,7 +4006,7 @@ dependencies = [
  "omicron-common",
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
- "oxnet",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet?branch=main)",
  "progenitor",
  "regress",
  "reqwest",
@@ -5527,7 +5542,7 @@ dependencies = [
 [[package]]
 name = "ztest"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=main#e665229882ff55977436d8ef7e329b0fbf0e76bd"
+source = "git+https://github.com/oxidecomputer/falcon?branch=main#84b8147e03290fa96d8693e5b668e6d032542907"
 dependencies = [
  "anyhow",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",

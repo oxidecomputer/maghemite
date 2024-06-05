@@ -11,7 +11,7 @@ use dendrite_common::ports::RearPort;
 use dpd_client::types;
 use dpd_client::Client;
 use dpd_client::ClientState;
-use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
+use libnet::{IpNet, Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -51,9 +51,9 @@ impl Route {
 impl From<crate::db::Route> for Route {
     fn from(r: crate::db::Route) -> Self {
         Self {
-            dest: r.destination.addr.into(),
+            dest: r.destination.addr().into(),
             //TODO libnet should return a u8, as nothing > 128 is a valid mask
-            prefix_len: r.destination.len,
+            prefix_len: r.destination.width(),
             gw: r.nexthop.into(),
             egress_port: 0,
             ifname: r.ifname,
@@ -94,17 +94,11 @@ impl From<Route> for libnet::route::Route {
     }
 }
 
-impl From<Route> for IpPrefix {
-    fn from(r: Route) -> IpPrefix {
+impl From<Route> for IpNet {
+    fn from(r: Route) -> IpNet {
         match r.dest {
-            IpAddr::V4(a) => IpPrefix::V4(Ipv4Prefix {
-                addr: a,
-                mask: r.prefix_len,
-            }),
-            IpAddr::V6(a) => IpPrefix::V6(Ipv6Prefix {
-                addr: a,
-                mask: r.prefix_len,
-            }),
+            IpAddr::V4(a) => IpNet::V4(Ipv4Net::new(a, r.prefix_len).unwrap()),
+            IpAddr::V6(a) => IpNet::V6(Ipv6Net::new(a, r.prefix_len).unwrap()),
         }
     }
 }
@@ -278,8 +272,7 @@ pub fn add_tunnel_routes(
     routes: &HashSet<TunnelRoute>,
 ) -> Result<(), String> {
     use oxide_vpc::api::{
-        IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr, Ipv6PrefixLen,
-        SetVirt2BoundaryReq,
+        IpCidr, Ipv4Cidr, Ipv4NetLen, Ipv6Cidr, Ipv6NetLen, SetVirt2BoundaryReq,
     };
     let hdl = OpteHdl::open(OpteHdl::XDE_CTL).map_err(|e| e.to_string())?;
 
@@ -297,11 +290,11 @@ pub fn add_tunnel_routes(
         let vip = match pfx {
             mg_common::net::IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
-                Ipv4PrefixLen::new(p.len).unwrap(),
+                Ipv4NetLen::new(p.len).unwrap(),
             )),
             mg_common::net::IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
                 p.addr.into(),
-                Ipv6PrefixLen::new(p.len).unwrap(),
+                Ipv6NetLen::new(p.len).unwrap(),
             )),
         };
         let req = SetVirt2BoundaryReq { vip, tep };
@@ -329,8 +322,8 @@ pub fn remove_tunnel_routes(
     routes: &HashSet<TunnelRoute>,
 ) -> Result<(), String> {
     use oxide_vpc::api::{
-        ClearVirt2BoundaryReq, IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr,
-        Ipv6PrefixLen,
+        ClearVirt2BoundaryReq, IpCidr, Ipv4Cidr, Ipv4NetLen, Ipv6Cidr,
+        Ipv6NetLen,
     };
     let hdl = OpteHdl::open(OpteHdl::XDE_CTL).map_err(|e| e.to_string())?;
     for (pfx, tep) in tunnel_route_update_map(routes) {
@@ -347,11 +340,11 @@ pub fn remove_tunnel_routes(
         let vip = match pfx {
             mg_common::net::IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
-                Ipv4PrefixLen::new(p.len).unwrap(),
+                Ipv4NetLen::new(p.len).unwrap(),
             )),
             mg_common::net::IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
                 p.addr.into(),
-                Ipv6PrefixLen::new(p.len).unwrap(),
+                Ipv6NetLen::new(p.len).unwrap(),
             )),
         };
         let req = ClearVirt2BoundaryReq { vip, tep };

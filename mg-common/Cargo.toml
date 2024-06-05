@@ -16,6 +16,7 @@ internal-dns.workspace = true
 tokio.workspace = true
 oximeter-producer.workspace = true
 oximeter.workspace = true
+oxnet.workspace = true
 backoff.workspace = true
 smf.workspace = true
 uuid.workspace = true
