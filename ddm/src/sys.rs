@@ -235,9 +235,8 @@ pub fn add_routes_dendrite(
 #[cfg(target_os = "illumos")]
 fn tunnel_route_update_map(
     routes: &HashSet<TunnelRoute>,
-) -> HashMap<mg_common::net::IpNet, Vec<TunnelEndpoint>> {
-    let mut m: HashMap<mg_common::net::IpNet, Vec<TunnelEndpoint>> =
-        HashMap::new();
+) -> HashMap<IpNet, Vec<TunnelEndpoint>> {
+    let mut m: HashMap<IpNet, Vec<TunnelEndpoint>> = HashMap::new();
     for r in routes {
         let pfx = r.origin.overlay_prefix;
         let tep = TunnelEndpoint {
@@ -289,11 +288,11 @@ pub fn add_tunnel_routes(
             );
         }
         let vip = match pfx {
-            mg_common::net::IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
+            IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
                 Ipv4PrefixLen::new(p.len).unwrap(),
             )),
-            mg_common::net::IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
+            IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
                 p.addr.into(),
                 Ipv6PrefixLen::new(p.len).unwrap(),
             )),
@@ -339,11 +338,11 @@ pub fn remove_tunnel_routes(
             );
         }
         let vip = match pfx {
-            mg_common::net::IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
+            IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
                 p.addr.into(),
                 Ipv4PrefixLen::new(p.len).unwrap(),
             )),
-            mg_common::net::IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
+            IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
                 p.addr.into(),
                 Ipv6PrefixLen::new(p.len).unwrap(),
             )),
