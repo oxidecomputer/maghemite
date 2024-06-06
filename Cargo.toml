@@ -107,6 +107,3 @@ package = "dpd-client"
 git = "https://github.com/oxidecomputer/dendrite"
 branch = "main"
 package = "common"
-
-# [patch."https://github.com/oxidecomputer/netadm-sys"]
-# libnet = { path = "../netadm-sys/libnet" }
