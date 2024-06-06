@@ -11,7 +11,7 @@ use dendrite_common::ports::RearPort;
 use dpd_client::types;
 use dpd_client::Client;
 use dpd_client::ClientState;
-use libnet::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
+use libnet::{IpNet, Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -94,17 +94,11 @@ impl From<Route> for libnet::route::Route {
     }
 }
 
-impl From<Route> for IpPrefix {
-    fn from(r: Route) -> IpPrefix {
+impl From<Route> for IpNet {
+    fn from(r: Route) -> IpNet {
         match r.dest {
-            IpAddr::V4(a) => IpPrefix::V4(Ipv4Prefix {
-                addr: a,
-                mask: r.prefix_len,
-            }),
-            IpAddr::V6(a) => IpPrefix::V6(Ipv6Prefix {
-                addr: a,
-                mask: r.prefix_len,
-            }),
+            IpAddr::V4(a) => Ipv4Net::new(a, r.prefix_len).unwrap().into(),
+            IpAddr::V6(a) => Ipv6Net::new(a, r.prefix_len).unwrap().into(),
         }
     }
 }
