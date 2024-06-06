@@ -1,4 +1,4 @@
-use libnet::IpNet;
+use oxnet::IpNet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv6Addr;

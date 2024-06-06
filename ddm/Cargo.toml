@@ -31,4 +31,5 @@ chrono.workspace = true
 omicron-common.workspace = true
 oximeter.workspace = true
 oximeter-producer.workspace = true
+oxnet.workspace = true
 uuid.workspace = true

@@ -82,7 +82,7 @@ mg-common = { path = "mg-common" }
 chrono = { version = "0.4.38", features = ["serde"] }
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
-oxnet = { git = "https://github.com/oxidecomputer/oxnet", branch = "main"}
+oxnet = { git = "https://github.com/oxidecomputer/oxnet" }
 omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 internal-dns = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 uuid = { version = "1.8", features = ["serde", "v4"] }

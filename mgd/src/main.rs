@@ -124,7 +124,7 @@ async fn run(args: RunArgs) {
         error!(log, "send context to signal handler {e}");
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(feature = "mg-lower")]
     {
         let rt = Arc::new(tokio::runtime::Handle::current());
         let ctx = context.clone();

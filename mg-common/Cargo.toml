@@ -20,4 +20,12 @@ oxnet.workspace = true
 backoff.workspace = true
 smf.workspace = true
 uuid.workspace = true
-libnet.workspace = true
+
+# We need this on illumos, but must omit it on other platforms
+[dependencies.libnet]
+workspace = true
+optional = true
+
+[features]
+default = ["libnet"]
+libnet = ["dep:libnet"]

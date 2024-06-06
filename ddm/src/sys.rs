@@ -11,7 +11,7 @@ use dendrite_common::ports::RearPort;
 use dpd_client::types;
 use dpd_client::Client;
 use dpd_client::ClientState;
-use libnet::{IpNet, Ipv4Net, Ipv6Net};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
