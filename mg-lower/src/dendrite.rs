@@ -14,8 +14,8 @@ use dpd_client::Client as DpdClient;
 use dpd_client::Ipv4Cidr;
 use dpd_client::Ipv6Cidr;
 use http::StatusCode;
-use libnet::Ipv6Prefix;
-use libnet::{get_route, IpPrefix, Ipv4Prefix};
+use libnet::Ipv6Net;
+use libnet::{get_route, IpNet, Ipv4Net};
 use rdb::Path;
 use rdb::Prefix;
 use slog::{error, warn, Logger};
@@ -333,10 +333,7 @@ fn test_tfport_parser() {
 fn get_port_and_link(
     nexthop: IpAddr,
 ) -> Result<(PortId, types::LinkId), Error> {
-    let prefix = match nexthop {
-        IpAddr::V4(addr) => IpPrefix::V4(Ipv4Prefix { addr, mask: 32 }),
-        IpAddr::V6(addr) => IpPrefix::V6(Ipv6Prefix { addr, mask: 128 }),
-    };
+    let prefix = IpNet::host_net(nexthop);
     let sys_route = get_route(prefix, Some(Duration::from_secs(1)))?;
 
     let ifname = match sys_route.ifx {
