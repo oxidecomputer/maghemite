@@ -94,8 +94,8 @@ impl From<Route> for libnet::route::Route {
 impl From<Route> for IpNet {
     fn from(r: Route) -> IpNet {
         match r.dest {
-            IpAddr::V4(a) => IpNet::V4(Ipv4Net::new(a, r.prefix_len).unwrap()),
-            IpAddr::V6(a) => IpNet::V6(Ipv6Net::new(a, r.prefix_len).unwrap()),
+            IpAddr::V4(a) => Ipv4Net::new(a, r.prefix_len).unwrap().into(),
+            IpAddr::V6(a) => Ipv6Net::new(a, r.prefix_len).unwrap().into(),
         }
     }
 }

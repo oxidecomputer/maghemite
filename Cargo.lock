@@ -1943,7 +1943,7 @@ dependencies = [
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys#4ceaf96e02acb8258ea4aa403326c08932324835"
+source = "git+https://github.com/oxidecomputer/netadm-sys#b76542f77c566690cda628b1f86bfb2021a1a066"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -1953,6 +1953,7 @@ dependencies = [
  "num_enum 0.5.11",
  "nvpair",
  "nvpair-sys",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet)",
  "rusty-doors",
  "socket2 0.4.10",
  "thiserror",
