@@ -52,7 +52,6 @@ impl From<crate::db::Route> for Route {
     fn from(r: crate::db::Route) -> Self {
         Self {
             dest: r.destination.addr().into(),
-            //TODO libnet should return a u8, as nothing > 128 is a valid mask
             prefix_len: r.destination.width(),
             gw: r.nexthop.into(),
             egress_port: 0,
@@ -65,7 +64,6 @@ impl From<libnet::route::Route> for Route {
     fn from(r: libnet::route::Route) -> Self {
         Self {
             dest: r.dest,
-            //TODO libnet should return a u8, as nothing > 128 is a valid mask
             prefix_len: r.mask.try_into().unwrap(),
             gw: r.gw,
             egress_port: 0,
@@ -81,7 +79,6 @@ impl From<Route> for libnet::route::Route {
     fn from(r: Route) -> libnet::route::Route {
         libnet::route::Route {
             dest: r.dest,
-            //TODO libnet should return a u8 as nothing > 128 is a valid mask
             mask: r.prefix_len as u32,
             gw: r.gw,
             delay: 0,
