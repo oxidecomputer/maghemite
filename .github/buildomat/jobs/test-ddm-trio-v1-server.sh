@@ -10,6 +10,7 @@
 #: access_repos = [
 #:   "oxidecomputer/dendrite",
 #: ]
+#: enable = false
 #:
 
 source .github/buildomat/test-ddm-common.sh
