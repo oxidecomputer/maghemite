@@ -7,10 +7,14 @@ use dropshot::{
     endpoint, ApiDescription, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use rdb::{db::Rib, Path, Prefix4, StaticRouteKey};
+use rdb::{Path, Prefix4, StaticRouteKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{net::Ipv4Addr, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::Ipv4Addr,
+    sync::Arc,
+};
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct AddStaticRoute4Request {
@@ -94,10 +98,19 @@ pub async fn static_remove_v4_route(
     Ok(HttpResponseDeleted())
 }
 
+pub type GetRibResult = BTreeMap<String, BTreeSet<Path>>;
+
 #[endpoint { method = GET, path = "/static/route4" }]
 pub async fn static_list_v4_routes(
     ctx: RequestContext<Arc<HandlerContext>>,
-) -> Result<HttpResponseOk<Rib>, HttpError> {
-    let static_rib = ctx.context().db.static_rib();
+) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
+    let static_rib = ctx
+        .context()
+        .db
+        .static_rib()
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+
     Ok(HttpResponseOk(static_rib))
 }
