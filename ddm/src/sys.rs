@@ -67,10 +67,7 @@ impl From<libnet::route::Route> for Route {
             prefix_len: r.mask.try_into().unwrap(),
             gw: r.gw,
             egress_port: 0,
-            ifname: match r.ifx {
-                Some(ifx) => ifx,
-                None => String::new(),
-            },
+            ifname: r.ifx.unwrap_or_default(),
         }
     }
 }
