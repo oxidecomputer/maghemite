@@ -12,70 +12,13 @@ progenitor::generate_api!(
             "body" => ?&request.body(),
         );
     }),
+    crates = {
+        "oxnet" = "0.1.0",
+    },
     post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
         slog::trace!(log, "client response"; "result" => ?result);
     })
 );
-
-impl Copy for types::Ipv4Prefix {}
-impl Copy for types::Ipv6Prefix {}
-impl Copy for types::IpPrefix {}
-
-impl std::cmp::PartialEq for types::Ipv4Prefix {
-    fn eq(&self, other: &Self) -> bool {
-        self.addr.eq(&other.addr) && self.len.eq(&other.len)
-    }
-}
-
-impl std::cmp::Eq for types::Ipv4Prefix {}
-
-impl std::hash::Hash for types::Ipv4Prefix {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.addr.hash(state);
-        self.len.hash(state);
-    }
-}
-
-impl std::cmp::PartialEq for types::Ipv6Prefix {
-    fn eq(&self, other: &Self) -> bool {
-        self.addr.eq(&other.addr) && self.len.eq(&other.len)
-    }
-}
-
-impl std::cmp::Eq for types::Ipv6Prefix {}
-
-impl std::hash::Hash for types::Ipv6Prefix {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.addr.hash(state);
-        self.len.hash(state);
-    }
-}
-
-impl std::cmp::PartialEq for types::IpPrefix {
-    fn eq(&self, other: &Self) -> bool {
-        match self {
-            types::IpPrefix::V4(x) => match other {
-                types::IpPrefix::V4(y) => x.eq(y),
-                _ => false,
-            },
-            types::IpPrefix::V6(x) => match other {
-                types::IpPrefix::V6(y) => x.eq(y),
-                _ => false,
-            },
-        }
-    }
-}
-
-impl std::hash::Hash for types::IpPrefix {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            types::IpPrefix::V4(x) => x.hash(state),
-            types::IpPrefix::V6(x) => x.hash(state),
-        }
-    }
-}
-
-impl std::cmp::Eq for types::IpPrefix {}
 
 impl std::cmp::PartialEq for types::TunnelOrigin {
     fn eq(&self, other: &Self) -> bool {

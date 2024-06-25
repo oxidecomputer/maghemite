@@ -7,7 +7,8 @@ use crate::discovery::Version;
 use crate::exchange::{PathVector, TunnelUpdate, UnderlayUpdate, Update};
 use crate::{dbg, discovery, err, exchange, inf, wrn};
 use libnet::get_ipaddr_info;
-use mg_common::net::{Ipv6Prefix, TunnelOrigin};
+use libnet::Ipv6Net;
+use mg_common::net::TunnelOrigin;
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv6Addr};
@@ -36,7 +37,7 @@ pub enum AdminEvent {
 
 #[derive(Debug)]
 pub enum PrefixSet {
-    Underlay(HashSet<Ipv6Prefix>),
+    Underlay(HashSet<Ipv6Net>),
     Tunnel(HashSet<TunnelOrigin>),
 }
 
@@ -91,7 +92,7 @@ pub enum EventError {
 #[derive(Debug)]
 pub enum EventResponse {
     Success,
-    Prefixes(Vec<Ipv6Prefix>),
+    Prefixes(Vec<Ipv6Net>),
 }
 
 #[derive(Error, Debug)]

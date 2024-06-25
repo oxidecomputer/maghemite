@@ -18,7 +18,7 @@ pub enum Commands {
 }
 
 #[derive(Debug, Error)]
-pub enum Ipv4PrefixParseError {
+pub enum Ipv4NetParseError {
     #[error("expected CIDR representation <addr>/<mask>")]
     Cidr,
 
@@ -31,27 +31,27 @@ pub enum Ipv4PrefixParseError {
 
 #[derive(Debug, Args)]
 pub struct StaticRoute4 {
-    pub destination: Ipv4Prefix,
+    pub destination: Ipv4Net,
     pub nexthop: Ipv4Addr,
     pub vlan_id: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Ipv4Prefix {
+pub struct Ipv4Net {
     pub addr: Ipv4Addr,
     pub len: u8,
 }
 
-impl std::str::FromStr for Ipv4Prefix {
-    type Err = Ipv4PrefixParseError;
+impl std::str::FromStr for Ipv4Net {
+    type Err = Ipv4NetParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() < 2 {
-            return Err(Ipv4PrefixParseError::Cidr);
+            return Err(Ipv4NetParseError::Cidr);
         }
 
-        Ok(Ipv4Prefix {
+        Ok(Ipv4Net {
             addr: Ipv4Addr::from_str(parts[0])?,
             len: u8::from_str(parts[1])?,
         })

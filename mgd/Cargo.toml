@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 mg-lower = { path = "../mg-lower", optional = true }
-mg-common = { path = "../mg-common" }
+mg-common = { path = "../mg-common", default-features = false}
 bfd = { path = "../bfd" }
 bgp = { path = "../bgp" }
 rdb = { path = "../rdb" }
@@ -32,3 +32,4 @@ smf.workspace = true
 
 [features]
 default = ["mg-lower"]
+mg-lower = ["dep:mg-lower"]

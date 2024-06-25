@@ -31,7 +31,8 @@ use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use hyper::body::Bytes;
-use mg_common::net::{Ipv6Prefix, TunnelOrigin};
+use mg_common::net::TunnelOrigin;
+use oxnet::Ipv6Net;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -131,7 +132,7 @@ impl From<HashSet<PathVector>> for PullResponse {
     Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
 )]
 pub struct PathVector {
-    pub destination: Ipv6Prefix,
+    pub destination: Ipv6Net,
     pub path: Vec<String>,
 }
 
@@ -772,8 +773,8 @@ fn handle_underlay_update(update: &UnderlayUpdate, ctx: &HandlerContext) {
             path: prefix.path.clone(),
         });
         let mut r = crate::sys::Route::new(
-            prefix.destination.addr.into(),
-            prefix.destination.len,
+            prefix.destination.addr().into(),
+            prefix.destination.width(),
             ctx.peer.into(),
         );
         r.ifname.clone_from(&ctx.ctx.config.if_name);
@@ -810,8 +811,8 @@ fn handle_underlay_update(update: &UnderlayUpdate, ctx: &HandlerContext) {
     for w in &withdraw {
         if db.routes_by_vector(w.destination, w.nexthop).is_empty() {
             let mut r = crate::sys::Route::new(
-                w.destination.addr.into(),
-                w.destination.len,
+                w.destination.addr().into(),
+                w.destination.width(),
                 w.nexthop.into(),
             );
             r.ifname.clone_from(&ctx.ctx.config.if_name);

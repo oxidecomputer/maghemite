@@ -2,9 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_admin_client::types::{Ipv6Prefix, TunnelOrigin};
+use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client;
 use dpd_client::Cidr;
+use oxnet::Ipv6Net;
 use rdb::db::Rib;
 use rdb::{Prefix, Prefix4, Prefix6, DEFAULT_ROUTE_PRIORITY};
 use slog::{error, info, Logger};
@@ -52,7 +53,7 @@ fn ensure_tep_underlay_origin(
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) {
-    let current: Vec<Ipv6Prefix> = match rt
+    let current: Vec<Ipv6Net> = match rt
         .block_on(async { client.get_originated().await })
         .map(|x| x.into_inner())
     {
@@ -65,7 +66,7 @@ fn ensure_tep_underlay_origin(
     .into_iter()
     .collect();
 
-    let target = Ipv6Prefix { addr: tep, len: 64 };
+    let target = Ipv6Net::new(tep, 64).unwrap();
 
     if current.contains(&target) {
         return;
@@ -82,12 +83,9 @@ fn route_to_tunnel(tep: Ipv6Addr, prefix: &Prefix) -> TunnelOrigin {
     match prefix {
         Prefix::V4(p) => {
             TunnelOrigin {
-                overlay_prefix: ddm_admin_client::types::IpPrefix::V4(
-                    ddm_admin_client::types::Ipv4Prefix {
-                        addr: p.value,
-                        len: p.length,
-                    },
-                ),
+                overlay_prefix: oxnet::Ipv4Net::new(p.value, p.length)
+                    .unwrap()
+                    .into(),
                 boundary_addr: tep,
                 vni: BOUNDARY_SERVICES_VNI,     //TODO?
                 metric: DEFAULT_ROUTE_PRIORITY, //TODO
@@ -95,12 +93,9 @@ fn route_to_tunnel(tep: Ipv6Addr, prefix: &Prefix) -> TunnelOrigin {
         }
         Prefix::V6(p) => {
             TunnelOrigin {
-                overlay_prefix: ddm_admin_client::types::IpPrefix::V6(
-                    ddm_admin_client::types::Ipv6Prefix {
-                        addr: p.value,
-                        len: p.length,
-                    },
-                ),
+                overlay_prefix: oxnet::Ipv6Net::new(p.value, p.length)
+                    .unwrap()
+                    .into(),
                 boundary_addr: tep,
                 vni: BOUNDARY_SERVICES_VNI,     //TODO?
                 metric: DEFAULT_ROUTE_PRIORITY, //TODO

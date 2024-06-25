@@ -11,7 +11,7 @@ use dendrite_common::ports::RearPort;
 use dpd_client::types;
 use dpd_client::Client;
 use dpd_client::ClientState;
-use libnet::{IpNet, Ipv4Net, Ipv6Net};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -51,9 +51,8 @@ impl Route {
 impl From<crate::db::Route> for Route {
     fn from(r: crate::db::Route) -> Self {
         Self {
-            dest: r.destination.addr.into(),
-            //TODO libnet should return a u8, as nothing > 128 is a valid mask
-            prefix_len: r.destination.len,
+            dest: r.destination.addr().into(),
+            prefix_len: r.destination.width(),
             gw: r.nexthop.into(),
             egress_port: 0,
             ifname: r.ifname,
@@ -65,7 +64,6 @@ impl From<libnet::route::Route> for Route {
     fn from(r: libnet::route::Route) -> Self {
         Self {
             dest: r.dest,
-            //TODO libnet should return a u8, as nothing > 128 is a valid mask
             prefix_len: r.mask.try_into().unwrap(),
             gw: r.gw,
             egress_port: 0,
@@ -78,7 +76,6 @@ impl From<Route> for libnet::route::Route {
     fn from(r: Route) -> libnet::route::Route {
         libnet::route::Route {
             dest: r.dest,
-            //TODO libnet should return a u8 as nothing > 128 is a valid mask
             mask: r.prefix_len as u32,
             gw: r.gw,
             delay: 0,
@@ -232,9 +229,8 @@ pub fn add_routes_dendrite(
 #[cfg(target_os = "illumos")]
 fn tunnel_route_update_map(
     routes: &HashSet<TunnelRoute>,
-) -> HashMap<mg_common::net::IpPrefix, Vec<TunnelEndpoint>> {
-    let mut m: HashMap<mg_common::net::IpPrefix, Vec<TunnelEndpoint>> =
-        HashMap::new();
+) -> HashMap<IpNet, Vec<TunnelEndpoint>> {
+    let mut m: HashMap<IpNet, Vec<TunnelEndpoint>> = HashMap::new();
     for r in routes {
         let pfx = r.origin.overlay_prefix;
         let tep = TunnelEndpoint {
@@ -286,13 +282,13 @@ pub fn add_tunnel_routes(
             );
         }
         let vip = match pfx {
-            mg_common::net::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
-                p.addr.into(),
-                Ipv4PrefixLen::new(p.len).unwrap(),
+            IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
+                p.addr().into(),
+                Ipv4PrefixLen::new(p.width()).unwrap(),
             )),
-            mg_common::net::IpPrefix::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
-                p.addr.into(),
-                Ipv6PrefixLen::new(p.len).unwrap(),
+            IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
+                p.addr().into(),
+                Ipv6PrefixLen::new(p.width()).unwrap(),
             )),
         };
         let req = SetVirt2BoundaryReq { vip, tep };
@@ -336,13 +332,13 @@ pub fn remove_tunnel_routes(
             );
         }
         let vip = match pfx {
-            mg_common::net::IpPrefix::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
-                p.addr.into(),
-                Ipv4PrefixLen::new(p.len).unwrap(),
+            IpNet::V4(p) => IpCidr::Ip4(Ipv4Cidr::new(
+                p.addr().into(),
+                Ipv4PrefixLen::new(p.width()).unwrap(),
             )),
-            mg_common::net::IpPrefix::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
-                p.addr.into(),
-                Ipv6PrefixLen::new(p.len).unwrap(),
+            IpNet::V6(p) => IpCidr::Ip6(Ipv6Cidr::new(
+                p.addr().into(),
+                Ipv6PrefixLen::new(p.width()).unwrap(),
             )),
         };
         let req = ClearVirt2BoundaryReq { vip, tep };

@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+oxnet.workspace = true
+percent-encoding.workspace = true
+progenitor.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 slog.workspace = true
-percent-encoding.workspace = true
-reqwest.workspace = true
-progenitor.workspace = true
 uuid.workspace = true

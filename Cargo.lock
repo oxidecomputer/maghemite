@@ -733,6 +733,7 @@ dependencies = [
  "oxide-vpc",
  "oximeter",
  "oximeter-producer",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet)",
  "pretty_assertions",
  "schemars",
  "serde",
@@ -750,6 +751,7 @@ dependencies = [
 name = "ddm-admin-client"
 version = "0.1.0"
 dependencies = [
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet)",
  "percent-encoding",
  "progenitor",
  "reqwest",
@@ -770,6 +772,7 @@ dependencies = [
  "ddm",
  "ddm-admin-client",
  "mg-common",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet)",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -2110,6 +2113,7 @@ dependencies = [
  "omicron-common",
  "oximeter",
  "oximeter-producer",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet)",
  "schemars",
  "serde",
  "slog",
@@ -2141,6 +2145,7 @@ dependencies = [
  "http 0.2.12",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "mg-common",
+ "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet)",
  "rdb",
  "slog",
  "thiserror",
