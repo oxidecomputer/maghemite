@@ -5,7 +5,7 @@
 use anyhow::{anyhow, Result};
 use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client;
-use ddm_admin_client_v2::types::Ipv6Prefix;
+use ddm_admin_client_v2::types::{IpPrefix, Ipv4Prefix, Ipv6Prefix};
 use ddm_admin_client_v2::Client as ClientV2;
 use slog::{Drain, Logger};
 use std::env;
@@ -553,7 +553,7 @@ async fn run_trio_tests(
 
     if zs2.v2 {
         s2_v2
-            .advertise_prefixes(&vec![Ipv6Prefix {
+            .withdraw_prefixes(&vec![Ipv6Prefix {
                 addr: "fd00:2::".parse().unwrap(),
                 len: 64,
             }])
@@ -563,9 +563,9 @@ async fn run_trio_tests(
             .await?;
     }
 
-    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 1);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 0);
     wait_for_eq!(prefix_count(&s2, &s2_v2, zs2.v2).await?, 1);
-    wait_for_eq!(prefix_count(&t1, &t1_v2, zt1.v2).await?, 2);
+    wait_for_eq!(prefix_count(&t1, &t1_v2, zt1.v2).await?, 1);
 
     if zs2.v2 {
         s2_v2
@@ -619,9 +619,26 @@ async fn run_trio_tests(
 
     println!("redundant advertise passed");
 
-    if !(zt1.v2 || zs1.v2 || zs2.v2) {
-        wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
+    wait_for_eq!(
+        tunnel_originated_endpoint_count(&t1, &t1_v2, zt1.v2).await?,
+        0
+    );
 
+    if zt1.v2 {
+        t1_v2
+            .advertise_tunnel_endpoints(&vec![
+                ddm_admin_client_v2::types::TunnelOrigin {
+                    overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                        addr: "203.0.113.0".parse().unwrap(),
+                        len: 24,
+                    }),
+                    boundary_addr: "fd00:1701::1".parse().unwrap(),
+                    vni: 47,
+                    metric: 0,
+                },
+            ])
+            .await?;
+    } else {
         t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
             overlay_prefix: "203.0.113.0/24".parse().unwrap(),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
@@ -629,16 +646,35 @@ async fn run_trio_tests(
             metric: 0,
         }])
         .await?;
+    }
 
-        wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 1);
-        wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
-        wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
-        wait_for_eq!(tunnel_endpoint_count(&s2).await?, 1);
+    wait_for_eq!(
+        tunnel_originated_endpoint_count(&t1, &t1_v2, zt1.v2).await?,
+        1
+    );
+    wait_for_eq!(tunnel_endpoint_count(&t1, &t1_v2, zt1.v2).await?, 0);
+    wait_for_eq!(tunnel_endpoint_count(&s1, &s1_v2, zs1.v2).await?, 1);
+    wait_for_eq!(tunnel_endpoint_count(&s2, &s2_v2, zs2.v2).await?, 1);
 
-        println!("tunnel endpoint advertise passed");
+    println!("tunnel endpoint advertise passed");
 
-        // redudant advertise should not change things
+    // redudant advertise should not change things
 
+    if zt1.v2 {
+        t1_v2
+            .advertise_tunnel_endpoints(&vec![
+                ddm_admin_client_v2::types::TunnelOrigin {
+                    overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                        addr: "203.0.113.0".parse().unwrap(),
+                        len: 24,
+                    }),
+                    boundary_addr: "fd00:1701::1".parse().unwrap(),
+                    vni: 47,
+                    metric: 0,
+                },
+            ])
+            .await?;
+    } else {
         t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
             overlay_prefix: "203.0.113.0/24".parse().unwrap(),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
@@ -646,25 +682,45 @@ async fn run_trio_tests(
             metric: 0,
         }])
         .await?;
+    }
 
-        sleep(Duration::from_secs(5));
+    sleep(Duration::from_secs(5));
 
-        wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 1);
-        wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
-        wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
-        wait_for_eq!(tunnel_endpoint_count(&s2).await?, 1);
+    wait_for_eq!(
+        tunnel_originated_endpoint_count(&t1, &t1_v2, zt1.v2).await?,
+        1
+    );
+    wait_for_eq!(tunnel_endpoint_count(&t1, &t1_v2, zt1.v2).await?, 0);
+    wait_for_eq!(tunnel_endpoint_count(&s1, &s1_v2, zs1.v2).await?, 1);
+    wait_for_eq!(tunnel_endpoint_count(&s2, &s2_v2, zs2.v2).await?, 1);
 
-        println!("redundant tunnel endpoint advertise passed");
+    println!("redundant tunnel endpoint advertise passed");
 
-        zs1.stop_router()?;
-        sleep(Duration::from_secs(5));
-        zs1.start_router()?;
-        sleep(Duration::from_secs(5));
-        let s1 = Client::new("http://10.0.0.1:8000", log.clone());
-        wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
+    zs1.stop_router()?;
+    sleep(Duration::from_secs(5));
+    zs1.start_router()?;
+    sleep(Duration::from_secs(5));
+    let s1 = Client::new("http://10.0.0.1:8000", log.clone());
+    let s1_v2 = ClientV2::new("http://10.0.0.1:8000", log.clone());
+    wait_for_eq!(tunnel_endpoint_count(&s1, &s1_v2, zs1.v2).await?, 1);
 
-        println!("tunnel router restart passed");
+    println!("tunnel router restart passed");
 
+    if zt1.v2 {
+        t1_v2
+            .withdraw_tunnel_endpoints(&vec![
+                ddm_admin_client_v2::types::TunnelOrigin {
+                    overlay_prefix: IpPrefix::V4(Ipv4Prefix {
+                        addr: "203.0.113.0".parse().unwrap(),
+                        len: 24,
+                    }),
+                    boundary_addr: "fd00:1701::1".parse().unwrap(),
+                    vni: 47,
+                    metric: 0,
+                },
+            ])
+            .await?;
+    } else {
         t1.withdraw_tunnel_endpoints(&vec![TunnelOrigin {
             overlay_prefix: "203.0.113.0/24".parse().unwrap(),
             boundary_addr: "fd00:1701::1".parse().unwrap(),
@@ -672,14 +728,17 @@ async fn run_trio_tests(
             metric: 0,
         }])
         .await?;
-
-        wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
-        wait_for_eq!(tunnel_endpoint_count(&t1).await?, 0);
-        wait_for_eq!(tunnel_endpoint_count(&s1).await?, 0);
-        wait_for_eq!(tunnel_endpoint_count(&s2).await?, 0);
-
-        println!("tunnel endpoint withdraw passed");
     }
+
+    wait_for_eq!(
+        tunnel_originated_endpoint_count(&t1, &t1_v2, zt1.v2).await?,
+        0
+    );
+    wait_for_eq!(tunnel_endpoint_count(&t1, &t1_v2, zt1.v2).await?, 0);
+    wait_for_eq!(tunnel_endpoint_count(&s1, &s1_v2, zs1.v2).await?, 0);
+    wait_for_eq!(tunnel_endpoint_count(&s2, &s2_v2, zs2.v2).await?, 0);
+
+    println!("tunnel endpoint withdraw passed");
 
     Ok(())
 }
@@ -873,12 +932,28 @@ async fn prefix_count(c: &Client, c2: &ClientV2, v2: bool) -> Result<usize> {
     }
 }
 
-async fn tunnel_endpoint_count(c: &Client) -> Result<usize> {
-    Ok(c.get_tunnel_endpoints().await?.len())
+async fn tunnel_endpoint_count(
+    c: &Client,
+    c2: &ClientV2,
+    v2: bool,
+) -> Result<usize> {
+    if v2 {
+        Ok(c2.get_tunnel_endpoints().await?.len())
+    } else {
+        Ok(c.get_tunnel_endpoints().await?.len())
+    }
 }
 
-async fn tunnel_originated_endpoint_count(c: &Client) -> Result<usize> {
-    Ok(c.get_originated_tunnel_endpoints().await?.len())
+async fn tunnel_originated_endpoint_count(
+    c: &Client,
+    c2: &ClientV2,
+    v2: bool,
+) -> Result<usize> {
+    if v2 {
+        Ok(c2.get_originated_tunnel_endpoints().await?.len())
+    } else {
+        Ok(c.get_originated_tunnel_endpoints().await?.len())
+    }
 }
 
 fn init_logger() -> Logger {
