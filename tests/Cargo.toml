@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ddm-admin-client = { path = "../ddm-admin-client" }
+ddm-admin-client-v2 = { package = "ddm-admin-client", git = "https://github.com/oxidecomputer/maghemite", rev = "2bfd39000c878c45675651a7588c015c486e7f43"}
 
 libnet.workspace = true
 anyhow.workspace = true
@@ -16,3 +17,5 @@ slog-async.workspace = true
 tokio.workspace = true
 ztest.workspace = true
 uuid.workspace = true
+serde.workspace = true
+

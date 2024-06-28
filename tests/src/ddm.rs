@@ -5,6 +5,8 @@
 use anyhow::{anyhow, Result};
 use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client;
+use ddm_admin_client_v2::types::Ipv6Prefix;
+use ddm_admin_client_v2::Client as ClientV2;
 use slog::{Drain, Logger};
 use std::env;
 use std::net::Ipv6Addr;
@@ -98,7 +100,7 @@ struct RouterZone<'a> {
     zone: Zone,
     transit: bool,
     testname: String,
-    v1: bool,
+    v2: bool,
 }
 
 impl<'a> RouterZone<'a> {
@@ -107,9 +109,9 @@ impl<'a> RouterZone<'a> {
         zfs: &'a Zfs,
         mgmt: &'a str,
         rtr_ifx: &[&'a str],
-        v1: bool,
+        v2: bool,
     ) -> Result<Self> {
-        Self::new(name, zfs, mgmt, rtr_ifx, false, "", v1)
+        Self::new(name, zfs, mgmt, rtr_ifx, false, "", v2)
     }
 
     fn transit(
@@ -118,9 +120,9 @@ impl<'a> RouterZone<'a> {
         mgmt: &'a str,
         rtr_ifx: &[&'a str],
         testname: &str,
-        v1: bool,
+        v2: bool,
     ) -> Result<Self> {
-        Self::new(name, zfs, mgmt, rtr_ifx, true, testname, v1)
+        Self::new(name, zfs, mgmt, rtr_ifx, true, testname, v2)
     }
 
     fn new(
@@ -130,7 +132,7 @@ impl<'a> RouterZone<'a> {
         rtr_ifx: &[&'a str],
         transit: bool,
         testname: &str,
-        v1: bool,
+        v2: bool,
     ) -> Result<Self> {
         let mut ifx = vec![mgmt];
         ifx.extend_from_slice(rtr_ifx);
@@ -150,7 +152,7 @@ impl<'a> RouterZone<'a> {
             zone,
             transit,
             testname: testname.into(),
-            v1,
+            v2,
         })
     }
 
@@ -165,8 +167,8 @@ impl<'a> RouterZone<'a> {
             .collect::<Vec<String>>()
             .join(" ");
 
-        let ddm = if self.v1 { "/opt/ddmd-v1" } else { "/opt/ddmd" };
-        let extra_args = if self.v1 {
+        let ddm = if self.v2 { "/opt/ddmd-v2" } else { "/opt/ddmd" };
+        let extra_args = if self.v2 {
             String::new()
         } else {
             format!(
@@ -176,15 +178,15 @@ impl<'a> RouterZone<'a> {
             )
         };
 
-        if self.v1 {
+        if self.v2 {
             self.zfs.copy_workspace_to_zone(
                 &self.zone.name,
-                "download/ddmd-v1",
+                "download/ddmd-v2",
                 "opt/",
             )?;
             self.zfs.copy_workspace_to_zone(
                 &self.zone.name,
-                "download/ddmadm-v1",
+                "download/ddmadm-v2",
                 "opt/",
             )?;
         }
@@ -336,21 +338,21 @@ macro_rules! run_topo {
 }
 
 #[tokio::test]
-async fn test_trio_v2() -> Result<()> {
+async fn test_trio_v3() -> Result<()> {
     test_trio(false, false).await
 }
 
 #[tokio::test]
-async fn test_trio_v1_server() -> Result<()> {
+async fn test_trio_v2_server() -> Result<()> {
     test_trio(true, false).await
 }
 
 #[tokio::test]
-async fn test_trio_v1_transit() -> Result<()> {
+async fn test_trio_v2_transit() -> Result<()> {
     test_trio(false, true).await
 }
 
-async fn test_trio(v1_server: bool, v1_transit: bool) -> Result<()> {
+async fn test_trio(v2_server: bool, v2_transit: bool) -> Result<()> {
     // A trio. Two server routers and one transit router.
     //
     //                                                    sled1
@@ -400,7 +402,7 @@ async fn test_trio(v1_server: bool, v1_transit: bool) -> Result<()> {
         &zfs,
         &mg2.name,
         &[&sl0_sw0.end_a],
-        v1_server,
+        v2_server,
     )?;
     println!("start zone s2");
     let s2 = RouterZone::server(
@@ -408,7 +410,7 @@ async fn test_trio(v1_server: bool, v1_transit: bool) -> Result<()> {
         &zfs,
         &mg3.name,
         &[&sl1_sw1.end_a],
-        v1_server,
+        v2_server,
     )?;
     println!("start zone t1");
     let t1 = RouterZone::transit(
@@ -417,7 +419,7 @@ async fn test_trio(v1_server: bool, v1_transit: bool) -> Result<()> {
         &mg1.name,
         &[&tf0_sr0.end_a, &tf1_sr1.end_a],
         "trio",
-        v1_transit,
+        v2_transit,
     )?;
 
     println!("waiting for zones to come up");
@@ -443,6 +445,10 @@ async fn run_trio_tests(
     let s2 = Client::new("http://10.0.0.2:8000", log.clone());
     let t1 = Client::new("http://10.0.0.3:8000", log.clone());
 
+    let s1_v2 = ClientV2::new("http://10.0.0.1:8000", log.clone());
+    let s2_v2 = ClientV2::new("http://10.0.0.2:8000", log.clone());
+    let t1_v2 = ClientV2::new("http://10.0.0.3:8000", log.clone());
+
     // If we never get a response from a server, return 99 as a sentinel value.
     wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
     wait_for_eq!(s2.get_peers().await.map_or(99, |x| x.len()), 1);
@@ -450,21 +456,39 @@ async fn run_trio_tests(
 
     println!("initial peering test passed");
 
-    s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
-        .await?;
+    if zs1.v2 {
+        s1_v2
+            .advertise_prefixes(&vec![Ipv6Prefix {
+                addr: "fd00:1::".parse().unwrap(),
+                len: 64,
+            }])
+            .await?;
+    } else {
+        s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+            .await?;
+    }
 
-    wait_for_eq!(prefix_count(&s1).await?, 0);
-    wait_for_eq!(prefix_count(&s2).await?, 1);
-    wait_for_eq!(prefix_count(&t1).await?, 1);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 0);
+    wait_for_eq!(prefix_count(&s2, &s2_v2, zs2.v2).await?, 1);
+    wait_for_eq!(prefix_count(&t1, &t1_v2, zt1.v2).await?, 1);
 
     println!("advertise from one passed");
 
-    s2.advertise_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
-        .await?;
+    if zs2.v2 {
+        s2_v2
+            .advertise_prefixes(&vec![Ipv6Prefix {
+                addr: "fd00:2::".parse().unwrap(),
+                len: 64,
+            }])
+            .await?;
+    } else {
+        s2.advertise_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
+            .await?;
+    }
 
-    wait_for_eq!(prefix_count(&s1).await?, 1);
-    wait_for_eq!(prefix_count(&s2).await?, 1);
-    wait_for_eq!(prefix_count(&t1).await?, 2);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 1);
+    wait_for_eq!(prefix_count(&s2, &s2_v2, zs2.v2).await?, 1);
+    wait_for_eq!(prefix_count(&t1, &t1_v2, zt1.v2).await?, 2);
 
     println!("advertise from two passed");
 
@@ -474,37 +498,41 @@ async fn run_trio_tests(
     println!("connectivity test passed");
 
     zt1.stop_router()?;
-    wait_for_eq!(prefix_count(&s1).await?, 0);
-    wait_for_eq!(prefix_count(&s2).await?, 0);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 0);
+    wait_for_eq!(prefix_count(&s2, &s2_v2, zs2.v2).await?, 0);
     zt1.start_router()?;
-    wait_for_eq!(prefix_count(&s1).await?, 1);
-    wait_for_eq!(prefix_count(&s2).await?, 1);
-    wait_for_eq!(prefix_count(&t1).await.unwrap_or(99), 2);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 1);
+    wait_for_eq!(prefix_count(&s2, &s2_v2, zs2.v2).await?, 1);
+    wait_for_eq!(prefix_count(&t1, &t1_v2, zt1.v2).await.unwrap_or(99), 2);
     zs1.zexec("ping fd00:2::1")?;
     zs2.zexec("ping fd00:1::1")?;
 
     println!("transit router restart passed");
 
     zs1.stop_router()?;
-    wait_for_eq!(prefix_count(&s2).await?, 0);
-    wait_for_eq!(prefix_count(&t1).await?, 1);
+    wait_for_eq!(prefix_count(&s2, &s2_v2, zs2.v2).await?, 0);
+    wait_for_eq!(prefix_count(&t1, &t1_v2, zt1.v2).await?, 1);
     zs1.start_router()?;
 
-    wait_for_eq!(prefix_count(&s1).await.unwrap_or(99), 1);
-    if zs2.v1 {
-        wait_for_eq!(prefix_count(&s2).await?, 0);
-        wait_for_eq!(prefix_count(&t1).await?, 1);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await.unwrap_or(99), 1);
+    wait_for_eq!(prefix_count(&s2, &s2_v2, zs2.v2).await?, 1);
+    wait_for_eq!(prefix_count(&t1, &t1_v2, zt1.v2).await?, 2);
+
+    if zs1.v2 {
+        s1_v2
+            .advertise_prefixes(&vec![Ipv6Prefix {
+                addr: "fd00:1::".parse().unwrap(),
+                len: 64,
+            }])
+            .await?;
     } else {
-        wait_for_eq!(prefix_count(&s2).await?, 1);
-        wait_for_eq!(prefix_count(&t1).await?, 2);
+        s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
+            .await?;
     }
 
-    s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
-        .await?;
-
-    wait_for_eq!(prefix_count(&s1).await?, 1);
-    wait_for_eq!(prefix_count(&s2).await?, 1);
-    wait_for_eq!(prefix_count(&t1).await?, 2);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 1);
+    wait_for_eq!(prefix_count(&s2, &s2_v2, zs2.v2).await?, 1);
+    wait_for_eq!(prefix_count(&t1, &t1_v2, zt1.v2).await?, 2);
 
     zs1.zexec("ping fd00:2::1")?;
     zs2.zexec("ping fd00:1::1")?;
@@ -519,42 +547,79 @@ async fn run_trio_tests(
         .addr;
 
     t1.expire_peer(&p0).await?;
-    wait_for_eq!(prefix_count(&s1).await?, 1);
-    wait_for_eq!(prefix_count(&s2).await?, 1);
-    wait_for_eq!(prefix_count(&t1).await?, 2);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 1);
+    wait_for_eq!(prefix_count(&s2, &s2_v2, zs2.v2).await?, 1);
+    wait_for_eq!(prefix_count(&t1, &t1_v2, zt1.v2).await?, 2);
 
-    s2.withdraw_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
-        .await?;
+    if zs2.v2 {
+        s2_v2
+            .advertise_prefixes(&vec![Ipv6Prefix {
+                addr: "fd00:2::".parse().unwrap(),
+                len: 64,
+            }])
+            .await?;
+    } else {
+        s2.withdraw_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
+            .await?;
+    }
 
-    wait_for_eq!(prefix_count(&s1).await?, 0);
-    wait_for_eq!(prefix_count(&s2).await?, 1);
-    wait_for_eq!(prefix_count(&t1).await?, 1);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 1);
+    wait_for_eq!(prefix_count(&s2, &s2_v2, zs2.v2).await?, 1);
+    wait_for_eq!(prefix_count(&t1, &t1_v2, zt1.v2).await?, 2);
 
-    s2.advertise_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
-        .await?;
+    if zs2.v2 {
+        s2_v2
+            .advertise_prefixes(&vec![Ipv6Prefix {
+                addr: "fd00:2::".parse().unwrap(),
+                len: 64,
+            }])
+            .await?;
+    } else {
+        s2.advertise_prefixes(&vec!["fd00:2::/64".parse().unwrap()])
+            .await?;
+    }
 
-    wait_for_eq!(prefix_count(&s1).await?, 1);
-    wait_for_eq!(prefix_count(&s2).await?, 1);
-    wait_for_eq!(prefix_count(&t1).await?, 2);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 1);
+    wait_for_eq!(prefix_count(&s2, &s2_v2, zs2.v2).await?, 1);
+    wait_for_eq!(prefix_count(&t1, &t1_v2, zt1.v2).await?, 2);
 
     println!("peer expiration recovery passed");
 
+    if zs2.v2 {
+        s2_v2
+            .advertise_prefixes(&vec![
+                Ipv6Prefix {
+                    addr: "fd00:2::".parse().unwrap(),
+                    len: 64,
+                },
+                Ipv6Prefix {
+                    addr: "fd00:3::".parse().unwrap(),
+                    len: 64,
+                },
+                Ipv6Prefix {
+                    addr: "fd00:4::".parse().unwrap(),
+                    len: 64,
+                },
+            ])
+            .await?;
+    } else {
+        s2.advertise_prefixes(&vec![
+            "fd00:2::/64".parse().unwrap(),
+            "fd00:3::/64".parse().unwrap(),
+            "fd00:4::/64".parse().unwrap(),
+        ])
+        .await?;
+    }
     // ensure that when an advertisement with a duplicate route is made, all
     // routes make it in the kernel of receivers.
-    s2.advertise_prefixes(&vec![
-        "fd00:2::/64".parse().unwrap(),
-        "fd00:3::/64".parse().unwrap(),
-        "fd00:4::/64".parse().unwrap(),
-    ])
-    .await?;
-    wait_for_eq!(prefix_count(&s1).await?, 3);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 3);
 
     let kernel_count = zs1.zexec("netstat -nrf inet6 | grep fd00 | wc -l")?;
     assert_eq!(kernel_count, "3");
 
     println!("redundant advertise passed");
 
-    if !(zt1.v1 || zs1.v1 || zs2.v1) {
+    if !(zt1.v2 || zs1.v2 || zs2.v2) {
         wait_for_eq!(tunnel_originated_endpoint_count(&t1).await?, 0);
 
         t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
@@ -727,7 +792,7 @@ async fn test_quartet() -> Result<()> {
 }
 
 async fn run_quartet_tests(
-    _zs1: &RouterZone<'_>,
+    zs1: &RouterZone<'_>,
     _zs2: &RouterZone<'_>,
     zs3: &RouterZone<'_>,
     _zt1: &RouterZone<'_>,
@@ -737,6 +802,11 @@ async fn run_quartet_tests(
     let s2 = Client::new("http://10.0.0.2:8000", log.clone());
     let s3 = Client::new("http://10.0.0.3:8000", log.clone());
     let t1 = Client::new("http://10.0.0.4:8000", log.clone());
+
+    let s1_v2 = ClientV2::new("http://10.0.0.1:8000", log.clone());
+    let _s2_v2 = ClientV2::new("http://10.0.0.2:8000", log.clone());
+    let s3_v2 = ClientV2::new("http://10.0.0.3:8000", log.clone());
+    let _t1_v2 = ClientV2::new("http://10.0.0.4:8000", log.clone());
 
     // If we never get a response from a server, return 99 as a sentinel value.
     wait_for_eq!(s1.get_peers().await.map_or(99, |x| x.len()), 1);
@@ -753,8 +823,8 @@ async fn run_quartet_tests(
         .await?;
 
     // s1/s3 should now have 1 prefix
-    wait_for_eq!(prefix_count(&s1).await?, 1);
-    wait_for_eq!(prefix_count(&s3).await?, 1);
+    wait_for_eq!(prefix_count(&s1, &s1_v2, zs1.v2).await?, 1);
+    wait_for_eq!(prefix_count(&s3, &s3_v2, zs3.v2).await?, 1);
 
     // s3 should be able to ping s1
     zs3.zexec("ping fd00:1::1")?;
@@ -764,7 +834,7 @@ async fn run_quartet_tests(
         .await?;
 
     // s3 should now have 2 prefixes
-    wait_for_eq!(prefix_count(&s3).await?, 2);
+    wait_for_eq!(prefix_count(&s3, &s3_v2, zs3.v2).await?, 2);
 
     s2.withdraw_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
         .await?;
@@ -778,7 +848,7 @@ async fn run_quartet_tests(
     sleep(Duration::from_secs(5));
 
     // s3 should still have 1 prefix left
-    wait_for_eq!(prefix_count(&s3).await?, 1);
+    wait_for_eq!(prefix_count(&s3, &s3_v2, zs3.v2).await?, 1);
 
     // s3 should be able to ping s1 even after s2 withdrew s1's prefix
     zs3.zexec("ping fd00:1::1")?;
@@ -786,12 +856,21 @@ async fn run_quartet_tests(
     Ok(())
 }
 
-async fn prefix_count(c: &Client) -> Result<usize> {
-    Ok(c.get_prefixes()
-        .await?
-        .values()
-        .map(|x| x.len())
-        .sum::<usize>())
+async fn prefix_count(c: &Client, c2: &ClientV2, v2: bool) -> Result<usize> {
+    if v2 {
+        Ok(c2
+            .get_prefixes()
+            .await?
+            .values()
+            .map(|x| x.len())
+            .sum::<usize>())
+    } else {
+        Ok(c.get_prefixes()
+            .await?
+            .values()
+            .map(|x| x.len())
+            .sum::<usize>())
+    }
 }
 
 async fn tunnel_endpoint_count(c: &Client) -> Result<usize> {

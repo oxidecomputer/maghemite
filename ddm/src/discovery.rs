@@ -109,8 +109,8 @@ const ADVERTISE: u8 = 1 << 1;
 #[derive(Debug, Copy, Clone)]
 #[repr(u8)]
 pub enum Version {
-    V1 = 1,
     V2 = 2,
+    V3 = 3,
 }
 
 #[derive(Error, Debug)]
@@ -444,8 +444,8 @@ fn handle_advertisement(
     // changes in the discovery protocol, if we were to have changes there. So
     // we need to come up with a general way for both protocols to evolve.
     let version = match version {
-        1 => Version::V1,
         2 => Version::V2,
+        3 => Version::V3,
         x => {
             err!(
                 ctx.log,

@@ -31,7 +31,7 @@ use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use hyper::body::Bytes;
-use mg_common::net::TunnelOrigin;
+use mg_common::net::{Ipv6Prefix, TunnelOrigin, TunnelOriginV2};
 use oxnet::Ipv6Net;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -59,6 +59,12 @@ pub struct UpdateV1 {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct UpdateV2 {
+    pub underlay: Option<UnderlayUpdateV2>,
+    pub tunnel: Option<TunnelUpdateV2>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct Update {
     pub underlay: Option<UnderlayUpdate>,
     pub tunnel: Option<TunnelUpdate>,
@@ -76,6 +82,15 @@ impl From<UpdateV1> for Update {
     }
 }
 
+impl From<UpdateV2> for Update {
+    fn from(value: UpdateV2) -> Self {
+        Update {
+            tunnel: value.tunnel.map(TunnelUpdate::from),
+            underlay: value.underlay.map(UnderlayUpdate::from),
+        }
+    }
+}
+
 impl From<Update> for UpdateV1 {
     fn from(value: Update) -> Self {
         let (announce, withdraw) = match value.underlay {
@@ -83,6 +98,15 @@ impl From<Update> for UpdateV1 {
             None => (HashSet::new(), HashSet::new()),
         };
         UpdateV1 { announce, withdraw }
+    }
+}
+
+impl From<Update> for UpdateV2 {
+    fn from(value: Update) -> Self {
+        UpdateV2 {
+            tunnel: value.tunnel.map(TunnelUpdateV2::from),
+            underlay: value.underlay.map(UnderlayUpdateV2::from),
+        }
     }
 }
 
@@ -119,6 +143,25 @@ pub struct PullResponse {
     pub tunnel: Option<HashSet<TunnelOrigin>>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct PullResponseV2 {
+    pub underlay: Option<HashSet<PathVectorV2>>,
+    pub tunnel: Option<HashSet<TunnelOriginV2>>,
+}
+
+impl From<PullResponseV2> for PullResponse {
+    fn from(value: PullResponseV2) -> Self {
+        PullResponse {
+            underlay: value
+                .underlay
+                .map(|x| x.into_iter().map(PathVector::from).collect()),
+            tunnel: value
+                .tunnel
+                .map(|x| x.into_iter().map(TunnelOrigin::from).collect()),
+        }
+    }
+}
+
 impl From<HashSet<PathVector>> for PullResponse {
     fn from(value: HashSet<PathVector>) -> Self {
         PullResponse {
@@ -136,10 +179,82 @@ pub struct PathVector {
     pub path: Vec<String>,
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
+)]
+pub struct PathVectorV2 {
+    pub destination: Ipv6Prefix,
+    pub path: Vec<String>,
+}
+
+impl From<PathVectorV2> for PathVector {
+    fn from(value: PathVectorV2) -> Self {
+        PathVector {
+            destination: Ipv6Net::new_unchecked(
+                value.destination.addr,
+                value.destination.len,
+            ),
+            path: value.path,
+        }
+    }
+}
+
+impl From<PathVector> for PathVectorV2 {
+    fn from(value: PathVector) -> Self {
+        PathVectorV2 {
+            destination: Ipv6Prefix {
+                addr: value.destination.addr(),
+                len: value.destination.width(),
+            },
+            path: value.path,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct UnderlayUpdate {
     pub announce: HashSet<PathVector>,
     pub withdraw: HashSet<PathVector>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct UnderlayUpdateV2 {
+    pub announce: HashSet<PathVectorV2>,
+    pub withdraw: HashSet<PathVectorV2>,
+}
+
+impl From<UnderlayUpdate> for UnderlayUpdateV2 {
+    fn from(value: UnderlayUpdate) -> Self {
+        UnderlayUpdateV2 {
+            announce: value
+                .announce
+                .into_iter()
+                .map(PathVectorV2::from)
+                .collect(),
+            withdraw: value
+                .withdraw
+                .into_iter()
+                .map(PathVectorV2::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<UnderlayUpdateV2> for UnderlayUpdate {
+    fn from(value: UnderlayUpdateV2) -> Self {
+        UnderlayUpdate {
+            announce: value
+                .announce
+                .into_iter()
+                .map(PathVector::from)
+                .collect(),
+            withdraw: value
+                .withdraw
+                .into_iter()
+                .map(PathVector::from)
+                .collect(),
+        }
+    }
 }
 
 impl UnderlayUpdate {
@@ -183,6 +298,46 @@ impl UnderlayUpdate {
 pub struct TunnelUpdate {
     pub announce: HashSet<TunnelOrigin>,
     pub withdraw: HashSet<TunnelOrigin>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct TunnelUpdateV2 {
+    pub announce: HashSet<TunnelOriginV2>,
+    pub withdraw: HashSet<TunnelOriginV2>,
+}
+
+impl From<TunnelUpdateV2> for TunnelUpdate {
+    fn from(value: TunnelUpdateV2) -> Self {
+        TunnelUpdate {
+            announce: value
+                .announce
+                .into_iter()
+                .map(TunnelOrigin::from)
+                .collect(),
+            withdraw: value
+                .withdraw
+                .into_iter()
+                .map(TunnelOrigin::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<TunnelUpdate> for TunnelUpdateV2 {
+    fn from(value: TunnelUpdate) -> Self {
+        TunnelUpdateV2 {
+            announce: value
+                .announce
+                .into_iter()
+                .map(TunnelOriginV2::from)
+                .collect(),
+            withdraw: value
+                .withdraw
+                .into_iter()
+                .map(TunnelOriginV2::from)
+                .collect(),
+        }
+    }
 }
 
 impl TunnelUpdate {
@@ -278,20 +433,20 @@ pub(crate) fn do_pull(
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<PullResponse, ExchangeError> {
     let uri = format!(
-        "http://[{}%{}]:{}/v2/pull",
+        "http://[{}%{}]:{}/v3/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
     );
     let body = do_pull_common(uri, rt)?;
     Ok(serde_json::from_slice(&body)?)
 }
 
-pub(crate) fn do_pull_v1(
+pub(crate) fn do_pull_v2(
     ctx: &SmContext,
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
-) -> Result<HashSet<PathVector>, ExchangeError> {
+) -> Result<PullResponseV2, ExchangeError> {
     let uri = format!(
-        "http://[{}%{}]:{}/pull",
+        "http://[{}%{}]:{}/v2/pull",
         addr, ctx.config.if_index, ctx.config.exchange_port,
     );
     let body = do_pull_common(uri, rt)?;
@@ -336,8 +491,8 @@ pub(crate) fn pull(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let pr: PullResponse = match version {
-        Version::V1 => do_pull_v1(&ctx, &addr, &rt)?.into(),
-        Version::V2 => do_pull(&ctx, &addr, &rt)?,
+        Version::V2 => do_pull_v2(&ctx, &addr, &rt)?.into(),
+        Version::V3 => do_pull(&ctx, &addr, &rt)?,
     };
 
     let update = Update::announce(pr);
@@ -363,17 +518,17 @@ fn send_update(
 ) -> Result<(), ExchangeError> {
     ctx.stats.updates_sent.fetch_add(1, Ordering::Relaxed);
     match version {
-        Version::V1 => {
-            send_update_v1(ctx, config, update.into(), addr, rt, log)
+        Version::V2 => {
+            send_update_v2(ctx, config, update.into(), addr, rt, log)
         }
-        Version::V2 => send_update_v2(ctx, config, update, addr, rt, log),
+        Version::V3 => send_update_v3(ctx, config, update, addr, rt, log),
     }
 }
 
 fn send_update_v2(
     ctx: &SmContext,
     config: Config,
-    update: Update,
+    update: UpdateV2,
     addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
@@ -386,17 +541,17 @@ fn send_update_v2(
     send_update_common(ctx, uri, payload, config, rt, log)
 }
 
-fn send_update_v1(
+fn send_update_v3(
     ctx: &SmContext,
     config: Config,
-    update: UpdateV1,
+    update: Update,
     addr: Ipv6Addr,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update)?;
     let uri = format!(
-        "http://[{}%{}]:{}/push",
+        "http://[{}%{}]:{}/v3/push",
         addr, config.if_index, config.exchange_port,
     );
     send_update_common(ctx, uri, payload, config, rt, log)
@@ -497,24 +652,24 @@ pub fn handler(
 pub fn api_description(
 ) -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, String> {
     let mut api = ApiDescription::new();
-    api.register(push_handler_v1)?;
+    api.register(push_handler_v2)?;
     api.register(push_handler)?;
-    api.register(pull_handler_v1)?;
+    api.register(pull_handler_v2)?;
     api.register(pull_handler)?;
     Ok(api)
 }
 
-#[endpoint { method = PUT, path = "/push" }]
-async fn push_handler_v1(
+#[endpoint { method = PUT, path = "/v2/push" }]
+async fn push_handler_v2(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-    request: TypedBody<UpdateV1>,
+    request: TypedBody<UpdateV2>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let update_v1 = request.into_inner();
-    let update = Update::from(update_v1);
+    let update_v2 = request.into_inner();
+    let update = Update::from(update_v2);
     push_handler_common(ctx, update).await
 }
 
-#[endpoint { method = PUT, path = "/v2/push" }]
+#[endpoint { method = PUT, path = "/v3/push" }]
 async fn push_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<Update>,
@@ -539,13 +694,15 @@ async fn push_handler_common(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-#[endpoint { method = GET, path = "/pull" }]
-async fn pull_handler_v1(
+#[endpoint { method = GET, path = "/v2/pull" }]
+async fn pull_handler_v2(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
-) -> Result<HttpResponseOk<HashSet<PathVector>>, HttpError> {
+) -> Result<HttpResponseOk<PullResponseV2>, HttpError> {
     let ctx = ctx.context().lock().await.clone();
 
-    let mut prefixes = HashSet::new();
+    let mut underlay = HashSet::new();
+    let mut tunnel = HashSet::new();
+
     // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
         for route in &ctx.ctx.db.imported() {
@@ -558,7 +715,14 @@ async fn pull_handler_v1(
                 path: route.path.clone(),
             };
             pv.path.push(ctx.ctx.hostname.clone());
-            prefixes.insert(pv);
+            underlay.insert(pv);
+        }
+        for route in &ctx.ctx.db.imported_tunnel() {
+            if route.nexthop == ctx.peer {
+                continue;
+            }
+            let tv = route.origin;
+            tunnel.insert(tv);
         }
     }
     let originated = ctx
@@ -571,13 +735,39 @@ async fn pull_handler_v1(
             destination: *prefix,
             path: vec![ctx.ctx.hostname.clone()],
         };
-        prefixes.insert(pv);
+        underlay.insert(pv);
     }
 
-    Ok(HttpResponseOk(prefixes))
+    let originated_tunnel = ctx
+        .ctx
+        .db
+        .originated_tunnel()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    for prefix in &originated_tunnel {
+        let tv = TunnelOrigin {
+            overlay_prefix: prefix.overlay_prefix,
+            boundary_addr: prefix.boundary_addr,
+            vni: prefix.vni,
+            metric: prefix.metric,
+        };
+        tunnel.insert(tv);
+    }
+
+    Ok(HttpResponseOk(PullResponseV2 {
+        underlay: if underlay.is_empty() {
+            None
+        } else {
+            Some(underlay.into_iter().map(PathVectorV2::from).collect())
+        },
+        tunnel: if tunnel.is_empty() {
+            None
+        } else {
+            Some(tunnel.into_iter().map(TunnelOriginV2::from).collect())
+        },
+    }))
 }
 
-#[endpoint { method = GET, path = "/v2/pull" }]
+#[endpoint { method = GET, path = "/v3/pull" }]
 async fn pull_handler(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<PullResponse>, HttpError> {
