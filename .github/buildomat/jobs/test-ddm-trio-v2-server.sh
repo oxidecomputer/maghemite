@@ -1,6 +1,6 @@
 #!/bin/bash
 #:
-#: name = "test-ddm-trio-v1-server"
+#: name = "test-ddm-trio-v2-server"
 #: variety = "basic"
 #: target = "helios-2.0"
 #: rust_toolchain = "stable"
@@ -10,7 +10,7 @@
 #: access_repos = [
 #:   "oxidecomputer/dendrite",
 #: ]
-#: enable = false
+#: enable = true
 #:
 
 source .github/buildomat/test-ddm-common.sh
@@ -20,4 +20,4 @@ source .github/buildomat/test-ddm-common.sh
 #
 
 banner "trio"
-pfexec cargo test --release -p mg-tests test_trio_v1_server -- --nocapture
+pfexec cargo test --release -p mg-tests test_trio_v2_server -- --nocapture

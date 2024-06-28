@@ -762,6 +762,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddm-admin-client"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/maghemite?rev=2bfd39000c878c45675651a7588c015c486e7f43#2bfd39000c878c45675651a7588c015c486e7f43"
+dependencies = [
+ "percent-encoding",
+ "progenitor",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "slog",
+ "uuid",
+]
+
+[[package]]
 name = "ddmadm"
 version = "0.1.0"
 dependencies = [
@@ -770,7 +784,7 @@ dependencies = [
  "clap",
  "colored",
  "ddm",
- "ddm-admin-client",
+ "ddm-admin-client 0.1.0",
  "mg-common",
  "oxnet 0.1.0 (git+https://github.com/oxidecomputer/oxnet)",
  "slog",
@@ -2140,7 +2154,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "common",
- "ddm-admin-client",
+ "ddm-admin-client 0.1.0",
  "dpd-client",
  "http 0.2.12",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
@@ -2167,8 +2181,10 @@ name = "mg-tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ddm-admin-client",
+ "ddm-admin-client 0.1.0",
+ "ddm-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=2bfd39000c878c45675651a7588c015c486e7f43)",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
+ "serde",
  "slog",
  "slog-async",
  "slog-envlogger",

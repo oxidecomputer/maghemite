@@ -19,4 +19,4 @@ source .github/buildomat/test-ddm-common.sh
 #
 
 banner "trio"
-pfexec cargo test --release -p mg-tests test_trio_v2 -- --nocapture
+pfexec cargo test --release -p mg-tests test_trio_v3 -- --nocapture
