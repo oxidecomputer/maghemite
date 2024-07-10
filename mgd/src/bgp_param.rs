@@ -41,7 +41,7 @@ pub struct NeighborSelector {
     pub addr: IpAddr,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct Neighbor {
     pub asn: u32,
     pub name: String,

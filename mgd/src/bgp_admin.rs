@@ -491,6 +491,7 @@ pub async fn bgp_apply(
 
         let to_delete = current_nbr_addrs.difference(&specified_nbr_addrs);
         let to_add = specified_nbr_addrs.difference(&current_nbr_addrs);
+        let to_modify = current_nbr_addrs.intersection(&specified_nbr_addrs);
 
         info!(log, "nbr: current {current:#?}");
         info!(log, "nbr: adding {to_add:#?}");
@@ -503,6 +504,31 @@ pub async fn bgp_apply(
                 .find(|x| x.host.ip() == nbr.addr)
                 .ok_or(Error::NotFound(nbr.addr.to_string()))?;
             nbr_config.push((nbr, cfg));
+        }
+
+        for nbr in to_modify {
+            let spec = peers
+                .iter()
+                .find(|x| x.host.ip() == nbr.addr)
+                .ok_or(Error::NotFound(nbr.addr.to_string()))?;
+
+            let tgt = resource::Neighbor::from_bgp_peer_config(
+                nbr.asn,
+                group.clone(),
+                spec.clone(),
+            );
+
+            let curr = resource::Neighbor::from_rdb_neighbor_info(
+                nbr.asn,
+                current
+                    .iter()
+                    .find(|x| x.host.ip() == nbr.addr)
+                    .ok_or(Error::NotFound(nbr.addr.to_string()))?,
+            );
+
+            if tgt != curr {
+                nbr_config.push((nbr, spec));
+            }
         }
 
         // TODO all the db modification that happens below needs to happen in a
@@ -527,7 +553,7 @@ pub async fn bgp_apply(
                     group.clone(),
                     cfg.clone(),
                 ),
-                false,
+                true,
             )?;
         }
 
