@@ -1456,6 +1456,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .filter(|x| list.contains(&Prefix::from(*x)))
                         .collect(),
                 };
+                drop(session);
 
                 let to_withdraw: BTreeSet<&Prefix4> =
                     originated_before.difference(&originated_after).collect();
@@ -2356,9 +2357,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if current.allow_export != info.allow_export {
             let previous = current.allow_export.clone();
             current.allow_export = info.allow_export;
+            drop(current);
             self.event_tx
                 .send(FsmEvent::ExportPolicyChanged(previous))
                 .map_err(|e| Error::EventSend(e.to_string()))?;
+        } else {
+            drop(current);
         }
 
         if path_attributes_changed {
