@@ -309,7 +309,7 @@ impl OpenMessage {
     pub fn new4(asn: u32, hold_time: u16, id: u32) -> OpenMessage {
         OpenMessage {
             version: BGP4,
-            asn: AS_TRANS,
+            asn: u16::try_from(asn).unwrap_or(AS_TRANS),
             hold_time,
             id,
             parameters: vec![OptionalParameter::Capabilities(BTreeSet::from(
