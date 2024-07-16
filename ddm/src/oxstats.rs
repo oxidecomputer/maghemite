@@ -5,15 +5,11 @@
 use crate::{admin::RouterStats, sm::SmContext};
 use chrono::{DateTime, Utc};
 use dropshot::{ConfigLogging, ConfigLoggingLevel};
-use mg_common::{
-    counter,
-    nexus::{local_underlay_address, resolve_nexus, run_oximeter},
-    quantity,
-};
+use mg_common::nexus::{local_underlay_address, resolve_nexus, run_oximeter};
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
 use oximeter::{
     types::{Cumulative, ProducerRegistry},
-    Metric, MetricsError, Producer, Sample, Target,
+    MetricsError, Producer, Sample,
 };
 use oximeter_producer::LogConfig;
 use slog::Logger;
@@ -21,6 +17,26 @@ use std::sync::atomic::Ordering;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
+
+oximeter::use_timeseries!("ddm-session.toml");
+pub use ddm_session::AdvertisementsReceived;
+pub use ddm_session::AdvertisementsSent;
+pub use ddm_session::DdmSession;
+pub use ddm_session::ImportedTunnelEndpoints;
+pub use ddm_session::ImportedUnderlayPrefixes;
+pub use ddm_session::PeerAddressChanges;
+pub use ddm_session::PeerExpirations;
+pub use ddm_session::PeerSessionsEstablished;
+pub use ddm_session::SolicitationsReceived;
+pub use ddm_session::SolicitationsSent;
+pub use ddm_session::UpdateSendFail;
+pub use ddm_session::UpdatesReceived;
+pub use ddm_session::UpdatesSent;
+
+oximeter::use_timeseries!("ddm-router.toml");
+pub use ddm_router::DdmRouter;
+pub use ddm_router::OriginatedTunnelEndpoints;
+pub use ddm_router::OriginatedUnderlayPrefixes;
 
 #[derive(Clone)]
 pub(crate) struct Stats {
@@ -31,36 +47,6 @@ pub(crate) struct Stats {
     peers: Vec<SmContext>,
     router_stats: Arc<RouterStats>,
 }
-
-#[derive(Debug, Clone, Target)]
-struct DdmSession {
-    hostname: String,
-    rack_id: Uuid,
-    sled_id: Uuid,
-    interface: String,
-}
-
-#[derive(Debug, Clone, Target)]
-struct DdmRouter {
-    hostname: String,
-    rack_id: Uuid,
-    sled_id: Uuid,
-}
-
-counter!(SolicitationsSent);
-counter!(SolicitationsReceived);
-counter!(AdvertisementsSent);
-counter!(AdvertisementsReceived);
-counter!(PeerExpirations);
-counter!(PeerAddressChanges);
-counter!(PeerSessionsEstablished);
-counter!(UpdatesSent);
-counter!(UpdatesReceived);
-counter!(UpdateSendFail);
-quantity!(ImportedUnderlayPrefixes, u64);
-quantity!(ImportedTunnelEndpoints, u64);
-quantity!(OriginatedUnderlayPrefixes, u64);
-quantity!(OriginatedTunnelEndpoints, u64);
 
 macro_rules! ddm_session_counter {
     (
@@ -80,7 +66,7 @@ macro_rules! ddm_session_counter {
                 interface: $interface,
             },
             &$kind {
-                count: Cumulative::<u64>::with_start_time(
+                datum: Cumulative::<u64>::with_start_time(
                     $start_time,
                     $value.load(Ordering::Relaxed),
                 ),
@@ -106,7 +92,7 @@ macro_rules! ddm_session_quantity {
                 interface: $interface,
             },
             &$kind {
-                quantity: $value.load(Ordering::Relaxed),
+                datum: $value.load(Ordering::Relaxed),
             },
         )?
     };
@@ -127,7 +113,7 @@ macro_rules! ddm_router_quantity {
                 sled_id: $sled_id,
             },
             &$kind {
-                quantity: $value.load(Ordering::Relaxed),
+                datum: $value.load(Ordering::Relaxed),
             },
         )?
     };
@@ -148,7 +134,7 @@ impl Producer for Stats {
         let mut samples: Vec<Sample> = Vec::with_capacity(2 + 13);
 
         samples.push(ddm_router_quantity!(
-            self.hostname.clone(),
+            self.hostname.clone().into(),
             self.rack_id,
             self.sled_id,
             OriginatedUnderlayPrefixes,
@@ -156,7 +142,7 @@ impl Producer for Stats {
         ));
 
         samples.push(ddm_router_quantity!(
-            self.hostname.clone(),
+            self.hostname.clone().into(),
             self.rack_id,
             self.sled_id,
             OriginatedTunnelEndpoints,
@@ -166,107 +152,107 @@ impl Producer for Stats {
         for peer in &self.peers {
             samples.push(ddm_session_counter!(
                 self.start_time,
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 SolicitationsSent,
                 peer.stats.solicitations_sent
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 SolicitationsReceived,
                 peer.stats.solicitations_received
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 AdvertisementsSent,
                 peer.stats.advertisements_sent
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 AdvertisementsReceived,
                 peer.stats.advertisements_received
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 PeerExpirations,
                 peer.stats.peer_expirations
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 PeerAddressChanges,
                 peer.stats.peer_address_changes
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 PeerSessionsEstablished,
                 peer.stats.peer_established
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 UpdatesSent,
                 peer.stats.updates_sent
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 UpdatesReceived,
                 peer.stats.updates_received
             ));
             samples.push(ddm_session_counter!(
                 self.start_time,
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 UpdateSendFail,
                 peer.stats.update_send_fail
             ));
             samples.push(ddm_session_quantity!(
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 ImportedUnderlayPrefixes,
                 peer.stats.imported_underlay_prefixes
             ));
             samples.push(ddm_session_quantity!(
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
-                peer.config.if_name.clone(),
+                peer.config.if_name.clone().into(),
                 ImportedTunnelEndpoints,
                 peer.stats.imported_tunnel_endpoints
             ));
