@@ -19,7 +19,6 @@ use crate::db::{effective_route_set, Route, RouterKind, TunnelRoute};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
-use dropshot::endpoint;
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
@@ -30,6 +29,7 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use dropshot::{endpoint, ApiDescriptionRegisterError};
 use hyper::body::Bytes;
 use mg_common::net::{Ipv6Prefix, TunnelOrigin, TunnelOriginV2};
 use oxnet::Ipv6Net;
@@ -622,7 +622,7 @@ pub fn handler(
 
     let log = log.clone();
 
-    let api = api_description()?;
+    let api = api_description().map_err(|e| e.to_string())?;
     let server = ctx.rt.block_on(async move {
         match HttpServerStarter::new(&config, api, context, &ds_log) {
             Ok(s) => Ok(s),
@@ -649,8 +649,10 @@ pub fn handler(
     }))
 }
 
-pub fn api_description(
-) -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, String> {
+pub fn api_description() -> Result<
+    ApiDescription<Arc<Mutex<HandlerContext>>>,
+    ApiDescriptionRegisterError,
+> {
     let mut api = ApiDescription::new();
     api.register(push_handler_v2)?;
     api.register(push_handler)?;

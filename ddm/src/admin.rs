@@ -5,7 +5,6 @@
 use crate::db::{Db, PeerInfo, TunnelRoute};
 use crate::exchange::PathVector;
 use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
-use dropshot::endpoint;
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
@@ -17,6 +16,7 @@ use dropshot::HttpServerStarter;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use dropshot::{endpoint, ApiDescriptionRegisterError};
 use mg_common::net::TunnelOrigin;
 use oxnet::Ipv6Net;
 use schemars::JsonSchema;
@@ -71,7 +71,7 @@ pub fn handler(
     .to_logger("admin")
     .map_err(|e| e.to_string())?;
 
-    let api = api_description()?;
+    let api = api_description().map_err(|e| e.to_string())?;
 
     info!(log, "admin: listening on {}", sa);
 
@@ -404,8 +404,10 @@ async fn disable_stats(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-pub fn api_description(
-) -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, String> {
+pub fn api_description() -> Result<
+    ApiDescription<Arc<Mutex<HandlerContext>>>,
+    ApiDescriptionRegisterError,
+> {
     let mut api = ApiDescription::new();
     api.register(get_peers)?;
     api.register(expire_peer)?;
