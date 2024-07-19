@@ -119,7 +119,7 @@ checksum = "b3d1d046238990b9cf5bcde22a3fb3584ee5cf65fb2765f454ed428c7a0063da"
 [[package]]
 name = "api_identity"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -941,7 +941,7 @@ dependencies = [
 [[package]]
 name = "dns-service-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "anyhow",
  "chrono",
@@ -994,7 +994,7 @@ dependencies = [
 [[package]]
 name = "dropshot"
 version = "0.10.2-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#fb254ad92bbbc29d249fa514486a9217d027f4a5"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#7b594d01f47ca783c5d4a25ca2b256602580fe92"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1040,7 +1040,7 @@ dependencies = [
 [[package]]
 name = "dropshot_endpoint"
 version = "0.10.2-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#fb254ad92bbbc29d249fa514486a9217d027f4a5"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#7b594d01f47ca783c5d4a25ca2b256602580fe92"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -1341,7 +1341,7 @@ dependencies = [
 [[package]]
 name = "gateway-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1744,7 +1744,7 @@ dependencies = [
 [[package]]
 name = "internal-dns"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2099,7 +2099,7 @@ dependencies = [
 [[package]]
 name = "mg-admin-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/maghemite?rev=1b385990e8648b221fd11f018f2a7ec425461c6c#1b385990e8648b221fd11f018f2a7ec425461c6c"
+source = "git+https://github.com/oxidecomputer/maghemite?rev=220dd026e83142b83bd93123f465a64dd4600201#220dd026e83142b83bd93123f465a64dd4600201"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2344,7 +2344,7 @@ dependencies = [
 [[package]]
 name = "nexus-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "chrono",
  "futures",
@@ -2367,7 +2367,7 @@ dependencies = [
 [[package]]
 name = "nexus-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "anyhow",
  "api_identity",
@@ -2579,7 +2579,7 @@ dependencies = [
 [[package]]
 name = "omicron-common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "anyhow",
  "api_identity",
@@ -2593,7 +2593,7 @@ dependencies = [
  "http 0.2.12",
  "ipnetwork",
  "macaddr",
- "mg-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=1b385990e8648b221fd11f018f2a7ec425461c6c)",
+ "mg-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=220dd026e83142b83bd93123f465a64dd4600201)",
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
  "once_cell",
@@ -2621,7 +2621,7 @@ dependencies = [
 [[package]]
 name = "omicron-passwords"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "argon2",
  "omicron-workspace-hack",
@@ -2635,7 +2635,7 @@ dependencies = [
 [[package]]
 name = "omicron-uuid-kinds"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "newtype-uuid",
  "paste",
@@ -2802,7 +2802,7 @@ dependencies = [
 [[package]]
 name = "oximeter"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2820,7 +2820,7 @@ dependencies = [
 [[package]]
 name = "oximeter-impl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "bytes",
  "chrono",
@@ -2848,7 +2848,7 @@ dependencies = [
 [[package]]
 name = "oximeter-macro-impl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -2859,7 +2859,7 @@ dependencies = [
 [[package]]
 name = "oximeter-producer"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "chrono",
  "dropshot",
@@ -2880,7 +2880,7 @@ dependencies = [
 [[package]]
 name = "oximeter-timeseries-macro"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "omicron-workspace-hack",
  "oximeter-impl",
@@ -2892,7 +2892,7 @@ dependencies = [
 [[package]]
 name = "oxnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/oxnet#2612d2203effcfdcbf83778a77f1bfd03fe6ed24"
+source = "git+https://github.com/oxidecomputer/oxnet#7dacd265f1bcd0f8b47bd4805250c4f0812da206"
 dependencies = [
  "ipnetwork",
  "schemars",
@@ -4060,7 +4060,7 @@ dependencies = [
 [[package]]
 name = "sled-agent-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#8316247eaf4c629301be3bbafaa8c77aca93eb13"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#c5ed4de5cd2b667cc4b46520e19bc036da8d63ab"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -9,20 +9,75 @@ use chrono::{DateTime, Utc};
 use dropshot::{ConfigLogging, ConfigLoggingLevel};
 use mg_common::nexus::{local_underlay_address, resolve_nexus, run_oximeter};
 use mg_common::stats::MgLowerStats;
-use mg_common::{counter, quantity};
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
 use oximeter::types::{Cumulative, ProducerRegistry};
-use oximeter::{Metric, MetricsError, Producer, Sample, Target};
+use oximeter::{MetricsError, Producer, Sample};
 use oximeter_producer::LogConfig;
 use rdb::Db;
 use slog::{warn, Logger};
 use std::collections::BTreeMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
+
+oximeter::use_timeseries!("bfd-session.toml");
+use bfd_session::BfdSession;
+use bfd_session::ControlPacketSendFailures;
+use bfd_session::ControlPacketsReceived;
+use bfd_session::ControlPacketsSent;
+use bfd_session::MessageReceiveError;
+use bfd_session::TimeoutExpired;
+use bfd_session::TransitionToDown;
+use bfd_session::TransitionToInit;
+use bfd_session::TransitionToUp;
+
+oximeter::use_timeseries!("bgp-session.toml");
+use bgp_session::ActiveConnectionsAccepted;
+use bgp_session::BgpSession;
+use bgp_session::ConnectionRetries;
+use bgp_session::HoldTimerExpirations;
+use bgp_session::IdleHoldTimerExpirations;
+use bgp_session::KeepaliveSendFailures;
+use bgp_session::KeepalivesReceived;
+use bgp_session::KeepalivesSent;
+use bgp_session::NotificationSendFailures;
+use bgp_session::OpenHandleFailures;
+use bgp_session::OpenSendFailures;
+use bgp_session::OpensReceived;
+use bgp_session::OpensSent;
+use bgp_session::PassiveConnectionsAccepted;
+use bgp_session::PrefixesAdvertised;
+use bgp_session::PrefixesImported;
+use bgp_session::TransitionToActive;
+use bgp_session::TransitionToConnect;
+use bgp_session::TransitionToEstablished;
+use bgp_session::TransitionToIdle;
+use bgp_session::TransitionToOpenConfirm;
+use bgp_session::TransitionToOpenSent;
+use bgp_session::TransitionToSessionSetup;
+use bgp_session::UnexpectedKeepaliveMessages;
+use bgp_session::UnexpectedOpenMessages;
+use bgp_session::UnexpectedUpdateMessages;
+use bgp_session::UpdateNexthopMissing;
+use bgp_session::UpdateSendFailures;
+use bgp_session::UpdatesReceived;
+use bgp_session::UpdatesSent;
+
+oximeter::use_timeseries!("static-routing-config.toml");
+use static_routing_config::StaticNexthops;
+use static_routing_config::StaticRoutes;
+use static_routing_config::StaticRoutingConfig;
+
+oximeter::use_timeseries!("mg-lower.toml");
+use self::mg_lower::MgLower;
+use self::mg_lower::RoutesBlockedByLinkState;
+
+oximeter::use_timeseries!("switch-rib.toml");
+use switch_rib::ActiveRoutes;
+use switch_rib::SwitchRib;
 
 #[derive(Clone)]
 pub(crate) struct Stats {
@@ -35,44 +90,6 @@ pub(crate) struct Stats {
     pub(crate) db: Db,
     pub(crate) mg_lower_stats: Arc<MgLowerStats>,
     log: Logger,
-}
-
-#[derive(Debug, Clone, Target)]
-struct BgpSession {
-    rack_id: Uuid,
-    sled_id: Uuid,
-    hostname: String,
-    local_asn: u32,
-    peer: IpAddr,
-}
-
-#[derive(Debug, Clone, Target)]
-struct BfdSession {
-    rack_id: Uuid,
-    sled_id: Uuid,
-    hostname: String,
-    peer: IpAddr,
-}
-
-#[derive(Debug, Clone, Target)]
-struct StaticRoutingConfig {
-    rack_id: Uuid,
-    sled_id: Uuid,
-    hostname: String,
-}
-
-#[derive(Debug, Clone, Target)]
-struct SwitchRib {
-    rack_id: Uuid,
-    sled_id: Uuid,
-    hostname: String,
-}
-
-#[derive(Debug, Clone, Target)]
-struct MgLower {
-    rack_id: Uuid,
-    sled_id: Uuid,
-    hostname: String,
 }
 
 macro_rules! bgp_session_counter {
@@ -95,7 +112,7 @@ macro_rules! bgp_session_counter {
                 peer: $peer,
             },
             &$kind {
-                count: Cumulative::<u64>::with_start_time(
+                datum: Cumulative::<u64>::with_start_time(
                     $start_time,
                     $value.load(Ordering::Relaxed),
                 ),
@@ -122,7 +139,7 @@ macro_rules! bfd_session_counter {
                 peer: $peer,
             },
             &$kind {
-                count: Cumulative::<u64>::with_start_time(
+                datum: Cumulative::<u64>::with_start_time(
                     $start_time,
                     $value.load(Ordering::Relaxed),
                 ),
@@ -147,7 +164,7 @@ macro_rules! static_counter {
                 sled_id: $sled_id,
             },
             &$kind {
-                count: Cumulative::<u64>::with_start_time($start_time, $value),
+                datum: Cumulative::<u64>::with_start_time($start_time, $value),
             },
         )?
     };
@@ -169,7 +186,7 @@ macro_rules! mg_lower_quantity {
                 sled_id: $sled_id,
             },
             &$kind {
-                quantity: $value.load(Ordering::Relaxed),
+                datum: $value.load(Ordering::Relaxed),
             },
         )?
     };
@@ -190,61 +207,10 @@ macro_rules! rib_quantity {
                 rack_id: $rack_id,
                 sled_id: $sled_id,
             },
-            &$kind { quantity: $value },
+            &$kind { datum: $value },
         )?
     };
 }
-
-// BGP
-counter!(KeepalivesSent);
-counter!(KeepalivesReceived);
-counter!(OpensSent);
-counter!(OpensReceived);
-counter!(UpdatesSent);
-counter!(UpdatesReceived);
-counter!(PrefixesAdvertised);
-counter!(PrefixesImported);
-counter!(IdleHoldTimerExpirations);
-counter!(HoldTimerExpirations);
-counter!(UnexpectedKeepaliveMessages);
-counter!(UnexpectedOpenMessages);
-counter!(UnexpectedUpdateMessages);
-counter!(UpdateNexthopMissing);
-counter!(ActiveConnectionsAccepted);
-counter!(PassiveConnectionsAccepted);
-counter!(ConnectionRetries);
-counter!(OpenHandleFailures);
-counter!(TransitionToIdle);
-counter!(TransitionToConnect);
-counter!(TransitionToActive);
-counter!(TransitionToOpenSent);
-counter!(TransitionToOpenConfirm);
-counter!(TransitionToSessionSetup);
-counter!(TransitionToEstablished);
-counter!(NotificationSendFailures);
-counter!(OpenSendFailures);
-counter!(KeepaliveSendFailures);
-counter!(UpdateSendFailures);
-
-// BFD
-counter!(ControlPacketsSent);
-counter!(ControlPacketSendFailures);
-counter!(ControlPacketsReceived);
-counter!(TransitionToInit);
-counter!(TransitionToDown);
-counter!(TransitionToUp);
-counter!(TimeoutExpired);
-counter!(MessageRecieveError);
-
-// Static
-counter!(StaticRoutes);
-counter!(StaticNexthops);
-
-// RIB
-quantity!(ActiveRoutes, u64);
-
-// Mg-lower
-quantity!(RoutesBlockedByLinkState, u64);
 
 impl std::fmt::Debug for Stats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -319,7 +285,7 @@ impl Stats {
         for (asn, session_counters) in &router_counters {
             for (addr, counters) in session_counters {
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -329,7 +295,7 @@ impl Stats {
                     counters.keepalives_sent
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -339,7 +305,7 @@ impl Stats {
                     counters.keepalives_received
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -349,7 +315,7 @@ impl Stats {
                     counters.opens_sent
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -359,7 +325,7 @@ impl Stats {
                     counters.opens_received
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -369,7 +335,7 @@ impl Stats {
                     counters.updates_sent
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -379,7 +345,7 @@ impl Stats {
                     counters.updates_received
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -389,7 +355,7 @@ impl Stats {
                     counters.prefixes_advertised
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -399,7 +365,7 @@ impl Stats {
                     counters.prefixes_imported
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -409,7 +375,7 @@ impl Stats {
                     counters.idle_hold_timer_expirations
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -419,7 +385,7 @@ impl Stats {
                     counters.hold_timer_expirations
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -429,7 +395,7 @@ impl Stats {
                     counters.update_nexhop_missing
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -439,7 +405,7 @@ impl Stats {
                     counters.active_connections_accepted
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -449,7 +415,7 @@ impl Stats {
                     counters.passive_connections_accepted
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -459,7 +425,7 @@ impl Stats {
                     counters.connection_retries
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -469,7 +435,7 @@ impl Stats {
                     counters.open_handle_failures
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -479,7 +445,7 @@ impl Stats {
                     counters.transitions_to_idle
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -489,7 +455,7 @@ impl Stats {
                     counters.transitions_to_connect
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -499,7 +465,7 @@ impl Stats {
                     counters.transitions_to_active
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -509,7 +475,7 @@ impl Stats {
                     counters.transitions_to_open_sent
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -519,7 +485,7 @@ impl Stats {
                     counters.transitions_to_open_confirm
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -529,7 +495,7 @@ impl Stats {
                     counters.transitions_to_session_setup
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -539,7 +505,7 @@ impl Stats {
                     counters.transitions_to_established
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -549,7 +515,7 @@ impl Stats {
                     counters.unexpected_update_message
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -559,7 +525,7 @@ impl Stats {
                     counters.unexpected_keepalive_message
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -569,7 +535,7 @@ impl Stats {
                     counters.unexpected_open_message
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -579,7 +545,7 @@ impl Stats {
                     counters.notification_send_failure
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -589,7 +555,7 @@ impl Stats {
                     counters.keepalive_send_failure
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -599,7 +565,7 @@ impl Stats {
                     counters.open_send_failure
                 ));
                 samples.push(bgp_session_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -626,7 +592,7 @@ impl Stats {
 
         for (addr, counters) in &counters {
             samples.push(bfd_session_counter!(
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
                 self.start_time,
@@ -635,7 +601,7 @@ impl Stats {
                 counters.control_packets_sent
             ));
             samples.push(bfd_session_counter!(
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
                 self.start_time,
@@ -644,7 +610,7 @@ impl Stats {
                 counters.control_packet_send_failures
             ));
             samples.push(bfd_session_counter!(
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
                 self.start_time,
@@ -653,7 +619,7 @@ impl Stats {
                 counters.control_packets_received
             ));
             samples.push(bfd_session_counter!(
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
                 self.start_time,
@@ -662,7 +628,7 @@ impl Stats {
                 counters.transition_to_init
             ));
             samples.push(bfd_session_counter!(
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
                 self.start_time,
@@ -671,7 +637,7 @@ impl Stats {
                 counters.transition_to_down
             ));
             samples.push(bfd_session_counter!(
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
                 self.start_time,
@@ -680,7 +646,7 @@ impl Stats {
                 counters.transition_to_up
             ));
             samples.push(bfd_session_counter!(
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
                 self.start_time,
@@ -689,12 +655,12 @@ impl Stats {
                 counters.timeout_expired
             ));
             samples.push(bfd_session_counter!(
-                self.hostname.clone(),
+                self.hostname.clone().into(),
                 self.rack_id,
                 self.sled_id,
                 self.start_time,
                 *addr,
-                MessageRecieveError,
+                MessageReceiveError,
                 counters.message_receive_error
             ));
         }
@@ -708,7 +674,7 @@ impl Stats {
         match self.db.get_static4_count() {
             Ok(count) => {
                 samples.push(static_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -723,7 +689,7 @@ impl Stats {
         match self.db.get_static_nexthop4_count() {
             Ok(count) => {
                 samples.push(static_counter!(
-                    self.hostname.clone(),
+                    self.hostname.clone().into(),
                     self.rack_id,
                     self.sled_id,
                     self.start_time,
@@ -747,7 +713,7 @@ impl Stats {
             count += paths.len();
         }
         samples.push(rib_quantity!(
-            self.hostname.clone(),
+            self.hostname.clone().into(),
             self.rack_id,
             self.sled_id,
             self.start_time,
@@ -760,7 +726,7 @@ impl Stats {
 
     fn mg_lower_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
         Ok(vec![mg_lower_quantity!(
-            self.hostname.clone(),
+            self.hostname.clone().into(),
             self.rack_id,
             self.sled_id,
             self.start_time,

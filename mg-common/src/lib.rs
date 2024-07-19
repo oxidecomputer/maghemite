@@ -28,29 +28,3 @@ macro_rules! write_lock {
         $rwl.write().expect("rwlock write")
     };
 }
-
-//
-// stats macros
-//
-
-#[macro_export]
-macro_rules! counter {
-    ($name:ident) => {
-        #[derive(Clone, Copy, Debug, Default, Metric)]
-        pub struct $name {
-            #[datum]
-            count: Cumulative<u64>,
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! quantity {
-    ($name:ident, $kind:tt) => {
-        #[derive(Clone, Copy, Debug, Default, Metric)]
-        pub struct $name {
-            #[datum]
-            quantity: $kind,
-        }
-    };
-}
