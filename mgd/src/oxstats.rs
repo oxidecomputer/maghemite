@@ -7,7 +7,7 @@ use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use chrono::{DateTime, Utc};
 use dropshot::{ConfigLogging, ConfigLoggingLevel};
-use mg_common::nexus::{local_underlay_address, resolve_nexus, run_oximeter};
+use mg_common::nexus::{local_underlay_address, run_oximeter};
 use mg_common::stats::MgLowerStats;
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
 use oximeter::types::{Cumulative, ProducerRegistry};
@@ -739,7 +739,6 @@ impl Stats {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_server(
     context: Arc<HandlerContext>,
-    dns_servers: Vec<SocketAddr>,
     hostname: String,
     rack_id: Uuid,
     sled_id: Uuid,
@@ -769,15 +768,14 @@ pub(crate) fn start_server(
         address: sa,
         interval: Duration::from_secs(1),
     };
+    let config = oximeter_producer::Config {
+        server_info: producer_info,
+        registration_address: None,
+        log: log_config,
+        request_body_max_bytes: 1024 * 1024 * 1024,
+    };
 
     Ok(tokio::spawn(async move {
-        let nexus_addr = resolve_nexus(log.clone(), &dns_servers).await;
-        let config = oximeter_producer::Config {
-            server_info: producer_info,
-            registration_address: Some(nexus_addr),
-            log: log_config,
-            request_body_max_bytes: 1024 * 1024 * 1024,
-        };
-        run_oximeter(registry.clone(), config.clone(), log.clone()).await
+        run_oximeter(registry, config, log).await
     }))
 }

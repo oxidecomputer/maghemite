@@ -373,7 +373,6 @@ async fn enable_stats(
                 DDM_STATS_PORT,
                 ctx.peers.clone(),
                 ctx.stats.clone(),
-                rq.dns_servers.clone(),
                 hostname,
                 rq.rack_id,
                 rq.sled_id,

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 
 use anyhow::anyhow;
 use smf::PropertyGroup;
@@ -62,7 +62,6 @@ pub fn get_string_list_prop(
 
 pub struct StatsServerProps {
     pub admin_addr: IpAddr,
-    pub dns_servers: Vec<SocketAddr>,
     pub rack_uuid: Uuid,
     pub sled_uuid: Uuid,
 }
@@ -71,23 +70,13 @@ pub fn get_stats_server_props(
     pg: PropertyGroup<'_>,
 ) -> anyhow::Result<StatsServerProps> {
     let admin_addr = get_string_prop("admin_host", &pg)?;
-    let dns_servers_prop = get_string_list_prop("dns_servers", &pg)?;
     let rack_uuid = get_string_prop("rack_uuid", &pg)?;
     let sled_uuid = get_string_prop("sled_uuid", &pg)?;
-
-    let mut dns_servers = Vec::new();
-    for p in &dns_servers_prop {
-        dns_servers.push(
-            p.parse()
-                .map_err(|e| anyhow!("parse dns server {p}: {e}"))?,
-        );
-    }
 
     Ok(StatsServerProps {
         admin_addr: admin_addr
             .parse()
             .map_err(|e| anyhow!("parse admin addr: {e}"))?,
-        dns_servers,
         rack_uuid: rack_uuid
             .parse()
             .map_err(|e| anyhow!("parse rack uuid {rack_uuid}: {e}"))?,
