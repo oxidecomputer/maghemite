@@ -2354,6 +2354,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             refresh_needed = true;
         }
 
+        if current.vlan_id != info.vlan_id {
+            current.vlan_id = info.vlan_id;
+            reset_needed = true;
+        }
+
         if current.allow_export != info.allow_export {
             let previous = current.allow_export.clone();
             current.allow_export = info.allow_export;
