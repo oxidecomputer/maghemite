@@ -37,6 +37,7 @@ pub(crate) fn update_tunnel_endpoints(
 
     let target: HashSet<TunnelOrigin> = routes
         .iter()
+        .filter(|(_prefix, path)| !path.is_empty())
         .map(|(prefix, _path)| route_to_tunnel(tep, prefix))
         .collect();
 
