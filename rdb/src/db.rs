@@ -554,6 +554,8 @@ impl Db {
             None => true,
         });
 
+        rib.retain(|&_, paths| !paths.is_empty());
+
         Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
         self.notify(prefix.into());
     }
@@ -574,6 +576,8 @@ impl Db {
             result.insert(*prefix, paths.clone());
             pcn.changed.insert(*prefix);
         }
+
+        rib.retain(|&_, paths| !paths.is_empty());
 
         for prefix in pcn.changed.iter() {
             Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
