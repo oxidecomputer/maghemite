@@ -9,7 +9,7 @@ use ddm::sm::{DpdConfig, SmContext, StateMachine};
 use ddm::sys::Route;
 use signal::handle_signals;
 use slog::{error, Drain, Logger};
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -187,14 +187,8 @@ async fn main() {
 
     let router_stats = Arc::new(RouterStats::default());
     let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
-    let dns_servers: Vec<SocketAddr> = arg
-        .dns_servers
-        .iter()
-        .filter(|x| x.as_str() != "unknown")
-        .map(|x| x.parse().unwrap())
-        .collect();
 
-    let stats_handler = if arg.with_stats && !dns_servers.is_empty() {
+    let stats_handler = if arg.with_stats {
         if let (Some(rack_uuid), Some(sled_uuid)) =
             (arg.rack_uuid, arg.sled_uuid)
         {
@@ -202,7 +196,6 @@ async fn main() {
                 arg.oximeter_port,
                 peers.clone(),
                 router_stats.clone(),
-                dns_servers,
                 hostname.clone(),
                 rack_uuid,
                 sled_uuid,

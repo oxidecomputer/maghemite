@@ -15,7 +15,7 @@ use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo, Path};
 use signal::handle_signals;
 use slog::{error, Logger};
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 use uuid::Uuid;
@@ -157,14 +157,7 @@ async fn run(args: RunArgs) {
         .to_string_lossy()
         .to_string();
 
-    let dns_servers: Vec<SocketAddr> = args
-        .dns_servers
-        .iter()
-        .filter(|x| x.as_str() != "unknown")
-        .map(|x| x.parse().unwrap())
-        .collect();
-
-    if args.with_stats && !dns_servers.is_empty() {
+    if args.with_stats {
         if let (Some(rack_uuid), Some(sled_uuid)) =
             (args.rack_uuid, args.sled_uuid)
         {
@@ -172,7 +165,6 @@ async fn run(args: RunArgs) {
             if !*is_running {
                 match oxstats::start_server(
                     context.clone(),
-                    dns_servers,
                     hostname,
                     rack_uuid,
                     sled_uuid,

@@ -64,7 +64,6 @@ fn refresh_stats_server(
         info!(log, "starting stats server on smf refresh");
         match crate::oxstats::start_server(
             ctx.clone(),
-            props.dns_servers,
             hostname,
             props.rack_uuid,
             props.sled_uuid,

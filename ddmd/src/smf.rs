@@ -67,7 +67,6 @@ fn refresh_stats_server(
             DDM_STATS_PORT,
             context.peers.clone(),
             context.stats.clone(),
-            props.dns_servers,
             hostname,
             props.rack_uuid,
             props.sled_uuid,

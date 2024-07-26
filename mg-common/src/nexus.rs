@@ -2,55 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use internal_dns::{resolver::Resolver, ServiceName};
-use slog::{info, warn, Logger};
-use std::{
-    net::{IpAddr, SocketAddr},
-    time::Duration,
-};
-use tokio::time::sleep;
-
-pub async fn resolve_nexus(
-    log: Logger,
-    dns_servers: &[SocketAddr],
-) -> SocketAddr {
-    info!(log, "resolving nexus");
-    loop {
-        let resolver = match Resolver::new_from_addrs(log.clone(), dns_servers)
-        {
-            Ok(resolver) => resolver,
-            Err(e) => {
-                warn!(log, "creating nexus resolver failed, waiting 1s: {e}");
-                sleep(Duration::from_secs(1)).await;
-                continue;
-            }
-        };
-
-        let op = || async {
-            match resolver.lookup_socket_v6(ServiceName::Nexus).await {
-                Ok(addr) => Ok(addr),
-                Err(e) => Err(e.into()),
-            }
-        };
-
-        let log_failure = |e, delay| {
-            warn!(log, "resolving nexus failed, {e} waiting {delay:?}");
-        };
-
-        match omicron_common::backoff::retry_notify(
-            omicron_common::backoff::retry_policy_internal_service_aggressive(),
-            op,
-            log_failure,
-        )
-        .await
-        {
-            Ok(addr) => return addr.into(),
-            Err(e) => {
-                warn!(log, "error resulving nexus: {e}");
-            }
-        }
-    }
-}
+use slog::{warn, Logger};
+use std::net::IpAddr;
 
 pub async fn run_oximeter(
     registry: oximeter::types::ProducerRegistry,
