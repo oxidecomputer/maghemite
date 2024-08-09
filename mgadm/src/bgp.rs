@@ -315,12 +315,12 @@ pub struct ExportPolicy {
 
 #[derive(Args, Debug)]
 pub struct Originate4 {
-    /// Set of prefixes to originate.
-    pub prefixes: Vec<Prefix4>,
-
     /// Autonomous system number for the router to originated the prefixes from.
     #[clap(env)]
     pub asn: u32,
+
+    /// Set of prefixes to originate.
+    pub prefixes: Vec<Prefix4>,
 }
 
 #[derive(Args, Debug)]
