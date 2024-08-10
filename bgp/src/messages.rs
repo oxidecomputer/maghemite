@@ -2000,12 +2000,17 @@ impl Capability {
 
     pub fn from_wire(input: &[u8]) -> Result<(&[u8], Capability), Error> {
         let (input, code) = parse_u8(input)?;
-        let code = CapabilityCode::try_from(code)?;
         let (input, len) = parse_u8(input)?;
         let len = len as usize;
         if input.len() < len {
             return Err(Error::Eom);
         }
+        let code = match CapabilityCode::try_from(code) {
+            Ok(code) => code,
+            Err(_) => {
+                return Ok((&input[len..], Capability::Unassigned { code }))
+            }
+        };
         let mut input = input;
 
         match code {
