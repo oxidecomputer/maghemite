@@ -5,7 +5,6 @@
 use crate::db::TunnelRoute;
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
-use dendrite_common::network::{Cidr, Ipv6Cidr};
 use dendrite_common::ports::PortId;
 use dendrite_common::ports::RearPort;
 use dpd_client::types;
@@ -150,9 +149,19 @@ pub fn add_routes_dendrite(
 
     for r in routes {
         let cidr = match r.dest {
-            IpAddr::V6(addr) => Ipv6Cidr {
-                prefix: addr,
-                prefix_len: r.prefix_len,
+            IpAddr::V6(addr) => match Ipv6Net::new(addr, r.prefix_len) {
+                Ok(cidr) => cidr,
+                Err(e) => {
+                    err!(
+                        log,
+                        ifname,
+                        "error forming cidr: {}/{} {:?}",
+                        addr,
+                        r.prefix_len,
+                        e
+                    );
+                    continue;
+                }
             },
             _ => {
                 err!(log, ifname, "unsupported dst: {:?}", r.dest);
@@ -211,7 +220,7 @@ pub fn add_routes_dendrite(
             vlan_id: None,
         };
         let route_set = types::RouteSet {
-            cidr: cidr.into(),
+            cidr: IpNet::V6(cidr),
             target: target.into(),
             replace: false,
         };
@@ -396,9 +405,19 @@ pub fn remove_routes_dendrite(
 
     for r in routes {
         let cidr = match r.dest {
-            IpAddr::V6(addr) => Ipv6Cidr {
-                prefix: addr,
-                prefix_len: r.prefix_len,
+            IpAddr::V6(addr) => match Ipv6Net::new(addr, r.prefix_len) {
+                Ok(cidr) => cidr,
+                Err(e) => {
+                    err!(
+                        log,
+                        ifname,
+                        "failed to create cidr for {}/{}: {}",
+                        addr,
+                        r.prefix_len,
+                        e
+                    );
+                    continue;
+                }
             },
             _ => {
                 wrn!(
@@ -443,7 +462,7 @@ pub fn get_routes_dendrite(
 
     for r in routes {
         let (dest, prefix_len) = match r.cidr {
-            Cidr::V6(cidr) => (cidr.prefix.into(), cidr.prefix_len),
+            IpNet::V6(cidr) => (cidr.prefix().into(), cidr.width()),
             _ => continue,
         };
 
@@ -499,8 +518,22 @@ pub fn add_routes_illumos(log: &Logger, routes: Vec<Route>, ifname: &str) {
             continue;
         }
 
+        let dst = match IpNet::new(r.dest, r.prefix_len) {
+            Ok(dst) => dst,
+            Err(e) => {
+                err!(
+                    log,
+                    ifname,
+                    "error forming route destination: {:?}, {}",
+                    r,
+                    e
+                );
+                continue;
+            }
+        };
+
         if let Err(e) =
-            libnet::ensure_route_present(r.into(), gw, Some(ifname.into()))
+            libnet::ensure_route_present(dst, gw, Some(ifname.into()))
         {
             err!(log, ifname, "set route: {}", e);
         }
@@ -523,9 +556,20 @@ pub fn remove_routes_illumos(log: &Logger, ifname: &str, routes: Vec<Route>) {
     for r in routes {
         let gw = r.gw;
         inf!(log, ifname, "removing route {} -> {}", r.dest, r.gw,);
-        if let Err(e) =
-            libnet::delete_route(r.clone().into(), gw, Some(r.ifname.clone()))
-        {
+        let dst = match IpNet::new(r.dest, r.prefix_len) {
+            Ok(dst) => dst,
+            Err(e) => {
+                err!(
+                    log,
+                    ifname,
+                    "error forming route destination: {:?}, {}",
+                    r,
+                    e
+                );
+                continue;
+            }
+        };
+        if let Err(e) = libnet::delete_route(dst, gw, Some(r.ifname.clone())) {
             err!(log, ifname, "set route: {e}");
             continue;
         }

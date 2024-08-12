@@ -15,4 +15,7 @@ pub enum Error {
 
     #[error("libnet error route {0}")]
     LibnetRoute(#[from] libnet::route::Error),
+
+    #[error("oxnet ipnet prefix error {0}")]
+    OxnetIpnetPrevix(#[from] oxnet::IpNetPrefixError),
 }

@@ -4,17 +4,17 @@
 
 use crate::Error;
 use crate::MG_LOWER_TAG;
-use dendrite_common::network::Cidr;
 use dendrite_common::ports::PortId;
 use dendrite_common::ports::QsfpPort;
 use dpd_client::types;
 use dpd_client::types::LinkId;
 use dpd_client::types::LinkState;
 use dpd_client::Client as DpdClient;
-use dpd_client::Ipv4Cidr;
-use dpd_client::Ipv6Cidr;
 use http::StatusCode;
-use libnet::{get_route, IpNet};
+use libnet::get_route;
+use oxnet::IpNet;
+use oxnet::Ipv4Net;
+use oxnet::Ipv6Net;
 use rdb::Path;
 use rdb::Prefix;
 use slog::{error, warn, Logger};
@@ -29,7 +29,7 @@ const TFPORT_QSFP_DEVICE_PREFIX: &str = "tfportqsfp";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct RouteHash {
-    pub(crate) cidr: Cidr,
+    pub(crate) cidr: IpNet,
     pub(crate) port_id: PortId,
     pub(crate) link_id: types::LinkId,
     pub(crate) nexthop: IpAddr,
@@ -38,14 +38,14 @@ pub(crate) struct RouteHash {
 
 impl RouteHash {
     pub fn new(
-        cidr: Cidr,
+        cidr: IpNet,
         port_id: PortId,
         link_id: types::LinkId,
         nexthop: IpAddr,
         vlan_id: Option<u16>,
     ) -> Result<Self, &'static str> {
         match (cidr, nexthop) {
-            (Cidr::V4(_), IpAddr::V4(_)) | (Cidr::V6(_), IpAddr::V6(_)) => {
+            (IpNet::V4(_), IpAddr::V4(_)) | (IpNet::V6(_), IpAddr::V6(_)) => {
                 Ok(RouteHash {
                     cidr,
                     port_id,
@@ -66,16 +66,8 @@ impl RouteHash {
 
         let rh = RouteHash {
             cidr: match prefix {
-                Prefix::V4(p) => Ipv4Cidr {
-                    prefix: p.value,
-                    prefix_len: p.length,
-                }
-                .into(),
-                Prefix::V6(p) => Ipv6Cidr {
-                    prefix: p.value,
-                    prefix_len: p.length,
-                }
-                .into(),
+                Prefix::V4(p) => Ipv4Net::new(p.value, p.length)?.into(),
+                Prefix::V6(p) => Ipv6Net::new(p.value, p.length)?.into(),
             },
             port_id,
             link_id,
@@ -173,8 +165,8 @@ where
         let vlan_id = r.vlan_id;
 
         let target = match (r.cidr, r.nexthop) {
-            (Cidr::V4(c), IpAddr::V4(tgt_ip)) => {
-                if c.prefix_len == 32 && local_v4_addrs.contains(&c.prefix) {
+            (IpNet::V4(c), IpAddr::V4(tgt_ip)) => {
+                if c.width() == 32 && local_v4_addrs.contains(&c.prefix()) {
                     warn!(
                         log,
                         "martian detected: prefix={c:?}, \
@@ -200,8 +192,8 @@ where
                 }
                 .into()
             }
-            (Cidr::V6(c), IpAddr::V6(tgt_ip)) => {
-                if c.prefix_len == 128 && local_v6_addrs.contains(&c.prefix) {
+            (IpNet::V6(c), IpAddr::V6(tgt_ip)) => {
+                if c.width() == 128 && local_v6_addrs.contains(&c.prefix()) {
                     warn!(
                         log,
                         "martian detected: prefix={c:?}, \
@@ -247,8 +239,8 @@ where
         let link_id = r.link_id;
 
         let cidr = match r.cidr {
-            Cidr::V4(cidr) => cidr,
-            Cidr::V6(_) => continue,
+            IpNet::V4(cidr) => cidr,
+            IpNet::V6(_) => continue,
         };
         let target = match r.nexthop {
             IpAddr::V4(tgt_ip) => tgt_ip,
@@ -364,10 +356,7 @@ pub(crate) fn get_routes_for_prefix(
 ) -> Result<HashSet<RouteHash>, Error> {
     let result = match prefix {
         Prefix::V4(p) => {
-            let cidr = Ipv4Cidr {
-                prefix: p.value,
-                prefix_len: p.length,
-            };
+            let cidr = Ipv4Net::new(p.value, p.length)?;
             let dpd_routes =
                 match rt.block_on(async { dpd.route_ipv4_get(&cidr).await }) {
                     Ok(routes) => routes,
@@ -443,10 +432,7 @@ pub(crate) fn get_routes_for_prefix(
                 .collect()
         }
         Prefix::V6(p) => {
-            let cidr = Ipv6Cidr {
-                prefix: p.value,
-                prefix_len: p.length,
-            };
+            let cidr = Ipv6Net::new(p.value, p.length)?;
             let dpd_routes = rt
                 .block_on(async { dpd.route_ipv6_get(&cidr).await })?
                 .into_inner();
