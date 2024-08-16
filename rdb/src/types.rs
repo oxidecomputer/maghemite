@@ -46,12 +46,16 @@ impl Ord for Path {
 }
 
 impl Path {
-    pub fn for_static(nexthop: IpAddr, vlan_id: Option<u16>) -> Self {
+    pub fn for_static(
+        nexthop: IpAddr,
+        vlan_id: Option<u16>,
+        local_pref: Option<u32>,
+    ) -> Self {
         Self {
             nexthop,
             vlan_id,
+            local_pref,
             shutdown: false,
-            local_pref: None,
             bgp: None,
         }
     }
@@ -103,6 +107,7 @@ pub struct StaticRouteKey {
     pub prefix: Prefix,
     pub nexthop: IpAddr,
     pub vlan_id: Option<u16>,
+    pub local_pref: Option<u32>,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
