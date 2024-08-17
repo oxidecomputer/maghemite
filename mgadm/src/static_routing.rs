@@ -33,7 +33,9 @@ pub enum Ipv4NetParseError {
 pub struct StaticRoute4 {
     pub destination: Ipv4Net,
     pub nexthop: Ipv4Addr,
+    #[clap(long)]
     pub vlan_id: Option<u16>,
+    #[clap(long)]
     pub local_pref: Option<u32>,
 }
 
