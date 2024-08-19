@@ -63,6 +63,12 @@ pub enum StatusCmd {
         asn: u32,
     },
 
+    /// Get the prefixes exported by a BGP router.
+    Exported {
+        #[clap(env)]
+        asn: u32,
+    },
+
     /// Get the prefixes imported by a BGP router.
     Imported {
         #[clap(env)]
@@ -535,6 +541,7 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
 
         Commands::Status(cmd) => match cmd.command {
             StatusCmd::Neighbors { asn } => get_neighbors(c, asn).await,
+            StatusCmd::Exported { asn } => get_exported(c, asn).await,
             StatusCmd::Imported { asn } => get_imported(c, asn).await,
             StatusCmd::Selected { asn } => get_selected(c, asn).await,
         },
@@ -624,6 +631,16 @@ async fn get_neighbors(c: Client, asn: u32) {
         .unwrap();
     }
     tw.flush().unwrap();
+}
+
+async fn get_exported(c: Client, asn: u32) {
+    let exported = c
+        .get_exported(&types::AsnSelector { asn })
+        .await
+        .unwrap()
+        .into_inner();
+
+    println!("{exported:#?}");
 }
 
 async fn get_imported(c: Client, asn: u32) {

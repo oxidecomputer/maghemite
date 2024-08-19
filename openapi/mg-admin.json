@@ -787,6 +787,46 @@
         }
       }
     },
+    "/bgp/status/exported": {
+      "get": {
+        "operationId": "get_exported",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AsnSelector"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_Array_of_Prefix",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Prefix"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/status/imported": {
       "get": {
         "operationId": "get_imported",
