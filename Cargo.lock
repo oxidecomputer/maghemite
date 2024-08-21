@@ -280,7 +280,7 @@ dependencies = [
  "itertools 0.13.0",
  "lazy_static",
  "libc",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=pf_key)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "mg-common",
  "nom",
  "num_enum 0.7.3",
@@ -771,7 +771,7 @@ dependencies = [
  "hostname 0.3.1",
  "hyper",
  "ispf",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=pf_key)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "mg-common",
  "omicron-common",
  "opte-ioctl",
@@ -850,7 +850,7 @@ dependencies = [
  "ddm",
  "dpd-client",
  "hostname 0.3.1",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=pf_key)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "mg-common",
  "slog",
  "slog-async",
@@ -2066,27 +2066,7 @@ checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#99b066f84c50b8bb57038549333dae3bdef661e6"
-dependencies = [
- "anyhow",
- "cfg-if",
- "colored",
- "dlpi",
- "libc",
- "num_enum 0.5.11",
- "nvpair",
- "nvpair-sys",
- "oxnet",
- "rusty-doors",
- "socket2",
- "thiserror",
- "tracing",
-]
-
-[[package]]
-name = "libnet"
-version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys?branch=pf_key#a8da652c671d9000cb6f2a06db4b7ad9258a689d"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#e07ad76458eb50601e0da4f9da16dbc942bfc2ba"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -2108,7 +2088,7 @@ dependencies = [
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys#99b066f84c50b8bb57038549333dae3bdef661e6"
+source = "git+https://github.com/oxidecomputer/netadm-sys#e07ad76458eb50601e0da4f9da16dbc942bfc2ba"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -2119,10 +2099,12 @@ dependencies = [
  "nvpair",
  "nvpair-sys",
  "oxnet",
+ "rand",
  "rusty-doors",
  "socket2",
  "thiserror",
  "tracing",
+ "winnow 0.6.18",
 ]
 
 [[package]]
@@ -2269,7 +2251,7 @@ dependencies = [
  "backoff",
  "clap",
  "internal-dns",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=pf_key)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "omicron-common",
  "oximeter",
  "oximeter-producer",
@@ -2303,7 +2285,7 @@ dependencies = [
  "ddm-admin-client 0.1.0",
  "dpd-client",
  "http 0.2.12",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=pf_key)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "mg-common",
  "oxnet",
  "rdb",
@@ -2329,7 +2311,7 @@ dependencies = [
  "anyhow",
  "ddm-admin-client 0.1.0",
  "ddm-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=2bfd39000c878c45675651a7588c015c486e7f43)",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=pf_key)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "serde",
  "slog",
  "slog-async",
@@ -5214,7 +5196,7 @@ name = "util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=pf_key)",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "slog",
  "slog-async",
  "slog-envlogger",
