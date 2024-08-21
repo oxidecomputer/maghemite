@@ -2,9 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+#![allow(clippy::type_complexity)]
 use crate::bgp_param as resource;
 use crate::{admin::HandlerContext, bgp_param::*, error::Error, register};
 use bgp::router::LoadPolicyError;
+use bgp::session::FsmStateKind;
 use bgp::{
     config::RouterConfig,
     connection::BgpConnection,
@@ -18,7 +20,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Query, RequestContext, TypedBody,
 };
 use http::status::StatusCode;
-use rdb::{Asn, BgpRouterInfo};
+use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
 use slog::info;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -110,6 +112,7 @@ pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
     //
 
     register!(api, get_neighbors);
+    register!(api, get_exported);
     register!(api, get_imported);
     register!(api, get_selected);
     register!(api, message_history);
@@ -349,6 +352,52 @@ pub async fn delete_origin4(
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseDeleted())
+}
+
+#[endpoint { method = GET, path = "/bgp/status/exported" }]
+pub async fn get_exported(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<AsnSelector>,
+) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    let r = get_router!(ctx, rq.asn)?.clone();
+    let orig4 = r.db.get_origin4().map_err(|e| {
+        HttpError::for_internal_error(format!("error getting origin: {e}"))
+    })?;
+    let neighs = r.db.get_bgp_neighbors().map_err(|e| {
+        HttpError::for_internal_error(format!("error getting neighbors: {e}"))
+    })?;
+    let mut exported = HashMap::new();
+
+    for n in neighs {
+        if r.get_session(n.host.ip())
+            .filter(|s| s.state() == FsmStateKind::Established)
+            .is_none()
+        {
+            continue;
+        }
+
+        let mut orig_routes: Vec<Prefix> = orig4
+            .clone()
+            .iter()
+            .map(|p| rdb::Prefix::from(*p))
+            .collect();
+
+        let mut exported_routes: Vec<Prefix> = match n.allow_export {
+            ImportExportPolicy::NoFiltering => orig_routes,
+            ImportExportPolicy::Allow(epol) => {
+                orig_routes.retain(|p| epol.contains(p));
+                orig_routes
+            }
+        };
+
+        // stable output order for clients
+        exported_routes.sort();
+        exported.insert(n.host.ip(), exported_routes);
+    }
+
+    Ok(HttpResponseOk(exported))
 }
 
 #[endpoint { method = GET, path = "/bgp/status/imported" }]
