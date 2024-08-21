@@ -60,7 +60,6 @@ pub struct Control {
     /// 6. Concatenated Path Down
     /// 7. Administratively Down
     /// 8. Reverse Concatenated Path Down
-    /// 9-31. -- Reserved for future use
     ///
     pub vers_diag: u8,
 
@@ -347,7 +346,6 @@ pub struct Auth {
     /// 3. Meticulous Keyed MD5
     /// 4. Keyed SHA1
     /// 5. Meticulous Keyed SHA1
-    /// 6-255. Reserved for future use
     ///
     pub auth_type: u8,
 

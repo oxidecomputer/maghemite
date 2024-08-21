@@ -4,8 +4,7 @@
 
 use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client;
-use dpd_client::Cidr;
-use oxnet::Ipv6Net;
+use oxnet::{IpNet, Ipv6Net};
 use rdb::db::Rib;
 use rdb::{Prefix, Prefix4, Prefix6, DEFAULT_ROUTE_PRIORITY};
 use slog::{error, info, Logger};
@@ -116,14 +115,14 @@ pub(crate) fn add_tunnel_routes(
         .iter()
         .map(|rt| {
             let pfx = match rt.cidr {
-                Cidr::V4(p) => Prefix4 {
-                    value: p.prefix,
-                    length: p.prefix_len,
+                IpNet::V4(p) => Prefix4 {
+                    value: p.prefix(),
+                    length: p.width(),
                 }
                 .into(),
-                Cidr::V6(p) => Prefix6 {
-                    value: p.prefix,
-                    length: p.prefix_len,
+                IpNet::V6(p) => Prefix6 {
+                    value: p.prefix(),
+                    length: p.width(),
                 }
                 .into(),
             };
@@ -163,14 +162,14 @@ pub(crate) fn remove_tunnel_routes(
         .iter()
         .map(|rt| {
             let pfx = match rt.cidr {
-                Cidr::V4(p) => Prefix4 {
-                    value: p.prefix,
-                    length: p.prefix_len,
+                IpNet::V4(p) => Prefix4 {
+                    value: p.prefix(),
+                    length: p.width(),
                 }
                 .into(),
-                Cidr::V6(p) => Prefix6 {
-                    value: p.prefix,
-                    length: p.prefix_len,
+                IpNet::V6(p) => Prefix6 {
+                    value: p.prefix(),
+                    length: p.width(),
                 }
                 .into(),
             };

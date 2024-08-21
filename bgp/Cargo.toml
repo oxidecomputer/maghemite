@@ -20,8 +20,14 @@ chrono.workspace = true
 libc.workspace = true
 socket2.workspace = true
 rhai.workspace = true
+libnet = { workspace = true, optional = true }
+itertools.workspace = true
+oxnet.workspace = true
 
 [dev-dependencies]
 pretty-hex.workspace = true
 pretty_assertions.workspace = true
 lazy_static.workspace = true
+
+[features]
+default = ["libnet"]

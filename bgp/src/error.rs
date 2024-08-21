@@ -199,6 +199,9 @@ pub enum Error {
 
     #[error("Feature not yet supported")]
     FeatureNotSupported,
+
+    #[error("Tcpkey database error: {0}")]
+    TcpKey(String),
 }
 
 #[derive(Debug)]

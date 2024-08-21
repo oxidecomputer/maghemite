@@ -11,13 +11,8 @@ use crate::messages::{
 use crate::session::FsmEvent;
 use crate::to_canonical;
 use libc::{c_int, sockaddr_storage};
-#[cfg(any(target_os = "linux", target_os = "illumos"))]
-use libc::{c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP};
-#[cfg(target_os = "linux")]
-use libc::{IP_MINTTL, TCP_MD5SIG};
-
 use mg_common::lock;
-use slog::{error, trace, warn, Logger};
+use slog::{error, info, trace, warn, Logger};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
@@ -27,22 +22,58 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+#[cfg(target_os = "illumos")]
+use itertools::Itertools;
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use libc::{c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP};
+#[cfg(target_os = "linux")]
+use libc::{IP_MINTTL, TCP_MD5SIG};
+#[cfg(target_os = "illumos")]
+use std::collections::HashSet;
 
 #[cfg(target_os = "illumos")]
 const IP_MINTTL: i32 = 0x1c;
 #[cfg(target_os = "illumos")]
 const TCP_MD5SIG: i32 = 0x27;
+#[cfg(target_os = "illumos")]
+const PFKEY_DURATION: Duration = Duration::from_secs(60 * 2);
+#[cfg(target_os = "illumos")]
+const PFKEY_KEEPALIVE: Duration = Duration::from_secs(60);
 
 pub struct BgpListenerTcp {
     addr: SocketAddr,
     listener: TcpListener,
 }
 
+/// Md5 security associations.
+#[cfg(target_os = "illumos")]
+pub struct Md5Sas {
+    key: String,
+    associations: HashSet<(SocketAddr, SocketAddr)>,
+    create_time: Instant,
+}
+
+#[cfg(target_os = "illumos")]
+impl Md5Sas {
+    fn new(key: &str) -> Self {
+        Self {
+            key: key.to_owned(),
+            associations: HashSet::new(),
+            create_time: Instant::now(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct BgpConnectionTcp {
     peer: SocketAddr,
     conn: Arc<Mutex<Option<TcpStream>>>, //TODO split into tx/rx?
+    #[cfg(target_os = "illumos")]
+    sas: Arc<Mutex<Option<Md5Sas>>>,
+    #[cfg(target_os = "illumos")]
+    sa_keepalive_running: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
     log: Logger,
 }
@@ -97,6 +128,10 @@ impl BgpConnection for BgpConnectionTcp {
             conn,
             log,
             dropped: Arc::new(AtomicBool::new(false)),
+            #[cfg(target_os = "illumos")]
+            sa_keepalive_running: Arc::new(AtomicBool::new(false)),
+            #[cfg(target_os = "illumos")]
+            sas: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -123,7 +158,6 @@ impl BgpConnection for BgpConnectionTcp {
 
         #[cfg(target_os = "linux")]
         if let Some(key) = md5_key {
-            slog::info!(self.log, "setting md5 key: {:?}", key);
             let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
             let len = key.len();
             keyval[..len].copy_from_slice(key.as_bytes());
@@ -137,8 +171,35 @@ impl BgpConnection for BgpConnectionTcp {
 
         #[cfg(target_os = "illumos")]
         if let Some(key) = md5_key {
-            // TODO This will come later for illumos
-            return Err(Error::FeatureNotSupported);
+            let sources = match source_address_select(self.peer.ip()) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!(
+                        self.log,
+                        "source address selection for {}: {e}", self.peer
+                    );
+                    return Err(Error::InvalidAddress(e.to_string()));
+                }
+            };
+            if sources.is_empty() {
+                error!(self.log, "no source address for {}", self.peer);
+                return Err(Error::InvalidAddress(String::from(
+                    "no source address",
+                )));
+            }
+            let local: Vec<SocketAddr> = sources
+                .iter()
+                .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
+                .collect();
+            if let Err(e) = self.set_md5_sig_fd(
+                s.as_raw_fd(),
+                key.as_str(),
+                local,
+                self.peer,
+            ) {
+                error!(self.log, "set md5 key for tcp conn failed: {e}");
+                return Err(e);
+            }
         }
 
         let sa: socket2::SockAddr = self.peer.into();
@@ -249,7 +310,7 @@ impl BgpConnection for BgpConnectionTcp {
         keylen: u16,
         key: [u8; MAX_MD5SIG_KEYLEN],
     ) -> Result<(), Error> {
-        slog::info!(self.log, "setting md5 auth for {}", self.peer);
+        info!(self.log, "setting md5 auth for {}", self.peer);
         let conn = self.conn.lock().unwrap();
         let fd = match conn.as_ref() {
             None => return Err(Error::NotConnected),
@@ -265,7 +326,7 @@ impl BgpConnection for BgpConnectionTcp {
         keylen: u16,
         key: [u8; MAX_MD5SIG_KEYLEN],
     ) -> Result<(), Error> {
-        slog::info!(self.log, "setting md5 auth for {}", self.peer);
+        info!(self.log, "setting md5 auth for {}", self.peer);
         let conn = self.conn.lock().unwrap();
         match conn.as_ref() {
             None => return Err(Error::NotConnected),
@@ -274,7 +335,9 @@ impl BgpConnection for BgpConnectionTcp {
                 let peer = c.peer_addr()?;
                 let s = String::from_utf8_lossy(&key[..keylen as usize])
                     .to_string();
-                if let Err(e) = set_md5_sig_fd(c.as_raw_fd(), &s, local, peer) {
+                if let Err(e) =
+                    self.set_md5_sig_fd(c.as_raw_fd(), &s, vec![local], peer)
+                {
                     error!(self.log, "set md5 key for tcp conn failed: {e}");
                     return Err(e);
                 }
@@ -295,6 +358,8 @@ impl BgpConnection for BgpConnectionTcp {
 
 impl Drop for BgpConnectionTcp {
     fn drop(&mut self) {
+        #[cfg(target_os = "illumos")]
+        self.md5_sig_drop();
         self.dropped
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -323,6 +388,10 @@ impl BgpConnectionTcp {
             conn: Arc::new(Mutex::new(Some(conn))),
             log,
             dropped,
+            #[cfg(target_os = "illumos")]
+            sa_keepalive_running: Arc::new(AtomicBool::new(false)),
+            #[cfg(target_os = "illumos")]
+            sas: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -338,7 +407,7 @@ impl BgpConnectionTcp {
             conn.set_read_timeout(Some(timeout))?;
         }
 
-        slog::info!(log, "spawning recv loop");
+        info!(log, "spawning recv loop");
 
         spawn(move || loop {
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {
@@ -520,6 +589,141 @@ impl BgpConnectionTcp {
             }),
         )
     }
+
+    #[cfg(target_os = "illumos")]
+    fn md5_sig_drop(&self) {
+        let guard = self.sas.lock().unwrap();
+        if let Some(ref sas) = *guard {
+            for (local, peer) in sas.associations.iter() {
+                for (a, b) in sa_set(*local, *peer) {
+                    if let Err(e) =
+                        libnet::pf_key::tcp_md5_key_remove(a.into(), b.into())
+                    {
+                        error!(self.log, "failed to drop sa {a} -> {b}: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "illumos")]
+    fn set_md5_sig_fd(
+        &self,
+        fd: i32,
+        key: &str,
+        locals: Vec<SocketAddr>,
+        peer: SocketAddr,
+    ) -> Result<(), Error> {
+        self.set_md5_security_associations(key, locals, peer)?;
+
+        let yes: c_int = 1;
+        unsafe {
+            if libc::setsockopt(
+                fd,
+                IPPROTO_TCP,
+                TCP_MD5SIG,
+                &yes as *const c_int as *const c_void,
+                std::mem::size_of::<c_int>() as u32,
+            ) != 0
+            {
+                return Err(Error::Io(std::io::Error::last_os_error()));
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "illumos")]
+    fn set_md5_security_associations(
+        &self,
+        key: &str,
+        locals: Vec<SocketAddr>,
+        peer: SocketAddr,
+    ) -> Result<(), Error> {
+        let mut guard = self.sas.lock().unwrap();
+        match &mut *guard {
+            Some(sas) => {
+                for local in locals.into_iter() {
+                    sas.associations.insert((local, peer));
+                }
+            }
+            None => {
+                let mut sas = Md5Sas::new(key);
+                for local in locals.into_iter() {
+                    sas.associations.insert((local, peer));
+                }
+                *guard = Some(sas);
+            }
+        }
+        drop(guard);
+        self.sa_keepalive();
+        Ok(())
+    }
+
+    #[cfg(target_os = "illumos")]
+    fn sa_keepalive(&self) {
+        use std::{sync::atomic::Ordering, thread::sleep};
+
+        if self.sa_keepalive_running.load(Ordering::SeqCst) {
+            return;
+        }
+
+        // Get one run in before returning, this helps the SAs to
+        // get set up before setting up the socket.
+        Self::do_sa_keepalive(&self.sas, &self.log);
+
+        info!(self.log, "spawning security association keepalive loop");
+        let dropped = self.dropped.clone();
+        let log = self.log.clone();
+        let sas = self.sas.clone();
+        spawn(move || loop {
+            sleep(PFKEY_KEEPALIVE);
+            if dropped.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            Self::do_sa_keepalive(&sas, &log);
+        });
+    }
+
+    #[cfg(target_os = "illumos")]
+    fn do_sa_keepalive(sas: &Arc<Mutex<Option<Md5Sas>>>, log: &Logger) {
+        use std::ops::{Add, Sub};
+
+        // While an API action that results in changing the authkey will
+        // result in a session reset, there are other things that can change
+        // out from underneath us that we need to keep tabs on. In particular
+        // we may accept a connection from a client (as opposed to the client)
+        // accepting a connection from us, and that will result in the
+        // association set increasing according to the source port of the client.
+        let guard = sas.lock().unwrap();
+        if let Some(ref sas) = *guard {
+            for (local, peer) in sas.associations.iter() {
+                for (a, b) in sa_set(*local, *peer) {
+                    let update =
+                        libnet::pf_key::tcp_md5_key_get(a.into(), b.into())
+                            .is_ok();
+                    let valid_time =
+                        Instant::now().sub(sas.create_time).add(PFKEY_DURATION);
+                    if update {
+                        if let Err(e) = libnet::pf_key::tcp_md5_key_update(
+                            a.into(),
+                            b.into(),
+                            valid_time,
+                        ) {
+                            error!(log, "pf_key update {a} -> {b}: {e}");
+                        }
+                    } else if let Err(e) = libnet::pf_key::tcp_md5_key_add(
+                        a.into(),
+                        b.into(),
+                        sas.key.as_str(),
+                        valid_time,
+                    ) {
+                        error!(log, "pf_key add {a} -> {b}: {e}");
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -553,62 +757,6 @@ fn set_md5_sig_fd(
     Ok(())
 }
 
-// TODO use actual kernel interfaces instead of this puddle of perl pretending
-// to be rust.
-#[cfg(target_os = "illumos")]
-fn set_md5_sig_fd(
-    fd: i32,
-    key: &str,
-    local: SocketAddr,
-    peer: SocketAddr,
-) -> Result<(), Error> {
-    {
-        use std::{
-            io::BufWriter,
-            process::{Command, Stdio},
-        };
-
-        let tcpkey = Command::new("/usr/sbin/tcpkey")
-            .stdin(Stdio::piped())
-            .spawn()?;
-        let mut tcpkey_in = tcpkey.stdin.unwrap();
-        let mut writer = BufWriter::new(&mut tcpkey_in);
-
-        writeln!(
-            writer,
-            "add src {} dst {} dport {} authalg md5 authstring {}\n",
-            local.ip(),
-            peer.ip(),
-            peer.port(),
-            key
-        )?;
-        writeln!(
-            writer,
-            "add src {} dst {} sport {} authalg md5 authstring {}",
-            local.ip(),
-            peer.ip(),
-            peer.port(),
-            key
-        )?;
-    }
-
-    let yes = true;
-    unsafe {
-        if libc::setsockopt(
-            fd,
-            IPPROTO_TCP,
-            TCP_MD5SIG,
-            &yes as *const bool as *const c_void,
-            std::mem::size_of::<TcpMd5Sig>() as u32,
-        ) != 0
-        {
-            return Err(Error::Io(std::io::Error::last_os_error()));
-        }
-    }
-
-    Ok(())
-}
-
 #[repr(C)]
 struct TcpMd5Sig {
     tcpm_addr: sockaddr_storage,
@@ -623,4 +771,52 @@ impl Default for TcpMd5Sig {
     fn default() -> Self {
         unsafe { std::mem::zeroed() }
     }
+}
+
+#[cfg(target_os = "illumos")]
+fn source_address_select(dst: IpAddr) -> anyhow::Result<Vec<IpAddr>> {
+    use oxnet::IpNet;
+
+    let prefix = match dst {
+        IpAddr::V4(_) => 32,
+        IpAddr::V6(_) => 128,
+    };
+    let target = IpNet::new_unchecked(dst, prefix);
+
+    let nexthop = libnet::get_route(target, None)?.gw;
+    let selected_local_addrs: Vec<IpAddr> = libnet::get_ipaddrs()?
+        .into_values()
+        .flatten()
+        .map(|x| oxnet::IpNet::new_unchecked(x.addr, x.mask as u8))
+        .filter(|x| x.contains(nexthop))
+        .max_set_by_key(|x| x.prefix())
+        .into_iter()
+        .map(|x| x.addr())
+        .collect();
+
+    Ok(selected_local_addrs)
+}
+
+#[cfg(target_os = "illumos")]
+fn any_port(mut s: SocketAddr) -> SocketAddr {
+    s.set_port(0);
+    s
+}
+
+#[cfg(target_os = "illumos")]
+fn sa_set(src: SocketAddr, dst: SocketAddr) -> [(SocketAddr, SocketAddr); 4] {
+    // There are two directions of traffic we have to cover with two port
+    // configurations for a total of four cases.
+    // * Local -> Peer
+    //   * Local is TCP client Peer is server
+    //   * Peer is TCP client Local is server
+    // * Peer -> Local
+    //   * Local is TCP client Peer is server
+    //   * Peer is TCP client Local is server
+    [
+        (any_port(src), dst),
+        (src, any_port(dst)),
+        (any_port(dst), src),
+        (dst, any_port(src)),
+    ]
 }
