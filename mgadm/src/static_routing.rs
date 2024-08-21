@@ -33,7 +33,10 @@ pub enum Ipv4NetParseError {
 pub struct StaticRoute4 {
     pub destination: Ipv4Net,
     pub nexthop: Ipv4Addr,
+    #[clap(long)]
     pub vlan_id: Option<u16>,
+    #[clap(long)]
+    pub local_pref: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -74,6 +77,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                         },
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
+                        local_pref: route.local_pref,
                     }],
                 },
             };
@@ -89,6 +93,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                         },
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
+                        local_pref: route.local_pref,
                     }],
                 },
             };
