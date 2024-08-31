@@ -4,14 +4,13 @@
 
 use crate::{admin::RouterStats, sm::SmContext};
 use chrono::{DateTime, Utc};
-use dropshot::{ConfigLogging, ConfigLoggingLevel};
 use mg_common::nexus::{local_underlay_address, run_oximeter};
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
 use oximeter::{
     types::{Cumulative, ProducerRegistry},
     MetricsError, Producer, Sample,
 };
-use oximeter_producer::LogConfig;
+use oximeter_producer::{ConfigLogging, ConfigLoggingLevel, LogConfig};
 use slog::Logger;
 use std::sync::atomic::Ordering;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
