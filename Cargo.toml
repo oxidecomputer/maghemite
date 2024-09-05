@@ -56,11 +56,12 @@ schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.37", features = ["full"] }
 serde_repr = "0.1"
 anyhow = "1.0.86"
-hyper = "0.14.30"
+hyper = "1.0.0"
 serde_json = "1.0.125"
 percent-encoding = "2.3.1"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
+reqwest11 = { package = "reqwest", version = "0.11", features = ["json", "stream", "rustls-tls"] }
 progenitor = { git = "https://github.com/oxidecomputer/progenitor", branch = "dependabot/cargo/reqwest-0.12.4" }
 clap = { version = "4.5.16", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
@@ -75,7 +76,7 @@ pretty_assertions = "1.4"
 lazy_static = "1.4"
 sled = "0.34"
 ciborium = "0.2.2"
-http = "0.2.12"
+http = "1.0.0"
 humantime = "2.1"
 rand = "0.8.5"
 backoff = "0.4"

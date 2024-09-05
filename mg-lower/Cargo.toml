@@ -16,3 +16,4 @@ thiserror.workspace = true
 http.workspace = true
 mg-common.workspace = true
 oxnet.workspace = true
+reqwest11.workspace = true
