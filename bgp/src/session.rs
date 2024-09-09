@@ -16,8 +16,8 @@ use crate::policy::{CheckerResult, ShaperResult};
 use crate::router::Router;
 use crate::{dbg, err, inf, to_canonical, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
-pub use rdb::DEFAULT_ROUTE_PRIORITY;
 use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
+pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -2070,7 +2070,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 let path = rdb::Path {
                     nexthop: nexthop.into(),
                     shutdown: update.graceful_shutdown(),
-                    local_pref: update.local_pref(),
+                    rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                     bgp: Some(BgpPathProperties {
                         origin_as: peer_as,
                         id,

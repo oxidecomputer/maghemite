@@ -71,6 +71,7 @@ pub fn bestpaths(
         Some(ref bgp) => bgp.origin_as,
         None => 0,
     });
+
     // Filter AS groups to paths with lowest MED
     let candidates = as_groups.into_iter().flat_map(|(_asn, paths)| {
         paths.min_set_by_key(|x| match x.bgp {
@@ -88,7 +89,10 @@ mod test {
     use std::collections::BTreeSet;
 
     use super::bestpaths;
-    use crate::{db::Rib, BgpPathProperties, Path, Prefix, Prefix4};
+    use crate::{
+        db::Rib, BgpPathProperties, Path, Prefix, Prefix4,
+        DEFAULT_RIB_PRIORITY_BGP,
+    };
 
     #[test]
     fn test_bestpath() {
@@ -103,7 +107,7 @@ mod test {
         // Add one path and make sure we get it back
         let path1 = Path {
             nexthop: "203.0.113.1".parse().unwrap(),
-            local_pref: Some(100),
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 470,
@@ -124,7 +128,7 @@ mod test {
         // Add another path to the same prefix and make sure bestpath returns both
         let mut path2 = Path {
             nexthop: "203.0.113.2".parse().unwrap(),
-            local_pref: Some(100),
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 480,
@@ -148,7 +152,7 @@ mod test {
         //   - we get all three paths back wihen max is 3
         let mut path3 = Path {
             nexthop: "203.0.113.3".parse().unwrap(),
-            local_pref: Some(100),
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 490,
