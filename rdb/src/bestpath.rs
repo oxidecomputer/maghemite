@@ -9,13 +9,15 @@ use itertools::Itertools;
 
 /// The bestpath algorithms chooses the best set of up to `max` paths for a
 /// particular prefix from the RIB. The set of paths chosen will all have
-/// equal MED, local_pref, AS path length and shutdown status. The bestpath
-/// algorithm performs path filtering in the following ordered sequece of
-/// operations.
+/// RIB priority, equal MED, local_pref, AS path length and shutdown status.
+/// The bestpath algorithm performs path filtering in the following ordered
+/// sequece of operations.
 ///
 /// - partition candidate paths into active and shutdown groups.
 /// - if only shutdown routes exist, select from that group, otherwise
 ///   select from the active group.
+/// - filter the selection group to the set of paths with the smallest
+///   rib priority
 /// - filter the selection group to the set of paths with the smallest
 ///   local preference
 /// - filter the selection group to the set of paths with the smallest
@@ -42,6 +44,11 @@ pub fn bestpaths(
     let (active, shutdown): (BTreeSet<&Path>, BTreeSet<&Path>) =
         candidates.iter().partition(|x| x.shutdown);
     let candidates = if active.is_empty() { shutdown } else { active };
+
+    // Filter down to paths with the best (lowest) RIB priority. This is a
+    // coarse filter to roughly separate RIB paths by protocol (e.g. BGP vs Static),
+    // similar to Administrative Distance on Cisco-like platforms.
+    let candidates = candidates.into_iter().min_set_by_key(|x| x.rib_priority);
 
     // Filter down to paths that are not stale. The `min_set_by_key` method
     // allows us to assign "not stale" paths to the `0` set, and "stale" paths
