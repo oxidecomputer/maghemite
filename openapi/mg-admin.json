@@ -3140,12 +3140,6 @@
       "StaticRoute4": {
         "type": "object",
         "properties": {
-          "local_pref": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
           "nexthop": {
             "type": "string",
             "format": "ipv4"

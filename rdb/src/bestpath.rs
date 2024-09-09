@@ -55,9 +55,10 @@ pub fn bestpaths(
     });
 
     // Filter down to paths with the highest local preference
-    let candidates = candidates
-        .into_iter()
-        .max_set_by_key(|x| x.local_pref.unwrap_or(0));
+    let candidates = candidates.into_iter().max_set_by_key(|x| match x.bgp {
+        Some(ref bgp) => bgp.local_pref.unwrap_or(0),
+        None => 0,
+    });
 
     // Filter down to paths with the shortest length
     let candidates = candidates.into_iter().min_set_by_key(|x| match x.bgp {
@@ -108,8 +109,9 @@ mod test {
                 origin_as: 470,
                 id: 47,
                 med: Some(75),
-                stale: None,
+                local_pref: Some(100),
                 as_path: vec![64500, 64501, 64502],
+                stale: None,
             }),
             vlan_id: None,
         };
@@ -128,8 +130,9 @@ mod test {
                 origin_as: 480,
                 id: 48,
                 med: Some(75),
-                stale: None,
+                local_pref: Some(100),
                 as_path: vec![64500, 64501, 64502],
+                stale: None,
             }),
             vlan_id: None,
         };
@@ -151,8 +154,9 @@ mod test {
                 origin_as: 490,
                 id: 49,
                 med: Some(100),
-                stale: None,
+                local_pref: Some(100),
                 as_path: vec![64500, 64501, 64502],
+                stale: None,
             }),
             vlan_id: None,
         };
@@ -181,7 +185,7 @@ mod test {
         // bump the local_pref on route 2, this should make it the singular
         // best path
         rib.get_mut(&Prefix::V4(target)).unwrap().remove(&path2);
-        path2.local_pref = Some(125);
+        path2.bgp.as_mut().unwrap().local_pref = Some(125);
         rib.get_mut(&Prefix::V4(target))
             .unwrap()
             .insert(path2.clone());

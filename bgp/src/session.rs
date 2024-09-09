@@ -2073,10 +2073,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     local_pref: update.local_pref(),
                     bgp: Some(BgpPathProperties {
                         origin_as: peer_as,
-                        med: update.multi_exit_discriminator(),
-                        stale: None,
                         id,
+                        med: update.multi_exit_discriminator(),
+                        local_pref: update.local_pref(),
                         as_path,
+                        stale: None,
                     }),
                     vlan_id: lock!(self.session).vlan_id,
                 };

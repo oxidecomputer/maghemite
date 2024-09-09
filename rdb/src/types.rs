@@ -66,6 +66,7 @@ pub struct BgpPathProperties {
     pub origin_as: u32,
     pub id: u32,
     pub med: Option<u32>,
+    pub local_pref: Option<u32>,
     pub as_path: Vec<u32>,
     pub stale: Option<DateTime<Utc>>,
 }
