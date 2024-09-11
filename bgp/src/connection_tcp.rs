@@ -32,6 +32,8 @@ use libc::{c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP};
 use libc::{IP_MINTTL, TCP_MD5SIG};
 #[cfg(target_os = "illumos")]
 use std::collections::HashSet;
+#[cfg(target_os = "illumos")]
+use std::time::Instant;
 
 #[cfg(target_os = "illumos")]
 const IP_MINTTL: i32 = 0x1c;
