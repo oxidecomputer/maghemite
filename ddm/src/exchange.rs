@@ -460,7 +460,8 @@ fn do_pull_common(
         *addr,
         ctx.config.exchange_port,
         0,
-        ctx.config.if_index,
+        0,
+        // ctx.config.if_index,
     );
     let req = hyper::Request::builder()
         .method(hyper::Method::GET)
