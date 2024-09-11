@@ -22,7 +22,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;

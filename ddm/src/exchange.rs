@@ -457,7 +457,7 @@ fn do_pull_common(
         addr, ctx.config.if_index, ctx.config.exchange_port, path,
     );
     let sockaddr = SocketAddrV6::new(
-        addr,
+        *addr,
         ctx.config.exchange_port,
         0,
         ctx.config.if_index,
@@ -536,10 +536,6 @@ fn send_update_v2(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update)?;
-    let uri = format!(
-        "http://[{}%{}]:{}/v2/push",
-        addr, config.if_index, config.exchange_port,
-    );
     send_update_common(ctx, addr, "v2/push", payload, config, rt, log)
 }
 
@@ -552,10 +548,6 @@ fn send_update_v3(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update)?;
-    let uri = format!(
-        "http://[{}%{}]:{}/v3/push",
-        addr, config.if_index, config.exchange_port,
-    );
     send_update_common(ctx, addr, "v3/push", payload, config, rt, log)
 }
 
