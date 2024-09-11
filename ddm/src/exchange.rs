@@ -10,8 +10,8 @@
 //! announcing, withdrawing and synchronizing routes with a a given peer.
 //! Communication between peers is over HTTP(s) requests.
 //!
-//! This file only contains basic mechanisms for prefix information exhcnage
-//! with peers. How those mechanisms are used in the overal state machine model
+//! This file only contains basic mechanisms for prefix information exchange
+//! with peers. How those mechanisms are used in the overall state machine model
 //! of a ddm router is defined in the state machine implementation in sm.rs.
 //!
 
@@ -30,6 +30,7 @@ use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use dropshot::{endpoint, ApiDescriptionRegisterError};
+use http_body_util::BodyExt;
 use hyper::body::Bytes;
 use mg_common::net::{Ipv6Prefix, TunnelOrigin, TunnelOriginV2};
 use oxnet::Ipv6Net;
@@ -432,11 +433,7 @@ pub(crate) fn do_pull(
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<PullResponse, ExchangeError> {
-    let uri = format!(
-        "http://[{}%{}]:{}/v3/pull",
-        addr, ctx.config.if_index, ctx.config.exchange_port,
-    );
-    let body = do_pull_common(uri, rt)?;
+    let body = do_pull_common(ctx, addr, "v3/pull", rt)?;
     Ok(serde_json::from_slice(&body)?)
 }
 
@@ -445,35 +442,40 @@ pub(crate) fn do_pull_v2(
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<PullResponseV2, ExchangeError> {
-    let uri = format!(
-        "http://[{}%{}]:{}/v2/pull",
-        addr, ctx.config.if_index, ctx.config.exchange_port,
-    );
-    let body = do_pull_common(uri, rt)?;
+    let body = do_pull_common(ctx, addr, "v2/pull", rt)?;
     Ok(serde_json::from_slice(&body)?)
 }
 
 fn do_pull_common(
-    uri: String,
+    ctx: &SmContext,
+    addr: &Ipv6Addr,
+    path: &str,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<Bytes, ExchangeError> {
-    let client = hyper::Client::new();
+    let uri = format!(
+        "http://[{}%{}]:{}/{}",
+        addr, ctx.config.if_index, ctx.config.exchange_port, path,
+    );
+    let sockaddr = SocketAddrV6::new(
+        addr,
+        ctx.config.exchange_port,
+        0,
+        ctx.config.if_index,
+    );
     let req = hyper::Request::builder()
         .method(hyper::Method::GET)
         .uri(&uri)
-        .body(hyper::Body::empty())?;
-
-    let resp = client.request(req);
+        .body(http_body_util::Empty::<Bytes>::new())?;
 
     let body = rt.block_on(async move {
+        let stream = tokio::net::TcpStream::connect(sockaddr).await?;
+        let io = hyper_util::rt::TokioIo::new(stream);
+        let (mut sender, _) = hyper::client::conn::http1::handshake(io).await?;
+        let resp = sender.send_request(req);
+
         match timeout(Duration::from_millis(250), resp).await {
             Ok(response) => match response {
-                Ok(data) => {
-                    match hyper::body::to_bytes(data.into_body()).await {
-                        Ok(data) => Ok(data),
-                        Err(e) => Err(ExchangeError::Hyper(e)),
-                    }
-                }
+                Ok(data) => Ok(data.into_body().collect().await?.to_bytes()),
                 Err(e) => Err(ExchangeError::Hyper(e)),
             },
             Err(e) => Err(ExchangeError::Timeout(e)),
@@ -538,7 +540,7 @@ fn send_update_v2(
         "http://[{}%{}]:{}/v2/push",
         addr, config.if_index, config.exchange_port,
     );
-    send_update_common(ctx, uri, payload, config, rt, log)
+    send_update_common(ctx, addr, "v2/push", payload, config, rt, log)
 }
 
 fn send_update_v3(
@@ -554,26 +556,39 @@ fn send_update_v3(
         "http://[{}%{}]:{}/v3/push",
         addr, config.if_index, config.exchange_port,
     );
-    send_update_common(ctx, uri, payload, config, rt, log)
+    send_update_common(ctx, addr, "v3/push", payload, config, rt, log)
 }
 
 fn send_update_common(
     ctx: &SmContext,
-    uri: String,
+    addr: Ipv6Addr,
+    path: &str,
     payload: String,
     config: Config,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let client = hyper::Client::new();
+    let uri = format!(
+        "http://[{}%{}]:{}/{}",
+        addr, ctx.config.if_index, ctx.config.exchange_port, path,
+    );
+    let sockaddr = SocketAddrV6::new(
+        addr,
+        ctx.config.exchange_port,
+        0,
+        ctx.config.if_index,
+    );
+    let body = http_body_util::Full::<Bytes>::from(payload);
     let req = hyper::Request::builder()
         .method(hyper::Method::PUT)
         .uri(&uri)
-        .body(hyper::Body::from(payload))?;
-
-    let resp = client.request(req);
+        .body(body)?;
 
     rt.block_on(async move {
+        let stream = tokio::net::TcpStream::connect(sockaddr).await?;
+        let io = hyper_util::rt::TokioIo::new(stream);
+        let (mut sender, _) = hyper::client::conn::http1::handshake(io).await?;
+        let resp = sender.send_request(req);
         match timeout(Duration::from_millis(config.exchange_timeout), resp)
             .await
         {
