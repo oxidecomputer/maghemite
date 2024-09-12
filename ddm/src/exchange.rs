@@ -460,8 +460,7 @@ fn do_pull_common(
         *addr,
         ctx.config.exchange_port,
         0,
-        0,
-        // ctx.config.if_index,
+        ctx.config.if_index,
     );
     let req = hyper::Request::builder()
         .method(hyper::Method::GET)
@@ -476,7 +475,10 @@ fn do_pull_common(
 
         match timeout(Duration::from_millis(250), resp).await {
             Ok(response) => match response {
-                Ok(data) => Ok(data.into_body().collect().await?.to_bytes()),
+                Ok(data) => match data.into_body().collect().await {
+                    Ok(data) => Ok(data.to_bytes()),
+                    Err(e) => Err(ExchangeError::Hyper(e)),
+                },
                 Err(e) => Err(ExchangeError::Hyper(e)),
             },
             Err(e) => Err(ExchangeError::Timeout(e)),
