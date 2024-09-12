@@ -32,6 +32,8 @@ use dropshot::TypedBody;
 use dropshot::{endpoint, ApiDescriptionRegisterError};
 use http_body_util::BodyExt;
 use hyper::body::Bytes;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use mg_common::net::{Ipv6Prefix, TunnelOrigin, TunnelOriginV2};
 use oxnet::Ipv6Net;
 use schemars::JsonSchema;
@@ -364,8 +366,8 @@ pub enum ExchangeError {
     #[error("hyper error: {0}")]
     Hyper(#[from] hyper::Error),
 
-    #[error("hyper http error: {0}")]
-    HyperHttp(#[from] hyper::http::Error),
+    #[error("hyper client error: {0}")]
+    HyperClient(#[from] hyper_util::client::legacy::Error),
 
     #[error("timeout error: {0}")]
     Timeout(#[from] tokio::time::error::Elapsed),
@@ -433,7 +435,11 @@ pub(crate) fn do_pull(
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<PullResponse, ExchangeError> {
-    let body = do_pull_common(ctx, addr, "v3/pull", rt)?;
+    let uri = format!(
+        "http://[{}%{}]:{}/v3/pull",
+        addr, ctx.config.if_index, ctx.config.exchange_port,
+    );
+    let body = do_pull_common(uri, rt)?;
     Ok(serde_json::from_slice(&body)?)
 }
 
@@ -442,50 +448,37 @@ pub(crate) fn do_pull_v2(
     addr: &Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<PullResponseV2, ExchangeError> {
-    let body = do_pull_common(ctx, addr, "v2/pull", rt)?;
+    let uri = format!(
+        "http://[{}%{}]:{}/v2/pull",
+        addr, ctx.config.if_index, ctx.config.exchange_port,
+    );
+    let body = do_pull_common(uri, rt)?;
     Ok(serde_json::from_slice(&body)?)
 }
 
 fn do_pull_common(
-    ctx: &SmContext,
-    addr: &Ipv6Addr,
-    path: &str,
+    uri: String,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<Bytes, ExchangeError> {
-    let uri = format!(
-        "http://[{}%{}]:{}/{}",
-        addr, ctx.config.if_index, ctx.config.exchange_port, path,
-    );
-    let sockaddr = SocketAddrV6::new(
-        *addr,
-        ctx.config.exchange_port,
-        0,
-        ctx.config.if_index,
-    );
+    let client = Client::builder(TokioExecutor::new()).build_http();
+
     let req = hyper::Request::builder()
         .method(hyper::Method::GET)
         .uri(&uri)
-        .body(http_body_util::Empty::<Bytes>::new())?;
+        .body(http_body_util::Empty::<Bytes>::new())
+        .unwrap();
 
-    let body = rt.block_on(async move {
-        let stream = tokio::net::TcpStream::connect(sockaddr).await?;
-        let io = hyper_util::rt::TokioIo::new(stream);
-        let (mut sender, _) = hyper::client::conn::http1::handshake(io).await?;
-        let resp = sender.send_request(req);
+    let resp = client.request(req);
 
-        match timeout(Duration::from_millis(250), resp).await {
-            Ok(response) => match response {
-                Ok(data) => match data.into_body().collect().await {
-                    Ok(data) => Ok(data.to_bytes()),
-                    Err(e) => Err(ExchangeError::Hyper(e)),
-                },
-                Err(e) => Err(ExchangeError::Hyper(e)),
-            },
-            Err(e) => Err(ExchangeError::Timeout(e)),
-        }
-    })?;
-
-    Ok(body)
+    rt.block_on(async move {
+        let body = timeout(Duration::from_millis(250), resp)
+            .await??
+            .into_body()
+            .collect()
+            .await?
+            .to_bytes();
+        Ok(body)
+    })
 }
 
 pub(crate) fn pull(
@@ -539,7 +532,11 @@ fn send_update_v2(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update)?;
-    send_update_common(ctx, addr, "v2/push", payload, config, rt, log)
+    let uri = format!(
+        "http://[{}%{}]:{}/v2/push",
+        addr, config.if_index, config.exchange_port,
+    );
+    send_update_common(ctx, uri, payload, config, rt, log)
 }
 
 fn send_update_v3(
@@ -551,39 +548,33 @@ fn send_update_v3(
     log: Logger,
 ) -> Result<(), ExchangeError> {
     let payload = serde_json::to_string(&update)?;
-    send_update_common(ctx, addr, "v3/push", payload, config, rt, log)
+    let uri = format!(
+        "http://[{}%{}]:{}/v3/push",
+        addr, config.if_index, config.exchange_port,
+    );
+    send_update_common(ctx, uri, payload, config, rt, log)
 }
 
 fn send_update_common(
     ctx: &SmContext,
-    addr: Ipv6Addr,
-    path: &str,
+    uri: String,
     payload: String,
     config: Config,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let uri = format!(
-        "http://[{}%{}]:{}/{}",
-        addr, ctx.config.if_index, ctx.config.exchange_port, path,
-    );
-    let sockaddr = SocketAddrV6::new(
-        addr,
-        ctx.config.exchange_port,
-        0,
-        ctx.config.if_index,
-    );
+    let client = Client::builder(TokioExecutor::new()).build_http();
+
     let body = http_body_util::Full::<Bytes>::from(payload);
     let req = hyper::Request::builder()
         .method(hyper::Method::PUT)
         .uri(&uri)
-        .body(body)?;
+        .body(body)
+        .unwrap();
+
+    let resp = client.request(req);
 
     rt.block_on(async move {
-        let stream = tokio::net::TcpStream::connect(sockaddr).await?;
-        let io = hyper_util::rt::TokioIo::new(stream);
-        let (mut sender, _) = hyper::client::conn::http1::handshake(io).await?;
-        let resp = sender.send_request(req);
         match timeout(Duration::from_millis(config.exchange_timeout), resp)
             .await
         {
@@ -718,7 +709,7 @@ async fn pull_handler_v2(
     // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
         for route in &ctx.ctx.db.imported() {
-            // dont redistribute prefixes to their originators
+            // don't redistribute prefixes to their originators
             if route.nexthop == ctx.peer {
                 continue;
             }
@@ -791,7 +782,7 @@ async fn pull_handler(
     // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
         for route in &ctx.ctx.db.imported() {
-            // dont redistribute prefixes to their originators
+            // don't redistribute prefixes to their originators
             if route.nexthop == ctx.peer {
                 continue;
             }
