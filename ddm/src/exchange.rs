@@ -10,8 +10,8 @@
 //! announcing, withdrawing and synchronizing routes with a a given peer.
 //! Communication between peers is over HTTP(s) requests.
 //!
-//! This file only contains basic mechanisms for prefix information exhcnage
-//! with peers. How those mechanisms are used in the overal state machine model
+//! This file only contains basic mechanisms for prefix information exchange
+//! with peers. How those mechanisms are used in the overall state machine model
 //! of a ddm router is defined in the state machine implementation in sm.rs.
 //!
 
@@ -30,7 +30,10 @@ use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use dropshot::{endpoint, ApiDescriptionRegisterError};
+use http_body_util::BodyExt;
 use hyper::body::Bytes;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use mg_common::net::{Ipv6Prefix, TunnelOrigin, TunnelOriginV2};
 use oxnet::Ipv6Net;
 use schemars::JsonSchema;
@@ -363,8 +366,8 @@ pub enum ExchangeError {
     #[error("hyper error: {0}")]
     Hyper(#[from] hyper::Error),
 
-    #[error("hyper http error: {0}")]
-    HyperHttp(#[from] hyper::http::Error),
+    #[error("hyper client error: {0}")]
+    HyperClient(#[from] hyper_util::client::legacy::Error),
 
     #[error("timeout error: {0}")]
     Timeout(#[from] tokio::time::error::Elapsed),
@@ -457,30 +460,25 @@ fn do_pull_common(
     uri: String,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<Bytes, ExchangeError> {
-    let client = hyper::Client::new();
+    let client = Client::builder(TokioExecutor::new()).build_http();
+
     let req = hyper::Request::builder()
         .method(hyper::Method::GET)
         .uri(&uri)
-        .body(hyper::Body::empty())?;
+        .body(http_body_util::Empty::<Bytes>::new())
+        .unwrap();
 
     let resp = client.request(req);
 
-    let body = rt.block_on(async move {
-        match timeout(Duration::from_millis(250), resp).await {
-            Ok(response) => match response {
-                Ok(data) => {
-                    match hyper::body::to_bytes(data.into_body()).await {
-                        Ok(data) => Ok(data),
-                        Err(e) => Err(ExchangeError::Hyper(e)),
-                    }
-                }
-                Err(e) => Err(ExchangeError::Hyper(e)),
-            },
-            Err(e) => Err(ExchangeError::Timeout(e)),
-        }
-    })?;
-
-    Ok(body)
+    rt.block_on(async move {
+        let body = timeout(Duration::from_millis(250), resp)
+            .await??
+            .into_body()
+            .collect()
+            .await?
+            .to_bytes();
+        Ok(body)
+    })
 }
 
 pub(crate) fn pull(
@@ -565,11 +563,14 @@ fn send_update_common(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let client = hyper::Client::new();
+    let client = Client::builder(TokioExecutor::new()).build_http();
+
+    let body = http_body_util::Full::<Bytes>::from(payload);
     let req = hyper::Request::builder()
         .method(hyper::Method::PUT)
         .uri(&uri)
-        .body(hyper::Body::from(payload))?;
+        .body(body)
+        .unwrap();
 
     let resp = client.request(req);
 
@@ -708,7 +709,7 @@ async fn pull_handler_v2(
     // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
         for route in &ctx.ctx.db.imported() {
-            // dont redistribute prefixes to their originators
+            // don't redistribute prefixes to their originators
             if route.nexthop == ctx.peer {
                 continue;
             }
@@ -781,7 +782,7 @@ async fn pull_handler(
     // Only transit routers redistribute prefixes
     if ctx.ctx.config.kind == RouterKind::Transit {
         for route in &ctx.ctx.db.imported() {
-            // dont redistribute prefixes to their originators
+            // don't redistribute prefixes to their originators
             if route.nexthop == ctx.peer {
                 continue;
             }
