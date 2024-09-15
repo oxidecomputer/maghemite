@@ -54,7 +54,7 @@ dropshot = { git = "https://github.com/oxidecomputer/dropshot", branch = "main" 
 schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.37", features = ["full"] }
 serde_repr = "0.1"
-anyhow = "1.0.88"
+anyhow = "1.0.89"
 hyper = "1.4.0"
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
