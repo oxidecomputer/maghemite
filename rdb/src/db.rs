@@ -417,7 +417,7 @@ impl Db {
                 prefix,
                 nexthop: path.nexthop,
                 vlan_id: path.vlan_id,
-                local_pref: path.local_pref,
+                rib_priority: path.rib_priority,
             };
             let key = serde_json::to_string(&srk)?;
             tree.insert(key.as_str(), "")?;
@@ -533,7 +533,7 @@ impl Db {
                 prefix,
                 nexthop: path.nexthop,
                 vlan_id: path.vlan_id,
-                local_pref: path.local_pref,
+                rib_priority: path.rib_priority,
             };
             let key = serde_json::to_string(&srk)?;
             tree.remove(key.as_str())?;
