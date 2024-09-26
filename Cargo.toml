@@ -62,7 +62,7 @@ percent-encoding = "2.3.1"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
 reqwest11 = { package = "reqwest", version = "0.11", features = ["json", "stream", "rustls-tls"] }
-progenitor = { git = "https://github.com/oxidecomputer/progenitor", branch = "main" }
+progenitor = "0.8.0"
 clap = { version = "4.5.18", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "2.1"
@@ -83,11 +83,11 @@ rand = "0.8.5"
 backoff = "0.4"
 mg-common = { path = "mg-common" }
 chrono = { version = "0.4.38", features = ["serde"] }
-oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
-oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
+oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "hyper-v1"}
+oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "hyper-v1"}
 oxnet = { git = "https://github.com/oxidecomputer/oxnet" }
-omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
-internal-dns = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
+omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "hyper-v1"}
+internal-dns = { git = "https://github.com/oxidecomputer/omicron", branch = "hyper-v1"}
 uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
 libc = "0.2"
@@ -114,3 +114,7 @@ package = "common"
 
 [patch."https://github.com/oxidecomputer/oxnet"]
 oxnet = {git = 'https://www.github.com/oxidecomputer/oxnet', rev = '7dacd265f1bcd0f8b47bd4805250c4f0812da206'}
+
+# There's a circular 
+[patch."https://github.com/oxidecomputer/maghemite"]
+mg-admin-client = { path = "mg-admin-client" }
