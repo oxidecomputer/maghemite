@@ -118,9 +118,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.88"
+version = "1.0.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e1496f8fb1fbf272686b8d37f523dab3e4a7443300055e74cdaa449f3114356"
+checksum = "86fdf8605db99b54d3cd748a44c6d04df638eb5dafb219b135d0149bd0db01f6"
 
 [[package]]
 name = "api_identity"
@@ -468,9 +468,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.17"
+version = "4.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e5a21b8495e732f1b3c364c9949b201ca7bae518c502c80256c96ad79eaf6ac"
+checksum = "b0956a43b323ac1afaffc053ed5c4b7c1f1800bacd1683c353aabbb752515dd3"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -478,9 +478,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.17"
+version = "4.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cf2dd12af7a047ad9d6da2b6b249759a22a7abc0f474c1dae1777afa4b21a73"
+checksum = "4d72166dd41634086d5803a47eb71ae740e61d84709c36f3c34110173db3961b"
 dependencies = [
  "anstream",
  "anstyle",
@@ -491,9 +491,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.13"
+version = "4.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "501d359d5f3dcaf6ecdeee48833ae73ec6e42723a1e52419c79abf9507eec0a0"
+checksum = "4ac6a0c7b1a9e9a5186361f67dfa1b88213572f427fb9ab038efb2bd8c582dab"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -783,7 +783,7 @@ dependencies = [
  "chrono",
  "common",
  "dpd-client",
- "dropshot 0.11.1-dev (git+https://github.com/seanmonstar/dropshot?branch=hyper-v1-2.4-own-body)",
+ "dropshot",
  "hostname 0.3.1",
  "http-body-util",
  "hyper 1.4.1",
@@ -817,7 +817,7 @@ version = "0.1.0"
 dependencies = [
  "oxnet",
  "percent-encoding",
- "progenitor 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=dependabot/cargo/reqwest-0.12.4)",
+ "progenitor",
  "reqwest 0.12.7",
  "serde",
  "serde_json",
@@ -831,7 +831,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/maghemite?rev=2bfd39000c878c45675651a7588c015c486e7f43#2bfd39000c878c45675651a7588c015c486e7f43"
 dependencies = [
  "percent-encoding",
- "progenitor 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor",
  "reqwest 0.11.27",
  "serde",
  "serde_json",
@@ -1012,7 +1012,7 @@ dependencies = [
  "expectorate",
  "http 0.2.12",
  "omicron-workspace-hack",
- "progenitor 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor",
  "reqwest 0.11.27",
  "schemars",
  "serde",
@@ -1045,7 +1045,7 @@ dependencies = [
  "futures",
  "http 0.2.12",
  "oxnet",
- "progenitor 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor",
  "regress 0.9.1",
  "reqwest 0.11.27",
  "schemars",
@@ -1054,54 +1054,6 @@ dependencies = [
  "slog",
  "tokio",
  "uuid",
-]
-
-[[package]]
-name = "dropshot"
-version = "0.11.1-dev"
-source = "git+https://github.com/seanmonstar/dropshot?branch=hyper-v1-2.4-own-body#9075a2a56f0e6cd8797ecc3a0842922718f0560b"
-dependencies = [
- "async-stream",
- "async-trait",
- "base64 0.22.1",
- "bytes",
- "camino",
- "chrono",
- "debug-ignore",
- "dropshot_endpoint 0.11.1-dev (git+https://github.com/seanmonstar/dropshot?branch=hyper-v1-2.4-own-body)",
- "form_urlencoded",
- "futures",
- "hostname 0.4.0",
- "http 1.1.0",
- "http-body-util",
- "hyper 1.4.1",
- "hyper-util",
- "indexmap 2.5.0",
- "multer",
- "openapiv3",
- "paste",
- "percent-encoding",
- "rustls 0.22.4",
- "rustls-pemfile 2.1.3",
- "schemars",
- "scopeguard",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "serde_urlencoded",
- "sha1",
- "slog",
- "slog-async",
- "slog-bunyan",
- "slog-json",
- "slog-term",
- "tokio",
- "tokio-rustls 0.25.0",
- "toml 0.8.19",
- "usdt",
- "uuid",
- "version_check",
- "waitgroup",
 ]
 
 [[package]]
@@ -1116,7 +1068,7 @@ dependencies = [
  "camino",
  "chrono",
  "debug-ignore",
- "dropshot_endpoint 0.11.1-dev (git+https://github.com/oxidecomputer/dropshot?branch=main)",
+ "dropshot_endpoint",
  "form_urlencoded",
  "futures",
  "hostname 0.4.0",
@@ -1148,19 +1100,6 @@ dependencies = [
  "uuid",
  "version_check",
  "waitgroup",
-]
-
-[[package]]
-name = "dropshot_endpoint"
-version = "0.11.1-dev"
-source = "git+https://github.com/seanmonstar/dropshot?branch=hyper-v1-2.4-own-body#9075a2a56f0e6cd8797ecc3a0842922718f0560b"
-dependencies = [
- "heck 0.5.0",
- "proc-macro2",
- "quote",
- "serde",
- "serde_tokenstream",
- "syn 2.0.77",
 ]
 
 [[package]]
@@ -1479,7 +1418,7 @@ dependencies = [
  "chrono",
  "gateway-messages",
  "omicron-workspace-hack",
- "progenitor 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor",
  "rand",
  "reqwest 0.11.27",
  "schemars",
@@ -2466,7 +2405,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "percent-encoding",
- "progenitor 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=dependabot/cargo/reqwest-0.12.4)",
+ "progenitor",
  "reqwest 0.12.7",
  "schemars",
  "serde",
@@ -2482,7 +2421,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "percent-encoding",
- "progenitor 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor",
  "reqwest 0.11.27",
  "schemars",
  "serde",
@@ -2604,7 +2543,7 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
- "dropshot 0.11.1-dev (git+https://github.com/seanmonstar/dropshot?branch=hyper-v1-2.4-own-body)",
+ "dropshot",
  "hostname 0.3.1",
  "http 1.1.0",
  "mg-common",
@@ -2744,7 +2683,7 @@ dependencies = [
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
  "oxnet",
- "progenitor 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor",
  "regress 0.9.1",
  "reqwest 0.11.27",
  "schemars",
@@ -2787,7 +2726,7 @@ dependencies = [
  "derive-where",
  "derive_more",
  "dns-service-client",
- "dropshot 0.11.1-dev (git+https://github.com/oxidecomputer/dropshot?branch=main)",
+ "dropshot",
  "futures",
  "gateway-client",
  "http 0.2.12",
@@ -3008,7 +2947,7 @@ dependencies = [
  "backoff",
  "camino",
  "chrono",
- "dropshot 0.11.1-dev (git+https://github.com/oxidecomputer/dropshot?branch=main)",
+ "dropshot",
  "futures",
  "hex",
  "http 0.2.12",
@@ -3020,8 +2959,8 @@ dependencies = [
  "once_cell",
  "oxnet",
  "parse-display",
- "progenitor 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
- "progenitor-client 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor",
+ "progenitor-client",
  "rand",
  "regress 0.9.1",
  "reqwest 0.11.27",
@@ -3314,7 +3253,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#61e1b382ca76a2175d78a07cd82929de8bc1cd20"
 dependencies = [
  "chrono",
- "dropshot 0.11.1-dev (git+https://github.com/oxidecomputer/dropshot?branch=main)",
+ "dropshot",
  "internal-dns",
  "nexus-client",
  "omicron-common",
@@ -3744,35 +3683,11 @@ dependencies = [
 [[package]]
 name = "progenitor"
 version = "0.7.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=dependabot/cargo/reqwest-0.12.4#e6b4ef462cce01e5f65ec78b13f7bfda7c5953db"
-dependencies = [
- "progenitor-client 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=dependabot/cargo/reqwest-0.12.4)",
- "progenitor-impl 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=dependabot/cargo/reqwest-0.12.4)",
- "progenitor-macro 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=dependabot/cargo/reqwest-0.12.4)",
-]
-
-[[package]]
-name = "progenitor"
-version = "0.7.0"
 source = "git+https://github.com/oxidecomputer/progenitor?branch=main#921ce56db7ae9ce29ad234e9b3346eddbf4068f8"
 dependencies = [
- "progenitor-client 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
- "progenitor-impl 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
- "progenitor-macro 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
-]
-
-[[package]]
-name = "progenitor-client"
-version = "0.7.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=dependabot/cargo/reqwest-0.12.4#e6b4ef462cce01e5f65ec78b13f7bfda7c5953db"
-dependencies = [
- "bytes",
- "futures-core",
- "percent-encoding",
- "reqwest 0.12.7",
- "serde",
- "serde_json",
- "serde_urlencoded",
+ "progenitor-client",
+ "progenitor-impl",
+ "progenitor-macro",
 ]
 
 [[package]]
@@ -3792,27 +3707,6 @@ dependencies = [
 [[package]]
 name = "progenitor-impl"
 version = "0.7.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=dependabot/cargo/reqwest-0.12.4#e6b4ef462cce01e5f65ec78b13f7bfda7c5953db"
-dependencies = [
- "heck 0.5.0",
- "http 0.2.12",
- "indexmap 2.5.0",
- "openapiv3",
- "proc-macro2",
- "quote",
- "regex",
- "schemars",
- "serde",
- "serde_json",
- "syn 2.0.77",
- "thiserror",
- "typify",
- "unicode-ident",
-]
-
-[[package]]
-name = "progenitor-impl"
-version = "0.7.0"
 source = "git+https://github.com/oxidecomputer/progenitor?branch=main#921ce56db7ae9ce29ad234e9b3346eddbf4068f8"
 dependencies = [
  "heck 0.5.0",
@@ -3834,28 +3728,11 @@ dependencies = [
 [[package]]
 name = "progenitor-macro"
 version = "0.7.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=dependabot/cargo/reqwest-0.12.4#e6b4ef462cce01e5f65ec78b13f7bfda7c5953db"
-dependencies = [
- "openapiv3",
- "proc-macro2",
- "progenitor-impl 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=dependabot/cargo/reqwest-0.12.4)",
- "quote",
- "schemars",
- "serde",
- "serde_json",
- "serde_tokenstream",
- "serde_yaml",
- "syn 2.0.77",
-]
-
-[[package]]
-name = "progenitor-macro"
-version = "0.7.0"
 source = "git+https://github.com/oxidecomputer/progenitor?branch=main#921ce56db7ae9ce29ad234e9b3346eddbf4068f8"
 dependencies = [
  "openapiv3",
  "proc-macro2",
- "progenitor-impl 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor-impl",
  "quote",
  "schemars",
  "serde",
@@ -3873,7 +3750,7 @@ dependencies = [
  "async-trait",
  "base64 0.21.7",
  "futures",
- "progenitor 0.7.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor",
  "rand",
  "reqwest 0.11.27",
  "schemars",
