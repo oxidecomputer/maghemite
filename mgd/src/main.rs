@@ -273,7 +273,7 @@ fn initialize_static_routes(db: &rdb::Db) {
         .expect("failed to get static routes from db");
     for route in &routes {
         let path =
-            Path::for_static(route.nexthop, route.vlan_id, route.local_pref);
+            Path::for_static(route.nexthop, route.vlan_id, route.rib_priority);
         db.add_prefix_path(route.prefix, path, true)
             .unwrap_or_else(|e| {
                 panic!("failed to initialize static route {route:#?}: {e}")

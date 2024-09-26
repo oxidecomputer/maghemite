@@ -6,6 +6,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use mg_admin_client::types;
 use mg_admin_client::Client;
+use rdb::DEFAULT_RIB_PRIORITY_STATIC;
 use std::net::{AddrParseError, Ipv4Addr};
 use std::num::ParseIntError;
 use thiserror::Error;
@@ -35,8 +36,8 @@ pub struct StaticRoute4 {
     pub nexthop: Ipv4Addr,
     #[clap(long)]
     pub vlan_id: Option<u16>,
-    #[clap(long)]
-    pub local_pref: Option<u32>,
+    #[clap(long, default_value_t = DEFAULT_RIB_PRIORITY_STATIC)]
+    pub rib_priority: u8,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,7 +78,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                         },
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
-                        local_pref: route.local_pref,
+                        rib_priority: route.rib_priority,
                     }],
                 },
             };
@@ -93,7 +94,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                         },
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
-                        local_pref: route.local_pref,
+                        rib_priority: route.rib_priority,
                     }],
                 },
             };

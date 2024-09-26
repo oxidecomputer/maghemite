@@ -753,7 +753,7 @@ fn print_rib(rib: Rib) {
             "{}\t{}\t{}",
             "Prefix".dimmed(),
             "Nexthop".dimmed(),
-            "Local Pref".dimmed(),
+            "RIB Priority".dimmed(),
         )
         .unwrap();
 
@@ -762,7 +762,7 @@ fn print_rib(rib: Rib) {
                 writeln!(
                     &mut tw,
                     "{}\t{}\t{:?}",
-                    prefix, path.nexthop, path.local_pref,
+                    prefix, path.nexthop, path.rib_priority,
                 )
                 .unwrap();
             }
@@ -776,9 +776,10 @@ fn print_rib(rib: Rib) {
         let mut tw = TabWriter::new(stdout());
         writeln!(
             &mut tw,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             "Prefix".dimmed(),
             "Nexthop".dimmed(),
+            "RIB Priority".dimmed(),
             "Local Pref".dimmed(),
             "Origin AS".dimmed(),
             "Peer ID".dimmed(),
@@ -793,10 +794,11 @@ fn print_rib(rib: Rib) {
                 let bgp = path.bgp.as_ref().unwrap();
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}",
+                    "{}\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}",
                     prefix,
                     path.nexthop,
-                    path.local_pref,
+                    path.rib_priority,
+                    bgp.local_pref,
                     bgp.origin_as,
                     Ipv4Addr::from(bgp.id),
                     bgp.med,

@@ -1266,6 +1266,12 @@
             "format": "uint32",
             "minimum": 0
           },
+          "local_pref": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "med": {
             "nullable": true,
             "type": "integer",
@@ -2639,15 +2645,14 @@
               }
             ]
           },
-          "local_pref": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
           "nexthop": {
             "type": "string",
             "format": "ip"
+          },
+          "rib_priority": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
           },
           "shutdown": {
             "type": "boolean"
@@ -2661,6 +2666,7 @@
         },
         "required": [
           "nexthop",
+          "rib_priority",
           "shutdown"
         ]
       },
@@ -3140,18 +3146,17 @@
       "StaticRoute4": {
         "type": "object",
         "properties": {
-          "local_pref": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
           "nexthop": {
             "type": "string",
             "format": "ipv4"
           },
           "prefix": {
             "$ref": "#/components/schemas/Prefix4"
+          },
+          "rib_priority": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
           },
           "vlan_id": {
             "nullable": true,
@@ -3162,7 +3167,8 @@
         },
         "required": [
           "nexthop",
-          "prefix"
+          "prefix",
+          "rib_priority"
         ]
       },
       "StaticRoute4List": {

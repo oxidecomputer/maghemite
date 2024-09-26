@@ -9,13 +9,15 @@ use itertools::Itertools;
 
 /// The bestpath algorithms chooses the best set of up to `max` paths for a
 /// particular prefix from the RIB. The set of paths chosen will all have
-/// equal MED, local_pref, AS path length and shutdown status. The bestpath
-/// algorithm performs path filtering in the following ordered sequece of
-/// operations.
+/// equal RIB priority, MED, local_pref, AS path length and shutdown status.
+/// The bestpath algorithm performs path filtering in the following ordered
+/// sequece of operations.
 ///
 /// - partition candidate paths into active and shutdown groups.
 /// - if only shutdown routes exist, select from that group, otherwise
 ///   select from the active group.
+/// - filter the selection group to the set of paths with the smallest
+///   rib priority
 /// - filter the selection group to the set of paths with the smallest
 ///   local preference
 /// - filter the selection group to the set of paths with the smallest
@@ -43,10 +45,30 @@ pub fn bestpaths(
         candidates.iter().partition(|x| x.shutdown);
     let candidates = if active.is_empty() { shutdown } else { active };
 
+    // Filter down to paths with the best (lowest) RIB priority. This is a
+    // coarse filter to roughly separate RIB paths by protocol (e.g. BGP vs Static),
+    // similar to Administrative Distance on Cisco-like platforms.
+    let candidates = candidates.into_iter().min_set_by_key(|x| x.rib_priority);
+
+    // In the case where paths come from multiple protocols but have the same
+    // RIB priority, follow the principle of least surprise. e.g. If a user has
+    // configured a static route with the same RIB priority as BGP is using,
+    // prefer the Static route.
+    // TODO: update this if new upper layer protocols are added
+    let (b, s): (BTreeSet<&Path>, BTreeSet<&Path>) =
+        candidates.into_iter().partition(|x| x.bgp.is_some());
+
+    if !s.is_empty() {
+        // Some paths are static, return up to max paths from static routes
+        return Some(s.into_iter().take(max).cloned().collect());
+    }
+
+    // Begin comparison of BGP Path Attributes
+
     // Filter down to paths that are not stale. The `min_set_by_key` method
     // allows us to assign "not stale" paths to the `0` set, and "stale" paths
     // to the `1` set. The method will then return the `0` set.
-    let candidates = candidates.into_iter().min_set_by_key(|x| match x.bgp {
+    let candidates = b.into_iter().min_set_by_key(|x| match x.bgp {
         Some(ref bgp) => match bgp.stale {
             Some(_) => 1,
             None => 0,
@@ -55,9 +77,10 @@ pub fn bestpaths(
     });
 
     // Filter down to paths with the highest local preference
-    let candidates = candidates
-        .into_iter()
-        .max_set_by_key(|x| x.local_pref.unwrap_or(0));
+    let candidates = candidates.into_iter().max_set_by_key(|x| match x.bgp {
+        Some(ref bgp) => bgp.local_pref.unwrap_or(0),
+        None => 0,
+    });
 
     // Filter down to paths with the shortest length
     let candidates = candidates.into_iter().min_set_by_key(|x| match x.bgp {
@@ -70,6 +93,7 @@ pub fn bestpaths(
         Some(ref bgp) => bgp.origin_as,
         None => 0,
     });
+
     // Filter AS groups to paths with lowest MED
     let candidates = as_groups.into_iter().flat_map(|(_asn, paths)| {
         paths.min_set_by_key(|x| match x.bgp {
@@ -87,7 +111,10 @@ mod test {
     use std::collections::BTreeSet;
 
     use super::bestpaths;
-    use crate::{db::Rib, BgpPathProperties, Path, Prefix, Prefix4};
+    use crate::{
+        db::Rib, BgpPathProperties, Path, Prefix, Prefix4,
+        DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+    };
 
     #[test]
     fn test_bestpath() {
@@ -102,14 +129,15 @@ mod test {
         // Add one path and make sure we get it back
         let path1 = Path {
             nexthop: "203.0.113.1".parse().unwrap(),
-            local_pref: Some(100),
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 470,
                 id: 47,
                 med: Some(75),
-                stale: None,
+                local_pref: Some(100),
                 as_path: vec![64500, 64501, 64502],
+                stale: None,
             }),
             vlan_id: None,
         };
@@ -122,14 +150,15 @@ mod test {
         // Add another path to the same prefix and make sure bestpath returns both
         let mut path2 = Path {
             nexthop: "203.0.113.2".parse().unwrap(),
-            local_pref: Some(100),
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 480,
                 id: 48,
                 med: Some(75),
-                stale: None,
+                local_pref: Some(100),
                 as_path: vec![64500, 64501, 64502],
+                stale: None,
             }),
             vlan_id: None,
         };
@@ -140,19 +169,20 @@ mod test {
         assert_eq!(result.len(), 2);
         assert_eq!(result, BTreeSet::from([path1.clone(), path2.clone()]));
 
-        // Add a thrid path and make sure that
+        // Add a third path and make sure that
         //   - results are limited to 2 paths when max is 2
         //   - we get all three paths back wihen max is 3
         let mut path3 = Path {
             nexthop: "203.0.113.3".parse().unwrap(),
-            local_pref: Some(100),
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 490,
                 id: 49,
                 med: Some(100),
-                stale: None,
+                local_pref: Some(100),
                 as_path: vec![64500, 64501, 64502],
+                stale: None,
             }),
             vlan_id: None,
         };
@@ -181,7 +211,7 @@ mod test {
         // bump the local_pref on route 2, this should make it the singular
         // best path
         rib.get_mut(&Prefix::V4(target)).unwrap().remove(&path2);
-        path2.local_pref = Some(125);
+        path2.bgp.as_mut().unwrap().local_pref = Some(125);
         rib.get_mut(&Prefix::V4(target))
             .unwrap()
             .insert(path2.clone());
@@ -189,5 +219,45 @@ mod test {
             bestpaths(target.into(), &rib, MAX_ECMP_FANOUT + 1).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result, BTreeSet::from([path2.clone()]));
+
+        // Add a fourth path (which is static) and make sure that:
+        // - path 4 loses to BGP paths with higher RIB priority
+        // - path 4 wins over BGP paths with lower RIB priority
+        // - path 4 wins over BGP paths with equal RIB priority
+        let mut path4 = Path {
+            nexthop: "203.0.113.4".parse().unwrap(),
+            rib_priority: u8::MAX,
+            shutdown: false,
+            bgp: None,
+            vlan_id: None,
+        };
+        rib.get_mut(&Prefix::V4(target))
+            .unwrap()
+            .insert(path4.clone());
+        let result = bestpaths(target.into(), &rib, MAX_ECMP_FANOUT).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result, BTreeSet::from([path2.clone()]));
+
+        // Lower the RIB Priority to beat BGP
+        rib.get_mut(&Prefix::V4(target)).unwrap().remove(&path4);
+        path4.rib_priority = DEFAULT_RIB_PRIORITY_STATIC;
+        rib.get_mut(&Prefix::V4(target))
+            .unwrap()
+            .insert(path4.clone());
+        let result =
+            bestpaths(target.into(), &rib, MAX_ECMP_FANOUT + 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result, BTreeSet::from([path4.clone()]));
+
+        // Raise the RIB Priority to match BGP
+        rib.get_mut(&Prefix::V4(target)).unwrap().remove(&path4);
+        path4.rib_priority = DEFAULT_RIB_PRIORITY_BGP;
+        rib.get_mut(&Prefix::V4(target))
+            .unwrap()
+            .insert(path4.clone());
+        let result =
+            bestpaths(target.into(), &rib, MAX_ECMP_FANOUT + 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result, BTreeSet::from([path4.clone()]));
     }
 }

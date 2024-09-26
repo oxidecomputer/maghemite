@@ -19,7 +19,7 @@ use std::str::FromStr;
 pub struct Path {
     pub nexthop: IpAddr,
     pub shutdown: bool,
-    pub local_pref: Option<u32>,
+    pub rib_priority: u8,
     pub bgp: Option<BgpPathProperties>,
     pub vlan_id: Option<u16>,
 }
@@ -38,8 +38,8 @@ impl Ord for Path {
         if self.shutdown != other.shutdown {
             return self.shutdown.cmp(&other.shutdown);
         }
-        if self.local_pref != other.local_pref {
-            return self.local_pref.cmp(&other.local_pref);
+        if self.rib_priority != other.rib_priority {
+            return self.rib_priority.cmp(&other.rib_priority);
         }
         self.bgp.cmp(&other.bgp)
     }
@@ -49,12 +49,12 @@ impl Path {
     pub fn for_static(
         nexthop: IpAddr,
         vlan_id: Option<u16>,
-        local_pref: Option<u32>,
+        rib_priority: u8,
     ) -> Self {
         Self {
             nexthop,
             vlan_id,
-            local_pref,
+            rib_priority,
             shutdown: false,
             bgp: None,
         }
@@ -66,6 +66,7 @@ pub struct BgpPathProperties {
     pub origin_as: u32,
     pub id: u32,
     pub med: Option<u32>,
+    pub local_pref: Option<u32>,
     pub as_path: Vec<u32>,
     pub stale: Option<DateTime<Utc>>,
 }
@@ -107,7 +108,7 @@ pub struct StaticRouteKey {
     pub prefix: Prefix,
     pub nexthop: IpAddr,
     pub vlan_id: Option<u16>,
-    pub local_pref: Option<u32>,
+    pub rib_priority: u8,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
