@@ -83,11 +83,11 @@ rand = "0.8.5"
 backoff = "0.4"
 mg-common = { path = "mg-common" }
 chrono = { version = "0.4.38", features = ["serde"] }
-oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "hyper-v1"}
-oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "hyper-v1"}
+oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
+oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oxnet = { git = "https://github.com/oxidecomputer/oxnet" }
-omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "hyper-v1"}
-internal-dns = { git = "https://github.com/oxidecomputer/omicron", branch = "hyper-v1"}
+omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
+internal-dns = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
 libc = "0.2"
@@ -114,7 +114,3 @@ package = "common"
 
 [patch."https://github.com/oxidecomputer/oxnet"]
 oxnet = {git = 'https://www.github.com/oxidecomputer/oxnet', rev = '7dacd265f1bcd0f8b47bd4805250c4f0812da206'}
-
-# There's a circular 
-[patch."https://github.com/oxidecomputer/maghemite"]
-mg-admin-client = { path = "mg-admin-client" }
