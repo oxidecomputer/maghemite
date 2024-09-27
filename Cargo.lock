@@ -187,9 +187,9 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.82"
+version = "0.1.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a27b8a3a6e1a44fa4c8baf1f653e4172e81486d4941f2237e20dc2d0cf4ddff1"
+checksum = "721cae7de5c34fbb2acd27e21e6d2cf7b886dce0c27388d46c4e6c47ea4318dd"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -783,7 +783,7 @@ dependencies = [
  "chrono",
  "common",
  "dpd-client",
- "dropshot 0.11.1-dev (git+https://github.com/seanmonstar/dropshot?branch=hyper-v1-2.4-own-body)",
+ "dropshot 0.12.0",
  "hostname 0.3.1",
  "http-body-util",
  "hyper 1.4.1",
@@ -1059,7 +1059,7 @@ dependencies = [
 [[package]]
 name = "dropshot"
 version = "0.11.1-dev"
-source = "git+https://github.com/seanmonstar/dropshot?branch=hyper-v1-2.4-own-body#9075a2a56f0e6cd8797ecc3a0842922718f0560b"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#2ad43f522a74c42bdb6bcaaef024801b853c1d3c"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1068,7 +1068,54 @@ dependencies = [
  "camino",
  "chrono",
  "debug-ignore",
- "dropshot_endpoint 0.11.1-dev (git+https://github.com/seanmonstar/dropshot?branch=hyper-v1-2.4-own-body)",
+ "dropshot_endpoint 0.11.1-dev",
+ "form_urlencoded",
+ "futures",
+ "hostname 0.4.0",
+ "http 0.2.12",
+ "hyper 0.14.30",
+ "indexmap 2.5.0",
+ "multer",
+ "openapiv3",
+ "paste",
+ "percent-encoding",
+ "rustls 0.22.4",
+ "rustls-pemfile 2.1.3",
+ "schemars",
+ "scopeguard",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
+ "sha1",
+ "slog",
+ "slog-async",
+ "slog-bunyan",
+ "slog-json",
+ "slog-term",
+ "tokio",
+ "tokio-rustls 0.25.0",
+ "toml 0.8.19",
+ "usdt",
+ "uuid",
+ "version_check",
+ "waitgroup",
+]
+
+[[package]]
+name = "dropshot"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab804b8d4ab58d96e1e19c8ef87e1747a70d2819e92b659d6fe8d5ac5ac44d50"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "camino",
+ "chrono",
+ "debug-ignore",
+ "dropshot_endpoint 0.12.0",
  "form_urlencoded",
  "futures",
  "hostname 0.4.0",
@@ -1105,55 +1152,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "dropshot"
-version = "0.11.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#2ad43f522a74c42bdb6bcaaef024801b853c1d3c"
-dependencies = [
- "async-stream",
- "async-trait",
- "base64 0.22.1",
- "bytes",
- "camino",
- "chrono",
- "debug-ignore",
- "dropshot_endpoint 0.11.1-dev (git+https://github.com/oxidecomputer/dropshot?branch=main)",
- "form_urlencoded",
- "futures",
- "hostname 0.4.0",
- "http 0.2.12",
- "hyper 0.14.30",
- "indexmap 2.5.0",
- "multer",
- "openapiv3",
- "paste",
- "percent-encoding",
- "rustls 0.22.4",
- "rustls-pemfile 2.1.3",
- "schemars",
- "scopeguard",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "serde_urlencoded",
- "sha1",
- "slog",
- "slog-async",
- "slog-bunyan",
- "slog-json",
- "slog-term",
- "tokio",
- "tokio-rustls 0.25.0",
- "toml 0.8.19",
- "usdt",
- "uuid",
- "version_check",
- "waitgroup",
-]
-
-[[package]]
 name = "dropshot_endpoint"
 version = "0.11.1-dev"
-source = "git+https://github.com/seanmonstar/dropshot?branch=hyper-v1-2.4-own-body#9075a2a56f0e6cd8797ecc3a0842922718f0560b"
+source = "git+https://github.com/oxidecomputer/dropshot?branch=main#2ad43f522a74c42bdb6bcaaef024801b853c1d3c"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -1165,8 +1166,9 @@ dependencies = [
 
 [[package]]
 name = "dropshot_endpoint"
-version = "0.11.1-dev"
-source = "git+https://github.com/oxidecomputer/dropshot?branch=main#2ad43f522a74c42bdb6bcaaef024801b853c1d3c"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "796be76b11b79de0decd7be2105add01220f8bbe04cf1f83214c0b801414a722"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -1943,9 +1945,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da62f120a8a37763efb0cf8fdf264b884c7b8b9ac8660b900c8661030c00e6ba"
+checksum = "41296eb09f183ac68eec06e03cdbea2e759633d4067b2f6552fc2e009bcad08b"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -1956,7 +1958,6 @@ dependencies = [
  "pin-project-lite",
  "socket2",
  "tokio",
- "tower",
  "tower-service",
  "tracing",
 ]
@@ -2604,7 +2605,7 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
- "dropshot 0.11.1-dev (git+https://github.com/seanmonstar/dropshot?branch=hyper-v1-2.4-own-body)",
+ "dropshot 0.12.0",
  "hostname 0.3.1",
  "http 1.1.0",
  "mg-common",
@@ -2787,7 +2788,7 @@ dependencies = [
  "derive-where",
  "derive_more",
  "dns-service-client",
- "dropshot 0.11.1-dev (git+https://github.com/oxidecomputer/dropshot?branch=main)",
+ "dropshot 0.11.1-dev",
  "futures",
  "gateway-client",
  "http 0.2.12",
@@ -3008,7 +3009,7 @@ dependencies = [
  "backoff",
  "camino",
  "chrono",
- "dropshot 0.11.1-dev (git+https://github.com/oxidecomputer/dropshot?branch=main)",
+ "dropshot 0.11.1-dev",
  "futures",
  "hex",
  "http 0.2.12",
@@ -3314,7 +3315,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#61e1b382ca76a2175d78a07cd82929de8bc1cd20"
 dependencies = [
  "chrono",
- "dropshot 0.11.1-dev (git+https://github.com/oxidecomputer/dropshot?branch=main)",
+ "dropshot 0.11.1-dev",
  "internal-dns",
  "nexus-client",
  "omicron-common",
@@ -3573,26 +3574,6 @@ dependencies = [
  "indexmap 2.5.0",
  "serde",
  "serde_derive",
-]
-
-[[package]]
-name = "pin-project"
-version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6bf43b791c5b9e34c3d182969b4abb522f9343702850a2e57f460d00d09b4b3"
-dependencies = [
- "pin-project-internal",
-]
-
-[[package]]
-name = "pin-project-internal"
-version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f38a4412a78282e09a2cf38d195ea5420d15ba0602cb375210efbc877243965"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.77",
 ]
 
 [[package]]
@@ -5513,27 +5494,6 @@ name = "topological-sort"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea68304e134ecd095ac6c3574494fc62b909f416c4fca77e440530221e549d3d"
-
-[[package]]
-name = "tower"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8fa9be0de6cf49e536ce1851f987bd21a43b771b09473c3549a6c853db37c1c"
-dependencies = [
- "futures-core",
- "futures-util",
- "pin-project",
- "pin-project-lite",
- "tokio",
- "tower-layer",
- "tower-service",
-]
-
-[[package]]
-name = "tower-layer"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "121c2a6cda46980bb0fcd1647ffaf6cd3fc79a013de288782836f6df9c48780e"
 
 [[package]]
 name = "tower-service"

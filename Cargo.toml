@@ -52,7 +52,7 @@ hostname = "0.3"
 thiserror = "1.0"
 # dropshot = { git = "https://github.com/oxidecomputer/dropshot", branch = "main" }
 # dropshot = { git = "https://github.com/seanmonstar/dropshot", branch = "hyper-v1-2.4-own-body", features = ["usdt-probes"] }
-dropshot = { version = "0.12.0", branch = "main" }
+dropshot = { version = "0.12.0", features = ["usdt-probes"] }
 schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.37", features = ["full"] }
 serde_repr = "0.1"
