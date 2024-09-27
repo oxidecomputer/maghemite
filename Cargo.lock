@@ -671,7 +671,7 @@ dependencies = [
 [[package]]
 name = "cpuid_profile_config"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/propolis?rev=5267be82e10d851a64196a8148893691b0b9f8ad#5267be82e10d851a64196a8148893691b0b9f8ad"
+source = "git+https://github.com/oxidecomputer/propolis?rev=fae5334bcad5e864794332c6fed5e6bb9ec88831#fae5334bcad5e864794332c6fed5e6bb9ec88831"
 dependencies = [
  "serde",
  "serde_derive",
@@ -855,7 +855,7 @@ version = "0.1.0"
 dependencies = [
  "oxnet",
  "percent-encoding",
- "progenitor 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "progenitor 0.8.0",
  "reqwest 0.12.7",
  "serde",
  "serde_json",
@@ -1050,7 +1050,7 @@ dependencies = [
  "expectorate",
  "http 1.1.0",
  "omicron-workspace-hack",
- "progenitor 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "progenitor 0.8.0",
  "reqwest 0.12.7",
  "schemars",
  "serde",
@@ -1083,7 +1083,7 @@ dependencies = [
  "futures",
  "http 1.1.0",
  "oxnet",
- "progenitor 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "progenitor 0.8.0",
  "regress 0.9.1",
  "reqwest 0.12.7",
  "schemars",
@@ -1460,7 +1460,7 @@ dependencies = [
  "chrono",
  "gateway-messages",
  "omicron-workspace-hack",
- "progenitor 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "progenitor 0.8.0",
  "rand",
  "reqwest 0.12.7",
  "schemars",
@@ -2248,7 +2248,7 @@ source = "git+https://github.com/oxidecomputer/dlpi-sys#1d587ea98cf2d36f1b1624b0
 [[package]]
 name = "libfalcon"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=main#16fedf00d636d0b3e870c99043d2ce005976e8b7"
+source = "git+https://github.com/oxidecomputer/falcon?branch=main#d8c38f890040f90cdc467e23f3f06b6372a9921c"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -2263,7 +2263,7 @@ dependencies = [
  "propolis-server-config",
  "rand",
  "regex",
- "reqwest 0.11.27",
+ "reqwest 0.12.7",
  "ron",
  "serde",
  "slog",
@@ -2468,7 +2468,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "percent-encoding",
- "progenitor 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "progenitor 0.8.0",
  "reqwest 0.12.7",
  "schemars",
  "serde",
@@ -2484,7 +2484,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "percent-encoding",
- "progenitor 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "progenitor 0.8.0",
  "reqwest 0.12.7",
  "schemars",
  "serde",
@@ -2737,7 +2737,7 @@ dependencies = [
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
  "oxnet",
- "progenitor 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "progenitor 0.8.0",
  "regress 0.9.1",
  "reqwest 0.12.7",
  "schemars",
@@ -3016,8 +3016,8 @@ dependencies = [
  "once_cell",
  "oxnet",
  "parse-display",
- "progenitor 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "progenitor-client 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "progenitor 0.8.0",
+ "progenitor-client 0.8.0",
  "rand",
  "regress 0.9.1",
  "reqwest 0.12.7",
@@ -3739,19 +3739,9 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "293df5b79211fbf0c1ebad6513ba451d267e9c15f5f19ee5d3da775e2dd27331"
 dependencies = [
- "progenitor-client 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "progenitor-impl 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "progenitor-macro 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "progenitor"
-version = "0.8.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#4a9a8ddc10fb3dea3ea839b0b7520c7f6b4ef682"
-dependencies = [
- "progenitor-client 0.8.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
- "progenitor-impl 0.8.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
- "progenitor-macro 0.8.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor-client 0.8.0",
+ "progenitor-impl 0.8.0",
+ "progenitor-macro 0.8.0",
 ]
 
 [[package]]
@@ -3773,20 +3763,6 @@ name = "progenitor-client"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4a5db54eac3cae7007a0785854bc3e89fd418cca7dfc2207b99b43979154c1b"
-dependencies = [
- "bytes",
- "futures-core",
- "percent-encoding",
- "reqwest 0.12.7",
- "serde",
- "serde_json",
- "serde_urlencoded",
-]
-
-[[package]]
-name = "progenitor-client"
-version = "0.8.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#4a9a8ddc10fb3dea3ea839b0b7520c7f6b4ef682"
 dependencies = [
  "bytes",
  "futures-core",
@@ -3841,27 +3817,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "progenitor-impl"
-version = "0.8.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#4a9a8ddc10fb3dea3ea839b0b7520c7f6b4ef682"
-dependencies = [
- "heck 0.5.0",
- "http 1.1.0",
- "indexmap 2.5.0",
- "openapiv3",
- "proc-macro2",
- "quote",
- "regex",
- "schemars",
- "serde",
- "serde_json",
- "syn 2.0.77",
- "thiserror",
- "typify 0.2.0 (git+https://github.com/oxidecomputer/typify)",
- "unicode-ident",
-]
-
-[[package]]
 name = "progenitor-macro"
 version = "0.7.0"
 source = "git+https://github.com/oxidecomputer/progenitor?branch=main#e0a1045aed55a0db2cd67939252ea354e284d840"
@@ -3886,24 +3841,7 @@ checksum = "d99a5a259e2d65a4933054aa51717c70b6aba0522695731ac354a522124efc9b"
 dependencies = [
  "openapiv3",
  "proc-macro2",
- "progenitor-impl 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "quote",
- "schemars",
- "serde",
- "serde_json",
- "serde_tokenstream",
- "serde_yaml",
- "syn 2.0.77",
-]
-
-[[package]]
-name = "progenitor-macro"
-version = "0.8.0"
-source = "git+https://github.com/oxidecomputer/progenitor?branch=main#4a9a8ddc10fb3dea3ea839b0b7520c7f6b4ef682"
-dependencies = [
- "openapiv3",
- "proc-macro2",
- "progenitor-impl 0.8.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor-impl 0.8.0",
  "quote",
  "schemars",
  "serde",
@@ -3916,14 +3854,14 @@ dependencies = [
 [[package]]
 name = "propolis-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/propolis?rev=5267be82e10d851a64196a8148893691b0b9f8ad#5267be82e10d851a64196a8148893691b0b9f8ad"
+source = "git+https://github.com/oxidecomputer/propolis?rev=fae5334bcad5e864794332c6fed5e6bb9ec88831#fae5334bcad5e864794332c6fed5e6bb9ec88831"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
  "futures",
- "progenitor 0.8.0 (git+https://github.com/oxidecomputer/progenitor?branch=main)",
+ "progenitor 0.8.0",
  "rand",
- "reqwest 0.11.27",
+ "reqwest 0.12.7",
  "schemars",
  "serde",
  "serde_json",
@@ -3937,7 +3875,7 @@ dependencies = [
 [[package]]
 name = "propolis-server-config"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/propolis?rev=5267be82e10d851a64196a8148893691b0b9f8ad#5267be82e10d851a64196a8148893691b0b9f8ad"
+source = "git+https://github.com/oxidecomputer/propolis?rev=fae5334bcad5e864794332c6fed5e6bb9ec88831#fae5334bcad5e864794332c6fed5e6bb9ec88831"
 dependencies = [
  "cpuid_profile_config",
  "serde",
@@ -6450,7 +6388,7 @@ dependencies = [
 [[package]]
 name = "zone"
 version = "0.3.0"
-source = "git+https://github.com/oxidecomputer/zone#65647e678fec739d4e9a6897bf2ee48e1fb051a5"
+source = "git+https://github.com/oxidecomputer/zone#7a0cb48801eaf5d1c91dfb36108528bd754e2e70"
 dependencies = [
  "itertools 0.12.1",
  "thiserror",
@@ -6486,7 +6424,7 @@ dependencies = [
 [[package]]
 name = "zone_cfg_derive"
 version = "0.3.0"
-source = "git+https://github.com/oxidecomputer/zone#65647e678fec739d4e9a6897bf2ee48e1fb051a5"
+source = "git+https://github.com/oxidecomputer/zone#7a0cb48801eaf5d1c91dfb36108528bd754e2e70"
 dependencies = [
  "heck 0.4.1",
  "proc-macro-error",
@@ -6498,7 +6436,7 @@ dependencies = [
 [[package]]
 name = "ztest"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=main#16fedf00d636d0b3e870c99043d2ce005976e8b7"
+source = "git+https://github.com/oxidecomputer/falcon?branch=main#d8c38f890040f90cdc467e23f3f06b6372a9921c"
 dependencies = [
  "anyhow",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
