@@ -91,7 +91,7 @@ pub(crate) fn ensure_tep_addr(
         })
         .await
     }) {
-        if e.status() != Some(reqwest11::StatusCode::CONFLICT) {
+        if e.status() != Some(reqwest::StatusCode::CONFLICT) {
             warn!(log, "failed to ensure TEP address {tep} on ASIC: {e}");
         }
     }
@@ -356,18 +356,17 @@ pub(crate) fn get_routes_for_prefix(
     let result = match prefix {
         Prefix::V4(p) => {
             let cidr = Ipv4Net::new(p.value, p.length)?;
-            let dpd_routes = match rt
-                .block_on(async { dpd.route_ipv4_get(&cidr).await })
-            {
-                Ok(routes) => routes,
-                Err(e) => {
-                    if e.status() == Some(reqwest11::StatusCode::NOT_FOUND) {
-                        return Ok(HashSet::new());
+            let dpd_routes =
+                match rt.block_on(async { dpd.route_ipv4_get(&cidr).await }) {
+                    Ok(routes) => routes,
+                    Err(e) => {
+                        if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+                            return Ok(HashSet::new());
+                        }
+                        return Err(e.into());
                     }
-                    return Err(e.into());
                 }
-            }
-            .into_inner();
+                .into_inner();
 
             let mut result: Vec<RouteHash> = Vec::new();
             for r in dpd_routes.iter() {
