@@ -10,7 +10,6 @@ use dpd_client::types;
 use dpd_client::types::LinkId;
 use dpd_client::types::LinkState;
 use dpd_client::Client as DpdClient;
-use http::StatusCode;
 use libnet::get_route;
 use oxnet::IpNet;
 use oxnet::Ipv4Net;
@@ -92,7 +91,7 @@ pub(crate) fn ensure_tep_addr(
         })
         .await
     }) {
-        if e.status() != Some(StatusCode::CONFLICT) {
+        if e.status() != Some(reqwest11::StatusCode::CONFLICT) {
             warn!(log, "failed to ensure TEP address {tep} on ASIC: {e}");
         }
     }
@@ -357,17 +356,18 @@ pub(crate) fn get_routes_for_prefix(
     let result = match prefix {
         Prefix::V4(p) => {
             let cidr = Ipv4Net::new(p.value, p.length)?;
-            let dpd_routes =
-                match rt.block_on(async { dpd.route_ipv4_get(&cidr).await }) {
-                    Ok(routes) => routes,
-                    Err(e) => {
-                        if e.status() == Some(StatusCode::NOT_FOUND) {
-                            return Ok(HashSet::new());
-                        }
-                        return Err(e.into());
+            let dpd_routes = match rt
+                .block_on(async { dpd.route_ipv4_get(&cidr).await })
+            {
+                Ok(routes) => routes,
+                Err(e) => {
+                    if e.status() == Some(reqwest11::StatusCode::NOT_FOUND) {
+                        return Ok(HashSet::new());
                     }
+                    return Err(e.into());
                 }
-                .into_inner();
+            }
+            .into_inner();
 
             let mut result: Vec<RouteHash> = Vec::new();
             for r in dpd_routes.iter() {

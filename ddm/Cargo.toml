@@ -35,3 +35,4 @@ oximeter.workspace = true
 oximeter-producer.workspace = true
 oxnet.workspace = true
 uuid.workspace = true
+reqwest.workspace = true

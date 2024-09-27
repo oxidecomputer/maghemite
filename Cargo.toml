@@ -50,19 +50,19 @@ ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.210", features = ["derive"] }
 hostname = "0.3"
 thiserror = "1.0"
-dropshot = { git = "https://github.com/oxidecomputer/dropshot", branch = "main" }
+dropshot = { version = "0.12.0", features = [ "usdt-probes" ] }
 schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.37", features = ["full"] }
 serde_repr = "0.1"
 anyhow = "1.0.89"
 hyper = "1.4.1"
-http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
 serde_json = "1.0.128"
 percent-encoding = "2.3.1"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
-reqwest = { version = "0.11", features = ["json", "stream", "rustls-tls"] }
-progenitor = { git = "https://github.com/oxidecomputer/progenitor", branch = "main" }
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
+reqwest11 = { package = "reqwest", version = "0.11", features = ["json", "stream", "rustls-tls"] }
+progenitor = "0.8.0"
 clap = { version = "4.5.18", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "2.1"
@@ -76,7 +76,8 @@ pretty_assertions = "1.4"
 lazy_static = "1.4"
 sled = "0.34"
 ciborium = "0.2.2"
-http = "0.2.12"
+http = "1.0.0"
+http-body-util = "0.1"
 humantime = "2.1"
 rand = "0.8.5"
 backoff = "0.4"
@@ -84,7 +85,7 @@ mg-common = { path = "mg-common" }
 chrono = { version = "0.4.38", features = ["serde"] }
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
-oxnet = { git = "https://github.com/oxidecomputer/oxnet", rev = "7dacd265f1bcd0f8b47bd4805250c4f0812da206" }
+oxnet = { git = "https://github.com/oxidecomputer/oxnet" }
 omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 internal-dns = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 uuid = { version = "1.8", features = ["serde", "v4"] }
