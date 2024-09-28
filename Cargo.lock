@@ -3067,9 +3067,9 @@ checksum = "e22821954cca73148cdd1547a540ac79a3f27b6d55b518490437bb9867212828"
 
 [[package]]
 name = "omicron-zone-package"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e75ad9eb79bb6a1ec78d2eecf36c67fffcf56264d779c456c6e2cd4b257ee9fe"
+checksum = "a5cd917080e98f2e325ad3d803432be83fbe7eb9ccabb0f0f20390072982f550"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3082,7 +3082,7 @@ dependencies = [
  "futures",
  "futures-util",
  "hex",
- "reqwest 0.11.27",
+ "reqwest 0.12.7",
  "ring 0.16.20",
  "semver 1.0.23",
  "serde",
