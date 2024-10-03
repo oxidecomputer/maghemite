@@ -524,7 +524,10 @@ impl Db {
     ) -> Result<(), Error> {
         let mut rib = lock!(self.rib_in);
         if let Some(paths) = rib.get_mut(&prefix) {
-            paths.retain(|x| x.nexthop != path.nexthop)
+            paths.retain(|x| x.nexthop != path.nexthop);
+            if paths.is_empty() {
+                rib.remove(&prefix);
+            }
         }
 
         if is_static {
