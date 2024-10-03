@@ -15,6 +15,7 @@ use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
 use slog::{error, Logger};
+use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -524,7 +525,7 @@ impl Db {
     ) -> Result<(), Error> {
         let mut rib = lock!(self.rib_in);
         if let Some(paths) = rib.get_mut(&prefix) {
-            paths.retain(|x| x.nexthop != path.nexthop);
+            paths.retain(|x| x.cmp(&path) != CmpOrdering::Equal);
             if paths.is_empty() {
                 rib.remove(&prefix);
             }
