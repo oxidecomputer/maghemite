@@ -666,7 +666,15 @@ impl BgpConnectionTcp {
     fn sa_keepalive(&self) {
         use std::{sync::atomic::Ordering, thread::sleep};
 
-        if self.sa_keepalive_running.load(Ordering::SeqCst) {
+        let running = self
+            .sa_keepalive_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire)
+            .is_err();
+        if running {
+            info!(
+                self.log,
+                "security association keepalive loop already running",
+            );
             return;
         }
 
