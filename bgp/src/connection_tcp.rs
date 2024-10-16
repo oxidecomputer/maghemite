@@ -12,7 +12,7 @@ use crate::session::FsmEvent;
 use crate::to_canonical;
 use libc::{c_int, sockaddr_storage};
 use mg_common::lock;
-use slog::{error, info, trace, warn, Logger};
+use slog::{debug, error, info, trace, warn, Logger};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
@@ -671,7 +671,7 @@ impl BgpConnectionTcp {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire)
             .is_err();
         if running {
-            info!(
+            debug!(
                 self.log,
                 "security association keepalive loop already running",
             );
@@ -682,7 +682,7 @@ impl BgpConnectionTcp {
         // get set up before setting up the socket.
         Self::do_sa_keepalive(&self.sas, &self.log);
 
-        info!(self.log, "spawning security association keepalive loop");
+        debug!(self.log, "spawning security association keepalive loop");
         let dropped = self.dropped.clone();
         let log = self.log.clone();
         let sas = self.sas.clone();
