@@ -1896,7 +1896,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .collect::<BTreeSet<crate::messages::Prefix>>();
 
             update.nlri.retain(|x| message_policy.contains(x));
-            update.withdrawn.retain(|x| message_policy.contains(x));
         };
 
         let out = match self.shape_update(update, shaper_application)? {
@@ -1982,7 +1981,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .collect::<BTreeSet<crate::messages::Prefix>>();
 
             update.nlri.retain(|x| message_policy.contains(x));
-            update.withdrawn.retain(|x| message_policy.contains(x));
         };
 
         self.update_rib(&update, id, peer_as);
