@@ -45,16 +45,12 @@ impl Ord for Path {
     }
 }
 
-impl Path {
-    pub fn for_static(
-        nexthop: IpAddr,
-        vlan_id: Option<u16>,
-        rib_priority: u8,
-    ) -> Self {
+impl From<StaticRouteKey> for Path {
+    fn from(value: StaticRouteKey) -> Self {
         Self {
-            nexthop,
-            vlan_id,
-            rib_priority,
+            nexthop: value.nexthop,
+            vlan_id: value.vlan_id,
+            rib_priority: value.rib_priority,
             shutdown: false,
             bgp: None,
         }

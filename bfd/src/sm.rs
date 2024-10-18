@@ -438,7 +438,7 @@ impl State for Down {
         db: rdb::Db,
         counters: Arc<SessionCounters>,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
-        db.disable_nexthop(self.peer);
+        db.set_nexthop_shutdown(self.peer, true);
         loop {
             // Get an incoming message
             let (_addr, msg) = match self.recv(
@@ -597,7 +597,7 @@ impl State for Up {
         db: rdb::Db,
         counters: Arc<SessionCounters>,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
-        db.enable_nexthop(self.peer);
+        db.set_nexthop_shutdown(self.peer, false);
         loop {
             // Get an incoming message
             let (_addr, msg) = match self.recv(

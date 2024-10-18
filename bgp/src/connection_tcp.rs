@@ -12,7 +12,7 @@ use crate::session::FsmEvent;
 use crate::to_canonical;
 use libc::{c_int, sockaddr_storage};
 use mg_common::lock;
-use slog::{debug, error, info, trace, warn, Logger};
+use slog::{error, info, trace, warn, Logger};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
@@ -30,6 +30,8 @@ use itertools::Itertools;
 use libc::{c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP};
 #[cfg(target_os = "linux")]
 use libc::{IP_MINTTL, TCP_MD5SIG};
+#[cfg(target_os = "illumos")]
+use slog::debug;
 #[cfg(target_os = "illumos")]
 use std::collections::HashSet;
 #[cfg(target_os = "illumos")]

@@ -129,8 +129,8 @@ impl Db {
         }
     }
 
-    pub fn loc_rib(&self) -> Arc<Mutex<Rib>> {
-        self.rib_loc.clone()
+    pub fn loc_rib(&self) -> Rib {
+        lock!(self.rib_loc).clone()
     }
 
     pub fn full_rib(&self) -> Rib {
@@ -379,10 +379,6 @@ impl Db {
         }
     }
 
-    pub fn get_imported(&self) -> Rib {
-        lock!(self.rib_in).clone()
-    }
-
     pub fn update_loc_rib(rib_in: &Rib, rib_loc: &mut Rib, prefix: Prefix) {
         let bp = bestpaths(prefix, rib_in, BESTPATH_FANOUT);
         match bp {
@@ -395,12 +391,7 @@ impl Db {
         }
     }
 
-    pub fn add_prefix_path(
-        &self,
-        prefix: Prefix,
-        path: Path,
-        is_static: bool,
-    ) -> Result<(), Error> {
+    pub fn add_prefix_path(&self, prefix: Prefix, path: &Path) {
         let mut rib = lock!(self.rib_in);
         match rib.get_mut(&prefix) {
             Some(paths) => {
@@ -411,22 +402,49 @@ impl Db {
             }
         }
         Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
+    }
 
-        if is_static {
-            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-            let srk = StaticRouteKey {
-                prefix,
-                nexthop: path.nexthop,
-                vlan_id: path.vlan_id,
-                rib_priority: path.rib_priority,
+    pub fn add_static_routes(
+        &self,
+        routes: &Vec<StaticRouteKey>,
+    ) -> Result<(), Error> {
+        let mut pcn = PrefixChangeNotification::default();
+        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+        for route in routes {
+            self.add_prefix_path(route.prefix, &Path::from(*route));
+            let key = match serde_json::to_string(route) {
+                Err(e) => {
+                    error!(
+                        self.log,
+                        "{} serde_json::to_string conversion failed: {e}",
+                        route.prefix
+                    );
+                    continue;
+                }
+                Ok(s) => s,
             };
-            let key = serde_json::to_string(&srk)?;
-            tree.insert(key.as_str(), "")?;
-            tree.flush()?;
+            if let Err(e) = tree.insert(key.as_str(), "") {
+                error!(
+                    self.log,
+                    "{}: insert into tree STATIC4_ROUTES failed: {e}",
+                    route.prefix
+                );
+                continue;
+            };
+            pcn.changed.insert(route.prefix);
         }
-
-        self.notify(prefix.into());
+        self.notify(pcn);
+        tree.flush()?;
         Ok(())
+    }
+
+    pub fn add_bgp_prefixes(&self, prefixes: Vec<Prefix>, path: Path) {
+        let mut pcn = PrefixChangeNotification::default();
+        for prefix in prefixes {
+            self.add_prefix_path(prefix, &path);
+            pcn.changed.insert(prefix);
+        }
+        self.notify(pcn);
     }
 
     pub fn get_static4(&self) -> Result<Vec<StaticRouteKey>, Error> {
@@ -475,35 +493,14 @@ impl Db {
         Ok(nexthops.len())
     }
 
-    pub fn disable_nexthop(&self, nexthop: IpAddr) {
+    pub fn set_nexthop_shutdown(&self, nexthop: IpAddr, shutdown: bool) {
         let mut rib = lock!(self.rib_in);
         let mut pcn = PrefixChangeNotification::default();
         for (prefix, paths) in rib.iter_mut() {
             for p in paths.clone().into_iter() {
-                if p.nexthop == nexthop && !p.shutdown {
+                if p.nexthop == nexthop && p.shutdown != shutdown {
                     let mut replacement = p.clone();
-                    replacement.shutdown = true;
-                    paths.insert(replacement);
-                    pcn.changed.insert(*prefix);
-                }
-            }
-        }
-
-        for prefix in pcn.changed.iter() {
-            Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
-        }
-
-        self.notify(pcn);
-    }
-
-    pub fn enable_nexthop(&self, nexthop: IpAddr) {
-        let mut rib = lock!(self.rib_in);
-        let mut pcn = PrefixChangeNotification::default();
-        for (prefix, paths) in rib.iter_mut() {
-            for p in paths.clone().into_iter() {
-                if p.nexthop == nexthop && p.shutdown {
-                    let mut replacement = p.clone();
-                    replacement.shutdown = false;
+                    replacement.shutdown = shutdown;
                     paths.insert(replacement);
                     pcn.changed.insert(*prefix);
                 }
@@ -517,79 +514,87 @@ impl Db {
         self.notify(pcn);
     }
 
-    pub fn remove_prefix_path(
-        &self,
-        prefix: Prefix,
-        path: Path,
-        is_static: bool, //TODO
-    ) -> Result<(), Error> {
+    pub fn remove_prefix_path<F>(&self, prefix: Prefix, prefix_cmp: F)
+    where
+        F: Fn(&Path) -> bool,
+    {
         let mut rib = lock!(self.rib_in);
         if let Some(paths) = rib.get_mut(&prefix) {
-            paths.retain(|x| x.cmp(&path) != CmpOrdering::Equal);
+            paths.retain(|p| prefix_cmp(p));
             if paths.is_empty() {
                 rib.remove(&prefix);
             }
         }
 
-        if is_static {
-            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-            let srk = StaticRouteKey {
-                prefix,
-                nexthop: path.nexthop,
-                vlan_id: path.vlan_id,
-                rib_priority: path.rib_priority,
+        Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
+    }
+
+    pub fn remove_static_routes(
+        &self,
+        routes: Vec<StaticRouteKey>,
+    ) -> Result<(), Error> {
+        let mut pcn = PrefixChangeNotification::default();
+        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+        for route in routes {
+            self.remove_prefix_path(route.prefix, |rib_path: &Path| {
+                rib_path.cmp(&Path::from(route)) != CmpOrdering::Equal
+            });
+            pcn.changed.insert(route.prefix);
+
+            let key = match serde_json::to_string(&route) {
+                Err(e) => {
+                    error!(
+                        self.log,
+                        "{} serde_json::to_string conversion failed: {e}",
+                        route.prefix
+                    );
+                    continue;
+                }
+                Ok(s) => s,
             };
-            let key = serde_json::to_string(&srk)?;
-            tree.remove(key.as_str())?;
-            tree.flush()?;
+            if let Err(e) = tree.remove(key.as_str()) {
+                error!(
+                    self.log,
+                    "{}: remove from tree STATIC4_ROUTES failed: {e}",
+                    route.prefix
+                );
+                continue;
+            }
         }
 
-        Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
-        self.notify(prefix.into());
+        self.notify(pcn);
+        tree.flush()?;
         Ok(())
     }
 
-    pub fn remove_peer_prefix(&self, id: u32, prefix: Prefix) {
-        let mut rib = lock!(self.rib_in);
-        let paths = match rib.get_mut(&prefix) {
-            None => return,
-            Some(ps) => ps,
-        };
-        paths.retain(|x| match x.bgp {
-            Some(ref bgp) => bgp.id != id,
-            None => true,
-        });
-
-        rib.retain(|&_, paths| !paths.is_empty());
-
-        Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
-        self.notify(prefix.into());
-    }
-
-    pub fn remove_peer_prefixes(
-        &self,
-        id: u32,
-    ) -> BTreeMap<Prefix, BTreeSet<Path>> {
-        let mut rib = lock!(self.rib_in);
-
+    pub fn remove_bgp_prefixes(&self, prefixes: Vec<Prefix>, id: u32) {
+        // TODO: don't rely on BGP ID for path definition.
+        // We currently only use Router-IDs to determine which
+        // peer/session a route was learned from. This will not work
+        // long term, as it will not work with add-path or multiple
+        // parallel sessions to the same router.
         let mut pcn = PrefixChangeNotification::default();
-        let mut result = BTreeMap::new();
-        for (prefix, paths) in rib.iter_mut() {
-            paths.retain(|x| match x.bgp {
-                Some(ref bgp) => bgp.id != id,
-                None => true,
+        for prefix in prefixes {
+            self.remove_prefix_path(prefix, |rib_path: &Path| {
+                match rib_path.bgp {
+                    Some(ref bgp) => bgp.id != id,
+                    None => true,
+                }
             });
-            result.insert(*prefix, paths.clone());
-            pcn.changed.insert(*prefix);
-        }
-
-        rib.retain(|&_, paths| !paths.is_empty());
-
-        for prefix in pcn.changed.iter() {
-            Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
+            pcn.changed.insert(prefix);
         }
         self.notify(pcn);
-        result
+    }
+
+    // helper function to remove all routes learned from a given peer
+    // e.g. when peer is deleted or exits Established state
+    pub fn remove_bgp_peer_prefixes(&self, id: u32) {
+        // TODO: don't rely on BGP ID for path definition.
+        // We currently only use Router-IDs to determine which
+        // peer/session a route was learned from. This will not work
+        // long term, as it will not work with add-path or multiple
+        // parallel sessions to the same router.
+        self.remove_bgp_prefixes(self.full_rib().keys().copied().collect(), id);
     }
 
     pub fn generation(&self) -> u64 {
@@ -621,8 +626,13 @@ impl Db {
         Ok(())
     }
 
-    pub fn mark_bgp_id_stale(&self, id: u32) {
-        let mut rib = self.rib_loc.lock().unwrap();
+    pub fn mark_bgp_peer_stale(&self, id: u32) {
+        // TODO: don't rely on BGP ID for path definition.
+        // We currently only use Router-IDs to determine which
+        // peer/session a route was learned from. This will not work
+        // long term, as it will not work with add-path or multiple
+        // parallel sessions to the same router.
+        let mut rib = lock!(self.rib_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
                 .iter()

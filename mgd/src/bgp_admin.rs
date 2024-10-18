@@ -418,8 +418,7 @@ pub async fn get_selected(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let rib = get_router!(ctx, rq.asn)?.db.loc_rib();
-    let selected = rib.lock().unwrap().clone();
+    let selected = get_router!(ctx, rq.asn)?.db.loc_rib();
     Ok(HttpResponseOk(selected.into()))
 }
 
@@ -797,7 +796,7 @@ pub(crate) mod helpers {
         )
         .remote_id
         .ok_or(Error::NotFound("bgp peer not found".into()))?;
-        ctx.db.remove_peer_prefixes(id);
+        ctx.db.remove_bgp_peer_prefixes(id);
         ctx.db.remove_bgp_neighbor(addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 

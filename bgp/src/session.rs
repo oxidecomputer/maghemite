@@ -1504,7 +1504,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             FsmEvent::RouteRefreshNeeded => {
                 if let Some(remote_id) = lock!(self.session).remote_id {
-                    self.db.mark_bgp_id_stale(remote_id);
+                    self.db.mark_bgp_peer_stale(remote_id);
                     self.send_route_refresh(&pc.conn);
                 }
                 FsmState::Established(pc)
@@ -1929,7 +1929,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
 
         // remove peer prefixes from db
-        self.db.remove_peer_prefixes(pc.id);
+        self.db.remove_bgp_peer_prefixes(pc.id);
 
         FsmState::Idle
     }
@@ -2024,9 +2024,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, id: u32, peer_as: u32) {
-        for w in &update.withdrawn {
-            self.db.remove_peer_prefix(id, w.as_prefix4().into());
-        }
+        self.db.remove_bgp_prefixes(
+            update
+                .withdrawn
+                .iter()
+                .map(|w| rdb::Prefix::from(w.as_prefix4()))
+                .collect(),
+            id,
+        );
 
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
@@ -2037,6 +2042,37 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         if !update.nlri.is_empty() {
+            // TODO: parse and prefer nexthop in MP_REACH_NLRI
+            //
+            // Per RFC 4760:
+            // """
+            // The next hop information carried in the MP_REACH_NLRI path attribute
+            // defines the Network Layer address of the router that SHOULD be used
+            // as the next hop to the destinations listed in the MP_NLRI attribute
+            // in the UPDATE message.
+            //
+            // [..]
+            //
+            // An UPDATE message that carries no NLRI, other than the one encoded in
+            // the MP_REACH_NLRI attribute, SHOULD NOT carry the NEXT_HOP attribute.
+            // If such a message contains the NEXT_HOP attribute, the BGP speaker
+            // that receives the message SHOULD ignore this attribute.
+            // """
+            //
+            // i.e.
+            // 1) NEXT_HOP SHOULD NOT be sent unless there are no MP_REACH_NLRI
+            // 2) NEXT_HOP SHOULD be ignored unless there are no MP_REACH_NLRI
+            //
+            // The standards do not state whether an implementation can/should send
+            // IPv4 Unicast prefixes embedded in an MP_REACH_NLRI attribute or in the
+            // classic NLRI field of an Update message. If we participate in MP-BGP
+            // and negotiate IPv4 Unicast, it's entirely likely that we'll peer with
+            // other BGP speakers falling into any of the combinations:
+            // a) MP not negotiated, IPv4 Unicast in NLRI, NEXT_HOP included
+            // b) MP negotiated, IPv4 Unicast in NLRI, NEXT_HOP included
+            // c) MP negotiated, IPv4 Unicast in NLRI, NEXT_HOP not included
+            // d) MP negotiated, IPv4 Unicast in MP_REACH_NLRI, NEXT_HOP included
+            // e) MP negotiated, IPv4 Unicast in MP_REACH_NLRI, NEXT_HOP not included
             let nexthop = match update.nexthop4() {
                 Some(nh) => nh,
                 None => {
@@ -2051,41 +2087,36 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             };
 
-            for n in &update.nlri {
-                let prefix = n.as_prefix4();
-                // ignore prefixes we originate
-                if originated.contains(&prefix) {
-                    continue;
-                }
-
-                let mut as_path = Vec::new();
-                if let Some(segments_list) = update.as_path() {
-                    for segments in &segments_list {
-                        as_path.extend(segments.value.iter());
-                    }
-                }
-
-                let path = rdb::Path {
-                    nexthop: nexthop.into(),
-                    shutdown: update.graceful_shutdown(),
-                    rib_priority: DEFAULT_RIB_PRIORITY_BGP,
-                    bgp: Some(BgpPathProperties {
-                        origin_as: peer_as,
-                        id,
-                        med: update.multi_exit_discriminator(),
-                        local_pref: update.local_pref(),
-                        as_path,
-                        stale: None,
-                    }),
-                    vlan_id: lock!(self.session).vlan_id,
-                };
-
-                if let Err(e) =
-                    self.db.add_prefix_path(prefix.into(), path.clone(), false)
-                {
-                    err!(self; "failed to add path {:?} -> {:?}: {e}", prefix, path);
+            let mut as_path = Vec::new();
+            if let Some(segments_list) = update.as_path() {
+                for segments in &segments_list {
+                    as_path.extend(segments.value.iter());
                 }
             }
+            let path = rdb::Path {
+                nexthop: nexthop.into(),
+                shutdown: update.graceful_shutdown(),
+                rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+                bgp: Some(BgpPathProperties {
+                    origin_as: peer_as,
+                    id,
+                    med: update.multi_exit_discriminator(),
+                    local_pref: update.local_pref(),
+                    as_path,
+                    stale: None,
+                }),
+                vlan_id: lock!(self.session).vlan_id,
+            };
+
+            self.db.add_bgp_prefixes(
+                update
+                    .nlri
+                    .iter()
+                    .filter(|p| !originated.contains(&p.as_prefix4()))
+                    .map(|n| rdb::Prefix::from(n.as_prefix4()))
+                    .collect(),
+                path.clone(),
+            );
         }
 
         //TODO(IPv6) iterate through MpReachNlri attributes for IPv6
