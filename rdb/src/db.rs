@@ -713,11 +713,6 @@ impl Reaper {
 
 #[cfg(test)]
 mod test {
-    use crate::StaticRouteKey;
-    use crate::{
-        db::Db, BgpPathProperties, Path, Prefix, Prefix4,
-        DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
-    };
     use slog::{Drain, Logger};
     use std::fs::File;
     use std::io::Write;
@@ -737,6 +732,11 @@ mod test {
 
     #[test]
     fn test_rib() {
+        use crate::StaticRouteKey;
+        use crate::{
+            db::Db, BgpPathProperties, Path, Prefix, Prefix4,
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+        };
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
         let p1 = Prefix::from("192.168.1.0/24".parse::<Prefix4>().unwrap());
@@ -787,7 +787,7 @@ mod test {
         let static_path1 = Path::from(static_key1);
 
         // setup
-        let log = init_file_logger(&"/tmp/rib.log");
+        let log = init_file_logger("/tmp/rib.log");
         let db_path = "/tmp/rb.db".to_string();
         let _ = std::fs::remove_dir_all(&db_path);
         let db = Db::new(&db_path, log.clone()).expect("create db");
