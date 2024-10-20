@@ -4001,6 +4001,8 @@ dependencies = [
  "serde_json",
  "sled",
  "slog",
+ "slog-async",
+ "slog-bunyan",
  "thiserror",
 ]
 
