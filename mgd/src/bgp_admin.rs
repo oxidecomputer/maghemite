@@ -20,6 +20,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Query, RequestContext, TypedBody,
 };
 use http::status::StatusCode;
+use mg_common::lock;
 use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
 use slog::info;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -51,12 +52,6 @@ impl BgpContext {
             addr_to_session,
         }
     }
-}
-
-macro_rules! lock {
-    ($mtx:expr) => {
-        $mtx.lock().expect("lock mutex")
-    };
 }
 
 macro_rules! get_router {
