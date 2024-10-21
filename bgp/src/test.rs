@@ -129,7 +129,7 @@ fn two_router_test_setup(
     r1_info: Option<SessionInfo>,
     r2_info: Option<SessionInfo>,
 ) -> (Arc<Router>, Arc<Dispatcher>, Arc<Router>, Arc<Dispatcher>) {
-    let log = crate::log::init_file_logger(&format!("r1.{name}.log"));
+    let log = mg_common::log::init_file_logger(&format!("r1.{name}.log"));
 
     std::fs::create_dir_all("/tmp").expect("create tmp dir");
 
@@ -188,7 +188,7 @@ fn two_router_test_setup(
 
     // Router 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    let log = crate::log::init_file_logger(&format!("r2.{name}.log"));
+    let log = mg_common::log::init_file_logger(&format!("r2.{name}.log"));
 
     let db_path = format!("/tmp/r2.{name}.db");
     let _ = std::fs::remove_dir_all(&db_path);
