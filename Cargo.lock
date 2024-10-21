@@ -305,8 +305,6 @@ dependencies = [
  "serde",
  "sled",
  "slog",
- "slog-async",
- "slog-bunyan",
  "socket2",
  "thiserror",
 ]
@@ -2510,6 +2508,8 @@ dependencies = [
  "schemars",
  "serde",
  "slog",
+ "slog-async",
+ "slog-bunyan",
  "smf 0.10.0",
  "thiserror",
  "tokio",

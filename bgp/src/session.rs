@@ -14,7 +14,8 @@ use crate::messages::{
 };
 use crate::policy::{CheckerResult, ShaperResult};
 use crate::router::Router;
-use crate::{dbg, err, inf, to_canonical, trc, wrn};
+use crate::to_canonical;
+use mg_common::{dbg, err, inf, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
