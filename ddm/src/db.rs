@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use mg_common::lock;
 use mg_common::net::TunnelOrigin;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::{JsonSchema, JsonSchema_repr};
@@ -61,46 +62,46 @@ impl Db {
         })
     }
     pub fn dump(&self) -> DbData {
-        self.data.lock().unwrap().clone()
+        lock!(self.data).clone()
     }
 
     pub fn peers(&self) -> HashMap<u32, PeerInfo> {
-        self.data.lock().unwrap().peers.clone()
+        lock!(self.data).peers.clone()
     }
 
     pub fn imported(&self) -> HashSet<Route> {
-        self.data.lock().unwrap().imported.clone()
+        lock!(self.data).imported.clone()
     }
 
     pub fn imported_count(&self) -> usize {
-        self.data.lock().unwrap().imported.len()
+        lock!(self.data).imported.len()
     }
 
     pub fn imported_tunnel(&self) -> HashSet<TunnelRoute> {
-        self.data.lock().unwrap().imported_tunnel.clone()
+        lock!(self.data).imported_tunnel.clone()
     }
 
     pub fn imported_tunnel_count(&self) -> usize {
-        self.data.lock().unwrap().imported_tunnel.len()
+        lock!(self.data).imported_tunnel.len()
     }
 
     pub fn import(&self, r: &HashSet<Route>) {
-        self.data.lock().unwrap().imported.extend(r.clone());
+        lock!(self.data).imported.extend(r.clone());
     }
 
     pub fn import_tunnel(&self, r: &HashSet<TunnelRoute>) {
-        self.data.lock().unwrap().imported_tunnel.extend(r.clone());
+        lock!(self.data).imported_tunnel.extend(r.clone());
     }
 
     pub fn delete_import(&self, r: &HashSet<Route>) {
-        let imported = &mut self.data.lock().unwrap().imported;
+        let imported = &mut lock!(self.data).imported;
         for x in r {
             imported.remove(x);
         }
     }
 
     pub fn delete_import_tunnel(&self, r: &HashSet<TunnelRoute>) {
-        let imported = &mut self.data.lock().unwrap().imported_tunnel;
+        let imported = &mut lock!(self.data).imported_tunnel;
         for x in r {
             imported.remove(x);
         }
@@ -223,7 +224,7 @@ impl Db {
     /// Set peer info at the given index. Returns true if peer information was
     /// changed.
     pub fn set_peer(&self, index: u32, info: PeerInfo) -> bool {
-        match self.data.lock().unwrap().peers.insert(index, info.clone()) {
+        match lock!(self.data).peers.insert(index, info.clone()) {
             Some(previous) => previous == info,
             None => true,
         }
@@ -233,7 +234,7 @@ impl Db {
         &self,
         nexthop: Ipv6Addr,
     ) -> (HashSet<Route>, HashSet<TunnelRoute>) {
-        let mut data = self.data.lock().unwrap();
+        let mut data = lock!(self.data);
         // Routes are generally held in sets to prevent duplication and provide
         // handy set-algebra operations.
         let mut removed = HashSet::new();
@@ -259,7 +260,7 @@ impl Db {
     }
 
     pub fn remove_peer(&self, index: u32) {
-        self.data.lock().unwrap().peers.remove(&index);
+        lock!(self.data).peers.remove(&index);
     }
 
     pub fn routes_by_vector(
@@ -267,7 +268,7 @@ impl Db {
         dst: Ipv6Net,
         nexthop: Ipv6Addr,
     ) -> Vec<Route> {
-        let data = self.data.lock().unwrap();
+        let data = lock!(self.data);
         let mut result = Vec::new();
         for x in &data.imported {
             if x.destination == dst && x.nexthop == nexthop {

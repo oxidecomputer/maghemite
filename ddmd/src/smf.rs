@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use ddm::admin::{HandlerContext, DDM_STATS_PORT};
+use mg_common::lock;
 use mg_common::smf::get_stats_server_props;
 use slog::{error, info, warn, Logger};
 use smf::PropertyGroup;
@@ -59,8 +60,8 @@ fn refresh_stats_server(
         }
     };
 
-    let context = ctx.lock().unwrap();
-    let mut handler = context.stats_handler.lock().unwrap();
+    let context = lock!(ctx);
+    let mut handler = lock!(context.stats_handler);
     if handler.is_none() {
         info!(log, "starting stats server on smf refresh");
         match ddm::oxstats::start_server(

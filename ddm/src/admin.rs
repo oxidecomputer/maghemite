@@ -17,6 +17,7 @@ use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
 use dropshot::{endpoint, ApiDescriptionRegisterError};
+use mg_common::lock;
 use mg_common::net::TunnelOrigin;
 use oxnet::Ipv6Net;
 use schemars::JsonSchema;
@@ -94,7 +95,7 @@ pub fn handler(
 async fn get_peers(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
     Ok(HttpResponseOk(ctx.db.peers()))
 }
 
@@ -109,7 +110,7 @@ async fn expire_peer(
     params: Path<ExpirePathParams>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let addr = params.into_inner().addr;
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
 
     for e in &ctx.event_channels {
         e.send(Event::Admin(AdminEvent::Expire(addr)))
@@ -127,7 +128,7 @@ type PrefixMap = BTreeMap<Ipv6Addr, HashSet<PathVector>>;
 async fn get_originated(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<HashSet<Ipv6Net>>, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
     let originated = ctx
         .db
         .originated()
@@ -139,7 +140,7 @@ async fn get_originated(
 async fn get_originated_tunnel_endpoints(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<HashSet<TunnelOrigin>>, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
     let originated = ctx
         .db
         .originated_tunnel()
@@ -151,7 +152,7 @@ async fn get_originated_tunnel_endpoints(
 async fn get_prefixes(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<PrefixMap>, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
     let imported = ctx.db.imported();
 
     let mut result = PrefixMap::default();
@@ -179,7 +180,7 @@ async fn get_prefixes(
 async fn get_tunnel_endpoints(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseOk<HashSet<TunnelRoute>>, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
     let imported = ctx.db.imported_tunnel();
     Ok(HttpResponseOk(imported))
 }
@@ -189,7 +190,7 @@ async fn advertise_prefixes(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<HashSet<Ipv6Net>>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
     let prefixes = request.into_inner();
     ctx.db
         .originate(&prefixes)
@@ -225,7 +226,7 @@ async fn advertise_tunnel_endpoints(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<HashSet<TunnelOrigin>>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
     let endpoints = request.into_inner();
     slog::info!(ctx.log, "advertise tunnel: {:#?}", endpoints);
     ctx.db
@@ -261,7 +262,7 @@ async fn withdraw_prefixes(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<HashSet<Ipv6Net>>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
     let prefixes = request.into_inner();
     ctx.db
         .withdraw(&prefixes)
@@ -297,7 +298,7 @@ async fn withdraw_tunnel_endpoints(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
     request: TypedBody<HashSet<TunnelOrigin>>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
     let endpoints = request.into_inner();
     slog::info!(ctx.log, "withdraw tunnel: {:#?}", endpoints);
     ctx.db
@@ -333,7 +334,7 @@ async fn withdraw_tunnel_endpoints(
 async fn sync(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
 
     for e in &ctx.event_channels {
         e.send(Event::Admin(AdminEvent::Sync)).map_err(|e| {
@@ -360,9 +361,9 @@ async fn enable_stats(
     request: TypedBody<EnableStatsRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
-    let ctx = ctx.context().lock().unwrap();
+    let ctx = lock!(ctx.context());
 
-    let mut jh = ctx.stats_handler.lock().unwrap();
+    let mut jh = lock!(ctx.stats_handler);
     if jh.is_none() {
         let hostname = hostname::get()
             .expect("failed to get hostname")
@@ -393,8 +394,8 @@ async fn enable_stats(
 async fn disable_stats(
     ctx: RequestContext<Arc<Mutex<HandlerContext>>>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let ctx = ctx.context().lock().unwrap();
-    let mut jh = ctx.stats_handler.lock().unwrap();
+    let ctx = lock!(ctx.context());
+    let mut jh = lock!(ctx.stats_handler);
     if let Some(ref h) = *jh {
         h.abort();
     }

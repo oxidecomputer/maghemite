@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{packet, PeerInfo};
+use mg_common::lock;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -117,7 +118,7 @@ macro_rules! err {
 }
 
 pub fn update_peer_info(remote: &Arc<Mutex<PeerInfo>>, msg: &packet::Control) {
-    let mut r = remote.lock().unwrap();
+    let mut r = lock!(remote);
     r.desired_min_tx = Duration::from_micros(msg.desired_min_tx.into());
     r.required_min_rx = Duration::from_micros(msg.required_min_rx.into());
     r.discriminator = msg.my_discriminator;

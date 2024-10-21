@@ -6,6 +6,7 @@ use crate::admin::HandlerContext;
 use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use chrono::{DateTime, Utc};
+use mg_common::lock;
 use mg_common::nexus::{local_underlay_address, run_oximeter};
 use mg_common::stats::MgLowerStats;
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
@@ -265,12 +266,12 @@ impl Producer for Stats {
 
 impl Stats {
     fn bgp_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
-        let routers = self.bgp.router.lock().unwrap();
+        let routers = lock!(self.bgp.router);
         let mut router_counters = BTreeMap::new();
         let mut session_count: usize = 0;
         for (asn, r) in &*routers {
             let mut session_counters = BTreeMap::new();
-            let sessions = r.sessions.lock().unwrap();
+            let sessions = lock!(r.sessions);
             for (addr, session) in &*sessions {
                 session_counters.insert(*addr, session.counters.clone());
                 session_count += 1;
@@ -580,7 +581,7 @@ impl Stats {
     }
 
     fn bfd_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
-        let daemon = self.bfd.daemon.lock().unwrap();
+        let daemon = lock!(self.bfd.daemon);
         let mut counters = BTreeMap::new();
         for (addr, session) in &daemon.sessions {
             counters.insert(*addr, session.counters.clone());

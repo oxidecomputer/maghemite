@@ -271,6 +271,7 @@ name = "bfd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "mg-common",
  "num_enum 0.7.3",
  "pretty_assertions",
  "rand",

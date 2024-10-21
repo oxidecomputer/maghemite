@@ -106,11 +106,11 @@ impl Db {
     }
 
     pub fn set_reaper_interval(&self, interval: std::time::Duration) {
-        *self.reaper.interval.lock().unwrap() = interval;
+        *lock!(self.reaper.interval) = interval;
     }
 
     pub fn set_reaper_stale_max(&self, stale_max: chrono::Duration) {
-        *self.reaper.stale_max.lock().unwrap() = stale_max;
+        *lock!(self.reaper.stale_max) = stale_max;
     }
 
     /// Register a routing databse watcher.
@@ -684,7 +684,7 @@ impl Reaper {
         let s = self.clone();
         spawn(move || loop {
             s.reap();
-            sleep(*s.interval.lock().unwrap());
+            sleep(*lock!(s.interval));
         });
     }
 
@@ -701,7 +701,7 @@ impl Reaper {
                             b.stale
                                 .map(|s| {
                                     Utc::now().signed_duration_since(s)
-                                        < *self.stale_max.lock().unwrap()
+                                        < *lock!(self.stale_max)
                                 })
                                 .unwrap_or(true)
                         })

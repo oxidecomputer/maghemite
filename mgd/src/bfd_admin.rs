@@ -13,6 +13,7 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use mg_common::lock;
 use rdb::BfdPeerConfig;
 use rdb::SessionMode;
 use schemars::JsonSchema;
@@ -67,9 +68,7 @@ pub(crate) async fn get_bfd_peers(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<Vec<BfdPeerInfo>>, HttpError> {
     let mut result = Vec::new();
-    for (addr, session) in
-        ctx.context().bfd.daemon.lock().unwrap().sessions.iter()
-    {
+    for (addr, session) in lock!(ctx.context().bfd.daemon).sessions.iter() {
         result.push(BfdPeerInfo {
             config: BfdPeerConfig {
                 peer: *addr,
@@ -118,7 +117,7 @@ pub(crate) fn add_peer(
     ctx: Arc<HandlerContext>,
     rq: BfdPeerConfig,
 ) -> Result<(), HttpError> {
-    let mut daemon = ctx.bfd.daemon.lock().unwrap();
+    let mut daemon = lock!(ctx.bfd.daemon);
     let dispatcher = ctx.bfd.dispatcher.clone();
     let db = ctx.db.clone();
 
@@ -211,13 +210,7 @@ pub(crate) fn channel(
     // Ensure there is a dispatcher thread for this listening address and a
     // corresponding entry in the dispatcher table to send messages from `peer`
     // to the appropriate session via `remote.tx`.
-    dispatcher.lock().unwrap().ensure(
-        listen,
-        peer,
-        remote.tx,
-        dst_port,
-        log.clone(),
-    )?;
+    lock!(dispatcher).ensure(listen, peer, remote.tx, dst_port, log.clone())?;
 
     // Spawn an egress thread to take packets from the session and send them
     // out a UDP socket.

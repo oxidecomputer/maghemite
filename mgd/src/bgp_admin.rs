@@ -634,10 +634,8 @@ pub async fn message_history(
 
     let mut result = HashMap::new();
 
-    for (addr, session) in
-        get_router!(ctx, rq.asn)?.sessions.lock().unwrap().iter()
-    {
-        result.insert(*addr, session.message_history.lock().unwrap().clone());
+    for (addr, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
+        result.insert(*addr, lock!(session.message_history).clone());
     }
 
     Ok(HttpResponseOk(MessageHistoryResponse { by_peer: result }))
@@ -661,7 +659,7 @@ pub async fn read_checker(
 ) -> Result<HttpResponseOk<CheckerSource>, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    match ctx.bgp.router.lock().unwrap().get(&rq.asn) {
+    match lock!(ctx.bgp.router).get(&rq.asn) {
         None => Err(HttpError::for_not_found(
             None,
             String::from("ASN not found"),
@@ -718,7 +716,7 @@ pub async fn read_shaper(
 ) -> Result<HttpResponseOk<ShaperSource>, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    match ctx.bgp.router.lock().unwrap().get(&rq.asn) {
+    match lock!(ctx.bgp.router).get(&rq.asn) {
         None => Err(HttpError::for_not_found(
             None,
             String::from("ASN not found"),
@@ -926,7 +924,7 @@ pub(crate) mod helpers {
         policy: PolicySource,
         overwrite: bool,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        match ctx.bgp.router.lock().unwrap().get(&asn) {
+        match lock!(ctx.bgp.router).get(&asn) {
             None => {
                 return Err(HttpError::for_not_found(
                     None,
@@ -987,7 +985,7 @@ pub(crate) mod helpers {
         asn: u32,
         policy: PolicyKind,
     ) -> Result<HttpResponseDeleted, HttpError> {
-        match ctx.bgp.router.lock().unwrap().get(&asn) {
+        match lock!(ctx.bgp.router).get(&asn) {
             None => {
                 return Err(HttpError::for_not_found(
                     None,

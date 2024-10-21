@@ -9,6 +9,7 @@ use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use bgp::log::init_logger;
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
+use mg_common::lock;
 use mg_common::stats::MgLowerStats;
 use rand::Fill;
 use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
@@ -161,7 +162,7 @@ async fn run(args: RunArgs) {
         if let (Some(rack_uuid), Some(sled_uuid)) =
             (args.rack_uuid, args.sled_uuid)
         {
-            let mut is_running = context.stats_server_running.lock().unwrap();
+            let mut is_running = lock!(context.stats_server_running);
             if !*is_running {
                 match oxstats::start_server(
                     context.clone(),

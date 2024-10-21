@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
+use mg_common::lock;
 use mg_common::smf::get_stats_server_props;
 use slog::{error, info, warn, Logger};
 use smf::PropertyGroup;
@@ -59,7 +60,7 @@ fn refresh_stats_server(
         }
     };
 
-    let mut is_running = ctx.stats_server_running.lock().unwrap();
+    let mut is_running = lock!(ctx.stats_server_running);
     if !*is_running {
         info!(log, "starting stats server on smf refresh");
         match crate::oxstats::start_server(

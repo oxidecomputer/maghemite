@@ -271,7 +271,7 @@ impl BgpConnection for BgpConnectionTcp {
 
     #[allow(unused_variables)]
     fn set_min_ttl(&self, ttl: u8) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = lock!(self.conn);
         match conn.as_ref() {
             None => Err(Error::NotConnected),
             Some(conn) => {
@@ -315,7 +315,7 @@ impl BgpConnection for BgpConnectionTcp {
         key: [u8; MAX_MD5SIG_KEYLEN],
     ) -> Result<(), Error> {
         info!(self.log, "setting md5 auth for {}", self.peer);
-        let conn = self.conn.lock().unwrap();
+        let conn = lock!(self.conn);
         let fd = match conn.as_ref() {
             None => return Err(Error::NotConnected),
             Some(c) => c.as_raw_fd(),
@@ -331,7 +331,7 @@ impl BgpConnection for BgpConnectionTcp {
         key: [u8; MAX_MD5SIG_KEYLEN],
     ) -> Result<(), Error> {
         info!(self.log, "setting md5 auth for {}", self.peer);
-        let conn = self.conn.lock().unwrap();
+        let conn = lock!(self.conn);
         match conn.as_ref() {
             None => return Err(Error::NotConnected),
             Some(c) => {
@@ -596,7 +596,7 @@ impl BgpConnectionTcp {
 
     #[cfg(target_os = "illumos")]
     fn md5_sig_drop(&self) {
-        let guard = self.sas.lock().unwrap();
+        let guard = lock!(self.sas);
         if let Some(ref sas) = *guard {
             for (local, peer) in sas.associations.iter() {
                 for (a, b) in sa_set(*local, *peer) {
@@ -644,7 +644,7 @@ impl BgpConnectionTcp {
         locals: Vec<SocketAddr>,
         peer: SocketAddr,
     ) -> Result<(), Error> {
-        let mut guard = self.sas.lock().unwrap();
+        let mut guard = lock!(self.sas);
         match &mut *guard {
             Some(sas) => {
                 for local in locals.into_iter() {
@@ -707,7 +707,7 @@ impl BgpConnectionTcp {
         // we may accept a connection from a client (as opposed to the client)
         // accepting a connection from us, and that will result in the
         // association set increasing according to the source port of the client.
-        let guard = sas.lock().unwrap();
+        let guard = lock!(sas);
         if let Some(ref sas) = *guard {
             for (local, peer) in sas.associations.iter() {
                 for (a, b) in sa_set(*local, *peer) {
