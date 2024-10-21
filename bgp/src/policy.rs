@@ -403,23 +403,13 @@ pub fn load_checker(program_source: &str) -> Result<AST, Error> {
 
 #[cfg(test)]
 mod test {
-    use slog::Drain;
-
     use crate::messages::{
         Community, PathAttribute, PathAttributeType, PathAttributeTypeCode,
         PathAttributeValue,
     };
 
     use super::*;
-
-    fn log() -> Logger {
-        let drain = slog_bunyan::new(std::io::stdout()).build().fuse();
-        let drain = slog_async::Async::new(drain)
-            .chan_size(0x8000)
-            .build()
-            .fuse();
-        slog::Logger::root(drain, slog::o!())
-    }
+    use mg_common::log::init_logger;
 
     #[test]
     fn open_require_4byte_as() {
@@ -431,14 +421,15 @@ mod test {
             std::fs::read_to_string("../bgp/policy/policy-check0.rhai")
                 .unwrap();
         let ast = load_checker(&source).unwrap();
+        let log = init_logger();
         let result =
-            check_incoming_open(m, &ast, asn.into(), addr, log()).unwrap();
+            check_incoming_open(m, &ast, asn.into(), addr, log).unwrap();
         assert_eq!(result, CheckerResult::Drop);
 
         // check that open messages with the 4-octet AS capability code get accepted
         let m = OpenMessage::new4(asn.into(), 30, 1701);
         let result =
-            check_incoming_open(m, &ast, asn.into(), addr, log()).unwrap();
+            check_incoming_open(m, &ast, asn.into(), addr, log).unwrap();
         assert_eq!(result, CheckerResult::Accept);
     }
 
@@ -459,12 +450,12 @@ mod test {
             std::fs::read_to_string("../bgp/policy/policy-check0.rhai")
                 .unwrap();
         let ast = load_checker(&source).unwrap();
-        let result = check_incoming_update(m, &ast, asn, addr, log()).unwrap();
+        let result = check_incoming_update(m, &ast, asn, addr, log).unwrap();
         assert_eq!(result, CheckerResult::Drop);
 
         // check that messages without the no-export community are accepted
         let m = UpdateMessage::default();
-        let result = check_incoming_update(m, &ast, asn, addr, log()).unwrap();
+        let result = check_incoming_update(m, &ast, asn, addr, log).unwrap();
         assert_eq!(result, CheckerResult::Accept);
     }
 
@@ -479,7 +470,7 @@ mod test {
                 .unwrap();
         let ast = load_shaper(&source).unwrap();
         let result =
-            shape_outgoing_open(m.clone(), &ast, asn.into(), addr, log())
+            shape_outgoing_open(m.clone(), &ast, asn.into(), addr, log)
                 .unwrap();
         m.add_four_octet_as(74);
         assert_eq!(result, ShaperResult::Emit(m.into()));
@@ -503,7 +494,7 @@ mod test {
                 .unwrap();
         let ast = load_shaper(&source).unwrap();
         let result =
-            shape_outgoing_update(m.clone(), &ast, asn, addr, log()).unwrap();
+            shape_outgoing_update(m.clone(), &ast, asn, addr, log).unwrap();
         m.add_community(Community::UserDefined(1701));
         assert_eq!(result, ShaperResult::Emit(m.into()));
     }
@@ -529,7 +520,7 @@ mod test {
 
         // ASN 100 should not have any changes
         let result: UpdateMessage =
-            shape_outgoing_update(originated.clone(), &ast, 100, addr, log())
+            shape_outgoing_update(originated.clone(), &ast, 100, addr, log)
                 .unwrap()
                 .unwrap()
                 .try_into()
@@ -539,7 +530,7 @@ mod test {
 
         // ASN 65402 should have only the 10.128./16 prefix
         let result: UpdateMessage =
-            shape_outgoing_update(originated, &ast, 65402, addr, log())
+            shape_outgoing_update(originated, &ast, 65402, addr, log)
                 .unwrap()
                 .unwrap()
                 .try_into()
