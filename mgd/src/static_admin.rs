@@ -89,7 +89,7 @@ pub async fn static_remove_v4_route(
         .collect();
     ctx.context()
         .db
-        .remove_static_routes(routes)
+        .remove_static_routes(&routes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     Ok(HttpResponseDeleted())
 }

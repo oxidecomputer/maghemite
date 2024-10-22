@@ -417,33 +417,29 @@ impl Db {
         &self,
         routes: &Vec<StaticRouteKey>,
     ) -> Result<(), Error> {
-        let mut pcn = PrefixChangeNotification::default();
         let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+
+        let mut route_keys = Vec::new();
+        for route in routes {
+            let key = serde_json::to_string(route)?;
+            route_keys.push(key);
+        }
+
+        tree.transaction(|tx_db| {
+            for key in &route_keys {
+                tx_db.insert(key.as_str(), "")?;
+            }
+            Ok(())
+        })?;
+        tree.flush()?;
+
+        let mut pcn = PrefixChangeNotification::default();
         for route in routes {
             self.add_prefix_path(route.prefix, &Path::from(*route));
-            let key = match serde_json::to_string(route) {
-                Err(e) => {
-                    error!(
-                        self.log,
-                        "{} serde_json::to_string conversion failed: {e}",
-                        route.prefix
-                    );
-                    continue;
-                }
-                Ok(s) => s,
-            };
-            if let Err(e) = tree.insert(key.as_str(), "") {
-                error!(
-                    self.log,
-                    "{}: insert into tree STATIC4_ROUTES failed: {e}",
-                    route.prefix
-                );
-                continue;
-            };
             pcn.changed.insert(route.prefix);
         }
+
         self.notify(pcn);
-        tree.flush()?;
         Ok(())
     }
 
@@ -539,39 +535,33 @@ impl Db {
 
     pub fn remove_static_routes(
         &self,
-        routes: Vec<StaticRouteKey>,
+        routes: &Vec<StaticRouteKey>,
     ) -> Result<(), Error> {
-        let mut pcn = PrefixChangeNotification::default();
         let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+
+        let mut route_keys = Vec::new();
+        for route in routes {
+            let key = serde_json::to_string(route)?;
+            route_keys.push(key);
+        }
+
+        tree.transaction(|tx_db| {
+            for key in &route_keys {
+                tx_db.remove(key.as_str())?;
+            }
+            Ok(())
+        })?;
+        tree.flush()?;
+
+        let mut pcn = PrefixChangeNotification::default();
         for route in routes {
             self.remove_prefix_path(route.prefix, |rib_path: &Path| {
-                rib_path.cmp(&Path::from(route)) == CmpOrdering::Equal
+                rib_path.cmp(&Path::from(*route)) == CmpOrdering::Equal
             });
             pcn.changed.insert(route.prefix);
-
-            let key = match serde_json::to_string(&route) {
-                Err(e) => {
-                    error!(
-                        self.log,
-                        "{} serde_json::to_string conversion failed: {e}",
-                        route.prefix
-                    );
-                    continue;
-                }
-                Ok(s) => s,
-            };
-            if let Err(e) = tree.remove(key.as_str()) {
-                error!(
-                    self.log,
-                    "{}: remove from tree STATIC4_ROUTES failed: {e}",
-                    route.prefix
-                );
-                continue;
-            }
         }
 
         self.notify(pcn);
-        tree.flush()?;
         Ok(())
     }
 
@@ -820,7 +810,7 @@ mod test {
 
         // rib_priority differs, so removal of static_key0
         // should not affect path from static_key1
-        db.remove_static_routes(vec![static_key0])
+        db.remove_static_routes(&vec![static_key0])
             .expect("remove_static_routes_failed for {static_key0}");
         assert_eq!(db.get_prefix_paths(&p0), vec![static_path1.clone()]);
         assert_eq!(
@@ -889,7 +879,7 @@ mod test {
 
         // removal of final static route (from static_key1) should result
         // in the prefix being completely deleted
-        db.remove_static_routes(vec![static_key1])
+        db.remove_static_routes(&vec![static_key1])
             .expect("remove_static_routes_failed for {static_key1}");
         assert!(db.get_prefix_paths(&p0).is_empty());
         assert!(db.get_selected_prefix_paths(&p0).is_empty());
