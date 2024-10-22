@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 rdb = { path = "../rdb" }
+mg-common.workspace = true
 slog.workspace = true
 slog-bunyan.workspace = true
 slog-async.workspace = true

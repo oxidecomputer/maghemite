@@ -24,7 +24,7 @@ use slog::{error, info, Logger};
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::mpsc::{channel, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -160,7 +160,7 @@ fn handle_change(
 
 fn sync_prefix(
     tep: Ipv6Addr,
-    rib_loc: Arc<Mutex<Rib>>,
+    rib_loc: Rib,
     prefix: &Prefix,
     dpd: &DpdClient,
     ddm: &DdmClient,
@@ -172,7 +172,7 @@ fn sync_prefix(
 
     // The best routes in the RIB
     let mut best: HashSet<RouteHash> = HashSet::new();
-    if let Some(paths) = rib_loc.lock().unwrap().get(prefix) {
+    if let Some(paths) = rib_loc.get(prefix) {
         for path in paths {
             best.insert(RouteHash::for_prefix_path(*prefix, path.clone())?);
         }

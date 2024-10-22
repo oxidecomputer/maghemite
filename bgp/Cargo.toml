@@ -8,8 +8,6 @@ rdb = { path = "../rdb" }
 nom.workspace = true
 num_enum.workspace = true
 slog.workspace = true
-slog-bunyan.workspace = true
-slog-async.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 schemars.workspace = true

@@ -20,6 +20,7 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Query, RequestContext, TypedBody,
 };
 use http::status::StatusCode;
+use mg_common::lock;
 use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
 use slog::info;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -51,12 +52,6 @@ impl BgpContext {
             addr_to_session,
         }
     }
-}
-
-macro_rules! lock {
-    ($mtx:expr) => {
-        $mtx.lock().expect("lock mutex")
-    };
 }
 
 macro_rules! get_router {
@@ -418,8 +413,7 @@ pub async fn get_selected(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let rib = get_router!(ctx, rq.asn)?.db.loc_rib();
-    let selected = rib.lock().unwrap().clone();
+    let selected = get_router!(ctx, rq.asn)?.db.loc_rib();
     Ok(HttpResponseOk(selected.into()))
 }
 
@@ -640,10 +634,8 @@ pub async fn message_history(
 
     let mut result = HashMap::new();
 
-    for (addr, session) in
-        get_router!(ctx, rq.asn)?.sessions.lock().unwrap().iter()
-    {
-        result.insert(*addr, session.message_history.lock().unwrap().clone());
+    for (addr, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
+        result.insert(*addr, lock!(session.message_history).clone());
     }
 
     Ok(HttpResponseOk(MessageHistoryResponse { by_peer: result }))
@@ -667,7 +659,7 @@ pub async fn read_checker(
 ) -> Result<HttpResponseOk<CheckerSource>, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    match ctx.bgp.router.lock().unwrap().get(&rq.asn) {
+    match lock!(ctx.bgp.router).get(&rq.asn) {
         None => Err(HttpError::for_not_found(
             None,
             String::from("ASN not found"),
@@ -724,7 +716,7 @@ pub async fn read_shaper(
 ) -> Result<HttpResponseOk<ShaperSource>, HttpError> {
     let ctx = ctx.context();
     let rq = request.into_inner();
-    match ctx.bgp.router.lock().unwrap().get(&rq.asn) {
+    match lock!(ctx.bgp.router).get(&rq.asn) {
         None => Err(HttpError::for_not_found(
             None,
             String::from("ASN not found"),
@@ -797,7 +789,7 @@ pub(crate) mod helpers {
         )
         .remote_id
         .ok_or(Error::NotFound("bgp peer not found".into()))?;
-        ctx.db.remove_peer_prefixes(id);
+        ctx.db.remove_bgp_peer_prefixes(id);
         ctx.db.remove_bgp_neighbor(addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 
@@ -932,7 +924,7 @@ pub(crate) mod helpers {
         policy: PolicySource,
         overwrite: bool,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        match ctx.bgp.router.lock().unwrap().get(&asn) {
+        match lock!(ctx.bgp.router).get(&asn) {
             None => {
                 return Err(HttpError::for_not_found(
                     None,
@@ -993,7 +985,7 @@ pub(crate) mod helpers {
         asn: u32,
         policy: PolicyKind,
     ) -> Result<HttpResponseDeleted, HttpError> {
-        match ctx.bgp.router.lock().unwrap().get(&asn) {
+        match lock!(ctx.bgp.router).get(&asn) {
             None => {
                 return Err(HttpError::for_not_found(
                     None,

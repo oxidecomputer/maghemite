@@ -14,7 +14,8 @@ use crate::messages::{
 };
 use crate::policy::{CheckerResult, ShaperResult};
 use crate::router::Router;
-use crate::{dbg, err, inf, to_canonical, trc, wrn};
+use crate::to_canonical;
+use mg_common::{dbg, err, inf, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
@@ -850,7 +851,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Idle;
                     }
                     {
-                        let ht = self.clock.timers.hold_timer.lock().unwrap();
+                        let ht = lock!(self.clock.timers.hold_timer);
                         ht.reset();
                         ht.enable();
                     }
@@ -875,7 +876,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Idle;
                     }
                     {
-                        let ht = self.clock.timers.hold_timer.lock().unwrap();
+                        let ht = lock!(self.clock.timers.hold_timer);
                         ht.reset();
                         ht.enable();
                     }
@@ -952,7 +953,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
                 lock!(self.clock.timers.connect_retry_timer).disable();
                 {
-                    let ht = self.clock.timers.hold_timer.lock().unwrap();
+                    let ht = lock!(self.clock.timers.hold_timer);
                     ht.reset();
                     ht.enable();
                 }
@@ -1069,7 +1070,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Idle;
                     }
                     {
-                        let ht = self.clock.timers.hold_timer.lock().unwrap();
+                        let ht = lock!(self.clock.timers.hold_timer);
                         ht.reset();
                         ht.enable();
                     }
@@ -1131,12 +1132,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // session timers and enter session setup.
             FsmEvent::Message(Message::KeepAlive) => {
                 {
-                    let ht = self.clock.timers.hold_timer.lock().unwrap();
+                    let ht = lock!(self.clock.timers.hold_timer);
                     ht.reset();
                     ht.enable();
                 }
                 {
-                    let kt = self.clock.timers.keepalive_timer.lock().unwrap();
+                    let kt = lock!(self.clock.timers.keepalive_timer);
                     kt.reset();
                     kt.enable();
                 }
@@ -1155,8 +1156,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .receive(m.clone().into());
                 wrn!(self; "notification received: {:#?}", m);
                 lock!(self.session).connect_retry_counter += 1;
-                self.clock.timers.hold_timer.lock().unwrap().disable();
-                self.clock.timers.keepalive_timer.lock().unwrap().disable();
+                lock!(self.clock.timers.hold_timer).disable();
+                lock!(self.clock.timers.keepalive_timer).disable();
                 self.counters
                     .notifications_received
                     .fetch_add(1, Ordering::Relaxed);
@@ -1164,7 +1165,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             FsmEvent::HoldTimerExpires => {
                 wrn!(self; "open sent: hold timer expired");
-                self.clock.timers.hold_timer.lock().unwrap().disable();
+                lock!(self.clock.timers.hold_timer).disable();
                 self.send_hold_timer_expired_notification(&pc.conn);
                 self.counters
                     .hold_timer_expirations
@@ -1200,7 +1201,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Idle;
                     }
                     {
-                        let ht = self.clock.timers.hold_timer.lock().unwrap();
+                        let ht = lock!(self.clock.timers.hold_timer);
                         ht.reset();
                         ht.enable();
                     }
@@ -1334,11 +1335,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // We've received an update message from the peer. Reset the hold
             // timer and apply the update to the RIB.
             FsmEvent::Message(Message::Update(m)) => {
-                self.clock.timers.hold_timer.lock().unwrap().reset();
+                lock!(self.clock.timers.hold_timer).reset();
                 inf!(self; "update received: {m:#?}");
                 let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
                 self.apply_update(m.clone(), pc.id, peer_as);
-                self.message_history.lock().unwrap().receive(m.into());
+                lock!(self.message_history).receive(m.into());
                 self.counters
                     .updates_received
                     .fetch_add(1, Ordering::Relaxed);
@@ -1346,7 +1347,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
 
             FsmEvent::Message(Message::RouteRefresh(m)) => {
-                self.clock.timers.hold_timer.lock().unwrap().reset();
+                lock!(self.clock.timers.hold_timer).reset();
                 inf!(self; "route refresh received: {m:#?}");
                 self.message_history
                     .lock()
@@ -1367,7 +1368,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // with us. Exit established and restart from the connect state.
             FsmEvent::Message(Message::Notification(m)) => {
                 wrn!(self; "notification received: {m:#?}");
-                self.message_history.lock().unwrap().receive(m.into());
+                lock!(self.message_history).receive(m.into());
                 self.counters
                     .notifications_received
                     .fetch_add(1, Ordering::Relaxed);
@@ -1381,7 +1382,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .keepalives_received
                     .fetch_add(1, Ordering::Relaxed);
-                self.clock.timers.hold_timer.lock().unwrap().reset();
+                lock!(self.clock.timers.hold_timer).reset();
                 FsmState::Established(pc)
             }
 
@@ -1504,7 +1505,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             FsmEvent::RouteRefreshNeeded => {
                 if let Some(remote_id) = lock!(self.session).remote_id {
-                    self.db.mark_bgp_id_stale(remote_id);
+                    self.db.mark_bgp_peer_stale(remote_id);
                     self.send_route_refresh(&pc.conn);
                 }
                 FsmState::Established(pc)
@@ -1601,8 +1602,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         {
-            let mut ht = self.clock.timers.hold_timer.lock().unwrap();
-            let mut kt = self.clock.timers.keepalive_timer.lock().unwrap();
+            let mut ht = lock!(self.clock.timers.hold_timer);
+            let mut kt = lock!(self.clock.timers.keepalive_timer);
             let mut theirs = false;
             let requested = u64::from(om.hold_time);
             if requested > 0 {
@@ -1685,7 +1686,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             error_subcode,
             data: Vec::new(),
         });
-        self.message_history.lock().unwrap().send(msg.clone());
+        lock!(self.message_history).send(msg.clone());
 
         if let Err(e) = conn.send(msg) {
             err!(self; "failed to send notification {e}");
@@ -1750,7 +1751,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
         drop(msg);
-        self.message_history.lock().unwrap().send(out.clone());
+        lock!(self.message_history).send(out.clone());
 
         self.counters.opens_sent.fetch_add(1, Ordering::Relaxed);
         if let Err(e) = conn.send(out) {
@@ -1765,7 +1766,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn is_ebgp(&self) -> bool {
-        if let Some(remote) = self.session.lock().unwrap().remote_asn {
+        if let Some(remote) = lock!(self.session).remote_asn {
             if remote != self.asn.as_u32() {
                 return true;
             }
@@ -1851,8 +1852,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             .path_attributes
             .push(PathAttributeValue::NextHop(nexthop).into());
 
-        if let Some(med) = self.session.lock().unwrap().multi_exit_discriminator
-        {
+        if let Some(med) = lock!(self.session).multi_exit_discriminator {
             update
                 .path_attributes
                 .push(PathAttributeValue::MultiExitDisc(med).into());
@@ -1861,7 +1861,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if self.is_ibgp() {
             update.path_attributes.push(
                 PathAttributeValue::LocalPref(
-                    self.session.lock().unwrap().local_pref.unwrap_or(0),
+                    lock!(self.session).local_pref.unwrap_or(0),
                 )
                 .into(),
             );
@@ -1896,7 +1896,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .collect::<BTreeSet<crate::messages::Prefix>>();
 
             update.nlri.retain(|x| message_policy.contains(x));
-            update.withdrawn.retain(|x| message_policy.contains(x));
         };
 
         let out = match self.shape_update(update, shaper_application)? {
@@ -1904,7 +1903,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             ShaperResult::Drop => return Ok(()),
         };
 
-        self.message_history.lock().unwrap().send(out.clone());
+        lock!(self.message_history).send(out.clone());
 
         self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
 
@@ -1924,13 +1923,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// to the connect state.
     fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         lock!(self.session).connect_retry_counter += 1;
-        self.clock.timers.hold_timer.lock().unwrap().disable();
-        self.clock.timers.keepalive_timer.lock().unwrap().disable();
+        lock!(self.clock.timers.hold_timer).disable();
+        lock!(self.clock.timers.keepalive_timer).disable();
 
         write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
 
         // remove peer prefixes from db
-        self.db.remove_peer_prefixes(pc.id);
+        self.db.remove_bgp_peer_prefixes(pc.id);
 
         FsmState::Idle
     }
@@ -1982,7 +1981,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .collect::<BTreeSet<crate::messages::Prefix>>();
 
             update.nlri.retain(|x| message_policy.contains(x));
-            update.withdrawn.retain(|x| message_policy.contains(x));
         };
 
         self.update_rib(&update, id, peer_as);
@@ -2026,9 +2024,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, id: u32, peer_as: u32) {
-        for w in &update.withdrawn {
-            self.db.remove_peer_prefix(id, w.as_prefix4().into());
-        }
+        self.db.remove_bgp_prefixes(
+            update
+                .withdrawn
+                .iter()
+                .map(|w| rdb::Prefix::from(w.as_prefix4()))
+                .collect(),
+            id,
+        );
 
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
@@ -2039,6 +2042,37 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         if !update.nlri.is_empty() {
+            // TODO: parse and prefer nexthop in MP_REACH_NLRI
+            //
+            // Per RFC 4760:
+            // """
+            // The next hop information carried in the MP_REACH_NLRI path attribute
+            // defines the Network Layer address of the router that SHOULD be used
+            // as the next hop to the destinations listed in the MP_NLRI attribute
+            // in the UPDATE message.
+            //
+            // [..]
+            //
+            // An UPDATE message that carries no NLRI, other than the one encoded in
+            // the MP_REACH_NLRI attribute, SHOULD NOT carry the NEXT_HOP attribute.
+            // If such a message contains the NEXT_HOP attribute, the BGP speaker
+            // that receives the message SHOULD ignore this attribute.
+            // """
+            //
+            // i.e.
+            // 1) NEXT_HOP SHOULD NOT be sent unless there are no MP_REACH_NLRI
+            // 2) NEXT_HOP SHOULD be ignored unless there are no MP_REACH_NLRI
+            //
+            // The standards do not state whether an implementation can/should send
+            // IPv4 Unicast prefixes embedded in an MP_REACH_NLRI attribute or in the
+            // classic NLRI field of an Update message. If we participate in MP-BGP
+            // and negotiate IPv4 Unicast, it's entirely likely that we'll peer with
+            // other BGP speakers falling into any of the combinations:
+            // a) MP not negotiated, IPv4 Unicast in NLRI, NEXT_HOP included
+            // b) MP negotiated, IPv4 Unicast in NLRI, NEXT_HOP included
+            // c) MP negotiated, IPv4 Unicast in NLRI, NEXT_HOP not included
+            // d) MP negotiated, IPv4 Unicast in MP_REACH_NLRI, NEXT_HOP included
+            // e) MP negotiated, IPv4 Unicast in MP_REACH_NLRI, NEXT_HOP not included
             let nexthop = match update.nexthop4() {
                 Some(nh) => nh,
                 None => {
@@ -2053,41 +2087,36 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             };
 
-            for n in &update.nlri {
-                let prefix = n.as_prefix4();
-                // ignore prefixes we originate
-                if originated.contains(&prefix) {
-                    continue;
-                }
-
-                let mut as_path = Vec::new();
-                if let Some(segments_list) = update.as_path() {
-                    for segments in &segments_list {
-                        as_path.extend(segments.value.iter());
-                    }
-                }
-
-                let path = rdb::Path {
-                    nexthop: nexthop.into(),
-                    shutdown: update.graceful_shutdown(),
-                    rib_priority: DEFAULT_RIB_PRIORITY_BGP,
-                    bgp: Some(BgpPathProperties {
-                        origin_as: peer_as,
-                        id,
-                        med: update.multi_exit_discriminator(),
-                        local_pref: update.local_pref(),
-                        as_path,
-                        stale: None,
-                    }),
-                    vlan_id: lock!(self.session).vlan_id,
-                };
-
-                if let Err(e) =
-                    self.db.add_prefix_path(prefix.into(), path.clone(), false)
-                {
-                    err!(self; "failed to add path {:?} -> {:?}: {e}", prefix, path);
+            let mut as_path = Vec::new();
+            if let Some(segments_list) = update.as_path() {
+                for segments in &segments_list {
+                    as_path.extend(segments.value.iter());
                 }
             }
+            let path = rdb::Path {
+                nexthop: nexthop.into(),
+                shutdown: update.graceful_shutdown(),
+                rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+                bgp: Some(BgpPathProperties {
+                    origin_as: peer_as,
+                    id,
+                    med: update.multi_exit_discriminator(),
+                    local_pref: update.local_pref(),
+                    as_path,
+                    stale: None,
+                }),
+                vlan_id: lock!(self.session).vlan_id,
+            };
+
+            self.db.add_bgp_prefixes(
+                update
+                    .nlri
+                    .iter()
+                    .filter(|p| !originated.contains(&p.as_prefix4()))
+                    .map(|n| rdb::Prefix::from(n.as_prefix4()))
+                    .collect(),
+                path.clone(),
+            );
         }
 
         //TODO(IPv6) iterate through MpReachNlri attributes for IPv6

@@ -7,6 +7,9 @@ pub enum Error {
     #[error("datastore error {0}")]
     DataStore(#[from] sled::Error),
 
+    #[error("data store transaction {0}")]
+    DataStoreTransaction(#[from] sled::transaction::TransactionError),
+
     #[error("serialization error {0}")]
     Serialization(#[from] serde_json::Error),
 

@@ -11,7 +11,6 @@ pub mod connection_tcp;
 pub mod dispatcher;
 pub mod error;
 pub mod fanout;
-pub mod log;
 pub mod messages;
 pub mod policy;
 pub mod router;

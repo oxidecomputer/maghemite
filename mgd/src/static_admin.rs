@@ -68,13 +68,10 @@ pub async fn static_add_v4_route(
         .into_iter()
         .map(Into::into)
         .collect();
-    for r in routes {
-        let path = Path::for_static(r.nexthop, r.vlan_id, r.rib_priority);
-        ctx.context()
-            .db
-            .add_prefix_path(r.prefix, path, true)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-    }
+    ctx.context()
+        .db
+        .add_static_routes(&routes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -90,13 +87,10 @@ pub async fn static_remove_v4_route(
         .into_iter()
         .map(Into::into)
         .collect();
-    for r in routes {
-        let path = Path::for_static(r.nexthop, r.vlan_id, r.rib_priority);
-        ctx.context()
-            .db
-            .remove_prefix_path(r.prefix, path, true)
-            .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-    }
+    ctx.context()
+        .db
+        .remove_static_routes(&routes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
     Ok(HttpResponseDeleted())
 }
 

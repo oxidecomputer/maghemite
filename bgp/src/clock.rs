@@ -108,35 +108,35 @@ impl Clock {
     ) {
         Self::step(
             resolution,
-            &timers.connect_retry_timer.lock().unwrap(),
+            &lock!(timers.connect_retry_timer),
             FsmEvent::ConnectRetryTimerExpires,
             s.clone(),
             &log,
         );
         Self::step(
             resolution,
-            &timers.keepalive_timer.lock().unwrap(),
+            &lock!(timers.keepalive_timer),
             FsmEvent::KeepaliveTimerExpires,
             s.clone(),
             &log,
         );
         Self::step(
             resolution,
-            &timers.hold_timer.lock().unwrap(),
+            &lock!(timers.hold_timer),
             FsmEvent::HoldTimerExpires,
             s.clone(),
             &log,
         );
         Self::step(
             resolution,
-            &timers.idle_hold_timer.lock().unwrap(),
+            &lock!(timers.idle_hold_timer),
             FsmEvent::IdleHoldTimerExpires,
             s.clone(),
             &log,
         );
         Self::step(
             resolution,
-            &timers.delay_open_timer.lock().unwrap(),
+            &lock!(timers.delay_open_timer),
             FsmEvent::DelayOpenTimerExpires,
             s.clone(),
             &log,

@@ -6,12 +6,13 @@ use crate::admin::HandlerContext;
 use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
-use bgp::log::init_logger;
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
+use mg_common::lock;
+use mg_common::log::init_logger;
 use mg_common::stats::MgLowerStats;
 use rand::Fill;
-use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo, Path};
+use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use signal::handle_signals;
 use slog::{error, Logger};
 use std::collections::BTreeMap;
@@ -161,7 +162,7 @@ async fn run(args: RunArgs) {
         if let (Some(rack_uuid), Some(sled_uuid)) =
             (args.rack_uuid, args.sled_uuid)
         {
-            let mut is_running = context.stats_server_running.lock().unwrap();
+            let mut is_running = lock!(context.stats_server_running);
             if !*is_running {
                 match oxstats::start_server(
                     context.clone(),
@@ -271,14 +272,9 @@ fn initialize_static_routes(db: &rdb::Db) {
     let routes = db
         .get_static4()
         .expect("failed to get static routes from db");
-    for route in &routes {
-        let path =
-            Path::for_static(route.nexthop, route.vlan_id, route.rib_priority);
-        db.add_prefix_path(route.prefix, path, true)
-            .unwrap_or_else(|e| {
-                panic!("failed to initialize static route {route:#?}: {e}")
-            })
-    }
+    db.add_static_routes(&routes).unwrap_or_else(|e| {
+        panic!("failed to initialize static routes {routes:#?}: {e}")
+    })
 }
 
 fn get_tunnel_endpoint_ula(db: &rdb::Db) -> Ipv6Addr {

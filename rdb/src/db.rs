@@ -15,6 +15,7 @@ use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
 use slog::{error, Logger};
+use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -105,11 +106,11 @@ impl Db {
     }
 
     pub fn set_reaper_interval(&self, interval: std::time::Duration) {
-        *self.reaper.interval.lock().unwrap() = interval;
+        *lock!(self.reaper.interval) = interval;
     }
 
     pub fn set_reaper_stale_max(&self, stale_max: chrono::Duration) {
-        *self.reaper.stale_max.lock().unwrap() = stale_max;
+        *lock!(self.reaper.stale_max) = stale_max;
     }
 
     /// Register a routing databse watcher.
@@ -128,8 +129,8 @@ impl Db {
         }
     }
 
-    pub fn loc_rib(&self) -> Arc<Mutex<Rib>> {
-        self.rib_loc.clone()
+    pub fn loc_rib(&self) -> Rib {
+        lock!(self.rib_loc).clone()
     }
 
     pub fn full_rib(&self) -> Rib {
@@ -378,8 +379,13 @@ impl Db {
         }
     }
 
-    pub fn get_imported(&self) -> Rib {
-        lock!(self.rib_in).clone()
+    pub fn get_selected_prefix_paths(&self, prefix: &Prefix) -> Vec<Path> {
+        let rib = lock!(self.rib_loc);
+        let paths = rib.get(prefix);
+        match paths {
+            None => Vec::new(),
+            Some(p) => p.iter().cloned().collect(),
+        }
     }
 
     pub fn update_loc_rib(rib_in: &Rib, rib_loc: &mut Rib, prefix: Prefix) {
@@ -394,12 +400,7 @@ impl Db {
         }
     }
 
-    pub fn add_prefix_path(
-        &self,
-        prefix: Prefix,
-        path: Path,
-        is_static: bool,
-    ) -> Result<(), Error> {
+    pub fn add_prefix_path(&self, prefix: Prefix, path: &Path) {
         let mut rib = lock!(self.rib_in);
         match rib.get_mut(&prefix) {
             Some(paths) => {
@@ -410,22 +411,45 @@ impl Db {
             }
         }
         Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
+    }
 
-        if is_static {
-            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-            let srk = StaticRouteKey {
-                prefix,
-                nexthop: path.nexthop,
-                vlan_id: path.vlan_id,
-                rib_priority: path.rib_priority,
-            };
-            let key = serde_json::to_string(&srk)?;
-            tree.insert(key.as_str(), "")?;
-            tree.flush()?;
+    pub fn add_static_routes(
+        &self,
+        routes: &Vec<StaticRouteKey>,
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+
+        let mut route_keys = Vec::new();
+        for route in routes {
+            let key = serde_json::to_string(route)?;
+            route_keys.push(key);
         }
 
-        self.notify(prefix.into());
+        tree.transaction(|tx_db| {
+            for key in &route_keys {
+                tx_db.insert(key.as_str(), "")?;
+            }
+            Ok(())
+        })?;
+        tree.flush()?;
+
+        let mut pcn = PrefixChangeNotification::default();
+        for route in routes {
+            self.add_prefix_path(route.prefix, &Path::from(*route));
+            pcn.changed.insert(route.prefix);
+        }
+
+        self.notify(pcn);
         Ok(())
+    }
+
+    pub fn add_bgp_prefixes(&self, prefixes: Vec<Prefix>, path: Path) {
+        let mut pcn = PrefixChangeNotification::default();
+        for prefix in prefixes {
+            self.add_prefix_path(prefix, &path);
+            pcn.changed.insert(prefix);
+        }
+        self.notify(pcn);
     }
 
     pub fn get_static4(&self) -> Result<Vec<StaticRouteKey>, Error> {
@@ -474,14 +498,14 @@ impl Db {
         Ok(nexthops.len())
     }
 
-    pub fn disable_nexthop(&self, nexthop: IpAddr) {
+    pub fn set_nexthop_shutdown(&self, nexthop: IpAddr, shutdown: bool) {
         let mut rib = lock!(self.rib_in);
         let mut pcn = PrefixChangeNotification::default();
         for (prefix, paths) in rib.iter_mut() {
             for p in paths.clone().into_iter() {
-                if p.nexthop == nexthop && !p.shutdown {
+                if p.nexthop == nexthop && p.shutdown != shutdown {
                     let mut replacement = p.clone();
-                    replacement.shutdown = true;
+                    replacement.shutdown = shutdown;
                     paths.insert(replacement);
                     pcn.changed.insert(*prefix);
                 }
@@ -491,101 +515,86 @@ impl Db {
         for prefix in pcn.changed.iter() {
             Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
         }
-
         self.notify(pcn);
     }
 
-    pub fn enable_nexthop(&self, nexthop: IpAddr) {
-        let mut rib = lock!(self.rib_in);
-        let mut pcn = PrefixChangeNotification::default();
-        for (prefix, paths) in rib.iter_mut() {
-            for p in paths.clone().into_iter() {
-                if p.nexthop == nexthop && p.shutdown {
-                    let mut replacement = p.clone();
-                    replacement.shutdown = false;
-                    paths.insert(replacement);
-                    pcn.changed.insert(*prefix);
-                }
-            }
-        }
-
-        //TODO loc_rib updater as a pcn listener?
-        for prefix in pcn.changed.iter() {
-            Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
-        }
-        self.notify(pcn);
-    }
-
-    pub fn remove_prefix_path(
-        &self,
-        prefix: Prefix,
-        path: Path,
-        is_static: bool, //TODO
-    ) -> Result<(), Error> {
+    pub fn remove_prefix_path<F>(&self, prefix: Prefix, prefix_cmp: F)
+    where
+        F: Fn(&Path) -> bool,
+    {
         let mut rib = lock!(self.rib_in);
         if let Some(paths) = rib.get_mut(&prefix) {
-            paths.retain(|x| x.nexthop != path.nexthop)
-        }
-
-        if is_static {
-            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-            let srk = StaticRouteKey {
-                prefix,
-                nexthop: path.nexthop,
-                vlan_id: path.vlan_id,
-                rib_priority: path.rib_priority,
-            };
-            let key = serde_json::to_string(&srk)?;
-            tree.remove(key.as_str())?;
-            tree.flush()?;
+            paths.retain(|p| !prefix_cmp(p));
+            if paths.is_empty() {
+                rib.remove(&prefix);
+            }
         }
 
         Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
-        self.notify(prefix.into());
+    }
+
+    pub fn remove_static_routes(
+        &self,
+        routes: &Vec<StaticRouteKey>,
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+
+        let mut route_keys = Vec::new();
+        for route in routes {
+            let key = serde_json::to_string(route)?;
+            route_keys.push(key);
+        }
+
+        tree.transaction(|tx_db| {
+            for key in &route_keys {
+                tx_db.remove(key.as_str())?;
+            }
+            Ok(())
+        })?;
+        tree.flush()?;
+
+        let mut pcn = PrefixChangeNotification::default();
+        for route in routes {
+            self.remove_prefix_path(route.prefix, |rib_path: &Path| {
+                rib_path.cmp(&Path::from(*route)) == CmpOrdering::Equal
+            });
+            pcn.changed.insert(route.prefix);
+        }
+
+        self.notify(pcn);
         Ok(())
     }
 
-    pub fn remove_peer_prefix(&self, id: u32, prefix: Prefix) {
-        let mut rib = lock!(self.rib_in);
-        let paths = match rib.get_mut(&prefix) {
-            None => return,
-            Some(ps) => ps,
-        };
-        paths.retain(|x| match x.bgp {
-            Some(ref bgp) => bgp.id != id,
-            None => true,
-        });
-
-        rib.retain(|&_, paths| !paths.is_empty());
-
-        Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
-        self.notify(prefix.into());
-    }
-
-    pub fn remove_peer_prefixes(
-        &self,
-        id: u32,
-    ) -> BTreeMap<Prefix, BTreeSet<Path>> {
-        let mut rib = lock!(self.rib_in);
-
+    pub fn remove_bgp_prefixes(&self, prefixes: Vec<Prefix>, id: u32) {
+        // TODO: don't rely on BGP ID for path definition.
+        // See: maghemite #241
+        // We currently only use Router-IDs to determine which
+        // peer/session a route was learned from. This will not work
+        // long term, as it will not work with add-path or multiple
+        // parallel sessions to the same router.
         let mut pcn = PrefixChangeNotification::default();
-        let mut result = BTreeMap::new();
-        for (prefix, paths) in rib.iter_mut() {
-            paths.retain(|x| match x.bgp {
-                Some(ref bgp) => bgp.id != id,
-                None => true,
+        for prefix in prefixes {
+            self.remove_prefix_path(prefix, |rib_path: &Path| {
+                match rib_path.bgp {
+                    Some(ref bgp) => bgp.id == id,
+                    None => true,
+                }
             });
-            result.insert(*prefix, paths.clone());
-            pcn.changed.insert(*prefix);
-        }
-
-        rib.retain(|&_, paths| !paths.is_empty());
-
-        for prefix in pcn.changed.iter() {
-            Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
+            pcn.changed.insert(prefix);
         }
         self.notify(pcn);
-        result
+    }
+
+    // helper function to remove all routes learned from a given peer
+    // e.g. when peer is deleted or exits Established state
+    pub fn remove_bgp_peer_prefixes(&self, id: u32) {
+        // TODO: don't rely on BGP ID for path definition.
+        // See: maghemite #241
+        // We currently only use Router-IDs to determine which
+        // peer/session a route was learned from. This will not work
+        // long term, as it will not work with add-path or multiple
+        // parallel sessions to the same router.
+        self.remove_bgp_prefixes(self.full_rib().keys().copied().collect(), id);
     }
 
     pub fn generation(&self) -> u64 {
@@ -617,8 +626,14 @@ impl Db {
         Ok(())
     }
 
-    pub fn mark_bgp_id_stale(&self, id: u32) {
-        let mut rib = self.rib_loc.lock().unwrap();
+    pub fn mark_bgp_peer_stale(&self, id: u32) {
+        // TODO: don't rely on BGP ID for path definition.
+        // See: maghemite #241
+        // We currently only use Router-IDs to determine which
+        // peer/session a route was learned from. This will not work
+        // long term, as it will not work with add-path or multiple
+        // parallel sessions to the same router.
+        let mut rib = lock!(self.rib_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
                 .iter()
@@ -661,7 +676,7 @@ impl Reaper {
         let s = self.clone();
         spawn(move || loop {
             s.reap();
-            sleep(*s.interval.lock().unwrap());
+            sleep(*lock!(s.interval));
         });
     }
 
@@ -678,12 +693,199 @@ impl Reaper {
                             b.stale
                                 .map(|s| {
                                     Utc::now().signed_duration_since(s)
-                                        < *self.stale_max.lock().unwrap()
+                                        < *lock!(self.stale_max)
                                 })
                                 .unwrap_or(true)
                         })
                         .unwrap_or(true)
                 })
             });
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use slog::{Drain, Logger};
+    use std::fs::File;
+    use std::io::Write;
+
+    pub fn init_file_logger(filename: &str) -> Logger {
+        build_logger(File::create(filename).expect("build logger"))
+    }
+
+    pub fn build_logger<W: Write + Send + 'static>(w: W) -> Logger {
+        let drain = slog_bunyan::new(w).build().fuse();
+        let drain = slog_async::Async::new(drain)
+            .chan_size(0x8000)
+            .build()
+            .fuse();
+        slog::Logger::root(drain, slog::o!())
+    }
+
+    #[test]
+    fn test_rib() {
+        use crate::StaticRouteKey;
+        use crate::{
+            db::Db, BgpPathProperties, Path, Prefix, Prefix4,
+            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        // init test vars
+        let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
+        let p1 = Prefix::from("192.168.1.0/24".parse::<Prefix4>().unwrap());
+        let p2 = Prefix::from("192.168.2.0/24".parse::<Prefix4>().unwrap());
+        let nh0 = "203.0.113.0";
+        let nh1 = "203.0.113.1";
+        let bgp_path0 = Path {
+            nexthop: nh0.parse().unwrap(),
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 1111,
+                id: 1111,
+                med: Some(1111),
+                local_pref: Some(1111),
+                as_path: vec![1111, 1111, 1111],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+        let bgp_path1 = Path {
+            nexthop: nh1.parse().unwrap(),
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 2222,
+                id: 2222,
+                med: Some(2222),
+                local_pref: Some(2222),
+                as_path: vec![2222, 2222, 2222],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+        let static_key0 = StaticRouteKey {
+            prefix: p0,
+            nexthop: nh0.parse().unwrap(),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        let static_path0 = Path::from(static_key0);
+        let static_key1 = StaticRouteKey {
+            prefix: p0,
+            nexthop: nh0.parse().unwrap(),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC + 10,
+        };
+        let static_path1 = Path::from(static_key1);
+
+        // setup
+        let log = init_file_logger("/tmp/rib.log");
+        let db_path = "/tmp/rb.db".to_string();
+        let _ = std::fs::remove_dir_all(&db_path);
+        let db = Db::new(&db_path, log.clone()).expect("create db");
+
+        // Start test cases
+
+        // start from empty rib
+        assert!(db.full_rib().is_empty());
+        assert!(db.loc_rib().is_empty());
+
+        // both paths have the same next-hop, but not all fields
+        // from StaticRouteKey match (rib_priority is different).
+        db.add_static_routes(&vec![static_key0, static_key1])
+            .expect(
+                "add_static_routes failed for {static_key0} and {static_key1}",
+            );
+
+        // both paths should get installed in rib_in, but only
+        // static_path0 should get into rib_loc.
+        assert_eq!(
+            db.get_prefix_paths(&p0),
+            vec![static_path0.clone(), static_path1.clone()]
+        );
+        assert_eq!(
+            db.get_selected_prefix_paths(&p0),
+            vec![static_path0.clone()]
+        );
+
+        // rib_priority differs, so removal of static_key0
+        // should not affect path from static_key1
+        db.remove_static_routes(&vec![static_key0])
+            .expect("remove_static_routes_failed for {static_key0}");
+        assert_eq!(db.get_prefix_paths(&p0), vec![static_path1.clone()]);
+        assert_eq!(
+            db.get_selected_prefix_paths(&p0),
+            vec![static_path1.clone()]
+        );
+
+        // install bgp routes
+        db.add_bgp_prefixes(vec![p0, p1], bgp_path0.clone());
+        db.add_bgp_prefixes(vec![p1, p2], bgp_path1.clone());
+
+        // p0 via paths static_path0 and bgp_path0 in rib_in
+        assert_eq!(
+            db.get_prefix_paths(&p0),
+            vec![static_path1.clone(), bgp_path0.clone()]
+        );
+        // p0 via path static_path0 in rib_loc
+        assert_eq!(
+            db.get_selected_prefix_paths(&p0),
+            vec![static_path1.clone()]
+        );
+
+        // p1 via both bgp_path0 and bgp_path1 in rib_in
+        assert_eq!(
+            db.get_prefix_paths(&p1),
+            vec![bgp_path0.clone(), bgp_path1.clone()]
+        );
+        // p1 via bgp_path1 in rib_loc (highest local_pref)
+        assert_eq!(db.get_selected_prefix_paths(&p1), vec![bgp_path1.clone()]);
+
+        // p2 via bgp_path1 in rib_in
+        assert_eq!(db.get_prefix_paths(&p2), vec![bgp_path1.clone()]);
+        // p2 via bgp_path1 in rib_loc
+        assert_eq!(db.get_selected_prefix_paths(&p2), vec![bgp_path1.clone()]);
+
+        // withdrawal of p2 via bgp_path1
+        db.remove_bgp_prefixes(vec![p2], bgp_path1.bgp.clone().unwrap().id);
+        assert!(db.get_prefix_paths(&p2).is_empty());
+        assert!(db.get_selected_prefix_paths(&p2).is_empty());
+        // p1 is unaffected
+        assert_eq!(
+            db.get_prefix_paths(&p1),
+            vec![bgp_path0.clone(), bgp_path1.clone()]
+        );
+        assert_eq!(db.get_selected_prefix_paths(&p1), vec![bgp_path1.clone()]);
+
+        // yank all routes from bgp_path0, simulating peer shutdown
+        db.remove_bgp_peer_prefixes(bgp_path0.bgp.clone().unwrap().id);
+        // p0 via static_path1 in rib_in and rib_loc
+        assert_eq!(db.get_prefix_paths(&p0), vec![static_path1.clone()]);
+        assert_eq!(
+            db.get_selected_prefix_paths(&p0),
+            vec![static_path1.clone()]
+        );
+        // p1 via bgp_path1 in rib_in and rib_loc
+        assert_eq!(db.get_prefix_paths(&p1), vec![bgp_path1.clone()]);
+        assert_eq!(db.get_selected_prefix_paths(&p1), vec![bgp_path1.clone()]);
+        // p2 not present, test that key is missing
+        assert!(db.get_prefix_paths(&p2).is_empty());
+        assert!(db.get_selected_prefix_paths(&p2).is_empty());
+
+        // withdrawal of p1 via bgp_path1
+        db.remove_bgp_prefixes(vec![p1], bgp_path1.bgp.clone().unwrap().id);
+        assert!(db.get_prefix_paths(&p1).is_empty());
+        assert!(db.get_selected_prefix_paths(&p1).is_empty());
+
+        // removal of final static route (from static_key1) should result
+        // in the prefix being completely deleted
+        db.remove_static_routes(&vec![static_key1])
+            .expect("remove_static_routes_failed for {static_key1}");
+        assert!(db.get_prefix_paths(&p0).is_empty());
+        assert!(db.get_selected_prefix_paths(&p0).is_empty());
+
+        // rib should be empty again
+        assert!(db.full_rib().is_empty());
+        assert!(db.loc_rib().is_empty());
     }
 }

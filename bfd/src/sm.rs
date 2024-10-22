@@ -8,6 +8,7 @@ use crate::{
 };
 use crate::{err, SessionCounters};
 use anyhow::{anyhow, Result};
+use mg_common::lock;
 use slog::{warn, Logger};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -197,7 +198,7 @@ impl StateMachine {
             // Get what we need from peer info, holding the lock a briefly as
             // possible.
             let (_delay, demand_mode, your_discriminator) = {
-                let r = remote.lock().unwrap();
+                let r = lock!(remote);
                 (
                     DeferredDelay(r.required_min_rx),
                     r.demand_mode,
@@ -305,7 +306,7 @@ pub(crate) trait State: Sync + Send {
         log: Logger,
     ) {
         let state = self.state();
-        let your_discriminator = remote.lock().unwrap().discriminator;
+        let your_discriminator = lock!(remote).discriminator;
 
         let mut pkt = packet::Control {
             desired_min_tx: local.desired_min_tx.as_micros() as u32,
@@ -438,7 +439,7 @@ impl State for Down {
         db: rdb::Db,
         counters: Arc<SessionCounters>,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
-        db.disable_nexthop(self.peer);
+        db.set_nexthop_shutdown(self.peer, true);
         loop {
             // Get an incoming message
             let (_addr, msg) = match self.recv(
@@ -597,7 +598,7 @@ impl State for Up {
         db: rdb::Db,
         counters: Arc<SessionCounters>,
     ) -> Result<(Box<dyn State>, BfdEndpoint)> {
-        db.enable_nexthop(self.peer);
+        db.set_nexthop_shutdown(self.peer, false);
         loop {
             // Get an incoming message
             let (_addr, msg) = match self.recv(
