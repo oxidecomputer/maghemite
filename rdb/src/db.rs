@@ -529,7 +529,7 @@ impl Db {
     {
         let mut rib = lock!(self.rib_in);
         if let Some(paths) = rib.get_mut(&prefix) {
-            paths.retain(|p| prefix_cmp(p));
+            paths.retain(|p| !prefix_cmp(p));
             if paths.is_empty() {
                 rib.remove(&prefix);
             }
@@ -546,7 +546,7 @@ impl Db {
         let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
         for route in routes {
             self.remove_prefix_path(route.prefix, |rib_path: &Path| {
-                rib_path.cmp(&Path::from(route)) != CmpOrdering::Equal
+                rib_path.cmp(&Path::from(route)) == CmpOrdering::Equal
             });
             pcn.changed.insert(route.prefix);
 
@@ -587,7 +587,7 @@ impl Db {
         for prefix in prefixes {
             self.remove_prefix_path(prefix, |rib_path: &Path| {
                 match rib_path.bgp {
-                    Some(ref bgp) => bgp.id != id,
+                    Some(ref bgp) => bgp.id == id,
                     None => true,
                 }
             });
