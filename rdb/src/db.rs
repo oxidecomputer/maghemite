@@ -578,6 +578,7 @@ impl Db {
 
     pub fn remove_bgp_prefixes(&self, prefixes: Vec<Prefix>, id: u32) {
         // TODO: don't rely on BGP ID for path definition.
+        // See: maghemite #241
         // We currently only use Router-IDs to determine which
         // peer/session a route was learned from. This will not work
         // long term, as it will not work with add-path or multiple
@@ -599,6 +600,7 @@ impl Db {
     // e.g. when peer is deleted or exits Established state
     pub fn remove_bgp_peer_prefixes(&self, id: u32) {
         // TODO: don't rely on BGP ID for path definition.
+        // See: maghemite #241
         // We currently only use Router-IDs to determine which
         // peer/session a route was learned from. This will not work
         // long term, as it will not work with add-path or multiple
@@ -637,6 +639,7 @@ impl Db {
 
     pub fn mark_bgp_peer_stale(&self, id: u32) {
         // TODO: don't rely on BGP ID for path definition.
+        // See: maghemite #241
         // We currently only use Router-IDs to determine which
         // peer/session a route was learned from. This will not work
         // long term, as it will not work with add-path or multiple
