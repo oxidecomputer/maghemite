@@ -67,7 +67,6 @@ impl From<StaticRouteKey> for Path {
 pub struct BgpPathProperties {
     pub origin_as: u32,
     pub id: u32,
-    // pub conn: (Option<SocketAddr>, SocketAddr),
     pub conn: SocketAddrPair,
     pub med: Option<u32>,
     pub local_pref: Option<u32>,
