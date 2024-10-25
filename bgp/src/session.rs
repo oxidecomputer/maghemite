@@ -17,7 +17,10 @@ use crate::router::Router;
 use crate::to_canonical;
 use mg_common::{dbg, err, inf, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
-use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
+use rdb::{
+    Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4,
+    SocketAddrPair,
+};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -342,7 +345,7 @@ pub struct SessionInfo {
     /// The ASN of the remote peer.
     pub remote_asn: Option<u32>,
 
-    /// The ASN of the remote peer.
+    /// The Router-ID of the remote peer.
     pub remote_id: Option<u32>,
 
     /// Minimum acceptable TTL value for incomming BGP packets.
@@ -500,12 +503,12 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     pub clock: Clock,
 
     pub session: Arc<Mutex<SessionInfo>>,
+    pub bind_addr: Option<SocketAddr>,
     event_rx: Receiver<FsmEvent<Cnx>>,
     state: Arc<Mutex<FsmStateKind>>,
     last_state_change: Mutex<Instant>,
     asn: Asn,
     id: u32,
-    bind_addr: Option<SocketAddr>,
     shutdown: AtomicBool,
     running: AtomicBool,
     db: Db,
@@ -1338,7 +1341,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 lock!(self.clock.timers.hold_timer).reset();
                 inf!(self; "update received: {m:#?}");
                 let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
-                self.apply_update(m.clone(), pc.id, peer_as);
+                self.apply_update(m.clone(), &pc, peer_as);
                 lock!(self.message_history).receive(m.into());
                 self.counters
                     .updates_received
@@ -1504,10 +1507,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
 
             FsmEvent::RouteRefreshNeeded => {
-                if let Some(remote_id) = lock!(self.session).remote_id {
-                    self.db.mark_bgp_peer_stale(remote_id);
-                    self.send_route_refresh(&pc.conn);
-                }
+                let conn = SocketAddrPair {
+                    local: pc.conn.local(),
+                    peer: pc.conn.peer(),
+                };
+                self.db.mark_bgp_peer_stale(conn);
+                self.send_route_refresh(&pc.conn);
                 FsmState::Established(pc)
             }
 
@@ -1929,13 +1934,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
 
         // remove peer prefixes from db
-        self.db.remove_bgp_peer_prefixes(pc.id);
+        self.db.remove_bgp_peer_prefixes(SocketAddrPair {
+            local: pc.conn.local(),
+            peer: pc.conn.peer(),
+        });
 
         FsmState::Idle
     }
 
     /// Apply an update by adding it to our RIB.
-    fn apply_update(&self, mut update: UpdateMessage, id: u32, peer_as: u32) {
+    fn apply_update(
+        &self,
+        mut update: UpdateMessage,
+        pc: &PeerConnection<Cnx>,
+        peer_as: u32,
+    ) {
         if let Err(e) = self.check_update(&update) {
             wrn!(
                 self;
@@ -1983,7 +1996,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             update.nlri.retain(|x| message_policy.contains(x));
         };
 
-        self.update_rib(&update, id, peer_as);
+        self.update_rib(&update, pc, peer_as);
 
         // NOTE: for now we are only acting as an edge router. This means we
         //       do not redistribute announcements. If this changes, uncomment
@@ -2023,14 +2036,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Update this router's RIB based on an update message from a peer.
-    fn update_rib(&self, update: &UpdateMessage, id: u32, peer_as: u32) {
+    fn update_rib(
+        &self,
+        update: &UpdateMessage,
+        pc: &PeerConnection<Cnx>,
+        peer_as: u32,
+    ) {
+        let conn = SocketAddrPair {
+            local: pc.conn.local(),
+            peer: pc.conn.peer(),
+        };
         self.db.remove_bgp_prefixes(
             update
                 .withdrawn
                 .iter()
                 .map(|w| rdb::Prefix::from(w.as_prefix4()))
                 .collect(),
-            id,
+            conn.clone(),
         );
 
         let originated = match self.db.get_origin4() {
@@ -2099,7 +2121,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                 bgp: Some(BgpPathProperties {
                     origin_as: peer_as,
-                    id,
+                    conn: conn.clone(),
+                    id: pc.id,
                     med: update.multi_exit_discriminator(),
                     local_pref: update.local_pref(),
                     as_path,

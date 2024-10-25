@@ -1261,6 +1261,9 @@
               "minimum": 0
             }
           },
+          "conn": {
+            "$ref": "#/components/schemas/SocketAddrPair"
+          },
           "id": {
             "type": "integer",
             "format": "uint32",
@@ -1291,6 +1294,7 @@
         },
         "required": [
           "as_path",
+          "conn",
           "id",
           "origin_as"
         ]
@@ -3141,6 +3145,21 @@
         "required": [
           "asn",
           "code"
+        ]
+      },
+      "SocketAddrPair": {
+        "type": "object",
+        "properties": {
+          "local": {
+            "nullable": true,
+            "type": "string"
+          },
+          "peer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "peer"
         ]
       },
       "StaticRoute4": {

@@ -109,17 +109,28 @@ pub fn bestpaths(
 #[cfg(test)]
 mod test {
     use std::collections::BTreeSet;
+    use std::net::{IpAddr, SocketAddr};
+    use std::str::FromStr;
 
     use super::bestpaths;
     use crate::{
-        db::Rib, BgpPathProperties, Path, Prefix, Prefix4,
-        DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+        db::Rib, types::SocketAddrPair, BgpPathProperties, Path, Prefix,
+        Prefix4, DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
     };
 
     #[test]
     fn test_bestpath() {
         let mut rib = Rib::default();
         let target: Prefix4 = "198.51.100.0/24".parse().unwrap();
+        let bgp_port = 179u16;
+        let local_sa =
+            SocketAddr::new(IpAddr::from_str("203.0.113.2").unwrap(), 4444);
+        let remote_sa =
+            SocketAddr::new(IpAddr::from_str("203.0.113.0").unwrap(), bgp_port);
+        let conn = SocketAddrPair {
+            local: Some(local_sa),
+            peer: remote_sa,
+        };
 
         // The best path for an empty RIB should be empty
         const MAX_ECMP_FANOUT: usize = 2;
@@ -133,6 +144,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 470,
+                conn: conn.clone(),
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -154,6 +166,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 480,
+                conn: conn.clone(),
                 id: 48,
                 med: Some(75),
                 local_pref: Some(100),
@@ -178,6 +191,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 490,
+                conn: conn.clone(),
                 id: 49,
                 med: Some(100),
                 local_pref: Some(100),

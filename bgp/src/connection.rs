@@ -70,7 +70,7 @@ pub trait BgpConnection: Send + Clone {
     /// Return the socket address of the peer for this connection.
     fn peer(&self) -> SocketAddr;
 
-    // Return the local address being used for the connection.
+    /// Return the local socket address for this connection.
     fn local(&self) -> Option<SocketAddr>;
 
     fn set_min_ttl(&self, ttl: u8) -> Result<(), Error>;

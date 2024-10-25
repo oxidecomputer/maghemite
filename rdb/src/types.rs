@@ -24,6 +24,12 @@ pub struct Path {
     pub vlan_id: Option<u16>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
+pub struct SocketAddrPair {
+    pub local: Option<SocketAddr>,
+    pub peer: SocketAddr,
+}
+
 // Define a basic ordering on paths so bestpath selection is deterministic
 impl PartialOrd for Path {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -61,6 +67,8 @@ impl From<StaticRouteKey> for Path {
 pub struct BgpPathProperties {
     pub origin_as: u32,
     pub id: u32,
+    // pub conn: (Option<SocketAddr>, SocketAddr),
+    pub conn: SocketAddrPair,
     pub med: Option<u32>,
     pub local_pref: Option<u32>,
     pub as_path: Vec<u32>,

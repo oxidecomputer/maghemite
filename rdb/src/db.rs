@@ -565,18 +565,16 @@ impl Db {
         Ok(())
     }
 
-    pub fn remove_bgp_prefixes(&self, prefixes: Vec<Prefix>, id: u32) {
-        // TODO: don't rely on BGP ID for path definition.
-        // See: maghemite #241
-        // We currently only use Router-IDs to determine which
-        // peer/session a route was learned from. This will not work
-        // long term, as it will not work with add-path or multiple
-        // parallel sessions to the same router.
+    pub fn remove_bgp_prefixes(
+        &self,
+        prefixes: Vec<Prefix>,
+        conn: SocketAddrPair,
+    ) {
         let mut pcn = PrefixChangeNotification::default();
         for prefix in prefixes {
             self.remove_prefix_path(prefix, |rib_path: &Path| {
                 match rib_path.bgp {
-                    Some(ref bgp) => bgp.id == id,
+                    Some(ref bgp) => bgp.conn == conn,
                     None => false,
                 }
             });
@@ -587,14 +585,11 @@ impl Db {
 
     // helper function to remove all routes learned from a given peer
     // e.g. when peer is deleted or exits Established state
-    pub fn remove_bgp_peer_prefixes(&self, id: u32) {
-        // TODO: don't rely on BGP ID for path definition.
-        // See: maghemite #241
-        // We currently only use Router-IDs to determine which
-        // peer/session a route was learned from. This will not work
-        // long term, as it will not work with add-path or multiple
-        // parallel sessions to the same router.
-        self.remove_bgp_prefixes(self.full_rib().keys().copied().collect(), id);
+    pub fn remove_bgp_peer_prefixes(&self, conn: SocketAddrPair) {
+        self.remove_bgp_prefixes(
+            self.full_rib().keys().copied().collect(),
+            conn,
+        );
     }
 
     pub fn generation(&self) -> u64 {
@@ -626,20 +621,14 @@ impl Db {
         Ok(())
     }
 
-    pub fn mark_bgp_peer_stale(&self, id: u32) {
-        // TODO: don't rely on BGP ID for path definition.
-        // See: maghemite #241
-        // We currently only use Router-IDs to determine which
-        // peer/session a route was learned from. This will not work
-        // long term, as it will not work with add-path or multiple
-        // parallel sessions to the same router.
+    pub fn mark_bgp_peer_stale(&self, conn: SocketAddrPair) {
         let mut rib = lock!(self.rib_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
                 .iter()
                 .filter_map(|p| {
                     if let Some(bgp) = p.bgp.as_ref() {
-                        if bgp.id == id {
+                        if bgp.conn == conn {
                             let mut marked = p.clone();
                             marked.bgp = Some(bgp.as_stale());
                             return Some(marked);
@@ -705,9 +694,12 @@ impl Reaper {
 
 #[cfg(test)]
 mod test {
+    use crate::SocketAddrPair;
     use slog::{Drain, Logger};
     use std::fs::File;
     use std::io::Write;
+    use std::net::{IpAddr, SocketAddr};
+    use std::str::FromStr;
 
     pub fn init_file_logger(filename: &str) -> Logger {
         build_logger(File::create(filename).expect("build logger"))
@@ -735,12 +727,28 @@ mod test {
         let p2 = Prefix::from("192.168.2.0/24".parse::<Prefix4>().unwrap());
         let nh0 = "203.0.113.0";
         let nh1 = "203.0.113.1";
+        let bgp_port = 179u16;
+        let local_sa =
+            SocketAddr::new(IpAddr::from_str("203.0.113.2").unwrap(), 4444);
+        let remote_sa0 =
+            SocketAddr::new(IpAddr::from_str("203.0.113.0").unwrap(), bgp_port);
+        let remote_sa1 =
+            SocketAddr::new(IpAddr::from_str("203.0.113.1").unwrap(), bgp_port);
+        let conn0 = SocketAddrPair {
+            local: Some(local_sa),
+            peer: remote_sa0,
+        };
+        let conn1 = SocketAddrPair {
+            local: Some(local_sa),
+            peer: remote_sa1,
+        };
         let bgp_path0 = Path {
             nexthop: nh0.parse().unwrap(),
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 1111,
+                conn: conn0.clone(),
                 id: 1111,
                 med: Some(1111),
                 local_pref: Some(1111),
@@ -755,6 +763,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 2222,
+                conn: conn1.clone(),
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(2222),
@@ -847,7 +856,7 @@ mod test {
         assert_eq!(db.get_selected_prefix_paths(&p2), vec![bgp_path1.clone()]);
 
         // withdrawal of p2 via bgp_path1
-        db.remove_bgp_prefixes(vec![p2], bgp_path1.bgp.clone().unwrap().id);
+        db.remove_bgp_prefixes(vec![p2], conn1.clone());
         assert!(db.get_prefix_paths(&p2).is_empty());
         assert!(db.get_selected_prefix_paths(&p2).is_empty());
         // p1 is unaffected
@@ -858,7 +867,7 @@ mod test {
         assert_eq!(db.get_selected_prefix_paths(&p1), vec![bgp_path1.clone()]);
 
         // yank all routes from bgp_path0, simulating peer shutdown
-        db.remove_bgp_peer_prefixes(bgp_path0.bgp.clone().unwrap().id);
+        db.remove_bgp_peer_prefixes(conn0);
         // p0 via static_path1 in rib_in and rib_loc
         assert_eq!(db.get_prefix_paths(&p0), vec![static_path1.clone()]);
         assert_eq!(
@@ -873,7 +882,7 @@ mod test {
         assert!(db.get_selected_prefix_paths(&p2).is_empty());
 
         // withdrawal of p1 via bgp_path1
-        db.remove_bgp_prefixes(vec![p1], bgp_path1.bgp.clone().unwrap().id);
+        db.remove_bgp_prefixes(vec![p1], conn1.clone());
         assert!(db.get_prefix_paths(&p1).is_empty());
         assert!(db.get_selected_prefix_paths(&p1).is_empty());
 
