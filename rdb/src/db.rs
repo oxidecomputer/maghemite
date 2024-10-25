@@ -779,8 +779,8 @@ mod test {
         let static_path1 = Path::from(static_key1);
 
         // setup
-        let log = init_file_logger("/tmp/rib.log");
-        let db_path = "/tmp/rb.db".to_string();
+        let log = init_file_logger("rib.log");
+        let db_path = "rib.db".to_string();
         let _ = std::fs::remove_dir_all(&db_path);
         let db = Db::new(&db_path, log.clone()).expect("create db");
 
