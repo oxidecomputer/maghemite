@@ -577,7 +577,7 @@ impl Db {
             self.remove_prefix_path(prefix, |rib_path: &Path| {
                 match rib_path.bgp {
                     Some(ref bgp) => bgp.id == id,
-                    None => true,
+                    None => false,
                 }
             });
             pcn.changed.insert(prefix);
