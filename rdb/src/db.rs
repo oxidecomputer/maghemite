@@ -734,14 +734,8 @@ mod test {
             SocketAddr::new(IpAddr::from_str("203.0.113.0").unwrap(), bgp_port);
         let remote_sa1 =
             SocketAddr::new(IpAddr::from_str("203.0.113.1").unwrap(), bgp_port);
-        let conn0 = SocketAddrPair {
-            local: Some(local_sa),
-            peer: remote_sa0,
-        };
-        let conn1 = SocketAddrPair {
-            local: Some(local_sa),
-            peer: remote_sa1,
-        };
+        let conn0 = SocketAddrPair::new(Some(local_sa), remote_sa0);
+        let conn1 = SocketAddrPair::new(Some(local_sa), remote_sa1);
         let bgp_path0 = Path {
             nexthop: nh0.parse().unwrap(),
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,

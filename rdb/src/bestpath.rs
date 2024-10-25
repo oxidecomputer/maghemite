@@ -127,10 +127,7 @@ mod test {
             SocketAddr::new(IpAddr::from_str("203.0.113.2").unwrap(), 4444);
         let remote_sa =
             SocketAddr::new(IpAddr::from_str("203.0.113.0").unwrap(), bgp_port);
-        let conn = SocketAddrPair {
-            local: Some(local_sa),
-            peer: remote_sa,
-        };
+        let conn = SocketAddrPair::new(Some(local_sa), remote_sa);
 
         // The best path for an empty RIB should be empty
         const MAX_ECMP_FANOUT: usize = 2;

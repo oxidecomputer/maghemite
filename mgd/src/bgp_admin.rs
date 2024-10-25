@@ -782,10 +782,8 @@ pub(crate) mod helpers {
         let session = get_router!(ctx, asn)?
             .get_session(addr)
             .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
-        let conn = SocketAddrPair {
-            local: session.bind_addr,
-            peer: session.neighbor.host,
-        };
+        let conn =
+            SocketAddrPair::new(session.bind_addr, session.neighbor.host);
         ctx.db.remove_bgp_peer_prefixes(conn);
         ctx.db.remove_bgp_neighbor(addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);

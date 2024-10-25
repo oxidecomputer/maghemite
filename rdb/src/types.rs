@@ -30,6 +30,12 @@ pub struct SocketAddrPair {
     pub peer: SocketAddr,
 }
 
+impl SocketAddrPair {
+    pub fn new(local: Option<SocketAddr>, peer: SocketAddr) -> Self {
+        Self { local, peer }
+    }
+}
+
 // Define a basic ordering on paths so bestpath selection is deterministic
 impl PartialOrd for Path {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {

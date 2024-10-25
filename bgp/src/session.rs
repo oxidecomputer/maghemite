@@ -1507,10 +1507,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
 
             FsmEvent::RouteRefreshNeeded => {
-                let conn = SocketAddrPair {
-                    local: pc.conn.local(),
-                    peer: pc.conn.peer(),
-                };
+                let conn = SocketAddrPair::new(pc.conn.local(), pc.conn.peer());
                 self.db.mark_bgp_peer_stale(conn);
                 self.send_route_refresh(&pc.conn);
                 FsmState::Established(pc)
@@ -1934,10 +1931,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
 
         // remove peer prefixes from db
-        self.db.remove_bgp_peer_prefixes(SocketAddrPair {
-            local: pc.conn.local(),
-            peer: pc.conn.peer(),
-        });
+        self.db.remove_bgp_peer_prefixes(SocketAddrPair::new(
+            pc.conn.local(),
+            pc.conn.peer(),
+        ));
 
         FsmState::Idle
     }
@@ -2042,10 +2039,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         pc: &PeerConnection<Cnx>,
         peer_as: u32,
     ) {
-        let conn = SocketAddrPair {
-            local: pc.conn.local(),
-            peer: pc.conn.peer(),
-        };
+        let conn = SocketAddrPair::new(pc.conn.local(), pc.conn.peer());
         self.db.remove_bgp_prefixes(
             update
                 .withdrawn
