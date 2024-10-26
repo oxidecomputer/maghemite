@@ -41,6 +41,20 @@ pub struct NeighborSelector {
     pub addr: IpAddr,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub enum NeighborResetOp {
+    Hard,
+    SoftInbound,
+    SoftOutbound,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct NeighborResetRequest {
+    pub asn: u32,
+    pub addr: IpAddr,
+    pub op: NeighborResetOp,
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct Neighbor {
     pub asn: u32,

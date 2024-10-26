@@ -5,7 +5,9 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use colored::*;
-use mg_admin_client::types::{self, Path};
+use mg_admin_client::types::{
+    self, NeighborResetOp, NeighborResetRequest, Path,
+};
 use mg_admin_client::types::{ImportExportPolicy, Rib};
 use mg_admin_client::Client;
 use rdb::types::{PolicyAction, Prefix4};
@@ -23,6 +25,9 @@ pub enum Commands {
 
     /// View dynamic router state.
     Status(StatusSubcommand),
+
+    /// Clear dynamic router state.
+    Clear(ClearSubcommand),
 
     /// Omicron control plane commands.
     Omicron(OmicronSubcommand),
@@ -79,6 +84,23 @@ pub enum StatusCmd {
     Selected {
         #[clap(env)]
         asn: u32,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct ClearSubcommand {
+    #[command(subcommand)]
+    command: ClearCmd,
+}
+
+#[derive(Clone, Subcommand, Debug)]
+pub enum ClearCmd {
+    Neighbor {
+        #[clap(env)]
+        asn: u32,
+        addr: IpAddr,
+        #[clap(value_enum)]
+        clear_type: NeighborResetOp,
     },
 }
 
@@ -546,6 +568,14 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             StatusCmd::Selected { asn } => get_selected(c, asn).await,
         },
 
+        Commands::Clear(cmd) => match cmd.command {
+            ClearCmd::Neighbor {
+                asn,
+                addr,
+                clear_type,
+            } => clear_nbr(asn, addr, clear_type, c).await,
+        },
+
         Commands::Omicron(cmd) => match cmd.command {
             OmicronCmd::Apply { filename } => apply(filename, c).await,
         },
@@ -683,6 +713,17 @@ async fn update_nbr(nbr: Neighbor, c: Client) {
 
 async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) {
     c.delete_neighbor(&addr, asn).await.unwrap();
+}
+
+async fn clear_nbr(
+    asn: u32,
+    addr: IpAddr,
+    op: types::NeighborResetOp,
+    c: Client,
+) {
+    c.clear_neighbor(&NeighborResetRequest { asn, addr, op })
+        .await
+        .unwrap();
 }
 
 async fn create_origin4(originate: Originate4, c: Client) {
