@@ -4,8 +4,12 @@
 
 use crate::{admin::RouterStats, sm::SmContext};
 use chrono::{DateTime, Utc};
+use dpd_client::types;
 use mg_common::nexus::{local_underlay_address, run_oximeter};
-use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
+use omicron_common::api::internal::{
+    nexus::{ProducerEndpoint, ProducerKind},
+    shared::SledIdentifiers,
+};
 use oximeter::{
     types::{Cumulative, ProducerRegistry},
     MetricsError, Producer, Sample,
@@ -15,7 +19,6 @@ use slog::Logger;
 use std::sync::atomic::Ordering;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
-use uuid::Uuid;
 
 oximeter::use_timeseries!("ddm-session.toml");
 pub use ddm_session::AdvertisementsReceived;
@@ -37,12 +40,15 @@ pub use ddm_router::DdmRouter;
 pub use ddm_router::OriginatedTunnelEndpoints;
 pub use ddm_router::OriginatedUnderlayPrefixes;
 
+/// Tag used for managing ddm.
+const DDMD_TAG: &str = "ddmd";
+
 #[derive(Clone)]
 pub(crate) struct Stats {
     pub(crate) start_time: DateTime<Utc>,
     hostname: String,
-    rack_id: Uuid,
-    sled_id: Uuid,
+    sled_idents: SledIdentifiers,
+    switch_idents: types::SwitchIdentifiers,
     peers: Vec<SmContext>,
     router_stats: Arc<RouterStats>,
 }
@@ -51,8 +57,8 @@ macro_rules! ddm_session_counter {
     (
         $start_time:expr,
         $hostname:expr,
-        $rack_id:expr,
-        $sled_id:expr,
+        $sled_idents:expr,
+        $switch_idents:expr,
         $interface:expr,
         $kind:tt,
         $value:expr
@@ -60,9 +66,38 @@ macro_rules! ddm_session_counter {
         Sample::new(
             &DdmSession {
                 hostname: $hostname,
-                rack_id: $rack_id,
-                sled_id: $sled_id,
                 interface: $interface,
+                rack_id: $sled_idents.rack_id,
+                sled_id: $sled_idents.sled_id,
+                sled_model: $sled_idents.model.clone().into(),
+                sled_revision: $sled_idents.revision,
+                sled_serial: $sled_idents.serial.clone().into(),
+                switch_id: $switch_idents.sidecar_id,
+                switch_model: $switch_idents.model.clone().into(),
+                switch_revision: $switch_idents.revision,
+                switch_serial: $switch_idents.serial.clone().into(),
+                switch_slot: $switch_idents.slot,
+                asic_fab: $switch_idents
+                    .fab
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_lot: $switch_idents
+                    .lot
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_wafer: $switch_idents.wafer.unwrap_or(0),
+                asic_wafer_loc_x: $switch_idents
+                    .wafer_loc
+                    .map(|[x, _]| x)
+                    .unwrap_or(0),
+                asic_wafer_loc_y: $switch_idents
+                    .wafer_loc
+                    .map(|[_, y]| y)
+                    .unwrap_or(0),
             },
             &$kind {
                 datum: Cumulative::<u64>::with_start_time(
@@ -77,8 +112,8 @@ macro_rules! ddm_session_counter {
 macro_rules! ddm_session_quantity {
     (
         $hostname:expr,
-        $rack_id:expr,
-        $sled_id:expr,
+        $sled_idents:expr,
+        $switch_idents:expr,
         $interface:expr,
         $kind:tt,
         $value:expr
@@ -86,9 +121,38 @@ macro_rules! ddm_session_quantity {
         Sample::new(
             &DdmSession {
                 hostname: $hostname,
-                rack_id: $rack_id,
-                sled_id: $sled_id,
                 interface: $interface,
+                rack_id: $sled_idents.rack_id,
+                sled_id: $sled_idents.sled_id,
+                sled_model: $sled_idents.model.clone().into(),
+                sled_revision: $sled_idents.revision,
+                sled_serial: $sled_idents.serial.clone().into(),
+                switch_id: $switch_idents.sidecar_id,
+                switch_model: $switch_idents.model.clone().into(),
+                switch_revision: $switch_idents.revision,
+                switch_serial: $switch_idents.serial.clone().into(),
+                switch_slot: $switch_idents.slot,
+                asic_fab: $switch_idents
+                    .fab
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_lot: $switch_idents
+                    .lot
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_wafer: $switch_idents.wafer.unwrap_or(0),
+                asic_wafer_loc_x: $switch_idents
+                    .wafer_loc
+                    .map(|[x, _]| x)
+                    .unwrap_or(0),
+                asic_wafer_loc_y: $switch_idents
+                    .wafer_loc
+                    .map(|[_, y]| y)
+                    .unwrap_or(0),
             },
             &$kind {
                 datum: $value.load(Ordering::Relaxed),
@@ -100,16 +164,45 @@ macro_rules! ddm_session_quantity {
 macro_rules! ddm_router_quantity {
     (
         $hostname:expr,
-        $rack_id:expr,
-        $sled_id:expr,
+        $sled_idents:expr,
+        $switch_idents:expr,
         $kind:tt,
         $value:expr
     ) => {
         Sample::new(
             &DdmRouter {
                 hostname: $hostname,
-                rack_id: $rack_id,
-                sled_id: $sled_id,
+                rack_id: $sled_idents.rack_id,
+                sled_id: $sled_idents.sled_id,
+                sled_model: $sled_idents.model.clone().into(),
+                sled_revision: $sled_idents.revision,
+                sled_serial: $sled_idents.serial.clone().into(),
+                switch_id: $switch_idents.sidecar_id,
+                switch_model: $switch_idents.model.clone().into(),
+                switch_revision: $switch_idents.revision,
+                switch_serial: $switch_idents.serial.clone().into(),
+                switch_slot: $switch_idents.slot,
+                asic_fab: $switch_idents
+                    .fab
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_lot: $switch_idents
+                    .lot
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_wafer: $switch_idents.wafer.unwrap_or(0),
+                asic_wafer_loc_x: $switch_idents
+                    .wafer_loc
+                    .map(|[x, _]| x)
+                    .unwrap_or(0),
+                asic_wafer_loc_y: $switch_idents
+                    .wafer_loc
+                    .map(|[_, y]| y)
+                    .unwrap_or(0),
             },
             &$kind {
                 datum: $value.load(Ordering::Relaxed),
@@ -134,16 +227,16 @@ impl Producer for Stats {
 
         samples.push(ddm_router_quantity!(
             self.hostname.clone().into(),
-            self.rack_id,
-            self.sled_id,
+            self.sled_idents,
+            self.switch_idents,
             OriginatedUnderlayPrefixes,
             self.router_stats.originated_underlay_prefixes
         ));
 
         samples.push(ddm_router_quantity!(
             self.hostname.clone().into(),
-            self.rack_id,
-            self.sled_id,
+            self.sled_idents,
+            self.switch_idents,
             OriginatedTunnelEndpoints,
             self.router_stats.originated_tunnel_endpoints
         ));
@@ -152,8 +245,8 @@ impl Producer for Stats {
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 SolicitationsSent,
                 peer.stats.solicitations_sent
@@ -161,8 +254,8 @@ impl Producer for Stats {
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 SolicitationsReceived,
                 peer.stats.solicitations_received
@@ -170,8 +263,8 @@ impl Producer for Stats {
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 AdvertisementsSent,
                 peer.stats.advertisements_sent
@@ -179,8 +272,8 @@ impl Producer for Stats {
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 AdvertisementsReceived,
                 peer.stats.advertisements_received
@@ -188,8 +281,8 @@ impl Producer for Stats {
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 PeerExpirations,
                 peer.stats.peer_expirations
@@ -197,8 +290,8 @@ impl Producer for Stats {
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 PeerAddressChanges,
                 peer.stats.peer_address_changes
@@ -206,8 +299,8 @@ impl Producer for Stats {
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 PeerSessionsEstablished,
                 peer.stats.peer_established
@@ -215,8 +308,8 @@ impl Producer for Stats {
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 UpdatesSent,
                 peer.stats.updates_sent
@@ -224,8 +317,8 @@ impl Producer for Stats {
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 UpdatesReceived,
                 peer.stats.updates_received
@@ -233,24 +326,24 @@ impl Producer for Stats {
             samples.push(ddm_session_counter!(
                 self.start_time,
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 UpdateSendFail,
                 peer.stats.update_send_fail
             ));
             samples.push(ddm_session_quantity!(
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 ImportedUnderlayPrefixes,
                 peer.stats.imported_underlay_prefixes
             ));
             samples.push(ddm_session_quantity!(
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 peer.config.if_name.clone().into(),
                 ImportedTunnelEndpoints,
                 peer.stats.imported_tunnel_endpoints
@@ -261,14 +354,12 @@ impl Producer for Stats {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn start_server(
     port: u16,
     peers: Vec<SmContext>,
     router_stats: Arc<RouterStats>,
     hostname: String,
-    rack_id: Uuid,
-    sled_id: Uuid,
+    sled_idents: SledIdentifiers,
     log: Logger,
 ) -> anyhow::Result<JoinHandle<()>> {
     let addr = local_underlay_address()?;
@@ -276,32 +367,37 @@ pub fn start_server(
     let log_config = LogConfig::Config(ConfigLogging::StderrTerminal {
         level: ConfigLoggingLevel::Debug,
     });
-    let registry = ProducerRegistry::new();
+    let _handle = tokio::spawn(async move {
+        let client = mg_common::dpd::new_client(&log, DDMD_TAG);
+        let switch_idents =
+            mg_common::dpd::fetch_switch_identifiers(&client, &log).await;
 
-    let stats_producer = Stats {
-        start_time: chrono::offset::Utc::now(),
-        peers,
-        hostname,
-        rack_id,
-        sled_id,
-        router_stats,
-    };
+        let registry = ProducerRegistry::new();
+        let stats_producer = Stats {
+            start_time: chrono::offset::Utc::now(),
+            peers,
+            hostname,
+            sled_idents,
+            switch_idents,
+            router_stats,
+        };
 
-    registry.register_producer(stats_producer).unwrap();
-    let producer_info = ProducerEndpoint {
-        id: registry.producer_id(),
-        kind: ProducerKind::Service,
-        address: sa,
-        interval: Duration::from_secs(1),
-    };
-    let config = oximeter_producer::Config {
-        server_info: producer_info,
-        registration_address: None,
-        log: log_config,
-        default_request_body_max_bytes: 1024 * 1024 * 1024,
-    };
+        registry.register_producer(stats_producer).unwrap();
+        let producer_info = ProducerEndpoint {
+            id: registry.producer_id(),
+            kind: ProducerKind::Service,
+            address: sa,
+            interval: Duration::from_secs(1),
+        };
+        let config = oximeter_producer::Config {
+            server_info: producer_info,
+            registration_address: None,
+            log: log_config,
+            default_request_body_max_bytes: 1024 * 1024 * 1024,
+        };
 
-    Ok(tokio::spawn(async move {
         run_oximeter(registry, config, log).await
-    }))
+    });
+
+    Ok(_handle)
 }

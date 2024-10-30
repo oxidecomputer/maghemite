@@ -453,16 +453,3 @@ pub(crate) fn get_routes_for_prefix(
     };
     Ok(result)
 }
-
-/// Create a new Dendrite/dpd client. The lower half always runs on the same
-/// host/zone as the underlying platform.
-pub(crate) fn new_dpd_client(log: &Logger) -> DpdClient {
-    let client_state = dpd_client::ClientState {
-        tag: MG_LOWER_TAG.into(),
-        log: log.clone(),
-    };
-    DpdClient::new(
-        &format!("http://localhost:{}", dpd_client::default_port()),
-        client_state,
-    )
-}

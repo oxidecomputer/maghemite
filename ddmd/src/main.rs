@@ -7,6 +7,7 @@ use ddm::admin::{HandlerContext, RouterStats};
 use ddm::db::{Db, RouterKind};
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
 use ddm::sys::Route;
+use omicron_common::api::internal::shared::SledIdentifiers;
 use signal::handle_signals;
 use slog::{error, Drain, Logger};
 use std::net::{IpAddr, Ipv6Addr};
@@ -94,11 +95,11 @@ struct Arg {
 
     /// Id of the rack this router is running on.
     #[arg(long)]
-    rack_uuid: Option<Uuid>,
+    rack_id: Option<Uuid>,
 
     /// Id of the sled this router is running on.
     #[arg(long)]
-    sled_uuid: Option<Uuid>,
+    sled_id: Option<Uuid>,
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -189,16 +190,21 @@ async fn main() {
     let peers: Vec<SmContext> = sms.iter().map(|x| x.ctx.clone()).collect();
 
     let stats_handler = if arg.with_stats {
-        if let (Some(rack_uuid), Some(sled_uuid)) =
-            (arg.rack_uuid, arg.sled_uuid)
-        {
+        if let (Some(rack_id), Some(sled_id)) = (arg.rack_id, arg.sled_id) {
+            let sled_idents = SledIdentifiers {
+                rack_id,
+                sled_id,
+                model: String::default(),
+                revision: 0,
+                serial: String::default(),
+            };
+
             match ddm::oxstats::start_server(
                 arg.oximeter_port,
                 peers.clone(),
                 router_stats.clone(),
                 hostname.clone(),
-                rack_uuid,
-                sled_uuid,
+                sled_idents,
                 log.clone(),
             ) {
                 Ok(handler) => Some(handler),

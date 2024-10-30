@@ -22,8 +22,11 @@
      <propval name='admin_host' type='astring' value='::' />
      <propval name='admin_port' type='count' value='4676' />
      <propval name='dns_servers' type='astring' value='unknown' />
-     <propval name='rack_uuid' type='astring' value='unknown' />
-     <propval name='sled_uuid' type='astring' value='unknown' />
+     <propval name='rack_id' type='astring' value='unknown' />
+     <propval name='sled_id' type='astring' value='unknown' />
+     <propval name='sled_model' type='astring' value='unknown' />
+     <propval name='sled_revision' type='astring' value='unknown' />
+     <propval name='sled_serial' type='astring' value='unknown' />
    </property_group>
 
   <property_group name='startd' type='framework'>

@@ -5,8 +5,8 @@
 use std::net::IpAddr;
 
 use anyhow::anyhow;
+use omicron_common::api::internal::shared::SledIdentifiers;
 use smf::PropertyGroup;
-use uuid::Uuid;
 
 pub fn get_string_prop(
     name: &str,
@@ -62,26 +62,35 @@ pub fn get_string_list_prop(
 
 pub struct StatsServerProps {
     pub admin_addr: IpAddr,
-    pub rack_uuid: Uuid,
-    pub sled_uuid: Uuid,
+    pub sled_idents: SledIdentifiers,
 }
 
 pub fn get_stats_server_props(
     pg: PropertyGroup<'_>,
 ) -> anyhow::Result<StatsServerProps> {
     let admin_addr = get_string_prop("admin_host", &pg)?;
-    let rack_uuid = get_string_prop("rack_uuid", &pg)?;
-    let sled_uuid = get_string_prop("sled_uuid", &pg)?;
+    let rack_id = get_string_prop("rack_id", &pg)?;
+    let sled_id = get_string_prop("sled_id", &pg)?;
+    let sled_model = get_string_prop("sled_model", &pg)?;
+    let sled_revision = get_string_prop("sled_revision", &pg)?;
+    let sled_serial = get_string_prop("sled_serial", &pg)?;
 
     Ok(StatsServerProps {
         admin_addr: admin_addr
             .parse()
             .map_err(|e| anyhow!("parse admin addr: {e}"))?,
-        rack_uuid: rack_uuid
-            .parse()
-            .map_err(|e| anyhow!("parse rack uuid {rack_uuid}: {e}"))?,
-        sled_uuid: sled_uuid
-            .parse()
-            .map_err(|e| anyhow!("parse rack uuid {rack_uuid}: {e}"))?,
+        sled_idents: SledIdentifiers {
+            rack_id: rack_id
+                .parse()
+                .map_err(|e| anyhow!("parse rack id {rack_id}: {e}"))?,
+            sled_id: sled_id
+                .parse()
+                .map_err(|e| anyhow!("parse sled id {sled_id}: {e}"))?,
+            model: sled_model,
+            revision: sled_revision.parse().map_err(|e| {
+                anyhow!("parse sled revision {sled_revision}: {e}")
+            })?,
+            serial: sled_serial,
+        },
     })
 }
