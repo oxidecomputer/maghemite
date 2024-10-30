@@ -27,8 +27,11 @@
      <propval name='dpd_port' type='astring' value='' />
      <propval name='log' type='astring' value='info' />
      <propval name='dns_servers' type='astring' value='unknown' />
-     <propval name='rack_uuid' type='astring' value='unknown' />
-     <propval name='sled_uuid' type='astring' value='unknown' />
+     <propval name='rack_id' type='astring' value='unknown' />
+     <propval name='sled_id' type='astring' value='unknown' />
+     <propval name='sled_model' type='astring' value='unknown' />
+     <propval name='sled_revision' type='astring' value='unknown' />
+     <propval name='sled_serial' type='astring' value='unknown' />
      <property name='interfaces' type='astring'>
      </property>
    </property_group>

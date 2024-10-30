@@ -15,6 +15,7 @@ slog-async.workspace = true
 tokio.workspace = true
 hostname.workspace = true
 dpd-client.workspace = true
+omicron-common.workspace = true
 anstyle.workspace = true
 uuid.workspace = true
 smf.workspace = true

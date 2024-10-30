@@ -6,9 +6,7 @@
 //! synchronizing information in a routing information base onto an underlying
 //! routing platform. The only platform currently supported is Dendrite.
 
-use crate::dendrite::{
-    get_routes_for_prefix, new_dpd_client, update_dendrite, RouteHash,
-};
+use crate::dendrite::{get_routes_for_prefix, update_dendrite, RouteHash};
 use crate::error::Error;
 use ddm::{
     add_tunnel_routes, new_ddm_client, remove_tunnel_routes,
@@ -57,7 +55,7 @@ pub fn run(
         db.watch(MG_LOWER_TAG.into(), tx);
 
         // initialize the underlying router with the current state
-        let dpd = new_dpd_client(&log);
+        let dpd = mg_common::dpd::new_client(&log, MG_LOWER_TAG);
         let ddm = new_ddm_client(&log);
         if let Err(e) =
             full_sync(tep, &db, &log, &dpd, &ddm, &stats, rt.clone())
