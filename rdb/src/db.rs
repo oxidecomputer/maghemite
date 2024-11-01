@@ -691,24 +691,9 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{db::Db, Path, Prefix};
-    use slog::{Drain, Logger};
-    use std::fs::File;
-    use std::io::Write;
+    use mg_common::log::*;
     use std::net::IpAddr;
     use std::str::FromStr;
-
-    pub fn init_file_logger(filename: &str) -> Logger {
-        build_logger(File::create(filename).expect("build logger"))
-    }
-
-    pub fn build_logger<W: Write + Send + 'static>(w: W) -> Logger {
-        let drain = slog_bunyan::new(w).build().fuse();
-        let drain = slog_async::Async::new(drain)
-            .chan_size(0x8000)
-            .build()
-            .fuse();
-        slog::Logger::root(drain, slog::o!())
-    }
 
     pub fn check_prefix_path(
         db: &Db,
@@ -813,8 +798,9 @@ mod test {
         let static_path1 = Path::from(static_key1);
 
         // setup
+        std::fs::create_dir_all("/tmp").expect("create tmp dir");
         let log = init_file_logger("rib.log");
-        let db_path = "rib.db".to_string();
+        let db_path = "/tmp/rib.db".to_string();
         let _ = std::fs::remove_dir_all(&db_path);
         let db = Db::new(&db_path, log.clone()).expect("create db");
 
