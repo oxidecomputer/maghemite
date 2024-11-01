@@ -1261,9 +1261,6 @@
               "minimum": 0
             }
           },
-          "conn": {
-            "$ref": "#/components/schemas/SocketAddrPair"
-          },
           "id": {
             "type": "integer",
             "format": "uint32",
@@ -1286,6 +1283,10 @@
             "format": "uint32",
             "minimum": 0
           },
+          "peer": {
+            "type": "string",
+            "format": "ip"
+          },
           "stale": {
             "nullable": true,
             "type": "string",
@@ -1294,9 +1295,9 @@
         },
         "required": [
           "as_path",
-          "conn",
           "id",
-          "origin_as"
+          "origin_as",
+          "peer"
         ]
       },
       "BgpPeerConfig": {
@@ -3145,21 +3146,6 @@
         "required": [
           "asn",
           "code"
-        ]
-      },
-      "SocketAddrPair": {
-        "type": "object",
-        "properties": {
-          "local": {
-            "nullable": true,
-            "type": "string"
-          },
-          "peer": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "peer"
         ]
       },
       "StaticRoute4": {

@@ -17,10 +17,7 @@ use crate::router::Router;
 use crate::to_canonical;
 use mg_common::{dbg, err, inf, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
-use rdb::{
-    Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4,
-    SocketAddrPair,
-};
+use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1507,8 +1504,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
 
             FsmEvent::RouteRefreshNeeded => {
-                let conn = SocketAddrPair::new(pc.conn.local(), pc.conn.peer());
-                self.db.mark_bgp_peer_stale(conn);
+                self.db.mark_bgp_peer_stale(pc.conn.peer().ip());
                 self.send_route_refresh(&pc.conn);
                 FsmState::Established(pc)
             }
@@ -1931,10 +1927,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
 
         // remove peer prefixes from db
-        self.db.remove_bgp_peer_prefixes(SocketAddrPair::new(
-            pc.conn.local(),
-            pc.conn.peer(),
-        ));
+        self.db.remove_bgp_peer_prefixes(&pc.conn.peer().ip());
 
         FsmState::Idle
     }
@@ -2039,14 +2032,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         pc: &PeerConnection<Cnx>,
         peer_as: u32,
     ) {
-        let conn = SocketAddrPair::new(pc.conn.local(), pc.conn.peer());
         self.db.remove_bgp_prefixes(
             update
                 .withdrawn
                 .iter()
                 .map(|w| rdb::Prefix::from(w.as_prefix4()))
                 .collect(),
-            conn.clone(),
+            &pc.conn.peer().ip(),
         );
 
         let originated = match self.db.get_origin4() {
@@ -2115,7 +2107,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                 bgp: Some(BgpPathProperties {
                     origin_as: peer_as,
-                    conn: conn.clone(),
+                    peer: pc.conn.peer().ip(),
                     id: pc.id,
                     med: update.multi_exit_discriminator(),
                     local_pref: update.local_pref(),

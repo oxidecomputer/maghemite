@@ -565,16 +565,12 @@ impl Db {
         Ok(())
     }
 
-    pub fn remove_bgp_prefixes(
-        &self,
-        prefixes: Vec<Prefix>,
-        conn: SocketAddrPair,
-    ) {
+    pub fn remove_bgp_prefixes(&self, prefixes: Vec<Prefix>, peer: &IpAddr) {
         let mut pcn = PrefixChangeNotification::default();
         for prefix in prefixes {
             self.remove_prefix_path(prefix, |rib_path: &Path| {
                 match rib_path.bgp {
-                    Some(ref bgp) => bgp.conn == conn,
+                    Some(ref bgp) => bgp.peer == *peer,
                     None => false,
                 }
             });
@@ -585,10 +581,10 @@ impl Db {
 
     // helper function to remove all routes learned from a given peer
     // e.g. when peer is deleted or exits Established state
-    pub fn remove_bgp_peer_prefixes(&self, conn: SocketAddrPair) {
+    pub fn remove_bgp_peer_prefixes(&self, peer: &IpAddr) {
         self.remove_bgp_prefixes(
             self.full_rib().keys().copied().collect(),
-            conn,
+            peer,
         );
     }
 
@@ -621,14 +617,14 @@ impl Db {
         Ok(())
     }
 
-    pub fn mark_bgp_peer_stale(&self, conn: SocketAddrPair) {
+    pub fn mark_bgp_peer_stale(&self, peer: IpAddr) {
         let mut rib = lock!(self.rib_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
                 .iter()
                 .filter_map(|p| {
                     if let Some(bgp) = p.bgp.as_ref() {
-                        if bgp.conn == conn {
+                        if bgp.peer == peer {
                             let mut marked = p.clone();
                             marked.bgp = Some(bgp.as_stale());
                             return Some(marked);
@@ -694,12 +690,11 @@ impl Reaper {
 
 #[cfg(test)]
 mod test {
-    use crate::SocketAddrPair;
     use crate::{db::Db, Path, Prefix};
     use slog::{Drain, Logger};
     use std::fs::File;
     use std::io::Write;
-    use std::net::{IpAddr, SocketAddr};
+    use std::net::IpAddr;
     use std::str::FromStr;
 
     pub fn init_file_logger(filename: &str) -> Logger {
@@ -748,28 +743,17 @@ mod test {
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
         let p1 = Prefix::from("192.168.1.0/24".parse::<Prefix4>().unwrap());
         let p2 = Prefix::from("192.168.2.0/24".parse::<Prefix4>().unwrap());
-        let nh0 = "203.0.113.0";
-        let nh1 = "203.0.113.1";
-        let nh2 = "203.0.113.2";
-        let bgp_port = 179u16;
-        let local_sa =
-            SocketAddr::new(IpAddr::from_str("203.0.113.255").unwrap(), 4444);
-        let remote_sa0 =
-            SocketAddr::new(IpAddr::from_str("203.0.113.0").unwrap(), bgp_port);
-        let remote_sa1 =
-            SocketAddr::new(IpAddr::from_str("203.0.113.1").unwrap(), bgp_port);
-        let remote_sa2 =
-            SocketAddr::new(IpAddr::from_str("203.0.113.2").unwrap(), bgp_port);
-        let conn0 = SocketAddrPair::new(Some(local_sa), remote_sa0);
-        let conn1 = SocketAddrPair::new(Some(local_sa), remote_sa1);
-        let conn2 = SocketAddrPair::new(Some(local_sa), remote_sa2);
+        let remote_ip0 = IpAddr::from_str("203.0.113.0").unwrap();
+        let remote_ip1 = IpAddr::from_str("203.0.113.1").unwrap();
+        let remote_ip2 = IpAddr::from_str("203.0.113.2").unwrap();
+
         let bgp_path0 = Path {
-            nexthop: nh0.parse().unwrap(),
+            nexthop: remote_ip0,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 1111,
-                conn: conn0.clone(),
+                peer: remote_ip0,
                 id: 1111,
                 med: Some(1111),
                 local_pref: Some(1111),
@@ -779,12 +763,12 @@ mod test {
             vlan_id: None,
         };
         let bgp_path1 = Path {
-            nexthop: nh1.parse().unwrap(),
+            nexthop: remote_ip1,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 2222,
-                conn: conn1.clone(),
+                peer: remote_ip1,
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(2222),
@@ -799,12 +783,12 @@ mod test {
         // TODO: set local_pref to Some(2222) to test ECMP when
         // BESTPATH_FANOUT is increased to test ECMP.
         let bgp_path2 = Path {
-            nexthop: nh2.parse().unwrap(),
+            nexthop: remote_ip2,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 2222,
-                conn: conn2.clone(),
+                peer: remote_ip2,
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(4444),
@@ -815,14 +799,14 @@ mod test {
         };
         let static_key0 = StaticRouteKey {
             prefix: p0,
-            nexthop: nh0.parse().unwrap(),
+            nexthop: remote_ip0,
             vlan_id: None,
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
         };
         let static_path0 = Path::from(static_key0);
         let static_key1 = StaticRouteKey {
             prefix: p0,
-            nexthop: nh0.parse().unwrap(),
+            nexthop: remote_ip0,
             vlan_id: None,
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC + 10,
         };
@@ -890,7 +874,7 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // withdrawal of p2 via bgp_path1
-        db.remove_bgp_prefixes(vec![p2], conn1.clone());
+        db.remove_bgp_prefixes(vec![p2], &bgp_path1.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
         // - p0 via static_path1, bgp_path0
@@ -912,7 +896,7 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // yank all routes from bgp_path0, simulating peer shutdown
-        db.remove_bgp_peer_prefixes(conn0);
+        db.remove_bgp_peer_prefixes(&bgp_path0.bgp.unwrap().peer);
         // expected current state
         // rib_in:
         // - p0 via static_path1
@@ -934,7 +918,7 @@ mod test {
 
         // yank all routes from bgp_path2, simulating peer shutdown
         // bgp_path2 should be unaffected, despite also having the same RID
-        db.remove_bgp_peer_prefixes(conn2);
+        db.remove_bgp_peer_prefixes(&bgp_path2.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
         // - p0 via static_path1
@@ -954,7 +938,7 @@ mod test {
 
         // yank all routes from bgp_path1, simulating peer shutdown
         // p0 should be unaffected, still retaining the static path
-        db.remove_bgp_peer_prefixes(conn1);
+        db.remove_bgp_peer_prefixes(&bgp_path1.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
         // - p0 via static_path1

@@ -21,7 +21,7 @@ use dropshot::{
 };
 use http::status::StatusCode;
 use mg_common::lock;
-use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix, SocketAddrPair};
+use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
 use slog::info;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -779,12 +779,7 @@ pub(crate) mod helpers {
     ) -> Result<HttpResponseDeleted, Error> {
         info!(ctx.log, "remove neighbor: {}", addr);
 
-        let session = get_router!(ctx, asn)?
-            .get_session(addr)
-            .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
-        let conn =
-            SocketAddrPair::new(session.bind_addr, session.neighbor.host);
-        ctx.db.remove_bgp_peer_prefixes(conn);
+        ctx.db.remove_bgp_peer_prefixes(&addr);
         ctx.db.remove_bgp_neighbor(addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 
