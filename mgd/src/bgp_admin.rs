@@ -779,17 +779,7 @@ pub(crate) mod helpers {
     ) -> Result<HttpResponseDeleted, Error> {
         info!(ctx.log, "remove neighbor: {}", addr);
 
-        let id = lock!(
-            get_router!(ctx, asn)?
-                .get_session(addr)
-                .ok_or(Error::NotFound(
-                    "session for bgp peer not found".into()
-                ))?
-                .session
-        )
-        .remote_id
-        .ok_or(Error::NotFound("bgp peer not found".into()))?;
-        ctx.db.remove_bgp_peer_prefixes(id);
+        ctx.db.remove_bgp_peer_prefixes(&addr);
         ctx.db.remove_bgp_neighbor(addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 

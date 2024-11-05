@@ -109,6 +109,8 @@ pub fn bestpaths(
 #[cfg(test)]
 mod test {
     use std::collections::BTreeSet;
+    use std::net::IpAddr;
+    use std::str::FromStr;
 
     use super::bestpaths;
     use crate::{
@@ -120,6 +122,10 @@ mod test {
     fn test_bestpath() {
         let mut rib = Rib::default();
         let target: Prefix4 = "198.51.100.0/24".parse().unwrap();
+        let remote_ip1 = IpAddr::from_str("203.0.113.1").unwrap();
+        let remote_ip2 = IpAddr::from_str("203.0.113.2").unwrap();
+        let remote_ip3 = IpAddr::from_str("203.0.113.3").unwrap();
+        let remote_ip4 = IpAddr::from_str("203.0.113.4").unwrap();
 
         // The best path for an empty RIB should be empty
         const MAX_ECMP_FANOUT: usize = 2;
@@ -128,11 +134,12 @@ mod test {
 
         // Add one path and make sure we get it back
         let path1 = Path {
-            nexthop: "203.0.113.1".parse().unwrap(),
+            nexthop: remote_ip1,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 470,
+                peer: remote_ip1,
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -149,11 +156,12 @@ mod test {
 
         // Add another path to the same prefix and make sure bestpath returns both
         let mut path2 = Path {
-            nexthop: "203.0.113.2".parse().unwrap(),
+            nexthop: remote_ip2,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 480,
+                peer: remote_ip2,
                 id: 48,
                 med: Some(75),
                 local_pref: Some(100),
@@ -173,11 +181,12 @@ mod test {
         //   - results are limited to 2 paths when max is 2
         //   - we get all three paths back wihen max is 3
         let mut path3 = Path {
-            nexthop: "203.0.113.3".parse().unwrap(),
+            nexthop: remote_ip3,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 490,
+                peer: remote_ip3,
                 id: 49,
                 med: Some(100),
                 local_pref: Some(100),
@@ -225,7 +234,7 @@ mod test {
         // - path 4 wins over BGP paths with lower RIB priority
         // - path 4 wins over BGP paths with equal RIB priority
         let mut path4 = Path {
-            nexthop: "203.0.113.4".parse().unwrap(),
+            nexthop: remote_ip4,
             rib_priority: u8::MAX,
             shutdown: false,
             bgp: None,

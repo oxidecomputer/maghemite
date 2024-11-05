@@ -1283,6 +1283,10 @@
             "format": "uint32",
             "minimum": 0
           },
+          "peer": {
+            "type": "string",
+            "format": "ip"
+          },
           "stale": {
             "nullable": true,
             "type": "string",
@@ -1292,7 +1296,8 @@
         "required": [
           "as_path",
           "id",
-          "origin_as"
+          "origin_as",
+          "peer"
         ]
       },
       "BgpPeerConfig": {
