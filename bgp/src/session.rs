@@ -1994,14 +1994,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         //    self.fanout_update(&update);
     }
 
-    fn handle_refresh(
-        &self,
-        msg: RouteRefreshMessage,
-        pc: &PeerConnection<Cnx>,
-    ) -> Result<(), Error> {
-        if msg.afi != Afi::Ipv4 as u16 {
-            return Ok(());
-        }
+    pub fn refresh_react(&self, conn: &Cnx) -> Result<(), Error> {
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
@@ -2018,9 +2011,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             for p in originated {
                 update.nlri.push(p.into());
             }
-            self.send_update(update, &pc.conn, ShaperApplication::Current)?;
+            self.send_update(update, conn, ShaperApplication::Current)?;
         }
         Ok(())
+    }
+
+    fn handle_refresh(
+        &self,
+        msg: RouteRefreshMessage,
+        pc: &PeerConnection<Cnx>,
+    ) -> Result<(), Error> {
+        if msg.afi != Afi::Ipv4 as u16 {
+            return Ok(());
+        }
+        self.refresh_react(&pc.conn)
     }
 
     /// Update this router's RIB based on an update message from a peer.

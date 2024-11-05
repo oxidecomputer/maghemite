@@ -3,10 +3,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
-use mg_admin_client::types::{self, Path};
-use mg_admin_client::types::{ImportExportPolicy, Rib};
+use mg_admin_client::types::NeighborResetOp as MgdNeighborResetOp;
+use mg_admin_client::types::{
+    self, ImportExportPolicy, NeighborResetRequest, Path, Rib,
+};
 use mg_admin_client::Client;
 use rdb::types::{PolicyAction, Prefix4};
 use std::collections::BTreeMap;
@@ -23,6 +25,9 @@ pub enum Commands {
 
     /// View dynamic router state.
     Status(StatusSubcommand),
+
+    /// Clear dynamic router state.
+    Clear(ClearSubcommand),
 
     /// Omicron control plane commands.
     Omicron(OmicronSubcommand),
@@ -77,6 +82,48 @@ pub enum StatusCmd {
 
     /// Get the selected paths chosen from imported paths.
     Selected {
+        #[clap(env)]
+        asn: u32,
+    },
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+#[allow(non_camel_case_types)]
+pub enum NeighborResetOp {
+    /// Perform a hard reset of the neighbor. This resets the TCP connection.
+    hard,
+    /// Send a route refresh to the neighbor. Does not reset the TCP connection.
+    soft_inbound,
+    /// Re-send all originated routes to the neighbor. Does not reset the TCP connection.
+    soft_outbound,
+}
+
+impl From<NeighborResetOp> for MgdNeighborResetOp {
+    fn from(op: NeighborResetOp) -> MgdNeighborResetOp {
+        match op {
+            NeighborResetOp::hard => MgdNeighborResetOp::Hard,
+            NeighborResetOp::soft_inbound => MgdNeighborResetOp::SoftInbound,
+            NeighborResetOp::soft_outbound => MgdNeighborResetOp::SoftOutbound,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct ClearSubcommand {
+    #[command(subcommand)]
+    command: ClearCmd,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+#[clap(rename_all = "kebab_case")]
+pub enum ClearCmd {
+    /// Clear the state of the selected BGP neighbor.
+    Neighbor {
+        /// IP address of the neighbor you want to clear the state of.
+        addr: IpAddr,
+        #[clap(value_enum)]
+        clear_type: NeighborResetOp,
+        /// BGP Autonomous System number.  Can be a 16-bit or 32-bit unsigned value.
         #[clap(env)]
         asn: u32,
     },
@@ -546,6 +593,14 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             StatusCmd::Selected { asn } => get_selected(c, asn).await,
         },
 
+        Commands::Clear(cmd) => match cmd.command {
+            ClearCmd::Neighbor {
+                asn,
+                addr,
+                clear_type,
+            } => clear_nbr(asn, addr, clear_type, c).await,
+        },
+
         Commands::Omicron(cmd) => match cmd.command {
             OmicronCmd::Apply { filename } => apply(filename, c).await,
         },
@@ -683,6 +738,16 @@ async fn update_nbr(nbr: Neighbor, c: Client) {
 
 async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) {
     c.delete_neighbor(&addr, asn).await.unwrap();
+}
+
+async fn clear_nbr(asn: u32, addr: IpAddr, op: NeighborResetOp, c: Client) {
+    c.clear_neighbor(&NeighborResetRequest {
+        asn,
+        addr,
+        op: op.into(),
+    })
+    .await
+    .unwrap();
 }
 
 async fn create_origin4(originate: Originate4, c: Client) {

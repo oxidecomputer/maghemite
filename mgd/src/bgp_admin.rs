@@ -11,6 +11,7 @@ use bgp::{
     config::RouterConfig,
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
+    messages::{Afi, Message, RouteRefreshMessage, Safi},
     router::Router,
     session::{FsmEvent, SessionInfo},
     BGP_PORT,
@@ -80,6 +81,7 @@ pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
     register!(api, read_neighbor);
     register!(api, update_neighbor);
     register!(api, delete_neighbor);
+    register!(api, clear_neighbor);
 
     // Origin configuration
     register!(api, create_origin4);
@@ -279,6 +281,16 @@ pub async fn delete_neighbor(
     let rq = request.into_inner();
     let ctx = ctx.context();
     Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
+}
+
+#[endpoint { method = POST, path = "/bgp/clear/neighbor" }]
+pub async fn clear_neighbor(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<NeighborResetRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    Ok(helpers::reset_neighbor(ctx.clone(), rq.asn, rq.addr, rq.op).await?)
 }
 
 #[endpoint { method = PUT, path = "/bgp/config/origin4" }]
@@ -862,6 +874,52 @@ pub(crate) mod helpers {
         }
 
         Ok(())
+    }
+
+    pub(crate) async fn reset_neighbor(
+        ctx: Arc<HandlerContext>,
+        asn: u32,
+        addr: IpAddr,
+        op: resource::NeighborResetOp,
+    ) -> Result<HttpResponseUpdatedNoContent, Error> {
+        info!(ctx.log, "clear neighbor: {}", addr);
+
+        let session = get_router!(ctx, asn)?
+            .get_session(addr)
+            .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
+
+        match op {
+            resource::NeighborResetOp::Hard => {
+                session.event_tx.send(FsmEvent::Reset).map_err(|e| {
+                    Error::InternalCommunication(format!(
+                        "failed to reset bgp session {e}",
+                    ))
+                })?
+            }
+            resource::NeighborResetOp::SoftInbound => session
+                .event_tx
+                .send(FsmEvent::RouteRefreshNeeded)
+                .map_err(|e| {
+                    Error::InternalCommunication(format!(
+                        "failed to generate route refresh {e}"
+                    ))
+                })?,
+            resource::NeighborResetOp::SoftOutbound => session
+                .event_tx
+                .send(FsmEvent::Message(Message::RouteRefresh(
+                    RouteRefreshMessage {
+                        afi: Afi::Ipv4 as u16,
+                        safi: Safi::NlriUnicast as u8,
+                    },
+                )))
+                .map_err(|e| {
+                    Error::InternalCommunication(format!(
+                        "failed to trigger outbound update {e}"
+                    ))
+                })?,
+        }
+
+        Ok(HttpResponseUpdatedNoContent())
     }
 
     pub(crate) fn add_router(

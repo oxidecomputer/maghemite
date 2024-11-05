@@ -90,6 +90,32 @@
         }
       }
     },
+    "/bgp/clear/neighbor": {
+      "post": {
+        "operationId": "clear_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NeighborResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/config/checker": {
       "get": {
         "operationId": "read_checker",
@@ -2434,6 +2460,36 @@
           "name",
           "passive",
           "resolution"
+        ]
+      },
+      "NeighborResetOp": {
+        "type": "string",
+        "enum": [
+          "Hard",
+          "SoftInbound",
+          "SoftOutbound"
+        ]
+      },
+      "NeighborResetRequest": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "format": "ip"
+          },
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "op": {
+            "$ref": "#/components/schemas/NeighborResetOp"
+          }
+        },
+        "required": [
+          "addr",
+          "asn",
+          "op"
         ]
       },
       "NotificationMessage": {
