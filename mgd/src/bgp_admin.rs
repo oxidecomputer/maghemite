@@ -898,6 +898,14 @@ pub(crate) mod helpers {
             }
             resource::NeighborResetOp::SoftInbound => session
                 .event_tx
+                .send(FsmEvent::RouteRefreshNeeded)
+                .map_err(|e| {
+                    Error::InternalCommunication(format!(
+                        "failed to generate route refresh {e}"
+                    ))
+                })?,
+            resource::NeighborResetOp::SoftOutbound => session
+                .event_tx
                 .send(FsmEvent::Message(Message::RouteRefresh(
                     RouteRefreshMessage {
                         afi: Afi::Ipv4 as u16,
@@ -907,14 +915,6 @@ pub(crate) mod helpers {
                 .map_err(|e| {
                     Error::InternalCommunication(format!(
                         "failed to trigger outbound update {e}"
-                    ))
-                })?,
-            resource::NeighborResetOp::SoftOutbound => session
-                .event_tx
-                .send(FsmEvent::RouteRefreshNeeded)
-                .map_err(|e| {
-                    Error::InternalCommunication(format!(
-                        "failed to generate route refresh {e}"
                     ))
                 })?,
         }
