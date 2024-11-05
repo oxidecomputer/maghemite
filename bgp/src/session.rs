@@ -1259,7 +1259,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             for p in originated {
                 update.nlri.push(p.into());
             }
-            read_lock!(self.fanout).send_all(&update);
             if let Err(e) =
                 self.send_update(update, &pc.conn, ShaperApplication::Current)
             {
@@ -2019,7 +2018,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             for p in originated {
                 update.nlri.push(p.into());
             }
-            read_lock!(self.fanout).send_all(&update);
             self.send_update(update, &pc.conn, ShaperApplication::Current)?;
         }
         Ok(())
