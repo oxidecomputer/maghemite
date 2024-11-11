@@ -69,8 +69,7 @@ fn refresh_stats_server(
             context.peers.clone(),
             context.stats.clone(),
             hostname,
-            props.rack_uuid,
-            props.sled_uuid,
+            props.sled_idents,
             log.clone(),
         ) {
             Ok(h) => {

@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub mod cli;
+pub mod dpd;
 pub mod log;
 pub mod net;
 pub mod nexus;

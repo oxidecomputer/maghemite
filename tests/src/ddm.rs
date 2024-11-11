@@ -172,7 +172,7 @@ impl<'a> RouterZone<'a> {
             String::new()
         } else {
             format!(
-                "--rack-uuid {} --sled-uuid {}",
+                "--rack-id {} --sled-id {}",
                 uuid::Uuid::new_v4(),
                 uuid::Uuid::new_v4(),
             )

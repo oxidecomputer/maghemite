@@ -19,6 +19,7 @@ use dropshot::TypedBody;
 use dropshot::{endpoint, ApiDescriptionRegisterError};
 use mg_common::lock;
 use mg_common::net::TunnelOrigin;
+use omicron_common::api::internal::shared::SledIdentifiers;
 use oxnet::Ipv6Net;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -369,14 +370,20 @@ async fn enable_stats(
             .expect("failed to get hostname")
             .to_string_lossy()
             .to_string();
+        let sled_idents = SledIdentifiers {
+            rack_id: rq.rack_id,
+            sled_id: rq.sled_id,
+            model: String::default(),
+            revision: 0,
+            serial: String::default(),
+        };
         *jh = Some(
             crate::oxstats::start_server(
                 DDM_STATS_PORT,
                 ctx.peers.clone(),
                 ctx.stats.clone(),
                 hostname,
-                rq.rack_id,
-                rq.sled_id,
+                sled_idents,
                 ctx.log.clone(),
             )
             .map_err(|e| {
