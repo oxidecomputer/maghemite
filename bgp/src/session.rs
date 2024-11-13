@@ -2124,6 +2124,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .nlri
                     .iter()
                     .filter(|p| !originated.contains(&p.as_prefix4()))
+                    .filter(|p| !self.is_v4_martian(&p.as_prefix4()))
                     .map(|n| rdb::Prefix::from(n.as_prefix4()))
                     .collect(),
                 path.clone(),
@@ -2136,7 +2137,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Perform a set of checks on an update to see if we can accept it.
     fn check_update(&self, update: &UpdateMessage) -> Result<(), Error> {
         self.check_for_self_in_path(update)?;
-        self.check_v4_prefixes(update)?;
         self.check_nexthop_self(update)?;
         let info = lock!(self.session);
         if info.enforce_first_as {
@@ -2182,19 +2182,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         Ok(())
     }
 
+    /// Returns true if prefix carries a martian value, i.e. the prefix
+    /// is not a valid routable IPv4 Unicast subnet. Currently this only
+    /// checks if the prefix overlaps with IPv4 Loopback (127.0.0.0/8)
+    /// or Multicast (224.0.0.0/4) address space. We deliberately skip
+    /// Class E (240.0.0.0/4) and Link-Local (169.254.0.0/16) ranges, as some
+    /// networks have already deployed these and cannot feasibly renumber,
+    /// and we need to be able to handle these as routable prefixes.
     //TODO similar check needed for v6 once we get full v6 support
-    fn check_v4_prefixes(&self, update: &UpdateMessage) -> Result<(), Error> {
-        for prefix in &update.nlri {
-            if prefix.length == 0 {
-                continue;
-            }
-            let first = prefix.value[0];
-            // check 127.0.0.0/8, 224.0.0.0/4
-            if (first == 127) || (first & 0xf0 == 224) {
-                return Err(Error::InvalidNlriPrefix(prefix.as_prefix4()));
-            }
+    fn is_v4_martian(&self, prefix: &Prefix4) -> bool {
+        let first = prefix.value.octets()[0];
+        if (first == 127) || (first & 0xf0 == 224) {
+            return true;
         }
-        Ok(())
+        false
     }
 
     fn check_nexthop_self(&self, update: &UpdateMessage) -> Result<(), Error> {
