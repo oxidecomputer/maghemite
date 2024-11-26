@@ -835,7 +835,7 @@ dependencies = [
  "oximeter-producer",
  "oxnet",
  "pretty_assertions",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "schemars",
  "serde",
  "serde_json",
@@ -855,7 +855,7 @@ dependencies = [
  "oxnet",
  "percent-encoding",
  "progenitor 0.8.0",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "serde",
  "serde_json",
  "slog",
@@ -1050,7 +1050,7 @@ dependencies = [
  "http 1.1.0",
  "omicron-workspace-hack",
  "progenitor 0.8.0",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "schemars",
  "serde",
  "slog",
@@ -1084,7 +1084,7 @@ dependencies = [
  "oxnet",
  "progenitor 0.8.0",
  "regress 0.9.1",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "schemars",
  "serde",
  "serde_json",
@@ -1461,7 +1461,7 @@ dependencies = [
  "omicron-workspace-hack",
  "progenitor 0.8.0",
  "rand",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "schemars",
  "serde",
  "serde_json",
@@ -2099,7 +2099,7 @@ dependencies = [
  "omicron-common",
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "slog",
  "thiserror",
  "uuid",
@@ -2262,7 +2262,7 @@ dependencies = [
  "propolis-server-config",
  "rand",
  "regex",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "ron",
  "serde",
  "slog",
@@ -2468,7 +2468,7 @@ dependencies = [
  "chrono",
  "percent-encoding",
  "progenitor 0.8.0",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "schemars",
  "serde",
  "serde_json",
@@ -2484,7 +2484,7 @@ dependencies = [
  "chrono",
  "percent-encoding",
  "progenitor 0.8.0",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "schemars",
  "serde",
  "serde_json",
@@ -2521,7 +2521,7 @@ name = "mg-ddm-verify"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "serde",
  "serde_json",
  "tokio",
@@ -2540,7 +2540,7 @@ dependencies = [
  "mg-common",
  "oxnet",
  "rdb",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "slog",
  "thiserror",
  "tokio",
@@ -2740,7 +2740,7 @@ dependencies = [
  "oxnet",
  "progenitor 0.8.0",
  "regress 0.9.1",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "schemars",
  "serde",
  "serde_json",
@@ -3021,7 +3021,7 @@ dependencies = [
  "progenitor-client 0.8.0",
  "rand",
  "regress 0.9.1",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "schemars",
  "semver 1.0.23",
  "serde",
@@ -3083,7 +3083,7 @@ dependencies = [
  "futures",
  "futures-util",
  "hex",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "ring 0.16.20",
  "semver 1.0.23",
  "serde",
@@ -3768,7 +3768,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "percent-encoding",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -3862,7 +3862,7 @@ dependencies = [
  "futures",
  "progenitor 0.8.0",
  "rand",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "schemars",
  "serde",
  "serde_json",
@@ -4133,9 +4133,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.8"
+version = "0.12.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f713147fbe92361e52392c73b8c9e48c04c6625bce969ef54dc901e58e042a7b"
+checksum = "a77c62af46e79de0a562e1a9849205ffcb7fc1238876e9bd743357570e04046f"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -6057,7 +6057,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
