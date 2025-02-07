@@ -347,8 +347,6 @@ async fn sync(
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct EnableStatsRequest {
-    addr: IpAddr,
-    dns_servers: Vec<SocketAddr>,
     sled_id: Uuid,
     rack_id: Uuid,
 }
