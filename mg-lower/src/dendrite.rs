@@ -114,7 +114,7 @@ fn get_local_addrs(
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<(BTreeSet<Ipv4Addr>, BTreeSet<Ipv6Addr>), Error> {
     let links = rt
-        .block_on(async { dpd.link_list_all().await })?
+        .block_on(async { dpd.link_list_all(None).await })?
         .into_inner();
 
     let mut v4 = BTreeSet::new();

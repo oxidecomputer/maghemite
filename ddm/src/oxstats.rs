@@ -298,7 +298,7 @@ pub fn start_server(
         server_info: producer_info,
         registration_address: None,
         log: log_config,
-        request_body_max_bytes: 1024 * 1024 * 1024,
+        default_request_body_max_bytes: 1024 * 1024 * 1024,
     };
 
     Ok(tokio::spawn(async move {
