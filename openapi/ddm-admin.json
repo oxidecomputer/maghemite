@@ -358,16 +358,6 @@
       "EnableStatsRequest": {
         "type": "object",
         "properties": {
-          "addr": {
-            "type": "string",
-            "format": "ip"
-          },
-          "dns_servers": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
           "rack_id": {
             "type": "string",
             "format": "uuid"
@@ -378,8 +368,6 @@
           }
         },
         "required": [
-          "addr",
-          "dns_servers",
           "rack_id",
           "sled_id"
         ]
