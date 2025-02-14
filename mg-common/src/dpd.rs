@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use dpd_client::{types, Client, ClientState};
+use slog::error;
 use std::time::Duration;
 
 /// Create a new Dendrite/dpd client. The lower half always runs on the same
@@ -33,7 +34,7 @@ pub async fn fetch_switch_identifiers(
                 return idents;
             }
             Err(e) => {
-                slog::error!(log,
+                error!(log,
                     "failed to fetch switch identifiers from dpd-client: {e:?}, will retry",
                 )
             }
