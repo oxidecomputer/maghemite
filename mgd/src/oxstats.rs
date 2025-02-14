@@ -1,15 +1,16 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
-
 use crate::admin::HandlerContext;
 use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use chrono::{DateTime, Utc};
+use dpd_client::types;
 use mg_common::lock;
 use mg_common::nexus::{local_underlay_address, run_oximeter};
 use mg_common::stats::MgLowerStats;
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
+use omicron_common::api::internal::shared::SledIdentifiers;
 use oximeter::types::{Cumulative, ProducerRegistry};
 use oximeter::{MetricsError, Producer, Sample};
 use oximeter_producer::{ConfigLogging, ConfigLoggingLevel, LogConfig};
@@ -21,7 +22,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use uuid::Uuid;
 
 oximeter::use_timeseries!("bfd-session.toml");
 use bfd_session::BfdSession;
@@ -79,11 +79,14 @@ oximeter::use_timeseries!("switch-rib.toml");
 use switch_rib::ActiveRoutes;
 use switch_rib::SwitchRib;
 
+/// Tag used for managing mgd.
+const MGD_TAG: &str = "mgd";
+
 #[derive(Clone)]
 pub(crate) struct Stats {
     pub(crate) hostname: String,
-    pub(crate) rack_id: Uuid,
-    pub(crate) sled_id: Uuid,
+    pub(crate) sled_idents: SledIdentifiers,
+    pub(crate) switch_idents: types::SwitchIdentifiers,
     pub(crate) start_time: DateTime<Utc>,
     pub(crate) bfd: BfdContext,
     pub(crate) bgp: BgpContext,
@@ -95,10 +98,10 @@ pub(crate) struct Stats {
 macro_rules! bgp_session_counter {
     (
         $hostname:expr,
-        $rack_id:expr,
-        $sled_id:expr,
-        $start_time:expr,
         $local_asn:expr,
+        $sled_idents:expr,
+        $switch_idents:expr,
+        $start_time:expr,
         $peer:expr,
         $kind:tt,
         $value:expr
@@ -106,10 +109,39 @@ macro_rules! bgp_session_counter {
         Sample::new(
             &BgpSession {
                 hostname: $hostname,
-                rack_id: $rack_id,
-                sled_id: $sled_id,
                 local_asn: $local_asn,
                 peer: $peer,
+                rack_id: $sled_idents.rack_id,
+                sled_id: $sled_idents.sled_id,
+                sled_model: $sled_idents.model.clone().into(),
+                sled_revision: $sled_idents.revision,
+                sled_serial: $sled_idents.serial.clone().into(),
+                switch_id: $switch_idents.sidecar_id,
+                switch_model: $switch_idents.model.clone().into(),
+                switch_revision: $switch_idents.revision,
+                switch_serial: $switch_idents.serial.clone().into(),
+                switch_slot: $switch_idents.slot,
+                asic_fab: $switch_idents
+                    .fab
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_lot: $switch_idents
+                    .lot
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_wafer: $switch_idents.wafer.unwrap_or(0),
+                asic_wafer_loc_x: $switch_idents
+                    .wafer_loc
+                    .map(|[x, _]| x)
+                    .unwrap_or(0),
+                asic_wafer_loc_y: $switch_idents
+                    .wafer_loc
+                    .map(|[_, y]| y)
+                    .unwrap_or(0),
             },
             &$kind {
                 datum: Cumulative::<u64>::with_start_time(
@@ -124,8 +156,8 @@ macro_rules! bgp_session_counter {
 macro_rules! bfd_session_counter {
     (
         $hostname:expr,
-        $rack_id:expr,
-        $sled_id:expr,
+        $sled_idents:expr,
+        $switch_idents:expr,
         $start_time:expr,
         $peer:expr,
         $kind:tt,
@@ -134,9 +166,38 @@ macro_rules! bfd_session_counter {
         Sample::new(
             &BfdSession {
                 hostname: $hostname,
-                rack_id: $rack_id,
-                sled_id: $sled_id,
                 peer: $peer,
+                rack_id: $sled_idents.rack_id,
+                sled_id: $sled_idents.sled_id,
+                sled_model: $sled_idents.model.clone().into(),
+                sled_revision: $sled_idents.revision,
+                sled_serial: $sled_idents.serial.clone().into(),
+                switch_id: $switch_idents.sidecar_id,
+                switch_model: $switch_idents.model.clone().into(),
+                switch_revision: $switch_idents.revision,
+                switch_serial: $switch_idents.serial.clone().into(),
+                switch_slot: $switch_idents.slot,
+                asic_fab: $switch_idents
+                    .fab
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_lot: $switch_idents
+                    .lot
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_wafer: $switch_idents.wafer.unwrap_or(0),
+                asic_wafer_loc_x: $switch_idents
+                    .wafer_loc
+                    .map(|[x, _]| x)
+                    .unwrap_or(0),
+                asic_wafer_loc_y: $switch_idents
+                    .wafer_loc
+                    .map(|[_, y]| y)
+                    .unwrap_or(0),
             },
             &$kind {
                 datum: Cumulative::<u64>::with_start_time(
@@ -151,8 +212,8 @@ macro_rules! bfd_session_counter {
 macro_rules! static_counter {
     (
         $hostname:expr,
-        $rack_id:expr,
-        $sled_id:expr,
+        $sled_idents:expr,
+        $switch_idents:expr,
         $start_time:expr,
         $kind:tt,
         $value:expr
@@ -160,8 +221,37 @@ macro_rules! static_counter {
         Sample::new(
             &StaticRoutingConfig {
                 hostname: $hostname,
-                rack_id: $rack_id,
-                sled_id: $sled_id,
+                rack_id: $sled_idents.rack_id,
+                sled_id: $sled_idents.sled_id,
+                sled_model: $sled_idents.model.clone().into(),
+                sled_revision: $sled_idents.revision,
+                sled_serial: $sled_idents.serial.clone().into(),
+                switch_id: $switch_idents.sidecar_id,
+                switch_model: $switch_idents.model.clone().into(),
+                switch_revision: $switch_idents.revision,
+                switch_serial: $switch_idents.serial.clone().into(),
+                switch_slot: $switch_idents.slot,
+                asic_fab: $switch_idents
+                    .fab
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_lot: $switch_idents
+                    .lot
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_wafer: $switch_idents.wafer.unwrap_or(0),
+                asic_wafer_loc_x: $switch_idents
+                    .wafer_loc
+                    .map(|[x, _]| x)
+                    .unwrap_or(0),
+                asic_wafer_loc_y: $switch_idents
+                    .wafer_loc
+                    .map(|[_, y]| y)
+                    .unwrap_or(0),
             },
             &$kind {
                 datum: Cumulative::<u64>::with_start_time($start_time, $value),
@@ -173,8 +263,8 @@ macro_rules! static_counter {
 macro_rules! mg_lower_quantity {
     (
         $hostname:expr,
-        $rack_id:expr,
-        $sled_id:expr,
+        $sled_idents:expr,
+        $switch_idents:expr,
         $start_time:expr,
         $kind:tt,
         $value:expr
@@ -182,8 +272,37 @@ macro_rules! mg_lower_quantity {
         Sample::new(
             &MgLower {
                 hostname: $hostname,
-                rack_id: $rack_id,
-                sled_id: $sled_id,
+                rack_id: $sled_idents.rack_id,
+                sled_id: $sled_idents.sled_id,
+                sled_model: $sled_idents.model.clone().into(),
+                sled_revision: $sled_idents.revision,
+                sled_serial: $sled_idents.serial.clone().into(),
+                switch_id: $switch_idents.sidecar_id,
+                switch_model: $switch_idents.model.clone().into(),
+                switch_revision: $switch_idents.revision,
+                switch_serial: $switch_idents.serial.clone().into(),
+                switch_slot: $switch_idents.slot,
+                asic_fab: $switch_idents
+                    .fab
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_lot: $switch_idents
+                    .lot
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_wafer: $switch_idents.wafer.unwrap_or(0),
+                asic_wafer_loc_x: $switch_idents
+                    .wafer_loc
+                    .map(|[x, _]| x)
+                    .unwrap_or(0),
+                asic_wafer_loc_y: $switch_idents
+                    .wafer_loc
+                    .map(|[_, y]| y)
+                    .unwrap_or(0),
             },
             &$kind {
                 datum: $value.load(Ordering::Relaxed),
@@ -195,8 +314,8 @@ macro_rules! mg_lower_quantity {
 macro_rules! rib_quantity {
     (
         $hostname:expr,
-        $rack_id:expr,
-        $sled_id:expr,
+        $sled_idents:expr,
+        $switch_idents:expr,
         $start_time:expr,
         $kind:tt,
         $value:expr
@@ -204,8 +323,37 @@ macro_rules! rib_quantity {
         Sample::new(
             &SwitchRib {
                 hostname: $hostname,
-                rack_id: $rack_id,
-                sled_id: $sled_id,
+                rack_id: $sled_idents.rack_id,
+                sled_id: $sled_idents.sled_id,
+                sled_model: $sled_idents.model.clone().into(),
+                sled_revision: $sled_idents.revision,
+                sled_serial: $sled_idents.serial.clone().into(),
+                switch_id: $switch_idents.sidecar_id,
+                switch_model: $switch_idents.model.clone().into(),
+                switch_revision: $switch_idents.revision,
+                switch_serial: $switch_idents.serial.clone().into(),
+                switch_slot: $switch_idents.slot,
+                asic_fab: $switch_idents
+                    .fab
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_lot: $switch_idents
+                    .lot
+                    .clone()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| $switch_idents.asic_backend.to_string())
+                    .into(),
+                asic_wafer: $switch_idents.wafer.unwrap_or(0),
+                asic_wafer_loc_x: $switch_idents
+                    .wafer_loc
+                    .map(|[x, _]| x)
+                    .unwrap_or(0),
+                asic_wafer_loc_y: $switch_idents
+                    .wafer_loc
+                    .map(|[_, y]| y)
+                    .unwrap_or(0),
             },
             &$kind { datum: $value },
         )?
@@ -286,290 +434,290 @@ impl Stats {
             for (addr, counters) in session_counters {
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     KeepalivesSent,
                     counters.keepalives_sent
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     KeepalivesReceived,
                     counters.keepalives_received
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     OpensSent,
                     counters.opens_sent
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     OpensReceived,
                     counters.opens_received
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     UpdatesSent,
                     counters.updates_sent
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     UpdatesReceived,
                     counters.updates_received
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     PrefixesAdvertised,
                     counters.prefixes_advertised
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     PrefixesImported,
                     counters.prefixes_imported
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     IdleHoldTimerExpirations,
                     counters.idle_hold_timer_expirations
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     HoldTimerExpirations,
                     counters.hold_timer_expirations
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     UpdateNexthopMissing,
                     counters.update_nexhop_missing
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     ActiveConnectionsAccepted,
                     counters.active_connections_accepted
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     PassiveConnectionsAccepted,
                     counters.passive_connections_accepted
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     ConnectionRetries,
                     counters.connection_retries
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     OpenHandleFailures,
                     counters.open_handle_failures
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     TransitionToIdle,
                     counters.transitions_to_idle
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     TransitionToConnect,
                     counters.transitions_to_connect
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     TransitionToActive,
                     counters.transitions_to_active
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     TransitionToOpenSent,
                     counters.transitions_to_open_sent
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     TransitionToOpenConfirm,
                     counters.transitions_to_open_confirm
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     TransitionToSessionSetup,
                     counters.transitions_to_session_setup
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     TransitionToEstablished,
                     counters.transitions_to_established
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     UnexpectedUpdateMessages,
                     counters.unexpected_update_message
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     UnexpectedKeepaliveMessages,
                     counters.unexpected_keepalive_message
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     UnexpectedOpenMessages,
                     counters.unexpected_open_message
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     NotificationSendFailures,
                     counters.notification_send_failure
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     KeepaliveSendFailures,
                     counters.keepalive_send_failure
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     OpenSendFailures,
                     counters.open_send_failure
                 ));
                 samples.push(bgp_session_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
-                    self.start_time,
                     *asn,
+                    self.sled_idents,
+                    self.switch_idents,
+                    self.start_time,
                     *addr,
                     UpdateSendFailures,
                     counters.update_send_failure
@@ -593,8 +741,8 @@ impl Stats {
         for (addr, counters) in &counters {
             samples.push(bfd_session_counter!(
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 self.start_time,
                 *addr,
                 ControlPacketsSent,
@@ -602,8 +750,8 @@ impl Stats {
             ));
             samples.push(bfd_session_counter!(
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 self.start_time,
                 *addr,
                 ControlPacketSendFailures,
@@ -611,8 +759,8 @@ impl Stats {
             ));
             samples.push(bfd_session_counter!(
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 self.start_time,
                 *addr,
                 ControlPacketsReceived,
@@ -620,8 +768,8 @@ impl Stats {
             ));
             samples.push(bfd_session_counter!(
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 self.start_time,
                 *addr,
                 TransitionToInit,
@@ -629,8 +777,8 @@ impl Stats {
             ));
             samples.push(bfd_session_counter!(
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 self.start_time,
                 *addr,
                 TransitionToDown,
@@ -638,8 +786,8 @@ impl Stats {
             ));
             samples.push(bfd_session_counter!(
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 self.start_time,
                 *addr,
                 TransitionToUp,
@@ -647,8 +795,8 @@ impl Stats {
             ));
             samples.push(bfd_session_counter!(
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 self.start_time,
                 *addr,
                 TimeoutExpired,
@@ -656,8 +804,8 @@ impl Stats {
             ));
             samples.push(bfd_session_counter!(
                 self.hostname.clone().into(),
-                self.rack_id,
-                self.sled_id,
+                self.sled_idents,
+                self.switch_idents,
                 self.start_time,
                 *addr,
                 MessageReceiveError,
@@ -675,8 +823,8 @@ impl Stats {
             Ok(count) => {
                 samples.push(static_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
+                    self.sled_idents,
+                    self.switch_idents,
                     self.start_time,
                     StaticRoutes,
                     count as u64
@@ -690,8 +838,8 @@ impl Stats {
             Ok(count) => {
                 samples.push(static_counter!(
                     self.hostname.clone().into(),
-                    self.rack_id,
-                    self.sled_id,
+                    self.sled_idents,
+                    self.switch_idents,
                     self.start_time,
                     StaticNexthops,
                     count as u64
@@ -714,8 +862,8 @@ impl Stats {
         }
         samples.push(rib_quantity!(
             self.hostname.clone().into(),
-            self.rack_id,
-            self.sled_id,
+            self.sled_idents,
+            self.switch_idents,
             self.start_time,
             ActiveRoutes,
             count as u64
@@ -727,8 +875,8 @@ impl Stats {
     fn mg_lower_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
         Ok(vec![mg_lower_quantity!(
             self.hostname.clone().into(),
-            self.rack_id,
-            self.sled_id,
+            self.sled_idents,
+            self.switch_idents,
             self.start_time,
             RoutesBlockedByLinkState,
             self.mg_lower_stats.routes_blocked_by_link_state
@@ -736,12 +884,11 @@ impl Stats {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Start and run the oximeter server.
 pub(crate) fn start_server(
     context: Arc<HandlerContext>,
     hostname: String,
-    rack_id: Uuid,
-    sled_id: Uuid,
+    sled_idents: SledIdentifiers,
     log: Logger,
 ) -> anyhow::Result<JoinHandle<()>> {
     let addr = local_underlay_address()?;
@@ -749,33 +896,40 @@ pub(crate) fn start_server(
     let log_config = LogConfig::Config(ConfigLogging::StderrTerminal {
         level: ConfigLoggingLevel::Debug,
     });
-    let registry = ProducerRegistry::new();
-    let stats_producer = Stats {
-        hostname,
-        rack_id,
-        sled_id,
-        start_time: chrono::offset::Utc::now(),
-        bfd: context.bfd.clone(),
-        bgp: context.bgp.clone(),
-        db: context.db.clone(),
-        mg_lower_stats: context.mg_lower_stats.clone(),
-        log: log.clone(),
-    };
-    registry.register_producer(stats_producer).unwrap();
-    let producer_info = ProducerEndpoint {
-        id: registry.producer_id(),
-        kind: ProducerKind::Service,
-        address: sa,
-        interval: Duration::from_secs(1),
-    };
-    let config = oximeter_producer::Config {
-        server_info: producer_info,
-        registration_address: None,
-        log: log_config,
-        default_request_body_max_bytes: 1024 * 1024 * 1024,
-    };
 
-    Ok(tokio::spawn(async move {
+    let _handle = tokio::spawn(async move {
+        let client = mg_common::dpd::new_client(&log, MGD_TAG);
+        let switch_idents =
+            mg_common::dpd::fetch_switch_identifiers(&client, &log).await;
+
+        let registry = ProducerRegistry::new();
+        let stats_producer = Stats {
+            hostname,
+            sled_idents,
+            switch_idents,
+            start_time: chrono::offset::Utc::now(),
+            bfd: context.bfd.clone(),
+            bgp: context.bgp.clone(),
+            db: context.db.clone(),
+            mg_lower_stats: context.mg_lower_stats.clone(),
+            log: log.clone(),
+        };
+        registry.register_producer(stats_producer).unwrap();
+        let producer_info = ProducerEndpoint {
+            id: registry.producer_id(),
+            kind: ProducerKind::Service,
+            address: sa,
+            interval: Duration::from_secs(1),
+        };
+        let config = oximeter_producer::Config {
+            server_info: producer_info,
+            registration_address: None,
+            log: log_config,
+            default_request_body_max_bytes: 1024 * 1024 * 1024,
+        };
+
         run_oximeter(registry, config, log).await
-    }))
+    });
+
+    Ok(_handle)
 }

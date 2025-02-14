@@ -7,3 +7,7 @@ cargo-bay
 out
 download
 tags
+
+# rdb
+rdb/*.log
+rdb/*.db

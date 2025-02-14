@@ -34,15 +34,15 @@ if [[ "$val" != '""' ]]; then
     export RUST_LOG="$val"
 fi
 
-val=$(svcprop -c -p config/rack_uuid "${SMF_FMRI}")
+val=$(svcprop -c -p config/rack_id "${SMF_FMRI}")
 if [[ "$val" != 'unknown' ]]; then
-    args+=( '--rack-uuid' )
+    args+=( '--rack-id' )
     args+=( "$val" )
 fi
 
-val=$(svcprop -c -p config/sled_uuid "${SMF_FMRI}")
+val=$(svcprop -c -p config/sled_id "${SMF_FMRI}")
 if [[ "$val" != 'unknown' ]]; then
-    args+=( '--sled-uuid' )
+    args+=( '--sled-id' )
     args+=( "$val" )
 fi
 

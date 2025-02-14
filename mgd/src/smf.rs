@@ -52,22 +52,21 @@ fn refresh_stats_server(
         .to_string_lossy()
         .to_string();
 
-    let props = match get_stats_server_props(pg) {
-        Ok(props) => props,
-        Err(e) => {
-            info!(log, "stats server not running on refresh: {e}");
-            return Ok(());
-        }
-    };
-
     let mut is_running = lock!(ctx.stats_server_running);
     if !*is_running {
+        let props = match get_stats_server_props(pg) {
+            Ok(props) => props,
+            Err(e) => {
+                info!(log, "stats server not running on refresh: {e}");
+                return Ok(());
+            }
+        };
+
         info!(log, "starting stats server on smf refresh");
         match crate::oxstats::start_server(
             ctx.clone(),
             hostname,
-            props.rack_uuid,
-            props.sled_uuid,
+            props.sled_idents,
             log.clone(),
         ) {
             Ok(_) => {

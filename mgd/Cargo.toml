@@ -12,6 +12,7 @@ rdb = { path = "../rdb" }
 anyhow.workspace = true
 clap.workspace = true
 colored.workspace = true
+dpd-client.workspace = true
 dropshot.workspace = true
 schemars.workspace = true
 serde.workspace = true

@@ -128,6 +128,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "api_identity"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
+dependencies = [
+ "omicron-workspace-hack",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.98",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -312,7 +323,7 @@ dependencies = [
 [[package]]
 name = "bhyve_api"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/propolis?rev=0c186579ba1fafc5a75d46d2ac8ab9ffa97fe309#0c186579ba1fafc5a75d46d2ac8ab9ffa97fe309"
+source = "git+https://github.com/oxidecomputer/propolis?rev=95d6a559890c94e3aa62c8adcd7c4e123ec4c6dc#95d6a559890c94e3aa62c8adcd7c4e123ec4c6dc"
 dependencies = [
  "bhyve_api_sys",
  "libc",
@@ -322,7 +333,7 @@ dependencies = [
 [[package]]
 name = "bhyve_api_sys"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/propolis?rev=0c186579ba1fafc5a75d46d2ac8ab9ffa97fe309#0c186579ba1fafc5a75d46d2ac8ab9ffa97fe309"
+source = "git+https://github.com/oxidecomputer/propolis?rev=95d6a559890c94e3aa62c8adcd7c4e123ec4c6dc#95d6a559890c94e3aa62c8adcd7c4e123ec4c6dc"
 dependencies = [
  "libc",
  "strum",
@@ -527,7 +538,7 @@ checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 [[package]]
 name = "clickhouse-admin-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "anyhow",
  "atomicwrites",
@@ -538,7 +549,7 @@ dependencies = [
  "derive_more",
  "expectorate",
  "itertools 0.13.0",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-workspace-hack",
  "schemars",
  "serde",
@@ -575,7 +586,7 @@ source = "git+https://github.com/oxidecomputer/dendrite?branch=main#18ed558cc962
 dependencies = [
  "anyhow",
  "chrono",
- "oximeter",
+ "oximeter 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
  "oxnet 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand",
  "schemars",
@@ -733,7 +744,7 @@ checksum = "22ec99545bb0ed0ea7bb9b8e1e9122ea386ff8a48c0922e43f36d45ab09e0e80"
 [[package]]
 name = "crucible-smf"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/crucible?rev=03f940b8387750d8955b37e3cc31cc91a2727262#03f940b8387750d8955b37e3cc31cc91a2727262"
+source = "git+https://github.com/oxidecomputer/crucible?rev=d2d8f8ad449df7e2befb7ee2723a442dd74b9b72#d2d8f8ad449df7e2befb7ee2723a442dd74b9b72"
 dependencies = [
  "crucible-workspace-hack",
  "libc",
@@ -853,10 +864,10 @@ dependencies = [
  "ispf",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "mg-common",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3dc9a3dd8d3c623f0cf2c659c7119ce0c026a96d)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3dc9a3dd8d3c623f0cf2c659c7119ce0c026a96d)",
- "oximeter",
+ "oximeter 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "oximeter-producer",
  "oxnet 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "pretty_assertions",
@@ -933,6 +944,7 @@ dependencies = [
  "hostname 0.3.1",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
  "mg-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "slog",
  "slog-async",
  "slog-bunyan",
@@ -1528,7 +1540,7 @@ dependencies = [
 [[package]]
 name = "gateway-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2096,7 +2108,7 @@ source = "git+https://github.com/oxidecomputer/opte?rev=b56afeeb14e0042cbd7bda85
 [[package]]
 name = "illumos-utils"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2113,8 +2125,8 @@ dependencies = [
  "itertools 0.13.0",
  "libc",
  "macaddr",
- "omicron-common",
- "omicron-uuid-kinds",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-workspace-hack",
  "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=b56afeeb14e0042cbd7bda85b166ed86ee17820e)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=b56afeeb14e0042cbd7bda85b166ed86ee17820e)",
@@ -2221,12 +2233,12 @@ dependencies = [
 [[package]]
 name = "internal-dns-resolver"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "futures",
  "hickory-resolver",
  "internal-dns-types",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-workspace-hack",
  "qorb",
  "reqwest 0.12.9",
@@ -2237,12 +2249,12 @@ dependencies = [
 [[package]]
 name = "internal-dns-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "anyhow",
  "chrono",
- "omicron-common",
- "omicron-uuid-kinds",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-workspace-hack",
  "schemars",
  "serde",
@@ -2653,9 +2665,10 @@ dependencies = [
  "anyhow",
  "backoff",
  "clap",
+ "dpd-client",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",
- "omicron-common",
- "oximeter",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
+ "oximeter 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "oximeter-producer",
  "oxnet 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "schemars",
@@ -2760,13 +2773,14 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "dpd-client",
  "dropshot 0.12.0",
  "hostname 0.3.1",
  "http 1.2.0",
  "mg-common",
  "mg-lower",
- "omicron-common",
- "oximeter",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
+ "oximeter 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "oximeter-producer",
  "rand",
  "rdb",
@@ -2880,15 +2894,15 @@ dependencies = [
 [[package]]
 name = "nexus-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "chrono",
  "futures",
  "nexus-sled-agent-shared",
  "nexus-types",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-passwords",
- "omicron-uuid-kinds",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-workspace-hack",
  "oxnet 0.1.0 (git+https://www.github.com/oxidecomputer/oxnet?rev=7dacd265f1bcd0f8b47bd4805250c4f0812da206)",
  "progenitor 0.9.1",
@@ -2904,13 +2918,13 @@ dependencies = [
 [[package]]
 name = "nexus-sled-agent-shared"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "daft",
  "illumos-utils",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-passwords",
- "omicron-uuid-kinds",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-workspace-hack",
  "schemars",
  "serde",
@@ -2924,10 +2938,10 @@ dependencies = [
 [[package]]
 name = "nexus-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "anyhow",
- "api_identity",
+ "api_identity 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "async-trait",
  "base64 0.22.1",
  "chrono",
@@ -2948,9 +2962,9 @@ dependencies = [
  "newtype-uuid",
  "newtype_derive",
  "nexus-sled-agent-shared",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-passwords",
- "omicron-uuid-kinds",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-workspace-hack",
  "openssl",
  "oxnet 0.1.0 (git+https://www.github.com/oxidecomputer/oxnet?rev=7dacd265f1bcd0f8b47bd4805250c4f0812da206)",
@@ -3165,7 +3179,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
 dependencies = [
  "anyhow",
- "api_identity",
+ "api_identity 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
  "async-trait",
  "backoff",
  "camino",
@@ -3178,7 +3192,49 @@ dependencies = [
  "ipnetwork",
  "macaddr",
  "mg-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=93cd0d642cf1b58f9f4528275e2a2aa758e9feb3)",
- "omicron-uuid-kinds",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "omicron-workspace-hack",
+ "once_cell",
+ "oxnet 0.1.0 (git+https://www.github.com/oxidecomputer/oxnet?rev=7dacd265f1bcd0f8b47bd4805250c4f0812da206)",
+ "parse-display",
+ "progenitor-client 0.9.1",
+ "rand",
+ "regress 0.9.1",
+ "reqwest 0.12.9",
+ "schemars",
+ "semver 1.0.25",
+ "serde",
+ "serde_human_bytes",
+ "serde_json",
+ "serde_with",
+ "slog",
+ "slog-error-chain",
+ "strum",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "omicron-common"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
+dependencies = [
+ "anyhow",
+ "api_identity 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
+ "async-trait",
+ "backoff",
+ "camino",
+ "chrono",
+ "daft",
+ "dropshot 0.15.1",
+ "futures",
+ "hex",
+ "http 1.2.0",
+ "ipnetwork",
+ "macaddr",
+ "mg-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=93cd0d642cf1b58f9f4528275e2a2aa758e9feb3)",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-workspace-hack",
  "once_cell",
  "oxnet 0.1.0 (git+https://www.github.com/oxidecomputer/oxnet?rev=7dacd265f1bcd0f8b47bd4805250c4f0812da206)",
@@ -3204,7 +3260,7 @@ dependencies = [
 [[package]]
 name = "omicron-passwords"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "argon2",
  "omicron-workspace-hack",
@@ -3219,6 +3275,17 @@ dependencies = [
 name = "omicron-uuid-kinds"
 version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+dependencies = [
+ "daft",
+ "newtype-uuid",
+ "paste",
+ "schemars",
+]
+
+[[package]]
+name = "omicron-uuid-kinds"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "daft",
  "newtype-uuid",
@@ -3463,10 +3530,29 @@ dependencies = [
  "chrono",
  "clap",
  "omicron-workspace-hack",
- "oximeter-macro-impl",
- "oximeter-schema",
- "oximeter-timeseries-macro",
- "oximeter-types",
+ "oximeter-macro-impl 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "oximeter-schema 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "oximeter-timeseries-macro 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "prettyplease",
+ "syn 2.0.98",
+ "toml 0.8.19",
+ "uuid",
+]
+
+[[package]]
+name = "oximeter"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "omicron-workspace-hack",
+ "oximeter-macro-impl 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
+ "oximeter-schema 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
+ "oximeter-timeseries-macro 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "prettyplease",
  "syn 2.0.98",
  "toml 0.8.19",
@@ -3485,18 +3571,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "oximeter-macro-impl"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
+dependencies = [
+ "omicron-workspace-hack",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.98",
+]
+
+[[package]]
 name = "oximeter-producer"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "chrono",
  "dropshot 0.15.1",
  "internal-dns-resolver",
  "internal-dns-types",
  "nexus-client",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-workspace-hack",
- "oximeter",
+ "oximeter 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "schemars",
  "serde",
  "slog",
@@ -3516,7 +3613,28 @@ dependencies = [
  "clap",
  "heck 0.5.0",
  "omicron-workspace-hack",
- "oximeter-types",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "schemars",
+ "serde",
+ "slog-error-chain",
+ "syn 2.0.98",
+ "toml 0.8.19",
+]
+
+[[package]]
+name = "oximeter-schema"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "heck 0.5.0",
+ "omicron-workspace-hack",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -3533,8 +3651,21 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
 dependencies = [
  "omicron-workspace-hack",
- "oximeter-schema",
- "oximeter-types",
+ "oximeter-schema 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.98",
+]
+
+[[package]]
+name = "oximeter-timeseries-macro"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
+dependencies = [
+ "omicron-workspace-hack",
+ "oximeter-schema 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "proc-macro2",
  "quote",
  "syn 2.0.98",
@@ -3549,7 +3680,27 @@ dependencies = [
  "chrono",
  "float-ord",
  "num",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "omicron-workspace-hack",
+ "parse-display",
+ "regex",
+ "schemars",
+ "serde",
+ "strum",
+ "thiserror 1.0.69",
+ "uuid",
+]
+
+[[package]]
+name = "oximeter-types"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
+dependencies = [
+ "bytes",
+ "chrono",
+ "float-ord",
+ "num",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-workspace-hack",
  "parse-display",
  "regex",
@@ -3563,7 +3714,7 @@ dependencies = [
 [[package]]
 name = "oxlog"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "anyhow",
  "camino",
@@ -3599,14 +3750,14 @@ dependencies = [
 [[package]]
 name = "oxql-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "anyhow",
  "chrono",
  "highway",
  "num",
  "omicron-workspace-hack",
- "oximeter-types",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "schemars",
  "serde",
 ]
@@ -5052,10 +5203,10 @@ dependencies = [
 [[package]]
 name = "sled-hardware-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "illumos-utils",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta)",
  "omicron-workspace-hack",
  "schemars",
  "serde",
@@ -6112,7 +6263,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 [[package]]
 name = "update-engine"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#78772eaa1d97bd7b6c438d060bd18c9eddcb0c9d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmgd-ddm-meta#a68d462d189a3dce27231a88bd140b959fe693e4"
 dependencies = [
  "anyhow",
  "cancel-safe-futures",

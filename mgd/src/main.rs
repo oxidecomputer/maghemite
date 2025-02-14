@@ -11,6 +11,7 @@ use mg_common::cli::oxide_cli_style;
 use mg_common::lock;
 use mg_common::log::init_logger;
 use mg_common::stats::MgLowerStats;
+use omicron_common::api::internal::shared::SledIdentifiers;
 use rand::Fill;
 use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use signal::handle_signals;
@@ -78,11 +79,11 @@ struct RunArgs {
 
     /// Id of the rack this router is running on.
     #[arg(long)]
-    rack_uuid: Option<Uuid>,
+    rack_id: Option<Uuid>,
 
     /// Id of the sled this router is running on.
     #[arg(long)]
-    sled_uuid: Option<Uuid>,
+    sled_id: Option<Uuid>,
 }
 
 #[tokio::main]
@@ -159,16 +160,20 @@ async fn run(args: RunArgs) {
         .to_string();
 
     if args.with_stats {
-        if let (Some(rack_uuid), Some(sled_uuid)) =
-            (args.rack_uuid, args.sled_uuid)
-        {
+        if let (Some(rack_id), Some(sled_id)) = (args.rack_id, args.sled_id) {
             let mut is_running = lock!(context.stats_server_running);
             if !*is_running {
+                let sled_idents = SledIdentifiers {
+                    rack_id,
+                    sled_id,
+                    model: String::default(),
+                    revision: 0,
+                    serial: String::default(),
+                };
                 match oxstats::start_server(
                     context.clone(),
                     hostname,
-                    rack_uuid,
-                    sled_uuid,
+                    sled_idents,
                     log.clone(),
                 ) {
                     Ok(_) => *is_running = true,
