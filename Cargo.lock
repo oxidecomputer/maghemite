@@ -2421,7 +2421,7 @@ source = "git+https://github.com/oxidecomputer/dlpi-sys#1d587ea98cf2d36f1b1624b0
 [[package]]
 name = "libfalcon"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=main#f3fe0542198c08bbb82d16f168e6482db9bec5b9"
+source = "git+https://github.com/oxidecomputer/falcon?branch=main#d04addf8c95cf59e1dbcc7c59c3d07692a2eae88"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -7026,7 +7026,7 @@ dependencies = [
 [[package]]
 name = "ztest"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=main#f3fe0542198c08bbb82d16f168e6482db9bec5b9"
+source = "git+https://github.com/oxidecomputer/falcon?branch=main#d04addf8c95cf59e1dbcc7c59c3d07692a2eae88"
 dependencies = [
  "anyhow",
  "libnet",
