@@ -8,6 +8,7 @@ use bgp_admin::BgpContext;
 use dropshot::{ApiDescription, ConfigDropshot, HttpServerStarter};
 use mg_common::stats::MgLowerStats;
 use rdb::Db;
+use semver::{BuildMetadata, Prerelease, Version};
 use slog::o;
 use slog::{error, info, warn, Logger};
 use std::fs::File;
@@ -36,7 +37,7 @@ pub fn start_server(
     let sa = SocketAddr::new(addr, port);
     let ds_config = ConfigDropshot {
         bind_address: sa,
-        request_body_max_bytes: 1024 * 1024 * 1024,
+        default_request_body_max_bytes: 1024 * 1024 * 1024,
         ..Default::default()
     };
 
@@ -76,7 +77,16 @@ pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
 
 pub fn apigen() {
     let api = api_description();
-    let openapi = api.openapi("Maghemite Admin", "v0.1.0");
+    let openapi = api.openapi(
+        "Maghemite Admin",
+        Version {
+            major: 0,
+            minor: 1,
+            patch: 0,
+            pre: Prerelease::EMPTY,
+            build: BuildMetadata::EMPTY,
+        },
+    );
     let mut out = File::create("mg-admin.json").expect("create json api file");
     openapi.write(&mut out).expect("write json api file");
 }

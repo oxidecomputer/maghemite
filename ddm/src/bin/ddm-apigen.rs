@@ -5,11 +5,21 @@
 use anyhow::anyhow;
 use anyhow::Result;
 use ddm::admin::api_description;
+use semver::{BuildMetadata, Prerelease, Version};
 use std::fs::File;
 
 fn main() -> Result<()> {
     let api = api_description().map_err(|e| anyhow!("{}", e))?;
-    let openapi = api.openapi("DDM Admin", "v0.1.0");
+    let openapi = api.openapi(
+        "DDM Admin",
+        Version {
+            major: 0,
+            minor: 1,
+            patch: 0,
+            pre: Prerelease::EMPTY,
+            build: BuildMetadata::EMPTY,
+        },
+    );
     let mut out = File::create("ddm-admin.json")?;
     openapi.write(&mut out)?;
     Ok(())

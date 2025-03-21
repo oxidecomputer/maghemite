@@ -411,7 +411,7 @@ pub enum LoadPolicyError {
     Compilation(String),
 
     #[error("Policy program already exists")]
-    Confilct,
+    Conflict,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -429,7 +429,7 @@ impl Policy {
     ) -> Result<Option<AST>, LoadPolicyError> {
         let mut current = self.shaper.write().unwrap();
         if current.is_some() && !overwrite {
-            return Err(LoadPolicyError::Confilct);
+            return Err(LoadPolicyError::Conflict);
         }
         let ast = load_shaper(program_source)
             .map_err(|e| LoadPolicyError::Compilation(e.to_string()))?;
@@ -459,7 +459,7 @@ impl Policy {
     ) -> Result<Option<AST>, LoadPolicyError> {
         let mut current = self.checker.write().unwrap();
         if current.is_some() && !overwrite {
-            return Err(LoadPolicyError::Confilct);
+            return Err(LoadPolicyError::Conflict);
         }
         let ast = load_checker(program_source)
             .map_err(|e| LoadPolicyError::Compilation(e.to_string()))?;
