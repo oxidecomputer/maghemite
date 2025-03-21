@@ -60,8 +60,8 @@ hyper-util = { version = "0.1", features = ["full"] }
 serde_json = "1.0.133"
 percent-encoding = "2.3.1"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
-reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
 progenitor = "0.9.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 clap = { version = "4.5.23", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "2.1"
