@@ -54,7 +54,7 @@ dropshot = { version = "0.16.0", features = [ "usdt-probes" ] }
 schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.37", features = ["full"] }
 serde_repr = "0.1"
-anyhow = "1.0.94"
+anyhow = "1.0.97"
 hyper = "1.5.1"
 hyper-util = { version = "0.1", features = ["full"] }
 serde_json = "1.0.133"
