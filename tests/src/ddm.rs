@@ -521,7 +521,7 @@ async fn run_trio_tests(
 
     println!("tunnel endpoint advertise passed");
 
-    // redudant advertise should not change things
+    // redundant advertise should not change things
 
     t1.advertise_tunnel_endpoints(&vec![TunnelOrigin {
         overlay_prefix: "203.0.113.0/24".parse().unwrap(),
