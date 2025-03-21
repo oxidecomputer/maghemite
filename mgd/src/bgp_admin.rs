@@ -17,10 +17,10 @@ use bgp::{
     BGP_PORT,
 };
 use dropshot::{
-    endpoint, ApiDescription, HttpError, HttpResponseDeleted, HttpResponseOk,
-    HttpResponseUpdatedNoContent, Query, RequestContext, TypedBody,
+    endpoint, ApiDescription, ClientErrorStatusCode, HttpError,
+    HttpResponseDeleted, HttpResponseOk, HttpResponseUpdatedNoContent, Query,
+    RequestContext, TypedBody,
 };
-use http::status::StatusCode;
 use mg_common::lock;
 use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
 use slog::info;
@@ -148,9 +148,9 @@ pub async fn create_router(
 
     let mut guard = lock!(ctx.bgp.router);
     if guard.get(&rq.asn).is_some() {
-        return Err(HttpError::for_status(
+        return Err(HttpError::for_client_error_with_status(
             Some("bgp router with specified ASN exists".into()),
-            StatusCode::CONFLICT,
+            ClientErrorStatusCode::CONFLICT,
         ));
     }
 
@@ -998,10 +998,9 @@ pub(crate) mod helpers {
                         ));
                     }
                     Err(LoadPolicyError::Confilct) => {
-                        return Err(HttpError::for_client_error(
-                            None,
-                            StatusCode::CONFLICT,
-                            "policy already loaded".to_string(),
+                        return Err(HttpError::for_client_error_with_status(
+                            Some("policy already loaded".to_string()),
+                            ClientErrorStatusCode::CONFLICT,
                         ));
                     }
                     Ok(previous) => match &policy {
