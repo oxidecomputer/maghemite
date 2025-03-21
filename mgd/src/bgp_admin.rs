@@ -997,7 +997,7 @@ pub(crate) mod helpers {
                             e.to_string(),
                         ));
                     }
-                    Err(LoadPolicyError::Confilct) => {
+                    Err(LoadPolicyError::Conflict) => {
                         return Err(HttpError::for_client_error_with_status(
                             Some("policy already loaded".to_string()),
                             ClientErrorStatusCode::CONFLICT,
