@@ -84,7 +84,7 @@ mg-common = { path = "mg-common" }
 chrono = { version = "0.4.40", features = ["serde"] }
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
-oxnet = { version = "0.1.0", default-features = false, features = ["schemars", "serde"] }
+oxnet = { version = "0.1.1", default-features = false, features = ["schemars", "serde"] }
 omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
