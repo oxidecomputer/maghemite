@@ -280,7 +280,7 @@ fn expire(
         };
         if let Some(nbr) = &*guard {
             let dt = Instant::now().duration_since(nbr.last_seen);
-            if dt.as_millis() > ctx.config.expire_threshold.into() {
+            if dt.as_millis() > u128::from(ctx.config.expire_threshold) {
                 wrn!(
                     &ctx.log,
                     ctx.config.if_name,
@@ -295,7 +295,7 @@ fn expire(
                     ctx.log.clone(),
                     &ctx.config.if_name,
                 );
-            } else if dt.as_millis() > ctx.config.solicit_interval.into() {
+            } else if dt.as_millis() > u128::from(ctx.config.solicit_interval) {
                 wrn!(
                     &ctx.log,
                     ctx.config.if_name,
