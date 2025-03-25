@@ -283,9 +283,9 @@ fn get_tunnel_endpoint_ula(db: &rdb::Db) -> Ipv6Addr {
     }
 
     // creat the randomized ULA fdxx:xxxx:xxxx:xxxx::1 as a tunnel endpoint
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut r = [0u8; 7];
-    r.try_fill(&mut rng).unwrap();
+    r.fill(&mut rng);
     let tep_ula = Ipv6Addr::from([
         0xfd, r[0], r[1], r[2], r[3], r[4], r[5], r[6], 0, 0, 0, 0, 0, 0, 0, 1,
     ]);
