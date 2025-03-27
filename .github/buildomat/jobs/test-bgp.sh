@@ -8,7 +8,7 @@
 #:   "/work/*.log",
 #: ]
 #: access_repos = [
-#:   "oxidecomputer/dendrite",
+#:   "oxidecomputer/dendrite-os",
 #: ]
 #:
 

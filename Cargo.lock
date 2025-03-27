@@ -120,7 +120,7 @@ checksum = "dcfed56ad506cb2c684a14971b8861fdc3baaaae314b9e5f9bb532cbe3ba7a4f"
 [[package]]
 name = "api_identity"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0c92213cbf480848862926873d1c8e633102471e"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -593,7 +593,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -602,13 +602,13 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fde0e0ec90c9dfb3b4b1a0891a7dcd0e2bffde2f7efed5fe7c9bb00e5bfb915e"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=main#58f63f5721d40d1954524879d1ede6b9084c7b3b"
+source = "git+https://github.com/oxidecomputer/dendrite-os?branch=main#668f1a2e35e7c76b22ab83fe6c2242d3454e2803"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1118,7 +1118,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=main#58f63f5721d40d1954524879d1ede6b9084c7b3b"
+source = "git+https://github.com/oxidecomputer/dendrite-os?branch=main#668f1a2e35e7c76b22ab83fe6c2242d3454e2803"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3170,7 +3170,7 @@ dependencies = [
 [[package]]
 name = "omicron-common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0c92213cbf480848862926873d1c8e633102471e"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
 dependencies = [
  "anyhow",
  "api_identity",
@@ -3226,7 +3226,7 @@ dependencies = [
 [[package]]
 name = "omicron-uuid-kinds"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0c92213cbf480848862926873d1c8e633102471e"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
 dependencies = [
  "daft",
  "newtype-uuid",
@@ -3407,7 +3407,7 @@ dependencies = [
 [[package]]
 name = "oximeter"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0c92213cbf480848862926873d1c8e633102471e"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3426,7 +3426,7 @@ dependencies = [
 [[package]]
 name = "oximeter-macro-impl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0c92213cbf480848862926873d1c8e633102471e"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -3459,7 +3459,7 @@ dependencies = [
 [[package]]
 name = "oximeter-schema"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0c92213cbf480848862926873d1c8e633102471e"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3480,7 +3480,7 @@ dependencies = [
 [[package]]
 name = "oximeter-timeseries-macro"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0c92213cbf480848862926873d1c8e633102471e"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
 dependencies = [
  "omicron-workspace-hack",
  "oximeter-schema",
@@ -3493,7 +3493,7 @@ dependencies = [
 [[package]]
 name = "oximeter-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#0c92213cbf480848862926873d1c8e633102471e"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
 dependencies = [
  "bytes",
  "chrono",
@@ -5858,7 +5858,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tufaceous-artifact"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/tufaceous?branch=main#69e2896b5905aba61445e519aaa40f02d59638b2"
+source = "git+https://github.com/oxidecomputer/tufaceous?branch=main#b813aa819b7a1bd42a7295ba6bc71f06f51ccbb9"
 dependencies = [
  "daft",
  "parse-display",
@@ -6413,7 +6413,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

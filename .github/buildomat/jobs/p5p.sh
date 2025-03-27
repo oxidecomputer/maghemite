@@ -10,7 +10,7 @@
 #: ]
 #:
 #: access_repos = [
-#:   "oxidecomputer/dendrite",
+#:   "oxidecomputer/dendrite-os",
 #: ]
 #:
 #: [[publish]]
