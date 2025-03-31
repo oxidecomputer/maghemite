@@ -120,7 +120,7 @@ checksum = "dcfed56ad506cb2c684a14971b8861fdc3baaaae314b9e5f9bb532cbe3ba7a4f"
 [[package]]
 name = "api_identity"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0dad016506a8676135cd3a1144b70a65feb0a5c3"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -608,7 +608,7 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite-os?branch=main#668f1a2e35e7c76b22ab83fe6c2242d3454e2803"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=port#ddb2c455a0e78ef1ebcaae22ba5f6ac907f21fde"
 dependencies = [
  "anyhow",
  "chrono",
@@ -680,16 +680,6 @@ checksum = "4ddef33a339a91ea89fb53151bd0a4689cfce27055c291dfa69945475d22c747"
 dependencies = [
  "time",
  "version_check",
-]
-
-[[package]]
-name = "core-foundation"
-version = "0.9.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e195e091a93c46f7102ec7818a2aa394e1e1771c3ab4825963fa03e45afb8f"
-dependencies = [
- "core-foundation-sys",
- "libc",
 ]
 
 [[package]]
@@ -882,7 +872,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "common",
  "dpd-client",
  "dropshot",
  "hostname 0.3.1",
@@ -1118,7 +1107,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite-os?branch=main#668f1a2e35e7c76b22ab83fe6c2242d3454e2803"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=port#ddb2c455a0e78ef1ebcaae22ba5f6ac907f21fde"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1887,22 +1876,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hyper-tls"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70206fc6890eaca9fde8a0bf71caa2ddfc9fe045ac9e5c70df101a7dbde866e0"
-dependencies = [
- "bytes",
- "http-body-util",
- "hyper",
- "hyper-util",
- "native-tls",
- "tokio",
- "tokio-native-tls",
- "tower-service",
-]
-
-[[package]]
 name = "hyper-util"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2646,12 +2619,12 @@ dependencies = [
 [[package]]
 name = "mg-admin-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/maghemite?rev=caafd889f31faacfaa51e02902990c220c20ef60#caafd889f31faacfaa51e02902990c220c20ef60"
+source = "git+https://github.com/oxidecomputer/maghemite?rev=5a0d6edd0ecc7f26225a5bf3849d8508956682d0#5a0d6edd0ecc7f26225a5bf3849d8508956682d0"
 dependencies = [
  "anyhow",
  "chrono",
  "percent-encoding",
- "progenitor 0.8.0",
+ "progenitor 0.9.1",
  "reqwest",
  "schemars",
  "serde",
@@ -2699,7 +2672,6 @@ name = "mg-lower"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "common",
  "ddm-admin-client",
  "dpd-client",
  "http",
@@ -2842,23 +2814,6 @@ dependencies = [
  "mime",
  "spin 0.9.8",
  "version_check",
-]
-
-[[package]]
-name = "native-tls"
-version = "0.2.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87de3442987e9dbec73158d5c715e7ad9072fda936bb03d19d7fa10e00520f0e"
-dependencies = [
- "libc",
- "log",
- "openssl",
- "openssl-probe",
- "openssl-sys",
- "schannel",
- "security-framework",
- "security-framework-sys",
- "tempfile",
 ]
 
 [[package]]
@@ -3170,7 +3125,7 @@ dependencies = [
 [[package]]
 name = "omicron-common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0dad016506a8676135cd3a1144b70a65feb0a5c3"
 dependencies = [
  "anyhow",
  "api_identity",
@@ -3185,7 +3140,7 @@ dependencies = [
  "http",
  "ipnetwork",
  "macaddr",
- "mg-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=caafd889f31faacfaa51e02902990c220c20ef60)",
+ "mg-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=5a0d6edd0ecc7f26225a5bf3849d8508956682d0)",
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
  "oxnet",
@@ -3226,7 +3181,7 @@ dependencies = [
 [[package]]
 name = "omicron-uuid-kinds"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0dad016506a8676135cd3a1144b70a65feb0a5c3"
 dependencies = [
  "daft",
  "newtype-uuid",
@@ -3319,12 +3274,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "openssl-probe"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
-
-[[package]]
 name = "openssl-sys"
 version = "0.9.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3407,7 +3356,7 @@ dependencies = [
 [[package]]
 name = "oximeter"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0dad016506a8676135cd3a1144b70a65feb0a5c3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3426,7 +3375,7 @@ dependencies = [
 [[package]]
 name = "oximeter-macro-impl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0dad016506a8676135cd3a1144b70a65feb0a5c3"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -3459,7 +3408,7 @@ dependencies = [
 [[package]]
 name = "oximeter-schema"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0dad016506a8676135cd3a1144b70a65feb0a5c3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3480,7 +3429,7 @@ dependencies = [
 [[package]]
 name = "oximeter-timeseries-macro"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0dad016506a8676135cd3a1144b70a65feb0a5c3"
 dependencies = [
  "omicron-workspace-hack",
  "oximeter-schema",
@@ -3493,7 +3442,7 @@ dependencies = [
 [[package]]
 name = "oximeter-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#5fd1c3588a45adfba0d8c59ff847487b28e6968b"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#0dad016506a8676135cd3a1144b70a65feb0a5c3"
 dependencies = [
  "bytes",
  "chrono",
@@ -4332,22 +4281,18 @@ checksum = "d19c46a6fdd48bc4dab94b6103fccc55d34c67cc0ad04653aad4ea2a07cd7bbb"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "encoding_rs",
  "futures-core",
  "futures-util",
- "h2",
  "http",
  "http-body",
  "http-body-util",
  "hyper",
  "hyper-rustls",
- "hyper-tls",
  "hyper-util",
  "ipnet",
  "js-sys",
  "log",
  "mime",
- "native-tls",
  "once_cell",
  "percent-encoding",
  "pin-project-lite",
@@ -4359,9 +4304,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper",
- "system-configuration",
  "tokio",
- "tokio-native-tls",
  "tokio-rustls 0.26.2",
  "tokio-util",
  "tower",
@@ -4616,15 +4559,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "schannel"
-version = "0.1.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f29ebaa345f945cec9fbbc532eb307f0fdad8161f281b6369539c8d84876b3d"
-dependencies = [
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "schemars"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4676,29 +4610,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.100",
-]
-
-[[package]]
-name = "security-framework"
-version = "2.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "897b2245f0b511c87893af39b033e5ca9cce68824c4d7e7630b5a1d339658d02"
-dependencies = [
- "bitflags 2.9.0",
- "core-foundation",
- "core-foundation-sys",
- "libc",
- "security-framework-sys",
-]
-
-[[package]]
-name = "security-framework-sys"
-version = "2.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49db231d56a190491cb4aeda9527f1ad45345af50b0851622a7adb8c03b01c32"
-dependencies = [
- "core-foundation-sys",
- "libc",
 ]
 
 [[package]]
@@ -5329,27 +5240,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "system-configuration"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c879d448e9d986b661742763247d3693ed13609438cf3d006f51f5368a5ba6b"
-dependencies = [
- "bitflags 2.9.0",
- "core-foundation",
- "system-configuration-sys",
-]
-
-[[package]]
-name = "system-configuration-sys"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
-dependencies = [
- "core-foundation-sys",
- "libc",
-]
-
-[[package]]
 name = "tabled"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5610,16 +5500,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-native-tls"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
-dependencies = [
- "native-tls",
- "tokio",
-]
-
-[[package]]
 name = "tokio-rustls"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5858,7 +5738,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tufaceous-artifact"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/tufaceous?branch=main#b813aa819b7a1bd42a7295ba6bc71f06f51ccbb9"
+source = "git+https://github.com/oxidecomputer/tufaceous?branch=main#0ae289102f0fe2605781afcb4c5395652a9c842b"
 dependencies = [
  "daft",
  "parse-display",

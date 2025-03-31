@@ -5,8 +5,6 @@
 use crate::db::TunnelRoute;
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
-use dendrite_common::ports::PortId;
-use dendrite_common::ports::RearPort;
 use dpd_client::types;
 use dpd_client::Client;
 use dpd_client::ClientState;
@@ -17,6 +15,7 @@ use slog::Logger;
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
+use types::PortId;
 
 #[cfg(target_os = "illumos")]
 use ::{
@@ -191,7 +190,7 @@ pub fn add_routes_dendrite(
 
         // TODO this assumes ddm only operates on rear ports, which will not be
         // true for multi-rack deployments.
-        let port_id = match RearPort::try_from(egress_port_num) {
+        let port_id = match types::Rear::try_from(egress_port_num.to_string()) {
             Ok(rear) => PortId::Rear(rear),
             Err(e) => {
                 err!(log, ifname, "bad port name: {e}");
@@ -471,8 +470,19 @@ pub fn get_routes_dendrite(
                 types::RouteTarget::V6(route) => route,
                 _ => continue,
             };
-            let egress_port = match t.port_id {
-                PortId::Rear(rear) => rear.as_u8(),
+            let egress_port = match &t.port_id {
+                PortId::Rear(rear) => match rear.parse::<u16>() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        slog::warn!(
+                            log,
+                            "Found invalid rear port ({}): {:?}",
+                            t.port_id,
+                            e
+                        );
+                        continue;
+                    }
+                },
                 _ => continue,
             };
 
@@ -480,7 +490,7 @@ pub fn get_routes_dendrite(
                 dest,
                 prefix_len,
                 gw: t.tgt_ip.into(),
-                egress_port: egress_port as u16,
+                egress_port,
                 ifname: String::new(),
             });
         }
