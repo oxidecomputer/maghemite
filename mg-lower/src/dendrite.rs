@@ -101,7 +101,7 @@ pub(crate) fn link_is_up(
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<bool, Error> {
     let link_info =
-        rt.block_on(async { dpd.link_get(&port_id, &link_id).await })?;
+        rt.block_on(async { dpd.link_get(port_id, link_id).await })?;
 
     Ok(link_info.link_state == LinkState::Up)
 }
@@ -397,7 +397,7 @@ pub(crate) fn get_routes_for_prefix(
                 match RouteHash::new(
                     cidr.into(),
                     r.port_id.clone(),
-                    r.link_id.clone(),
+                    r.link_id,
                     r.tgt_ip.into(),
                     r.vlan_id,
                 ) {
@@ -418,7 +418,7 @@ pub(crate) fn get_routes_for_prefix(
                     RouteHash::new(
                         cidr.into(),
                         r.port_id.clone(),
-                        r.link_id.clone(),
+                        r.link_id,
                         r.tgt_ip.into(),
                         r.vlan_id,
                     )
@@ -438,7 +438,7 @@ pub(crate) fn get_routes_for_prefix(
                     RouteHash::new(
                         cidr.into(),
                         r.port_id.clone(),
-                        r.link_id.clone(),
+                        r.link_id,
                         r.tgt_ip.into(),
                         r.vlan_id,
                     )
