@@ -290,7 +290,7 @@ impl<'a> Drop for RouterZone<'a> {
         if self.transit {
             if let Err(e) = self.zfs.copy_from_zone(
                 &self.zone.name,
-                "var/svc/log/system-illumos-dendrite:default.log",
+                "var/svc/log/oxide-dendrite:default.log",
                 &format!("/work/{}-dpd.log", self.zone.name),
             ) {
                 eprintln!(
