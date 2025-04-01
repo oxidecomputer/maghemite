@@ -298,6 +298,16 @@ impl<'a> Drop for RouterZone<'a> {
                     self.zone.name, e,
                 );
             }
+            if let Err(e) = self.zfs.copy_from_zone(
+                &self.zone.name,
+                "var/svc/log/oxide-tfport:default.log",
+                &format!("/work/{}-tfport.log", self.zone.name),
+            ) {
+                eprintln!(
+                    "failed to copy zone tfport log file for {}: {}",
+                    self.zone.name, e,
+                );
+            }
         }
     }
 }
