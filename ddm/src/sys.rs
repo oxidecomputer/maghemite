@@ -190,10 +190,11 @@ pub fn add_routes_dendrite(
 
         // TODO this assumes ddm only operates on rear ports, which will not be
         // true for multi-rack deployments.
-        let port_id = match types::Rear::try_from(egress_port_num.to_string()) {
+        let port_name = format!("rear{}", egress_port_num);
+        let port_id = match types::Rear::try_from(&port_name) {
             Ok(rear) => PortId::Rear(rear),
             Err(e) => {
-                err!(log, ifname, "bad port name: {e}");
+                err!(log, ifname, "bad port name ({port_name}): {e}");
                 continue;
             }
         };
