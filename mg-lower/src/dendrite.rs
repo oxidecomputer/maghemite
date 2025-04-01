@@ -334,12 +334,17 @@ fn get_port_and_link(
     };
 
     let (port, link, _vlan) = parse_tfport_name(&ifname)?;
-    let port_id = types::Qsfp::try_from(port.to_string())
+    let port_name = format!("qsfp{port}");
+    let port_id = types::Qsfp::try_from(&port_name)
         .map(types::PortId::Qsfp)
-        .map_err(|e| Error::Tfport(format!("bad port name: {e}")))?;
+        .map_err(|e| {
+            Error::Tfport(format!(
+                "bad port name ifname: {ifname}  port name: {port_name}: {e}"
+            ))
+        })?;
 
     // TODO breakout considerations
-    let link_id = dpd_client::types::LinkId(link);
+    let link_id = types::LinkId(link);
     Ok((port_id, link_id))
 }
 
