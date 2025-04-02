@@ -7,9 +7,6 @@
 #: output_rules = [
 #:   "/work/*.log",
 #: ]
-#: access_repos = [
-#:   "oxidecomputer/dendrite-os",
-#: ]
 #:
 
 source .github/buildomat/test-ddm-common.sh

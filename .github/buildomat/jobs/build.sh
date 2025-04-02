@@ -8,9 +8,6 @@
 #:   "/work/debug/*",
 #:   "/work/release/*",
 #: ]
-#: access_repos = [
-#:   "oxidecomputer/dendrite-os",
-#: ]
 #:
 #: [[publish]]
 #: series = "release"

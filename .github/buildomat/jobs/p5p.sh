@@ -9,10 +9,6 @@
 #:   "=/out/mg.p5p.sha256",
 #: ]
 #:
-#: access_repos = [
-#:   "oxidecomputer/dendrite-os",
-#: ]
-#:
 #: [[publish]]
 #: series = "repo"
 #: name = "mg.p5p"

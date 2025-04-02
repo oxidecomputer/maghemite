@@ -7,9 +7,6 @@
 #: output_rules = [
 #:   "/out/*",
 #: ]
-#: access_repos = [
-#:   "oxidecomputer/dendrite-os",
-#: ]
 #:
 #: [[publish]]
 #: series = "image"

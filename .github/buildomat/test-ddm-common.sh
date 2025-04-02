@@ -29,23 +29,19 @@ dladm
 ipadm
 
 banner "collect"
-get_artifact softnpu image 64beaff129b7f63a04a53dd5ed0ec09f012f5756 softnpu
-get_artifact sidecar-lite release d815d8e2b310de8a7461241d9f9f1b5c762e1e65 libsidecar_lite.so
-get_artifact sidecar-lite release d815d8e2b310de8a7461241d9f9f1b5c762e1e65 scadm
-get_artifact dendrite image 668f1a2e35e7c76b22ab83fe6c2242d3454e2803 dendrite-softnpu.tar.gz
-get_artifact maghemite release 2bfd39000c878c45675651a7588c015c486e7f43 ddmd
-get_artifact maghemite release 2bfd39000c878c45675651a7588c015c486e7f43 ddmadm
+get_artifact softnpu image b016b192ed6bb7e2ebee024f48263f627bade5a4 softnpu
+get_artifact sidecar-lite release 117c38829e4c3129583a92e27cb55d318da1ce6e libsidecar_lite.so
+get_artifact sidecar-lite release 117c38829e4c3129583a92e27cb55d318da1ce6e scadm
+get_artifact dendrite image 0dcd325bef5445edf9ff89526e7da0be603ee2c7 dendrite-softnpu.tar.gz
 
 pushd download
 chmod +x softnpu
 chmod +x scadm
-chmod +x ddmadm
-chmod +x ddmd
-mv ddmadm ddmadm-v2
-mv ddmd ddmd-v2
 rm -rf zones/dendrite
 mkdir -p zones/dendrite
 tar -xzf dendrite-softnpu.tar.gz -C zones/dendrite
+sed -i  "s#<service_fmri value='svc:/oxide/zone-network-setup:default' />##g" \
+    zones/dendrite/root/var/svc/manifest/site/dendrite/manifest.xml 
 popd
 
 banner "install"
