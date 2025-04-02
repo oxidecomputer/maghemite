@@ -46,6 +46,10 @@ mv ddmd ddmd-v2
 rm -rf zones/dendrite
 mkdir -p zones/dendrite
 tar -xzf dendrite-softnpu.tar.gz -C zones/dendrite
+sed -i  "s#<service_fmri value='svc:/oxide/zone-network-setup:default' />##g" \
+    zones/dendrite/root/var/svc/manifest/site/dendrite/manifest.xml
+sed -i  "s#<service_fmri value='svc:/oxide/.*setup:default' />##g" \
+    zones/dendrite/root/var/svc/manifest/site/tfport/manifest.xml
 popd
 
 banner "install"
