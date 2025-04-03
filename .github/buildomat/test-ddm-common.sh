@@ -32,7 +32,7 @@ banner "collect"
 get_artifact softnpu image 64beaff129b7f63a04a53dd5ed0ec09f012f5756 softnpu
 get_artifact sidecar-lite release d815d8e2b310de8a7461241d9f9f1b5c762e1e65 libsidecar_lite.so
 get_artifact sidecar-lite release d815d8e2b310de8a7461241d9f9f1b5c762e1e65 scadm
-get_artifact dendrite image ddb2c455a0e78ef1ebcaae22ba5f6ac907f21fde dendrite-softnpu.tar.gz
+get_artifact dendrite image 270dc8eb421b8514bf1ed00ab956025dc326b9df dendrite-softnpu.tar.gz
 get_artifact maghemite release 2bfd39000c878c45675651a7588c015c486e7f43 ddmd
 get_artifact maghemite release 2bfd39000c878c45675651a7588c015c486e7f43 ddmadm
 
