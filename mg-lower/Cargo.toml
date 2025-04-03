@@ -8,7 +8,6 @@ ddm-admin-client = { path = "../ddm-admin-client" }
 rdb = { path = "../rdb" }
 anyhow.workspace = true
 dpd-client.workspace = true
-dendrite-common.workspace = true
 slog.workspace = true
 libnet.workspace = true
 tokio.workspace = true

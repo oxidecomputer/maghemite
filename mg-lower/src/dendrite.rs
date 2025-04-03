@@ -4,10 +4,7 @@
 
 use crate::Error;
 use crate::MG_LOWER_TAG;
-use dendrite_common::ports::PortId;
-use dendrite_common::ports::QsfpPort;
 use dpd_client::types;
-use dpd_client::types::LinkId;
 use dpd_client::types::LinkState;
 use dpd_client::Client as DpdClient;
 use libnet::get_route;
@@ -26,10 +23,10 @@ use std::time::Duration;
 
 const TFPORT_QSFP_DEVICE_PREFIX: &str = "tfportqsfp";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct RouteHash {
     pub(crate) cidr: IpNet,
-    pub(crate) port_id: PortId,
+    pub(crate) port_id: types::PortId,
     pub(crate) link_id: types::LinkId,
     pub(crate) nexthop: IpAddr,
     pub(crate) vlan_id: Option<u16>,
@@ -38,7 +35,7 @@ pub(crate) struct RouteHash {
 impl RouteHash {
     pub fn new(
         cidr: IpNet,
-        port_id: PortId,
+        port_id: types::PortId,
         link_id: types::LinkId,
         nexthop: IpAddr,
         vlan_id: Option<u16>,
@@ -99,12 +96,12 @@ pub(crate) fn ensure_tep_addr(
 
 pub(crate) fn link_is_up(
     dpd: &DpdClient,
-    port_id: PortId,
-    link_id: LinkId,
+    port_id: &types::PortId,
+    link_id: &types::LinkId,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<bool, Error> {
     let link_info =
-        rt.block_on(async { dpd.link_get(&port_id, &link_id).await })?;
+        rt.block_on(async { dpd.link_get(port_id, link_id).await })?;
 
     Ok(link_info.link_state == LinkState::Up)
 }
@@ -159,7 +156,7 @@ where
     for r in to_add {
         let cidr = r.cidr;
         let tag = dpd.inner().tag.clone();
-        let port_id = r.port_id;
+        let port_id = r.port_id.clone();
         let link_id = r.link_id;
         let vlan_id = r.vlan_id;
 
@@ -234,7 +231,7 @@ where
         }
     }
     for r in to_del {
-        let port_id = r.port_id;
+        let port_id = r.port_id.clone();
         let link_id = r.link_id;
 
         let cidr = match r.cidr {
@@ -322,7 +319,7 @@ fn test_tfport_parser() {
 
 fn get_port_and_link(
     nexthop: IpAddr,
-) -> Result<(PortId, types::LinkId), Error> {
+) -> Result<(types::PortId, types::LinkId), Error> {
     let prefix = IpNet::host_net(nexthop);
     let sys_route = get_route(prefix, Some(Duration::from_secs(1)))?;
 
@@ -337,13 +334,17 @@ fn get_port_and_link(
     };
 
     let (port, link, _vlan) = parse_tfport_name(&ifname)?;
-    let port_id = match QsfpPort::try_from(port) {
-        Ok(qsfp) => PortId::Qsfp(qsfp),
-        Err(e) => return Err(Error::Tfport(format!("bad port name: {e}"))),
-    };
+    let port_name = format!("qsfp{port}");
+    let port_id = types::Qsfp::try_from(&port_name)
+        .map(types::PortId::Qsfp)
+        .map_err(|e| {
+            Error::Tfport(format!(
+                "bad port name ifname: {ifname}  port name: {port_name}: {e}"
+            ))
+        })?;
 
     // TODO breakout considerations
-    let link_id = dpd_client::types::LinkId(link);
+    let link_id = types::LinkId(link);
     Ok((port_id, link_id))
 }
 
@@ -373,7 +374,7 @@ pub(crate) fn get_routes_for_prefix(
                 if r.tag != MG_LOWER_TAG {
                     continue;
                 }
-                match link_is_up(dpd, r.port_id, r.link_id, &rt) {
+                match link_is_up(dpd, &r.port_id, &r.link_id, &rt) {
                     Err(e) => {
                         error!(
                             log,
@@ -400,7 +401,7 @@ pub(crate) fn get_routes_for_prefix(
                 }
                 match RouteHash::new(
                     cidr.into(),
-                    r.port_id,
+                    r.port_id.clone(),
                     r.link_id,
                     r.tgt_ip.into(),
                     r.vlan_id,
@@ -421,7 +422,7 @@ pub(crate) fn get_routes_for_prefix(
                 .map(|r| {
                     RouteHash::new(
                         cidr.into(),
-                        r.port_id,
+                        r.port_id.clone(),
                         r.link_id,
                         r.tgt_ip.into(),
                         r.vlan_id,
@@ -441,7 +442,7 @@ pub(crate) fn get_routes_for_prefix(
                 .map(|r| {
                     RouteHash::new(
                         cidr.into(),
-                        r.port_id,
+                        r.port_id.clone(),
                         r.link_id,
                         r.tgt_ip.into(),
                         r.vlan_id,

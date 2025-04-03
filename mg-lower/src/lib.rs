@@ -179,10 +179,10 @@ fn sync_prefix(
     }
 
     // Routes that are in the best set but not on the asic should be added.
-    let add: HashSet<RouteHash> = best.difference(&current).copied().collect();
+    let add: HashSet<RouteHash> = best.difference(&current).cloned().collect();
 
     // Routes that are on the asic but not in the best set should be removed.
-    let del: HashSet<RouteHash> = current.difference(&best).copied().collect();
+    let del: HashSet<RouteHash> = current.difference(&best).cloned().collect();
 
     // Update DDM tunnel routing
     add_tunnel_routes(tep, ddm, &add, rt.clone(), log);

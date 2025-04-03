@@ -168,7 +168,8 @@ impl<'a> RouterZone<'a> {
         );
 
         if self.transit {
-            self.zone.zexec("svcadm enable dendrite")?;
+            self.zone.zexec("svcadm disable dendrite")?;
+            self.zone.zexec("svcadm disable tfport")?;
             self.zone.zexec(
                 "svccfg -s dendrite setprop config/address = [::1]:12224",
             )?;
@@ -184,10 +185,15 @@ impl<'a> RouterZone<'a> {
                 self.ifx.len() - 1
             ))?;
             self.zone.zexec("svcadm refresh dendrite:default")?;
-            self.zone.zexec("svcadm restart dendrite:default")?;
+            self.zone.zexec("svcadm enable dendrite:default")?;
             // wait for dendrite to come up
             println!("wait 10s for dendrite to come up ...");
             sleep(Duration::from_secs(10));
+            self.zone
+                .zexec("svccfg -s tfport setprop config/pkt_source = none")?;
+            self.zone
+                .zexec("svccfg -s tfport setprop config/flags = --sync-only")?;
+            self.zone.zexec("svcadm refresh tfport:default")?;
             self.zone.zexec("svcadm enable tfport")?;
             self.zone.zexec(&format!(
                 "{} {ddm} --kind transit --dendrite {} {} &> /opt/ddmd.log &",

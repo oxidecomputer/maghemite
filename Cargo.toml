@@ -102,11 +102,6 @@ git = "https://github.com/oxidecomputer/opte"
 rev = "cd9aa6467c5e62c6d97f6aafa2150d6930e3a0fa"
 
 [workspace.dependencies.dpd-client]
-git = "https://github.com/oxidecomputer/dendrite-os"
+git = "https://github.com/oxidecomputer/dendrite"
 branch = "main"
 package = "dpd-client"
-
-[workspace.dependencies.dendrite-common]
-git = "https://github.com/oxidecomputer/dendrite-os"
-branch = "main"
-package = "common"
