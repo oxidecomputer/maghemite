@@ -109,7 +109,7 @@ pub async fn static_list_v4_routes(
     let mut static_rib: GetRibResult = BTreeMap::new();
     for srk in static_db {
         let key = srk.prefix.to_string();
-        let paths = static_rib.entry(key).or_insert(BTreeSet::new());
+        let paths = static_rib.entry(key).or_default();
         paths.insert(srk.into());
     }
 
