@@ -28,7 +28,7 @@ git clone https://github.com/oxidecomputer/testbed
 cd testbed/interop
 mkdir image
 cd image
-cp /input/image/mgd.tar.gz .
+cp /input/image/out/mgd.tar.gz .
 tar xzvf mgd.tar.gz
 cp root/opt/oxide/mgd/bin/{mgd,mgadm} cargo-bay/mgd/
 cargo build
