@@ -22,6 +22,7 @@ cargo --version
 rustc --version
 
 cargo install cargo-nextest
+pfexec pkg install protobuf
 
 banner "setup"
 git clone https://github.com/oxidecomputer/testbed
