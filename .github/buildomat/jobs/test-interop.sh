@@ -30,7 +30,8 @@ mkdir image
 cd image
 cp /input/image/out/mgd.tar.gz .
 tar xzvf mgd.tar.gz
-cp root/opt/oxide/mgd/bin/{mgd,mgadm} cargo-bay/mgd/
+cd ..
+cp image/root/opt/oxide/mgd/bin/{mgd,mgadm} cargo-bay/mgd/
 cargo build
 
 banner "start topology"
