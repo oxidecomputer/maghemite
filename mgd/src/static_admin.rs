@@ -100,13 +100,18 @@ pub type GetRibResult = BTreeMap<String, BTreeSet<Path>>;
 pub async fn static_list_v4_routes(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
-    let static_rib = ctx
+    let static_db = ctx
         .context()
         .db
-        .static_rib()
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect();
+        .get_static4()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    let mut static_rib: GetRibResult = BTreeMap::new();
+    for srk in static_db {
+        let key = srk.prefix.to_string();
+        let paths = static_rib.entry(key).or_default();
+        paths.insert(srk.into());
+    }
 
     Ok(HttpResponseOk(static_rib))
 }
