@@ -246,7 +246,7 @@ where
             dpd.route_ipv4_delete_target(&cidr, &port_id, &link_id, &target)
                 .await
         }) {
-            error!(log, "failed to create route {:?}: {}", r, e);
+            error!(log, "failed to delete route {:?}: {}", r, e);
             Err(e)?;
         }
     }
