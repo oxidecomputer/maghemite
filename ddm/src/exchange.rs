@@ -398,8 +398,7 @@ pub(crate) fn announce_tunnel(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update =
-        TunnelUpdate::announce(endpoints.into_iter().map(Into::into).collect());
+    let update = TunnelUpdate::announce(endpoints.into_iter().collect());
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
@@ -425,8 +424,7 @@ pub(crate) fn withdraw_tunnel(
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
 ) -> Result<(), ExchangeError> {
-    let update =
-        TunnelUpdate::withdraw(endpoints.into_iter().map(Into::into).collect());
+    let update = TunnelUpdate::withdraw(endpoints.into_iter().collect());
     send_update(ctx, config, update.into(), addr, version, rt, log)
 }
 
