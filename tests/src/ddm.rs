@@ -74,7 +74,7 @@ impl<'a> SoftnpuZone<'a> {
     }
 }
 
-impl<'a> Drop for SoftnpuZone<'a> {
+impl Drop for SoftnpuZone<'_> {
     fn drop(&mut self) {
         if let Err(e) = self.zone.zexec("pkill softnpu") {
             eprintln!("failed to stop softnpu: {}", e);
@@ -271,14 +271,14 @@ impl<'a> RouterZone<'a> {
     }
 }
 
-impl<'a> std::ops::Deref for RouterZone<'a> {
+impl std::ops::Deref for RouterZone<'_> {
     type Target = Zone;
     fn deref(&self) -> &Zone {
         &self.zone
     }
 }
 
-impl<'a> Drop for RouterZone<'a> {
+impl Drop for RouterZone<'_> {
     fn drop(&mut self) {
         if let Err(e) = self.zone.zexec("pkill ddmd") {
             eprintln!("failed to stop ddmd: {}", e);

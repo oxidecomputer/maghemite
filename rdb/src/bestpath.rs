@@ -34,10 +34,7 @@ pub fn bestpaths(
     rib: &Rib,
     max: usize,
 ) -> Option<BTreeSet<Path>> {
-    let candidates = match rib.get(&prefix) {
-        Some(cs) => cs,
-        None => return None,
-    };
+    let candidates = rib.get(&prefix)?;
 
     // Partition the choice space on whether routes are shutdown or not. If we
     // only have shutdown routes then use those. Otherwise use active routes
