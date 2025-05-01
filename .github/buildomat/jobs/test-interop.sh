@@ -35,6 +35,10 @@ cd ..
 cp image/root/opt/oxide/mgd/bin/{mgd,mgadm} cargo-bay/mgd/
 cargo build
 
+banner "collect interface info"
+ipadm
+dladm
+
 banner "start topology"
 pfexec ./interop launch
 
