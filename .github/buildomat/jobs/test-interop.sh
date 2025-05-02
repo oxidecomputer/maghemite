@@ -38,6 +38,7 @@ cargo build
 banner "collect interface info"
 ipadm
 dladm
+netstat -cran
 
 banner "start topology"
 pfexec ./interop launch
