@@ -2,7 +2,7 @@
 #:
 #: name = "test-interop"
 #: variety = "basic"
-#: target = "helios-2.0"
+#: target = "lab-2.0-opte"
 #: rust_toolchain = "stable"
 #: access_repos = [
 #:   "oxidecomputer/testbed",
