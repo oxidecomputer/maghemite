@@ -532,65 +532,69 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
     match command {
         Commands::Config(cmd) => match cmd.command {
             ConfigCmd::Router(cmd) => match cmd.command {
-                RouterCmd::List => read_routers(c).await,
-                RouterCmd::Create(cfg) => create_router(cfg, c).await,
-                RouterCmd::Read { asn } => read_router(asn, c).await,
-                RouterCmd::Update(cfg) => update_router(cfg, c).await,
-                RouterCmd::Delete { asn } => delete_router(asn, c).await,
+                RouterCmd::List => read_routers(c).await?,
+                RouterCmd::Create(cfg) => create_router(cfg, c).await?,
+                RouterCmd::Read { asn } => read_router(asn, c).await?,
+                RouterCmd::Update(cfg) => update_router(cfg, c).await?,
+                RouterCmd::Delete { asn } => delete_router(asn, c).await?,
             },
 
             ConfigCmd::Neighbor(cmd) => match cmd.command {
-                NeighborCmd::List { asn } => list_nbr(asn, c).await,
-                NeighborCmd::Create(nbr) => create_nbr(nbr, c).await,
-                NeighborCmd::Read { asn, addr } => read_nbr(asn, addr, c).await,
-                NeighborCmd::Update(nbr) => update_nbr(nbr, c).await,
+                NeighborCmd::List { asn } => list_nbr(asn, c).await?,
+                NeighborCmd::Create(nbr) => create_nbr(nbr, c).await?,
+                NeighborCmd::Read { asn, addr } => {
+                    read_nbr(asn, addr, c).await?
+                }
+                NeighborCmd::Update(nbr) => update_nbr(nbr, c).await?,
                 NeighborCmd::Delete { asn, addr } => {
-                    delete_nbr(asn, addr, c).await
+                    delete_nbr(asn, addr, c).await?
                 }
             },
 
             ConfigCmd::Origin(cmd) => match cmd.command {
                 OriginCmd::Ipv4(cmd) => match cmd.command {
                     Origin4Cmd::Create(origin) => {
-                        create_origin4(origin, c).await
+                        create_origin4(origin, c).await?
                     }
-                    Origin4Cmd::Read { asn } => read_origin4(asn, c).await,
+                    Origin4Cmd::Read { asn } => read_origin4(asn, c).await?,
                     Origin4Cmd::Update(origin) => {
-                        update_origin4(origin, c).await
+                        update_origin4(origin, c).await?
                     }
-                    Origin4Cmd::Delete { asn } => delete_origin4(asn, c).await,
+                    Origin4Cmd::Delete { asn } => {
+                        delete_origin4(asn, c).await?
+                    }
                 },
             },
 
             ConfigCmd::Policy(cmd) => match cmd.command {
                 PolicyCmd::Checker(cmd) => match cmd.command {
                     CheckerCmd::Create { file, asn } => {
-                        create_chk(file, asn, c).await
+                        create_chk(file, asn, c).await?
                     }
-                    CheckerCmd::Read { asn } => read_chk(asn, c).await,
+                    CheckerCmd::Read { asn } => read_chk(asn, c).await?,
                     CheckerCmd::Update { file, asn } => {
-                        update_chk(file, asn, c).await
+                        update_chk(file, asn, c).await?
                     }
-                    CheckerCmd::Delete { asn } => delete_chk(asn, c).await,
+                    CheckerCmd::Delete { asn } => delete_chk(asn, c).await?,
                 },
                 PolicyCmd::Shaper(cmd) => match cmd.command {
                     ShaperCmd::Create { file, asn } => {
-                        create_shp(file, asn, c).await
+                        create_shp(file, asn, c).await?
                     }
-                    ShaperCmd::Read { asn } => read_shp(asn, c).await,
+                    ShaperCmd::Read { asn } => read_shp(asn, c).await?,
                     ShaperCmd::Update { file, asn } => {
-                        update_shp(file, asn, c).await
+                        update_shp(file, asn, c).await?
                     }
-                    ShaperCmd::Delete { asn } => delete_shp(asn, c).await,
+                    ShaperCmd::Delete { asn } => delete_shp(asn, c).await?,
                 },
             },
         },
 
         Commands::Status(cmd) => match cmd.command {
-            StatusCmd::Neighbors { asn } => get_neighbors(c, asn).await,
-            StatusCmd::Exported { asn } => get_exported(c, asn).await,
-            StatusCmd::Imported { asn } => get_imported(c, asn).await,
-            StatusCmd::Selected { asn } => get_selected(c, asn).await,
+            StatusCmd::Neighbors { asn } => get_neighbors(c, asn).await?,
+            StatusCmd::Exported { asn } => get_exported(c, asn).await?,
+            StatusCmd::Imported { asn } => get_imported(c, asn).await?,
+            StatusCmd::Selected { asn } => get_selected(c, asn).await?,
         },
 
         Commands::Clear(cmd) => match cmd.command {
@@ -598,54 +602,57 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
                 asn,
                 addr,
                 clear_type,
-            } => clear_nbr(asn, addr, clear_type, c).await,
+            } => clear_nbr(asn, addr, clear_type, c).await?,
         },
 
         Commands::Omicron(cmd) => match cmd.command {
-            OmicronCmd::Apply { filename } => apply(filename, c).await,
+            OmicronCmd::Apply { filename } => apply(filename, c).await?,
         },
     }
     Ok(())
 }
 
-async fn read_routers(c: Client) {
-    let routers = c.read_routers().await.unwrap().into_inner();
+async fn read_routers(c: Client) -> Result<()> {
+    let routers = c.read_routers().await?.into_inner();
     println!("{routers:#?}");
+    Ok(())
 }
 
-async fn create_router(cfg: RouterConfig, c: Client) {
+async fn create_router(cfg: RouterConfig, c: Client) -> Result<()> {
     c.create_router(&types::Router {
         asn: cfg.asn,
         id: cfg.id,
         listen: cfg.listen,
         graceful_shutdown: cfg.graceful_shutdown,
     })
-    .await
-    .unwrap();
+    .await?;
+    Ok(())
 }
 
-async fn update_router(cfg: RouterConfig, c: Client) {
+async fn update_router(cfg: RouterConfig, c: Client) -> Result<()> {
     c.update_router(&types::Router {
         asn: cfg.asn,
         id: cfg.id,
         listen: cfg.listen,
         graceful_shutdown: cfg.graceful_shutdown,
     })
-    .await
-    .unwrap();
+    .await?;
+    Ok(())
 }
 
-async fn read_router(asn: u32, c: Client) {
-    let response = c.read_router(asn).await.unwrap();
+async fn read_router(asn: u32, c: Client) -> Result<()> {
+    let response = c.read_router(asn).await?;
     println!("{response:#?}");
+    Ok(())
 }
 
-async fn delete_router(asn: u32, c: Client) {
-    c.delete_router(asn).await.unwrap();
+async fn delete_router(asn: u32, c: Client) -> Result<()> {
+    c.delete_router(asn).await?;
+    Ok(())
 }
 
-async fn get_neighbors(c: Client, asn: u32) {
-    let result = c.get_neighbors(asn).await.unwrap();
+async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
+    let result = c.get_neighbors(asn).await?;
     //println!("{result:#?}");
     let mut tw = TabWriter::new(stdout());
     writeln!(
@@ -686,71 +693,82 @@ async fn get_neighbors(c: Client, asn: u32) {
         .unwrap();
     }
     tw.flush().unwrap();
+    Ok(())
 }
 
-async fn get_exported(c: Client, asn: u32) {
+async fn get_exported(c: Client, asn: u32) -> Result<()> {
     let exported = c
         .get_exported(&types::AsnSelector { asn })
-        .await
-        .unwrap()
+        .await?
         .into_inner();
 
     println!("{exported:#?}");
+    Ok(())
 }
 
-async fn get_imported(c: Client, asn: u32) {
+async fn get_imported(c: Client, asn: u32) -> Result<()> {
     let imported = c
         .get_imported(&types::AsnSelector { asn })
-        .await
-        .unwrap()
+        .await?
         .into_inner();
 
     print_rib(imported);
+    Ok(())
 }
 
-async fn get_selected(c: Client, asn: u32) {
+async fn get_selected(c: Client, asn: u32) -> Result<()> {
     let selected = c
         .get_selected(&types::AsnSelector { asn })
-        .await
-        .unwrap()
+        .await?
         .into_inner();
 
     print_rib(selected);
+    Ok(())
 }
 
-async fn list_nbr(asn: u32, c: Client) {
-    let nbrs = c.read_neighbors(asn).await.unwrap();
+async fn list_nbr(asn: u32, c: Client) -> Result<()> {
+    let nbrs = c.read_neighbors(asn).await?;
     println!("{nbrs:#?}");
+    Ok(())
 }
 
-async fn create_nbr(nbr: Neighbor, c: Client) {
-    c.create_neighbor(&nbr.into()).await.unwrap();
+async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
+    c.create_neighbor(&nbr.into()).await?;
+    Ok(())
 }
 
-async fn read_nbr(asn: u32, addr: IpAddr, c: Client) {
-    let nbr = c.read_neighbor(&addr, asn).await.unwrap().into_inner();
+async fn read_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
+    let nbr = c.read_neighbor(&addr, asn).await?.into_inner();
     println!("{nbr:#?}");
+    Ok(())
 }
 
-async fn update_nbr(nbr: Neighbor, c: Client) {
-    c.update_neighbor(&nbr.into()).await.unwrap();
+async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
+    c.update_neighbor(&nbr.into()).await?;
+    Ok(())
 }
 
-async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) {
-    c.delete_neighbor(&addr, asn).await.unwrap();
+async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
+    c.delete_neighbor(&addr, asn).await?;
+    Ok(())
 }
 
-async fn clear_nbr(asn: u32, addr: IpAddr, op: NeighborResetOp, c: Client) {
+async fn clear_nbr(
+    asn: u32,
+    addr: IpAddr,
+    op: NeighborResetOp,
+    c: Client,
+) -> Result<()> {
     c.clear_neighbor(&NeighborResetRequest {
         asn,
         addr,
         op: op.into(),
     })
-    .await
-    .unwrap();
+    .await?;
+    Ok(())
 }
 
-async fn create_origin4(originate: Originate4, c: Client) {
+async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
     c.create_origin4(&types::Origin4 {
         asn: originate.asn,
         prefixes: originate
@@ -763,11 +781,11 @@ async fn create_origin4(originate: Originate4, c: Client) {
             })
             .collect(),
     })
-    .await
-    .unwrap();
+    .await?;
+    Ok(())
 }
 
-async fn update_origin4(originate: Originate4, c: Client) {
+async fn update_origin4(originate: Originate4, c: Client) -> Result<()> {
     c.update_origin4(&types::Origin4 {
         asn: originate.asn,
         prefixes: originate
@@ -780,24 +798,26 @@ async fn update_origin4(originate: Originate4, c: Client) {
             })
             .collect(),
     })
-    .await
-    .unwrap();
+    .await?;
+    Ok(())
 }
 
-async fn delete_origin4(asn: u32, c: Client) {
-    c.delete_origin4(asn).await.unwrap();
+async fn delete_origin4(asn: u32, c: Client) -> Result<()> {
+    c.delete_origin4(asn).await?;
+    Ok(())
 }
 
-async fn read_origin4(asn: u32, c: Client) {
-    let o4 = c.read_origin4(asn).await.unwrap();
+async fn read_origin4(asn: u32, c: Client) -> Result<()> {
+    let o4 = c.read_origin4(asn).await?;
     println!("{o4:#?}");
+    Ok(())
 }
 
-async fn apply(filename: String, c: Client) {
-    let contents = read_to_string(filename).expect("read file");
-    let request: types::ApplyRequest =
-        serde_json::from_str(&contents).expect("parse config");
-    c.bgp_apply(&request).await.expect("bgp apply");
+async fn apply(filename: String, c: Client) -> Result<()> {
+    let contents = read_to_string(filename)?;
+    let request: types::ApplyRequest = serde_json::from_str(&contents)?;
+    c.bgp_apply(&request).await?;
+    Ok(())
 }
 
 fn print_rib(rib: Rib) {
@@ -879,64 +899,66 @@ fn print_rib(rib: Rib) {
     }
 }
 
-async fn create_chk(filename: String, asn: u32, c: Client) {
-    let code = std::fs::read_to_string(filename).unwrap();
+async fn create_chk(filename: String, asn: u32, c: Client) -> Result<()> {
+    let code = std::fs::read_to_string(filename)?;
 
     // check that the program is loadable first
-    bgp::policy::load_checker(&code).unwrap();
+    bgp::policy::load_checker(&code)?;
 
     c.create_checker(&types::CheckerSource { asn, code })
-        .await
-        .unwrap();
+        .await?;
+    Ok(())
 }
 
-async fn read_chk(asn: u32, c: Client) {
-    let result = c.read_checker(asn).await.unwrap();
+async fn read_chk(asn: u32, c: Client) -> Result<()> {
+    let result = c.read_checker(asn).await?;
     print!("{result:#?}");
+    Ok(())
 }
 
-async fn update_chk(filename: String, asn: u32, c: Client) {
-    let code = std::fs::read_to_string(filename).unwrap();
+async fn update_chk(filename: String, asn: u32, c: Client) -> Result<()> {
+    let code = std::fs::read_to_string(filename)?;
 
     // check that the program is loadable first
-    bgp::policy::load_checker(&code).unwrap();
+    bgp::policy::load_checker(&code)?;
 
     c.update_checker(&types::CheckerSource { asn, code })
-        .await
-        .unwrap();
+        .await?;
+    Ok(())
 }
 
-async fn delete_chk(asn: u32, c: Client) {
-    c.delete_checker(asn).await.unwrap();
+async fn delete_chk(asn: u32, c: Client) -> Result<()> {
+    c.delete_checker(asn).await?;
+    Ok(())
 }
 
-async fn create_shp(filename: String, asn: u32, c: Client) {
-    let code = std::fs::read_to_string(filename).unwrap();
+async fn create_shp(filename: String, asn: u32, c: Client) -> Result<()> {
+    let code = std::fs::read_to_string(filename)?;
 
     // check that the program is loadable first
-    bgp::policy::load_shaper(&code).unwrap();
+    bgp::policy::load_shaper(&code)?;
 
-    c.create_shaper(&types::ShaperSource { asn, code })
-        .await
-        .unwrap();
+    c.create_shaper(&types::ShaperSource { asn, code }).await?;
+    Ok(())
 }
 
-async fn read_shp(asn: u32, c: Client) {
-    let result = c.read_shaper(asn).await.unwrap();
+async fn read_shp(asn: u32, c: Client) -> Result<()> {
+    let result = c.read_shaper(asn).await?;
     print!("{result:#?}");
+    Ok(())
 }
 
-async fn update_shp(filename: String, asn: u32, c: Client) {
+async fn update_shp(filename: String, asn: u32, c: Client) -> Result<()> {
     let code = std::fs::read_to_string(filename).unwrap();
 
     // check that the program is loadable first
     bgp::policy::load_shaper(&code).unwrap();
 
-    c.update_shaper(&types::ShaperSource { asn, code })
-        .await
-        .unwrap();
+    c.update_shaper(&types::ShaperSource { asn, code }).await?;
+    Ok(())
 }
 
-async fn delete_shp(asn: u32, c: Client) {
-    c.delete_shaper(asn).await.unwrap();
+async fn delete_shp(asn: u32, c: Client) -> Result<()> {
+    c.delete_shaper(asn).await?;
+    Ok(())
 }
