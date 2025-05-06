@@ -826,12 +826,17 @@ fn print_rib(rib: Rib) {
     let mut static_routes = CliRib::new();
     let mut bgp_routes = CliRib::new();
     for (prefix, paths) in rib.0.into_iter() {
-        let (br, sr) = paths.into_iter().partition(|p| p.bgp.is_some());
-        static_routes.insert(prefix.clone(), sr);
-        bgp_routes.insert(prefix, br);
+        let (br, sr): (Vec<Path>, Vec<Path>) =
+            paths.into_iter().partition(|p| p.bgp.is_some());
+        if !sr.is_empty() {
+            static_routes.insert(prefix.clone(), sr);
+        }
+        if !br.is_empty() {
+            bgp_routes.insert(prefix, br);
+        }
     }
 
-    if static_routes.values().map(|x| x.len()).sum::<usize>() > 0 {
+    if !static_routes.is_empty() {
         let mut tw = TabWriter::new(stdout());
         writeln!(
             &mut tw,
@@ -858,7 +863,7 @@ fn print_rib(rib: Rib) {
         tw.flush().unwrap();
     }
 
-    if bgp_routes.values().map(|x| x.len()).sum::<usize>() > 0 {
+    if !bgp_routes.is_empty() {
         let mut tw = TabWriter::new(stdout());
         writeln!(
             &mut tw,
