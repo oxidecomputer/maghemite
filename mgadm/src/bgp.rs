@@ -10,8 +10,8 @@ use mg_admin_client::types::{
     self, ImportExportPolicy, NeighborResetRequest, Path, Rib,
 };
 use mg_admin_client::Client;
+use natord::compare;
 use rdb::types::{PolicyAction, Prefix4};
-use std::collections::BTreeMap;
 use std::fs::read_to_string;
 use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -821,7 +821,7 @@ async fn apply(filename: String, c: Client) -> Result<()> {
 }
 
 fn print_rib(rib: Rib) {
-    type CliRib = BTreeMap<String, Vec<Path>>;
+    type CliRib = Vec<(String, Vec<Path>)>;
 
     let mut static_routes = CliRib::new();
     let mut bgp_routes = CliRib::new();
@@ -829,10 +829,10 @@ fn print_rib(rib: Rib) {
         let (br, sr): (Vec<Path>, Vec<Path>) =
             paths.into_iter().partition(|p| p.bgp.is_some());
         if !sr.is_empty() {
-            static_routes.insert(prefix.clone(), sr);
+            static_routes.push((prefix.clone(), sr));
         }
         if !br.is_empty() {
-            bgp_routes.insert(prefix, br);
+            bgp_routes.push((prefix, br));
         }
     }
 
@@ -847,6 +847,7 @@ fn print_rib(rib: Rib) {
         )
         .unwrap();
 
+        static_routes.sort_by(|a, b| compare(&a.0, &b.0));
         for (prefix, paths) in static_routes.into_iter() {
             write!(&mut tw, "{prefix}").unwrap();
             for path in paths.into_iter() {
@@ -880,6 +881,7 @@ fn print_rib(rib: Rib) {
         )
         .unwrap();
 
+        bgp_routes.sort_by(|a, b| compare(&a.0, &b.0));
         for (prefix, paths) in bgp_routes.into_iter() {
             write!(&mut tw, "{prefix}").unwrap();
             for path in paths.into_iter() {

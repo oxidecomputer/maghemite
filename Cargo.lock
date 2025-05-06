@@ -2796,6 +2796,7 @@ dependencies = [
  "humantime",
  "mg-admin-client 0.1.0",
  "mg-common",
+ "natord",
  "rdb",
  "serde_json",
  "slog",
@@ -2887,6 +2888,12 @@ dependencies = [
  "spin 0.9.8",
  "version_check",
 ]
+
+[[package]]
+name = "natord"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "308d96db8debc727c3fd9744aac51751243420e46edf401010908da7f8d5e57c"
 
 [[package]]
 name = "newline-converter"
