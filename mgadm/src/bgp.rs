@@ -843,11 +843,12 @@ fn print_rib(rib: Rib) {
         .unwrap();
 
         for (prefix, paths) in static_routes.into_iter() {
+            write!(&mut tw, "{prefix}").unwrap();
             for path in paths.into_iter() {
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{:?}",
-                    prefix, path.nexthop, path.rib_priority,
+                    "\t{}\t{:?}",
+                    path.nexthop, path.rib_priority,
                 )
                 .unwrap();
             }
@@ -875,12 +876,12 @@ fn print_rib(rib: Rib) {
         .unwrap();
 
         for (prefix, paths) in bgp_routes.into_iter() {
+            write!(&mut tw, "{prefix}").unwrap();
             for path in paths.into_iter() {
                 let bgp = path.bgp.as_ref().unwrap();
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}",
-                    prefix,
+                    "\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}",
                     path.nexthop,
                     path.rib_priority,
                     bgp.local_pref,
