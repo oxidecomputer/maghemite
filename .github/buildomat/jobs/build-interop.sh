@@ -36,4 +36,4 @@ cp image/root/opt/oxide/mgd/bin/{mgd,mgadm} cargo-bay/mgd/
 cargo build
 cd ..
 tar czvf interop.tgz interop/
-mv interop.tgz work/
+mv interop.tgz /work/
