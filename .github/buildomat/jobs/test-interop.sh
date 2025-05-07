@@ -4,15 +4,13 @@
 #: variety = "basic"
 #: target = "lab-2.0-opte"
 #: rust_toolchain = "stable"
-#: access_repos = [
-#:   "oxidecomputer/testbed",
-#: ]
+#: skip_clone = true
 #: output_rules = [
 #:   "/work/*",
 #: ]
 #:
-#: [dependencies.image]
-#: job = "image"
+#: [dependencies.build-interop]
+#: job = "build-interop"
 #:
 
 set -x
@@ -21,28 +19,19 @@ set -e
 cargo --version
 rustc --version
 
-cargo install cargo-nextest
-pfexec pkg install protobuf git
-
-banner "testbed setup"
-git clone https://github.com/oxidecomputer/testbed
-cd testbed/interop
-mkdir image
-cd image
-cp /input/image/out/mgd.tar.gz .
-tar xzvf mgd.tar.gz
-cd ..
-cp image/root/opt/oxide/mgd/bin/{mgd,mgadm} cargo-bay/mgd/
-cargo build
-
 banner "collect interface info"
 ipadm
 dladm
 netstat -cran
 
-banner "start topology"
+banner "setup interop topology"
+cp /input/test-interop/out/interop.tgz .
+tar xzvf interop.tgz
+cd interop
+
+banner "launch interop topology"
 pfexec ./interop launch
 
-banner "test-interop"
+banner "start interop test"
 cargo nextest run
 cp *.log /work/
