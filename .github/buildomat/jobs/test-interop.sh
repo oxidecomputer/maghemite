@@ -19,19 +19,15 @@ set -e
 cargo --version
 rustc --version
 
-banner "collect interface info"
-ipadm
-dladm
-netstat -cran
-
-banner "setup interop topology"
+banner "setup"
+ls -R /input
 cp /input/test-interop/out/interop.tgz .
 tar xzvf interop.tgz
 cd interop
 
-banner "launch interop topology"
+banner "launch"
 pfexec ./interop launch
 
-banner "start interop test"
+banner "test"
 cargo nextest run
 cp *.log /work/
