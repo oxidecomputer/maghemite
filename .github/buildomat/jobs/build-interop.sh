@@ -8,7 +8,7 @@
 #:   "oxidecomputer/testbed",
 #: ]
 #: output_rules = [
-#:   "=/work/interop.tar.gz",
+#:   "=/work/testbed.tar.gz",
 #: ]
 #:
 
