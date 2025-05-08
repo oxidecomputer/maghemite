@@ -26,13 +26,14 @@ git clone https://github.com/oxidecomputer/testbed
 
 banner 'build'
 cd testbed
-ls -a interop/ || true
-ls -a interop/.falcon || true
 cargo build \
     -p interop-lab \
     -p wrangler
 
 banner 'archive'
+mkdir out
+cp target/debug/{interop,wrangler} out
 cd ..
-tar cvfz /work/testbed.tar.gz \
+tar cvzXf <(echo testbed/target) \
+    /work/testbed.tar.gz \
     testbed

@@ -32,6 +32,8 @@ for bin in mgadm mgd; do
 	mv "image/mgd/root/opt/oxide/mgd/bin/$bin" \
 	    "interop/cargo-bay/mgd/$bin"
 done
+mkdir -p target/debug
+mv out/{interop,wrangler} target/debug
 
 banner 'launch'
 
