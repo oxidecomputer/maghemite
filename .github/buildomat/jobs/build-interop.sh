@@ -32,12 +32,7 @@ cargo build \
     -p interop-lab \
     -p wrangler
 
-banner 'falcon'
-ls -a interop/ || true
-ls -a interop/.falcon || true
-
 banner 'archive'
-tar cvfz /work/interop.tar.gz \
-    interop \
-    target/debug/wrangler \
-    target/debug/interop
+cd ..
+tar cvfz /work/testbed.tar.gz \
+    testbed

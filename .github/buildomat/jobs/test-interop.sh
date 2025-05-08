@@ -24,7 +24,7 @@ find /input -ls
 
 banner 'setup'
 
-tar xvfz /input/build-interop/work/interop.tar.gz
+tar xvfz /input/build-interop/work/testbed.tar.gz
 
 mkdir -p image/mgd
 (cd image/mgd && tar xvfz /input/image/out/mgd.tar.gz)
@@ -35,7 +35,7 @@ done
 
 banner 'launch'
 
-cd interop
+cd testbed/interop
 pfexec ./interop launch
 
 banner 'test'
