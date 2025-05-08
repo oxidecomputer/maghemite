@@ -30,9 +30,11 @@ cargo build \
     -p interop-lab \
     -p wrangler
 
+banner 'falcon'
+find interop/.falcon -ls
+
 banner 'archive'
 tar cvfz /work/interop.tar.gz \
     interop \
-    .falcon \
     target/debug/wrangler \
     target/debug/interop
