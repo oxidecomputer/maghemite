@@ -21,7 +21,7 @@ rustc --version
 
 banner "setup"
 ls -R /input
-cp /input/test-interop/work/interop.tgz .
+cp /input/build-interop/work/interop.tgz .
 tar xzvf interop.tgz
 cd interop
 
