@@ -33,5 +33,6 @@ cargo build \
 banner 'archive'
 tar cvfz /work/interop.tar.gz \
     interop \
+    .falcon \
     target/debug/wrangler \
     target/debug/interop
