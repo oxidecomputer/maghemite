@@ -8,7 +8,7 @@
 #:   "oxidecomputer/testbed",
 #: ]
 #: output_rules = [
-#:   "=/work/interop.tgz",
+#:   "=/out/interop.tgz",
 #: ]
 #:
 #: [dependencies.image]
@@ -36,4 +36,4 @@ cp image/root/opt/oxide/mgd/bin/{mgd,mgadm} cargo-bay/mgd/
 cargo build
 cd ..
 tar czvf interop.tgz interop/
-mv interop.tgz /work/
+mv interop.tgz /out/
