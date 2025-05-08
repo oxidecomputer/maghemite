@@ -26,12 +26,15 @@ git clone https://github.com/oxidecomputer/testbed
 
 banner 'build'
 cd testbed
+ls -a interop/ || true
+ls -a interop/.falcon || true
 cargo build \
     -p interop-lab \
     -p wrangler
 
 banner 'falcon'
-find interop/.falcon -ls
+ls -a interop/ || true
+ls -a interop/.falcon || true
 
 banner 'archive'
 tar cvfz /work/interop.tar.gz \
