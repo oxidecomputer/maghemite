@@ -8,11 +8,8 @@
 #:   "oxidecomputer/testbed",
 #: ]
 #: output_rules = [
-#:   "=/work/interop.tgz",
+#:   "=/work/interop.tar.gz",
 #: ]
-#:
-#: [dependencies.image]
-#: job = "image"
 #:
 
 set -x
@@ -24,16 +21,15 @@ rustc --version
 cargo install cargo-nextest
 pfexec pkg install protobuf git
 
-banner "build interop topology"
+banner 'clone'
 git clone https://github.com/oxidecomputer/testbed
-cd testbed/interop
-mkdir image
-cd image
-cp /input/image/out/mgd.tar.gz .
-tar xzvf mgd.tar.gz
-cd ..
-cp image/root/opt/oxide/mgd/bin/{mgd,mgadm} cargo-bay/mgd/
-cargo build
-cd ..
-tar czvf interop.tgz interop/
-mv interop.tgz /work/
+
+banner 'build'
+cd testbed
+cargo build -p interop-lab
+
+banner 'archive'
+tar cvfz /work/interop.tar.gz \
+    interop \
+    target/debug/wrangler \
+    target/debug/interop
