@@ -10,7 +10,7 @@ use mg_admin_client::types::{
     self, ImportExportPolicy, NeighborResetRequest, Path, Rib,
 };
 use mg_admin_client::Client;
-use rdb::types::{PolicyAction, Prefix4};
+use rdb::types::{PolicyAction, Prefix, Prefix4};
 use std::collections::BTreeMap;
 use std::fs::read_to_string;
 use std::io::{stdout, Write};
@@ -821,17 +821,31 @@ async fn apply(filename: String, c: Client) -> Result<()> {
 }
 
 fn print_rib(rib: Rib) {
-    type CliRib = BTreeMap<String, Vec<Path>>;
+    type CliRib = BTreeMap<Prefix, Vec<Path>>;
 
     let mut static_routes = CliRib::new();
     let mut bgp_routes = CliRib::new();
     for (prefix, paths) in rib.0.into_iter() {
-        let (br, sr) = paths.into_iter().partition(|p| p.bgp.is_some());
-        static_routes.insert(prefix.clone(), sr);
-        bgp_routes.insert(prefix, br);
+        // TODO: handle Prefix generically when IPv6 support is added
+        // (requires impl std::str::FromStr for Prefix/Prefix6)
+        let pfx: Prefix = Prefix::V4(match prefix.parse::<Prefix4>() {
+            Ok(p4) => p4,
+            Err(e) => {
+                eprintln!("failed to parse prefix [{prefix}]: {e}");
+                continue;
+            }
+        });
+        let (br, sr): (Vec<Path>, Vec<Path>) =
+            paths.into_iter().partition(|p| p.bgp.is_some());
+        if !sr.is_empty() {
+            static_routes.insert(pfx, sr);
+        }
+        if !br.is_empty() {
+            bgp_routes.insert(pfx, br);
+        }
     }
 
-    if static_routes.values().map(|x| x.len()).sum::<usize>() > 0 {
+    if !static_routes.is_empty() {
         let mut tw = TabWriter::new(stdout());
         writeln!(
             &mut tw,
@@ -843,11 +857,12 @@ fn print_rib(rib: Rib) {
         .unwrap();
 
         for (prefix, paths) in static_routes.into_iter() {
+            write!(&mut tw, "{prefix}").unwrap();
             for path in paths.into_iter() {
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{:?}",
-                    prefix, path.nexthop, path.rib_priority,
+                    "\t{}\t{:?}",
+                    path.nexthop, path.rib_priority,
                 )
                 .unwrap();
             }
@@ -857,7 +872,7 @@ fn print_rib(rib: Rib) {
         tw.flush().unwrap();
     }
 
-    if bgp_routes.values().map(|x| x.len()).sum::<usize>() > 0 {
+    if !bgp_routes.is_empty() {
         let mut tw = TabWriter::new(stdout());
         writeln!(
             &mut tw,
@@ -875,12 +890,12 @@ fn print_rib(rib: Rib) {
         .unwrap();
 
         for (prefix, paths) in bgp_routes.into_iter() {
+            write!(&mut tw, "{prefix}").unwrap();
             for path in paths.into_iter() {
                 let bgp = path.bgp.as_ref().unwrap();
                 writeln!(
                     &mut tw,
-                    "{}\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}",
-                    prefix,
+                    "\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}",
                     path.nexthop,
                     path.rib_priority,
                     bgp.local_pref,
