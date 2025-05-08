@@ -26,7 +26,9 @@ git clone https://github.com/oxidecomputer/testbed
 
 banner 'build'
 cd testbed
-cargo build -p interop-lab
+cargo build \
+    -p interop-lab \
+    -p wrangler
 
 banner 'archive'
 tar cvfz /work/interop.tar.gz \
