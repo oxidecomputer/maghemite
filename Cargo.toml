@@ -65,7 +65,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 clap = { version = "4.5.38", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "2.1"
-ctrlc = { version = "3.4.6", features = ["termination"] }
+ctrlc = { version = "3.4.7", features = ["termination"] }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anstyle = "1.0.10"
 nom = "7.1"
