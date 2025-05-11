@@ -30,14 +30,15 @@ mkdir -p image/mgd
 (cd image/mgd && tar xvfz /input/image/out/mgd.tar.gz)
 for bin in mgadm mgd; do
 	mv "image/mgd/root/opt/oxide/mgd/bin/$bin" \
-	    "interop/cargo-bay/mgd/$bin"
+	    "testbed/interop/cargo-bay/mgd/$bin"
 done
+cd testbed
 mkdir -p target/debug
 mv out/{interop,wrangler} target/debug
 
 banner 'launch'
 
-cd testbed/interop
+cd interop
 pfexec ./interop launch
 
 banner 'test'
