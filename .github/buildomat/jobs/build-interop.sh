@@ -38,6 +38,7 @@ banner 'archive'
 mkdir out
 cp target/debug/{interop,wrangler} out
 cd ..
+# TODO: DOES THIS COPY HIDDEN DIRECTORIES? (testbed/.falcon)
 tar cvzXf <(echo testbed/target) \
     /work/testbed.tar.gz \
     testbed

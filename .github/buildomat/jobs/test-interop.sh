@@ -39,10 +39,11 @@ mv out/{interop,wrangler} target/debug
 banner 'launch'
 
 cd interop
-ls -a -R .falcon
-pfexec ./interop launch
+ls -a -R .falcon || true
+pfexec ./interop launch || ps waux | grep propolis-server
 
 banner 'test'
 
+ls -a -R .falcon || true
 cargo nextest run
 cp *.log /work/
