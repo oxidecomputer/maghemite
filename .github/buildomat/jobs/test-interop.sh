@@ -22,6 +22,22 @@ banner 'inputs'
 
 find /input -ls
 
+banner 'zpool'
+
+export DISK=${DISK:-c1t1d0}
+pfexec diskinfo
+pfexec zpool create -o ashift=12 -f cpool $DISK
+pfexec zfs create -o mountpoint=/ci cpool/ci
+
+if [[ $(curl -s http://catacomb.eng.oxide.computer:12346/trim-me) =~ "true" ]]; then
+    pfexec zpool trim cpool
+    while [[ ! $(zpool status -t cpool) =~ "100%" ]]; do sleep 10; done
+fi
+
+pfexec chown "$UID" /ci
+cd /ci
+export FALCON_DATASET="cpool/falcon"
+
 banner 'setup'
 
 tar xvfz /input/build-interop/work/testbed.tar.gz
