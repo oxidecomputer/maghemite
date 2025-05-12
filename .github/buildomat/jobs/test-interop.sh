@@ -36,11 +36,13 @@ cd testbed
 mkdir -p target/debug
 mv out/{interop,wrangler} target/debug
 
+pfexec diskinfo
+pfexec zfs list
+
 banner 'launch'
 
 cd interop
-ls -a -R .falcon || true
-pfexec ./interop launch || ps waux | grep propolis-server
+pfexec ./interop launch
 
 banner 'test'
 
