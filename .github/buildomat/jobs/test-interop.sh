@@ -39,6 +39,7 @@ mv out/{interop,wrangler} target/debug
 banner 'launch'
 
 cd interop
+ls -a -R .falcon
 pfexec ./interop launch
 
 banner 'test'
