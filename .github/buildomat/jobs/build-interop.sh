@@ -30,6 +30,10 @@ cargo build \
     -p interop-lab \
     -p wrangler
 
+banner 'info'
+
+ls -a -R interop/.falcon
+
 banner 'archive'
 mkdir out
 cp target/debug/{interop,wrangler} out
