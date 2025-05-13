@@ -65,5 +65,5 @@ banner 'test'
 
 find ./.falcon -ls
 pgrep -lf propolis-server
-./baseline --show-output
+truss ./baseline --show-output |& grep uuid
 cp *.log /work/
