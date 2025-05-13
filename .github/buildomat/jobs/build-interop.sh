@@ -29,13 +29,19 @@ cd testbed
 cargo build \
     -p interop-lab \
     -p wrangler
+cargo build --tests
 
-banner 'info'
+banner 'prep'
 
-banner 'archive'
 mkdir out
 cp target/debug/{interop,wrangler} out
+# grab just the file ending in the hash, not the file ending in ".d"
+TEST=$(ls ../target/debug/deps/baseline-* | egrep -v '.*\.d$')
+cp $TEST out
 cd ..
+
+banner 'archive'
+
 tar cvzXf <(echo testbed/target) \
     /work/testbed.tar.gz \
     testbed

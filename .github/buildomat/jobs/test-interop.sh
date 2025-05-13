@@ -62,6 +62,6 @@ pfexec ./interop launch
 
 banner 'test'
 
-ls -a -R .falcon || true
-cargo nextest run
+mv ../out/baseline .
+./baseline --show-output --logfile /work/baseline.log
 cp *.log /work/
