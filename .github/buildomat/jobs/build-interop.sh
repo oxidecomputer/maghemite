@@ -22,10 +22,13 @@ cargo install cargo-nextest
 pfexec pkg install protobuf git
 
 banner 'clone'
+#mkdir /ci
+#cd /ci
 git clone https://github.com/oxidecomputer/testbed
 
 banner 'build'
 cd testbed
+pwd
 cargo build \
     -p interop-lab \
     -p wrangler
