@@ -65,7 +65,6 @@ banner 'test'
 
 pwd
 find ./.falcon -ls
-realpath ./.falcon/mgd.uuid
 pgrep -lf propolis-server
-truss ./baseline --show-output |& grep uuid
+./baseline --show-output
 cp *.log /work/
