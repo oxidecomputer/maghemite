@@ -63,7 +63,7 @@ pfexec ./interop launch
 
 banner 'test'
 
-find -ls ./.falcon
+find ./.falcon -ls
 pgrep -lf propolis-server
 ./baseline --show-output
 cp *.log /work/
