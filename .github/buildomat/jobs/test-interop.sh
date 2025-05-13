@@ -63,5 +63,5 @@ pfexec ./interop launch
 banner 'test'
 
 mv ../out/baseline .
-./baseline --show-output --logfile /work/baseline.log
+./baseline --show-output
 cp *.log /work/
