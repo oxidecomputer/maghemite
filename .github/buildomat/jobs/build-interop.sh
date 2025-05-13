@@ -22,8 +22,9 @@ cargo install cargo-nextest
 pfexec pkg install protobuf git
 
 banner 'clone'
-#mkdir /ci
-#cd /ci
+pfexec mkdir /ci
+pfexec chown "$UID" /ci
+cd /ci
 git clone https://github.com/oxidecomputer/testbed
 
 banner 'build'
@@ -45,6 +46,12 @@ cd ..
 
 banner 'archive'
 
-tar cvzXf <(echo testbed/target) \
+cat <<EOF > exclude-file.txt
+testbed/.git
+testbed/a4x2
+testbed/archive
+testbed/target
+EOF
+tar cvzXf exclude-file.txt \
     /work/testbed.tar.gz \
     testbed
