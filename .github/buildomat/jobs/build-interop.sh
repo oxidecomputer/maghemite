@@ -36,7 +36,7 @@ banner 'prep'
 mkdir out
 cp target/debug/{interop,wrangler} out
 # grab just the file ending in the hash, not the file ending in ".d"
-TEST=$(ls ../target/debug/deps/baseline-* | egrep -v '.*\.d$')
+TEST=$(ls target/debug/deps/baseline-* | egrep -v '.*\.d$')
 cp $TEST out
 cd ..
 
