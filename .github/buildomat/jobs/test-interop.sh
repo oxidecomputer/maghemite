@@ -51,6 +51,7 @@ done
 cd testbed
 mkdir -p target/debug
 mv out/{interop,wrangler} target/debug
+mv out/baseline interop
 
 pfexec diskinfo
 pfexec zfs list
@@ -59,10 +60,10 @@ banner 'launch'
 
 cd interop
 pfexec ./interop launch
-pgrep -lf propolis-server
 
 banner 'test'
 
-mv ../out/baseline .
+find -ls ./.falcon
+pgrep -lf propolis-server
 ./baseline --show-output
 cp *.log /work/
