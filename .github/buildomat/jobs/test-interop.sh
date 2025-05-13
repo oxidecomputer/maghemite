@@ -59,6 +59,7 @@ banner 'launch'
 
 cd interop
 pfexec ./interop launch
+pgrep -lf propolis-server
 
 banner 'test'
 
