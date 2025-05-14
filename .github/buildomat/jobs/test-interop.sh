@@ -66,5 +66,9 @@ banner 'test'
 pwd
 find ./.falcon -ls
 pgrep -lf propolis-server
-./baseline --show-output
+./baseline --show-output || \
+	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/account.log" > ./arista.account.log && \
+	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/messages" > ./arista.messages && \
+	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-access.log" > ./arista.nginx-access.log && \
+	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-error.log" > nginx-access.log
 cp *.log /work/
