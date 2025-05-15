@@ -495,8 +495,14 @@ pub async fn bgp_apply(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<ApplyRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let log = ctx.context().log.clone();
-    let rq = request.into_inner();
+    do_bgp_apply(ctx.context(), request.into_inner()).await
+}
+
+async fn do_bgp_apply(
+    ctx: &Arc<HandlerContext>,
+    rq: ApplyRequest,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let log = ctx.log.clone();
 
     info!(log, "apply: {rq:#?}");
 
@@ -520,7 +526,6 @@ pub async fn bgp_apply(
 
     for (group, peers) in &rq.peers {
         let current: Vec<rdb::BgpNeighborInfo> = ctx
-            .context()
             .db
             .get_bgp_neighbors()
             .map_err(Error::Db)?
@@ -590,7 +595,7 @@ pub async fn bgp_apply(
         // transaction.
 
         helpers::ensure_router(
-            ctx.context().clone(),
+            ctx.clone(),
             resource::Router {
                 asn: rq.asn,
                 id: rq.asn,
@@ -602,7 +607,7 @@ pub async fn bgp_apply(
 
         for (nbr, cfg) in nbr_config {
             helpers::add_neighbor(
-                ctx.context().clone(),
+                ctx.clone(),
                 resource::Neighbor::from_bgp_peer_config(
                     nbr.asn,
                     group.clone(),
@@ -613,10 +618,9 @@ pub async fn bgp_apply(
         }
 
         for nbr in to_delete {
-            helpers::remove_neighbor(ctx.context().clone(), nbr.asn, nbr.addr)
-                .await?;
+            helpers::remove_neighbor(ctx.clone(), nbr.asn, nbr.addr).await?;
 
-            let mut routers = lock!(ctx.context().bgp.router);
+            let mut routers = lock!(ctx.bgp.router);
             let mut remove = false;
             if let Some(r) = routers.get(&nbr.asn) {
                 remove = lock!(r.sessions).is_empty();
@@ -629,7 +633,7 @@ pub async fn bgp_apply(
         }
     }
 
-    get_router!(ctx.context(), rq.asn)?
+    get_router!(ctx, rq.asn)?
         .set_origin4(rq.originate.clone().into_iter().map(Into::into).collect())
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
@@ -1063,5 +1067,133 @@ pub(crate) mod helpers {
             }
         }
         Ok(HttpResponseDeleted())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::do_bgp_apply;
+    use crate::{
+        admin::HandlerContext,
+        bfd_admin::BfdContext,
+        bgp_admin::BgpContext,
+        bgp_param::{ApplyRequest, BgpPeerConfig},
+    };
+    use mg_common::stats::MgLowerStats;
+    use rdb::{Db, ImportExportPolicy};
+    use std::{
+        collections::{BTreeMap, HashMap},
+        env::temp_dir,
+        fs::{create_dir_all, remove_dir_all},
+        net::{Ipv6Addr, SocketAddr},
+        sync::{Arc, Mutex},
+    };
+
+    #[tokio::test]
+    async fn apply_remove_entire_group() {
+        let tmpdir = temp_dir();
+        let tmpdir = format!(
+            "{}/maghemite-test/apply_remove_entire_group",
+            tmpdir.to_str().unwrap()
+        );
+        if std::fs::exists(&tmpdir).unwrap() {
+            remove_dir_all(&tmpdir).unwrap();
+        }
+        create_dir_all(&tmpdir).unwrap();
+        println!("tmpdir is {tmpdir}");
+        let dbdir = format!("{tmpdir}/test.db");
+        let log =
+            mg_common::log::init_file_logger("apply_remove_entire_group.log");
+
+        let ctx = Arc::new(HandlerContext {
+            tep: Ipv6Addr::UNSPECIFIED,
+            bgp: BgpContext::new(Arc::new(Mutex::new(BTreeMap::new()))),
+            bfd: BfdContext::new(log.clone()),
+            log: log.clone(),
+            data_dir: tmpdir.to_owned(),
+            db: Db::new(dbdir.as_str(), log.clone()).unwrap(),
+            mg_lower_stats: Arc::new(MgLowerStats::default()),
+            stats_server_running: Mutex::new(false),
+            oximeter_port: 0,
+        });
+
+        let mut peers = HashMap::new();
+        peers.insert(
+            String::from("qsfp0"),
+            vec![BgpPeerConfig {
+                host: SocketAddr::new("203.0.113.1".parse().unwrap(), 179),
+                name: String::from("bob"),
+                hold_time: 3,
+                idle_hold_time: 1,
+                delay_open: 1,
+                connect_retry: 1,
+                keepalive: 1,
+                resolution: 1,
+                passive: false,
+                remote_asn: None,
+                min_ttl: None,
+                md5_auth_key: None,
+                multi_exit_discriminator: None,
+                communities: Vec::default(),
+                local_pref: None,
+                enforce_first_as: false,
+                allow_import: ImportExportPolicy::NoFiltering,
+                allow_export: ImportExportPolicy::NoFiltering,
+                vlan_id: None,
+            }],
+        );
+        peers.insert(
+            String::from("qsfp1"),
+            vec![BgpPeerConfig {
+                host: SocketAddr::new("203.0.113.2".parse().unwrap(), 179),
+                name: String::from("alice"),
+                hold_time: 3,
+                idle_hold_time: 1,
+                delay_open: 1,
+                connect_retry: 1,
+                keepalive: 1,
+                resolution: 1,
+                passive: false,
+                remote_asn: None,
+                min_ttl: None,
+                md5_auth_key: None,
+                multi_exit_discriminator: None,
+                communities: Vec::default(),
+                local_pref: None,
+                enforce_first_as: false,
+                allow_import: ImportExportPolicy::NoFiltering,
+                allow_export: ImportExportPolicy::NoFiltering,
+                vlan_id: None,
+            }],
+        );
+
+        let mut req = ApplyRequest {
+            asn: 47,
+            originate: Vec::default(),
+            checker: None,
+            shaper: None,
+            peers: peers.clone(),
+        };
+
+        do_bgp_apply(&ctx, req.clone())
+            .await
+            .expect("bgp apply request");
+
+        assert_eq!(
+            ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),
+            2,
+        );
+
+        peers.clear();
+        req.peers.remove("qsfp0");
+
+        do_bgp_apply(&ctx, req.clone())
+            .await
+            .expect("bgp apply request");
+
+        assert_eq!(
+            ctx.db.get_bgp_neighbors().expect("get bgp neighbors").len(),
+            1,
+        );
     }
 }
