@@ -524,7 +524,25 @@ async fn do_bgp_apply(
         }
     }
 
-    for (group, peers) in &rq.peers {
+    let groups = ctx
+        .db
+        .get_bgp_neighbors()
+        .map_err(Error::Db)?
+        .into_iter()
+        .map(|x| x.group)
+        .collect::<HashSet<_>>();
+
+    // Turn any peer groups that are resident in the db but not in the apply
+    // request into empty groups so the difference functions below remove
+    // any peers from entire groups that have been removed.
+    let mut peers = rq.peers.clone();
+    for g in &groups {
+        if !peers.contains_key(g) {
+            peers.insert(g.clone(), Vec::default());
+        }
+    }
+
+    for (group, peers) in &peers {
         let current: Vec<rdb::BgpNeighborInfo> = ctx
             .db
             .get_bgp_neighbors()
