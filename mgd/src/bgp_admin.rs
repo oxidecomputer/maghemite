@@ -1190,7 +1190,7 @@ mod tests {
             originate: Vec::default(),
             checker: None,
             shaper: None,
-            peers: peers.clone(),
+            peers,
         };
 
         do_bgp_apply(&ctx, req.clone())
@@ -1202,7 +1202,6 @@ mod tests {
             2,
         );
 
-        peers.clear();
         req.peers.remove("qsfp0");
 
         do_bgp_apply(&ctx, req.clone())
