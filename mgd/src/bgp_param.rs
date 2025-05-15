@@ -251,7 +251,7 @@ pub struct PeerInfo {
 }
 
 /// Apply changes to an ASN.
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct ApplyRequest {
     /// ASN to apply changes to.
     pub asn: u32,

@@ -21,6 +21,11 @@ rustc --version
 cargo install cargo-nextest
 
 pushd bgp
-
 cargo nextest run
 cp *.log /work/
+popd
+
+pushd mgd
+cargo nextest run
+cp *.log /work/
+popd
