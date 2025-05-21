@@ -95,11 +95,11 @@ semver = "1.0"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "88adb1a5df689b3e2daddab9325ee94047f6ffad"
+rev = "792ec8a3816ba8c7c4268f65cd19dbd946a9027d"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "88adb1a5df689b3e2daddab9325ee94047f6ffad"
+rev = "792ec8a3816ba8c7c4268f65cd19dbd946a9027d"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
