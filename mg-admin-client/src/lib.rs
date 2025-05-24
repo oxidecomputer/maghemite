@@ -15,19 +15,13 @@ progenitor::generate_api!(
     post_hook = (|log: &slog::Logger, result: &Result<_, _>| {
         slog::trace!(log, "client response"; "result" => ?result);
     }),
-    derives = [schemars::JsonSchema],
+    derives = [schemars::JsonSchema, PartialEq],
 );
 
 impl std::hash::Hash for types::Prefix4 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.value.hash(state);
         self.length.hash(state);
-    }
-}
-
-impl std::cmp::PartialEq for types::Prefix4 {
-    fn eq(&self, other: &Self) -> bool {
-        self.value.eq(&other.value) && self.length.eq(&other.length)
     }
 }
 
