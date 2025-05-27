@@ -62,10 +62,10 @@ percent-encoding = "2.3.1"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
 progenitor = "0.9.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
-clap = { version = "4.5.37", features = ["derive", "unstable-styles", "env"] }
+clap = { version = "4.5.38", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
-colored = "2.1"
-ctrlc = { version = "3.4.6", features = ["termination"] }
+colored = "3.0"
+ctrlc = { version = "3.4.7", features = ["termination"] }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anstyle = "1.0.10"
 nom = "7.1"
@@ -84,7 +84,7 @@ mg-common = { path = "mg-common" }
 chrono = { version = "0.4.41", features = ["serde"] }
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
-oxnet = { version = "0.1.1", default-features = false, features = ["schemars", "serde"] }
+oxnet = { version = "0.1.2", default-features = false, features = ["schemars", "serde"] }
 omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
