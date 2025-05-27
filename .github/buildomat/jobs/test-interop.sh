@@ -68,9 +68,9 @@ find ./.falcon -ls
 pgrep -lf propolis-server
 pfexec ./interop exec arista "which docker" > ./arista.docker.log
 pfexec ./interop exec arista "compgen -c | grep docker" > ./arista.compgen.log
-pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/account.log" > ./arista.account.log
-pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/messages" > ./arista.messages
-pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-error.log" > ./arista.nginx-error.log
+# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/account.log" > ./arista.account.log
+# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/messages" > ./arista.messages
+# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-error.log" > ./arista.nginx-error.log
 # pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-access.log" > ./arista.nginx-access.log
 cp *.log /work/
 ./baseline --show-output
