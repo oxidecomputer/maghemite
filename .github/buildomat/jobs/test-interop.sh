@@ -60,7 +60,7 @@ banner 'dhcp-server'
 
 export EXT_INTERFACE=${EXT_INTERFACE:-igb0}
 
-cp /input/image/out/dhcp-server .
+cp /input/build-interop/work/dhcp-server .
 chmod +x dhcp-server
 first=`bmat address ls -f extra -Ho first`
 last=`bmat address ls -f extra -Ho last`
