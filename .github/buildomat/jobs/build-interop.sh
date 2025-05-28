@@ -22,13 +22,6 @@ rustc --version
 cargo install cargo-nextest
 pfexec pkg install protobuf git
 
-banner 'dhcp-server'
-
-git clone https://github.com/oxidecomputer/omicron.git
-cd omicron
-cargo build -p end-to-end-tests --bin dhcp-server --release
-cp target/release/dhcp-server /work/
-
 banner 'clone'
 pfexec mkdir /ci
 pfexec chown "$UID" /ci
@@ -63,3 +56,12 @@ EOF
 tar cvzXf exclude-file.txt \
     /work/testbed.tar.gz \
     testbed
+
+banner 'dhcp-server'
+
+git clone https://github.com/oxidecomputer/omicron.git
+cd omicron
+source .github/buildomat/ci-env.sh
+pfexec ./tools/install_prerequisites.sh
+cargo build -p end-to-end-tests --bin dhcp-server --release
+cp target/release/dhcp-server /work/
