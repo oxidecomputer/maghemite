@@ -65,5 +65,10 @@ source .github/buildomat/ci-env.sh
 # try just using builder prereqs
 # pfexec ./tools/install_prerequisites.sh
 pfexec ./tools/install_builder_prerequisites.sh -y
+stat target
+stat target/{debug,release}
+pfexec mkdir -p target/release
+pfexec chown "$UID" /target
+pfexec chown "$UID" /target/release
 cargo build -p end-to-end-tests --bin dhcp-server --release
 cp target/release/dhcp-server /work/
