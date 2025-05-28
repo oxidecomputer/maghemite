@@ -70,5 +70,7 @@ stat target/{debug,release}
 pfexec mkdir -p target/release
 pfexec chown "$UID" /target
 pfexec chown "$UID" /target/release
+stat target
+stat target/{debug,release}
 cargo build -p end-to-end-tests --bin dhcp-server --release
 cp target/release/dhcp-server /work/
