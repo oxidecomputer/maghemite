@@ -67,6 +67,9 @@ pwd
 find ./.falcon -ls
 cp ./.falcon/{arista,juniper,mgd}* /work/
 pgrep -lf propolis-server
+pfexec ./interop exec arista "cat /tmp/init.log" > /work/arista.init.log
+pfexec ./interop exec juniper "cat /tmp/init.log" > /work/juniper.init.log
+pfexec ./interop exec mgd "cat /tmp/init.log" > /work/mgd.init.log
 # pfexec ./interop exec arista "which docker" > ./arista.docker.log
 # pfexec ./interop exec arista "compgen -c | grep docker" > ./arista.compgen.log
 # pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/account.log" > ./arista.account.log
