@@ -16,20 +16,36 @@
 set -x
 set -e
 
+#
+# Allow this program to run either under buildomat, or in a local clone:
+#
+if [[ $CI == true ]]; then
+	top=$PWD
+	WORK=/work
+
+	pfexec pkg install protobuf git
+else
+	if [[ -z $WORK || ! -d $WORK ]]; then
+		printf 'ERROR: set WORK when running manually\n' >&2
+		exit 1
+	fi
+
+	#
+	# Be resilient against someone running this while not in the repository
+	# root directory:
+	#
+	top=$(cd "$(dirname "$0")"/../../.. && pwd)
+fi
+
 cargo --version
 rustc --version
 
-pfexec pkg install protobuf git
-
 banner 'clone'
-pfexec mkdir /ci
-pfexec chown "$UID" /ci
-cd /ci
-git clone https://github.com/oxidecomputer/testbed
+mkdir "$top/ci"
+git clone https://github.com/oxidecomputer/testbed "$top/ci/testbed"
 
 banner 'build'
-cd testbed
-pwd
+cd "$top/ci/testbed"
 cargo build \
     -p interop-lab \
     -p wrangler
@@ -38,14 +54,14 @@ cargo build --tests
 banner 'prep'
 
 mkdir out
-cp target/debug/{interop,wrangler} out
+cp target/debug/{interop,wrangler} out/
 # grab just the file ending in the hash, not the file ending in ".d"
 TEST=$(ls -t target/debug/deps/baseline-* | egrep -v '.*\.d$' | head -1)
-mv $TEST out/baseline
-cd ..
+mv "$TEST" 'out/baseline'
 
 banner 'archive'
 
+cd "$top/ci"
 cat <<EOF > exclude-file.txt
 testbed/.git
 testbed/a4x2
@@ -53,24 +69,19 @@ testbed/archive
 testbed/target
 EOF
 tar cvzXf exclude-file.txt \
-    /work/testbed.tar.gz \
+    "$WORK/testbed.tar.gz" \
     testbed
 
 banner 'dhcp-server'
 
-git clone https://github.com/oxidecomputer/omicron.git
-cd omicron
+git clone https://github.com/oxidecomputer/omicron.git "$top/ci/omicron"
+cd "$top/ci/omicron"
 source env.sh
-source .github/buildomat/ci-env.sh
-# try just using builder prereqs
-# pfexec ./tools/install_prerequisites.sh
-pfexec ./tools/install_builder_prerequisites.sh -y
-stat target
-stat target/{debug,release}
-pfexec mkdir -p target/release
-pfexec chown "$UID" /target
-pfexec chown "$UID" /target/release
-stat target
-stat target/{debug,release}
+if [[ $CI == true ]]; then
+	source .github/buildomat/ci-env.sh
+	# try just using builder prereqs
+	# ./tools/install_prerequisites.sh
+	./tools/install_builder_prerequisites.sh -y
+fi
 cargo build -p end-to-end-tests --bin dhcp-server --release
-cp target/release/dhcp-server /work/
+cp target/release/dhcp-server "$WORK/"
