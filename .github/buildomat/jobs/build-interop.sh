@@ -62,6 +62,8 @@ banner 'dhcp-server'
 git clone https://github.com/oxidecomputer/omicron.git
 cd omicron
 source .github/buildomat/ci-env.sh
-pfexec ./tools/install_prerequisites.sh
+# try just using builder prereqs
+# pfexec ./tools/install_prerequisites.sh
+pfexec ./tools/install_builder_prerequisites.sh -y
 cargo build -p end-to-end-tests --bin dhcp-server --release
 cp target/release/dhcp-server /work/
