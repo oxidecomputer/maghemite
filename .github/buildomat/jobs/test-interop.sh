@@ -56,6 +56,18 @@ mv out/baseline interop
 pfexec diskinfo
 pfexec zfs list
 
+banner 'dhcp-server'
+
+export EXT_INTERFACE=${EXT_INTERFACE:-igb0}
+
+cp /input/image/out/dhcp-server .
+chmod +x dhcp-server
+first=`bmat address ls -f extra -Ho first`
+last=`bmat address ls -f extra -Ho last`
+gw=`bmat address ls -f extra -Ho gateway`
+server=`ipadm show-addr $EXT_INTERFACE/dhcp -po ADDR | sed 's#/.*##g'`
+pfexec ./dhcp-server $first $last $gw $server &> /work/dhcp-server.log &
+
 banner 'launch'
 
 cd interop
@@ -70,11 +82,10 @@ pgrep -lf propolis-server
 pfexec ./interop exec arista "cat /tmp/init.log" > /work/arista.init.log
 pfexec ./interop exec juniper "cat /tmp/init.log" > /work/juniper.init.log
 pfexec ./interop exec mgd "cat /tmp/init.log" > /work/mgd.init.log
-# pfexec ./interop exec arista "which docker" > ./arista.docker.log
-# pfexec ./interop exec arista "compgen -c | grep docker" > ./arista.compgen.log
-# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/account.log" > ./arista.account.log
-# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/messages" > ./arista.messages
-# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-error.log" > ./arista.nginx-error.log
-# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-access.log" > ./arista.nginx-access.log
-cp *.log /work/
+# pfexec ./interop exec arista "which docker" > /work/arista.docker.log
+# pfexec ./interop exec arista "compgen -c | grep docker" > /work/arista.compgen.log
+# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/account.log" > /work/arista.account.log
+# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/messages" > /work/arista.messages
+# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-error.log" > /work/arista.nginx-error.log
+# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-access.log" > /work/arista.nginx-access.log
 ./baseline --show-output

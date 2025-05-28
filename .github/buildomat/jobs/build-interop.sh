@@ -9,6 +9,7 @@
 #: ]
 #: output_rules = [
 #:   "=/work/testbed.tar.gz",
+#:   "=/work/dhcp-server",
 #: ]
 #:
 
@@ -20,6 +21,13 @@ rustc --version
 
 cargo install cargo-nextest
 pfexec pkg install protobuf git
+
+banner 'dhcp-server'
+
+git clone https://github.com/oxidecomputer/omicron.git
+cd omicron
+cargo build -p end-to-end-tests --bin dhcp-server --release
+cp target/release/dhcp-server /work/
 
 banner 'clone'
 pfexec mkdir /ci
