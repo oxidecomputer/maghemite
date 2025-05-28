@@ -23,7 +23,7 @@ if [[ $CI == true ]]; then
 	top=$PWD
 	WORK=/work
 
-	pfexec pkg install protobuf git
+	pfexec pkg install protobuf git cmake
 else
 	if [[ -z $WORK || ! -d $WORK ]]; then
 		printf 'ERROR: set WORK when running manually\n' >&2
