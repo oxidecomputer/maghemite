@@ -19,7 +19,6 @@ set -e
 cargo --version
 rustc --version
 
-cargo install cargo-nextest
 pfexec pkg install protobuf git
 
 banner 'clone'
