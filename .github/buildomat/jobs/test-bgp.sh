@@ -23,6 +23,7 @@ NEXTEST_VERSION='0.9.97'
 cargo --version
 rustc --version
 curl -sSfL --retry 10 https://get.nexte.st/"$NEXTEST_VERSION"/"$1" | gunzip | tar -xvf - -C ~/.cargo/bin
+export PATH="~/.cargo/bin:$PATH"
 
 pushd bgp
 cargo nextest run
