@@ -19,12 +19,11 @@ set -o pipefail
 # NOTE: This version should be in sync with the recommended version in
 # .config/nextest.toml. (Maybe build an automated way to pull the recommended
 # version in the future.)
-NEXTEST_VERSION='0.9.97'
+NEXTEST_VERSION='0.9.96'
 
 cargo --version
 rustc --version
 curl -sSfL --retry 10 https://get.nexte.st/"$NEXTEST_VERSION"/"$1" | gunzip | tar -xvf - -C ~/.cargo/bin
-export PATH="~/.cargo/bin:$PATH"
 
 banner bfd
 cargo nextest run -p bfd --nocapture
