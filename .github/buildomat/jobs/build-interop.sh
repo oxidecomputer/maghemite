@@ -79,8 +79,6 @@ cd "$top/ci/omicron"
 source env.sh
 if [[ $CI == true ]]; then
 	source .github/buildomat/ci-env.sh
-	# try just using builder prereqs
-	# ./tools/install_prerequisites.sh
 	./tools/install_builder_prerequisites.sh -y
 fi
 cargo build -p end-to-end-tests --bin dhcp-server --release
