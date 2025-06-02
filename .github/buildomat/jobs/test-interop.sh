@@ -18,6 +18,61 @@
 set -x
 set -e
 
+_exit_trap() {
+	local status=$?
+	[[ $status -eq 0 ]] && exit 0
+
+	set +o errexit
+
+	banner 'debug'
+
+	#
+	# collect general info about runner
+	#
+	pfexec df -h
+	pfexec diskinfo
+	pfexec zfs list
+	pfexec zpool list
+	pfexec stat /ci
+
+	#
+	# collect falcon info
+	#
+	find /ci/testbed/interop/.falcon -ls
+	cp /ci/testbed/interop/.falcon/{arista,juniper,mgd}* /work/
+
+	#
+	# check if propolis is running
+	#
+	pgrep -lf propolis-server
+
+	#
+	# grab platform-specific logs
+	#
+	# arista
+	pfexec ./interop exec arista "cat /tmp/init.log" > /work/arista.init.log
+	pfexec ./interop exec arista "docker ps -a"
+	pfexec ./interop exec arista "docker logs ceos1" > /work/arista.docker.logs
+	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/account.log" > /work/arista.account.log
+	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/messages" > /work/arista.messages
+	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-error.log" > /work/arista.nginx-error.log
+	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-access.log" > /work/arista.nginx-access.log
+	# juniper
+	pfexec ./interop exec juniper "cat /tmp/init.log" > /work/juniper.init.log
+	pfexec ./interop exec juniper "docker ps -a"
+	pfexec ./interop exec juniper "docker logs crpd1" > /work/juniper.docker.logs
+	pfexec ./interop exec juniper "docker exec -it crpd1 cat /var/log/messages" > /work/juniper.messages
+	pfexec ./interop exec juniper "docker exec -it crpd1 cat /var/log/na-grpcd" > /work/juniper.na-grpcd
+	# maghemite
+	# /tmp filepaths chosen in testbed/interop/src/interop.rs and testbed/interop/cargo-bay/mgd/init.sh
+	pfexec ./interop exec mgd "cat /tmp/init.log" > /work/mgd.init.log
+	pfexec ./interop exec mgd "cat /tmp/mgd.log" > /work/mgd.log
+
+	exit 1
+}
+
+trap _exit_trap EXIT
+
 banner 'inputs'
 
 find /input -ls
@@ -25,13 +80,12 @@ find /input -ls
 banner 'zpool'
 
 export DISK=${DISK:-c1t1d0}
-pfexec diskinfo
 pfexec zpool create -o ashift=12 -f cpool $DISK
 pfexec zfs create -o mountpoint=/ci cpool/ci
 
 if [[ $(curl -s http://catacomb.eng.oxide.computer:12346/trim-me) =~ "true" ]]; then
-    pfexec zpool trim cpool
-    while [[ ! $(zpool status -t cpool) =~ "100%" ]]; do sleep 10; done
+		pfexec zpool trim cpool
+		while [[ ! $(zpool status -t cpool) =~ "100%" ]]; do sleep 10; done
 fi
 
 pfexec chown "$UID" /ci
@@ -53,9 +107,6 @@ mkdir -p target/debug
 mv out/{interop,wrangler} target/debug
 mv out/baseline interop
 
-pfexec diskinfo
-pfexec zfs list
-
 banner 'dhcp-server'
 
 export EXT_INTERFACE=${EXT_INTERFACE:-igb0}
@@ -75,17 +126,4 @@ pfexec ./interop launch
 
 banner 'test'
 
-pwd
-find ./.falcon -ls
-cp ./.falcon/{arista,juniper,mgd}* /work/
-pgrep -lf propolis-server
-pfexec ./interop exec arista "cat /tmp/init.log" > /work/arista.init.log
-pfexec ./interop exec juniper "cat /tmp/init.log" > /work/juniper.init.log
-pfexec ./interop exec mgd "cat /tmp/init.log" > /work/mgd.init.log
-# pfexec ./interop exec arista "which docker" > /work/arista.docker.log
-# pfexec ./interop exec arista "compgen -c | grep docker" > /work/arista.compgen.log
-# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/account.log" > /work/arista.account.log
-# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/messages" > /work/arista.messages
-# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-error.log" > /work/arista.nginx-error.log
-# pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-access.log" > /work/arista.nginx-access.log
 ./baseline --show-output
