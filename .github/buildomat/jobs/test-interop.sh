@@ -68,6 +68,8 @@ _exit_trap() {
 	pfexec ./interop exec mgd "cat /tmp/init.log" > /work/mgd.init.log
 	pfexec ./interop exec mgd "cat /tmp/mgd.log" > /work/mgd.log
 
+	find /work -ls
+
 	exit 1
 }
 
