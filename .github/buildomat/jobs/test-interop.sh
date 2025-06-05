@@ -135,4 +135,4 @@ pfexec ./interop launch
 
 banner 'test'
 
-./baseline --show-output && echo "passed, but simulating failure" && exit 1
+./baseline --show-output
