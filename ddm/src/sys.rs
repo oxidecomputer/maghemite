@@ -277,7 +277,7 @@ pub fn add_tunnel_routes(
         IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr, Ipv6PrefixLen,
         SetVirt2BoundaryReq,
     };
-    let hdl = OpteHdl::open(OpteHdl::XDE_CTL).map_err(|e| e.to_string())?;
+    let hdl = OpteHdl::open().map_err(|e| e.to_string())?;
 
     for (pfx, tep) in tunnel_route_update_map(routes) {
         for t in &tep {
@@ -328,7 +328,7 @@ pub fn remove_tunnel_routes(
         ClearVirt2BoundaryReq, IpCidr, Ipv4Cidr, Ipv4PrefixLen, Ipv6Cidr,
         Ipv6PrefixLen,
     };
-    let hdl = OpteHdl::open(OpteHdl::XDE_CTL).map_err(|e| e.to_string())?;
+    let hdl = OpteHdl::open().map_err(|e| e.to_string())?;
     for (pfx, tep) in tunnel_route_update_map(routes) {
         for t in &tep {
             inf!(
