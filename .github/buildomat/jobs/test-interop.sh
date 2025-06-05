@@ -33,7 +33,7 @@ _exit_trap() {
 	pfexec diskinfo
 	pfexec zfs list
 	pfexec zpool list
-	pfexec stat /ci
+	pfexec ls -l /ci
 
 	#
 	# collect falcon info
@@ -50,23 +50,30 @@ _exit_trap() {
 	# grab platform-specific logs
 	#
 	# arista
-	pfexec ./interop exec arista "cat /tmp/init.log" > /work/arista.init.log
-	pfexec ./interop exec arista "docker ps -a"
-	pfexec ./interop exec arista "docker logs ceos1" > /work/arista.docker.logs
-	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/account.log" > /work/arista.account.log
-	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/messages" > /work/arista.messages
-	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-error.log" > /work/arista.nginx-error.log
-	pfexec ./interop exec arista "docker exec -it ceos1 cat /var/log/nginx-access.log" > /work/arista.nginx-access.log
+	ARISTA_IF=`pfexec ./interop exec arista "ip -4 -j route show default | jq '.[0][\"dev\"]' | tr -d '\"'"`
+	ARISTA_IP=`pfexec ./interop exec arista "ip -4 -br -j addr show dev $ARISTA_IF | jq '.[0][\"addr_info\"][0][\"local\"]' | tr -d '\"'"`
+	ssh root@$ARISTA_IP "mv /tmp/init.log /tmp/arista.init.log"
+	ssh root@$ARISTA_IP "docker ps -a > /tmp/arista.docker-ps.log"
+	ssh root@$ARISTA_IP "docker logs ceos1 > /tmp/arista.docker.logs"
+	ssh root@$ARISTA_IP "docker exec -it ceos1 cat /var/log/account.log > /tmp/arista.account.log"
+	ssh root@$ARISTA_IP "docker exec -it ceos1 cat /var/log/messages > /tmp/arista.messages"
+	ssh root@$ARISTA_IP "docker exec -it ceos1 cat /var/log/nginx-error.log > /tmp/arista.nginx-error.log"
+	ssh root@$ARISTA_IP "docker exec -it ceos1 cat /var/log/nginx-access.log > /tmp/arista.nginx-access.log"
+	scp root@$ARISTA_IP:/tmp/*.log /work
 	# juniper
-	pfexec ./interop exec juniper "cat /tmp/init.log" > /work/juniper.init.log
-	pfexec ./interop exec juniper "docker ps -a"
-	pfexec ./interop exec juniper "docker logs crpd1" > /work/juniper.docker.logs
-	pfexec ./interop exec juniper "docker exec -it crpd1 cat /var/log/messages" > /work/juniper.messages
-	pfexec ./interop exec juniper "docker exec -it crpd1 cat /var/log/na-grpcd" > /work/juniper.na-grpcd
+	JUNIPER_IF=`pfexec ./interop exec juniper "ip -j route show default | jq '.[0][\"dev\"]' | tr -d '\"'"`
+	JUNIPER_IP=`pfexec ./interop exec juniper "ip -4 -br -j addr show dev $JUNIPER_IF | jq '.[0][\"addr_info\"][0][\"local\"]' | tr -d '\"'"`
+	ssh root@$JUNIPER_IP "cat /tmp/init.log /tmp/juniper.init.log"
+	ssh root@$JUNIPER_IP "docker ps -a > /tmp/juniper.docker-ps.log"
+	ssh root@$JUNIPER_IP "docker logs crpd1 > /tmp/juniper.docker-logs.log"
+	ssh root@$JUNIPER_IP "docker exec -it crpd1 cat /var/log/messages > /tmp/juniper-messages.log"
+	ssh root@$JUNIPER_IP "docker exec -it crpd1 cat /var/log/na-grpcd > /tmp/juniper-na-grpcd.log"
+	scp root@$JUNIPER_IP:/tmp/*.log /work
 	# maghemite
 	# /tmp filepaths chosen in testbed/interop/src/interop.rs and testbed/interop/cargo-bay/mgd/init.sh
-	pfexec ./interop exec mgd "cat /tmp/init.log" > /work/mgd.init.log
-	pfexec ./interop exec mgd "cat /tmp/mgd.log" > /work/mgd.log
+	MGD_IF=`pfexec ./interop exec mgd "route get -inet default | grep interface | awk '{print \\$NF}'"`
+	MGD_IP=`pfexec ./interop exec mgd "ipadm show-addr $MGD_IF/v4 -p -o addr | awk -F '/' '{print \\$1}'"`
+	scp root@$MGD_IP:/tmp/{init,mgd}.log /work
 
 	find /work -ls
 
