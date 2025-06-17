@@ -127,7 +127,8 @@ find /input -ls
 
 banner 'zpool'
 
-export DISK=${DISK:-c1t1d0}
+# pick the largest disk available
+export DISK=$(pfexec diskinfo -pH | sort -k8 -n -r | head -1 | awk '{print $2}')
 pfexec zpool create -o ashift=12 -f cpool $DISK
 pfexec zfs create -o mountpoint=/ci cpool/ci
 
