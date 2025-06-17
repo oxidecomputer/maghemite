@@ -2,7 +2,7 @@
 #:
 #: name = "test-interop"
 #: variety = "basic"
-#: target = "lab-2.0-opte"
+#: target = "lab-2.0-gimlet"
 #: skip_clone = true
 #: output_rules = [
 #:   "/work/*",
