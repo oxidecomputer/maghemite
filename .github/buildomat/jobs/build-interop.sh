@@ -56,7 +56,7 @@ banner 'prep'
 mkdir out
 cp target/debug/{interop,wrangler} out/
 # grab just the file ending in the hash, not the file ending in ".d"
-TEST=$(ls -t target/debug/deps/baseline-* | egrep -v '.*\.d$' | head -1)
+TEST=$(find target/debug/deps -maxdepth 1 -type f -name 'baseline-*' -exec ls -t {} + | grep -v -E '.*\.d$' | head -1)
 mv "$TEST" 'out/baseline'
 
 banner 'archive'
