@@ -188,3 +188,4 @@ net_info
 banner 'test'
 
 ./baseline --show-output
+# XXX: NOP TO FORCE BUILDOMAT TO RUN
