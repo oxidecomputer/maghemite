@@ -18,6 +18,14 @@
 set -x
 set -e
 
+ssh() {
+	if [ -z $SSH_BIN ]; then
+		SSH_BIN=$(which ssh)
+	fi
+
+	$SSH_BIN -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $@
+}
+
 net_info() {
 	#
 	# grab command output to see what's going on from the buildomat logs
