@@ -188,3 +188,4 @@ net_info
 banner 'test'
 
 ./baseline --show-output
+# NOP number 2
