@@ -48,7 +48,7 @@ net_info() {
 	ssh root@"$JUNIPER_IP" "docker exec -t crpd1 cli -c 'show route | no-more'"
 
 	if [ -z "$MGD_IP" ]; then
-		MGD_IF=$(pfexec ./interop exec mgd "route get -inet default | grep interface | awk '{print \\$NF}'")
+		MGD_IF=$(pfexec ./interop exec mgd "route get -inet default | grep interface | awk '{print \$NF}'")
 		MGD_IP=$(pfexec ./interop exec mgd "ipadm show-addr $MGD_IF/v4 -p -o addr | cut -f / -d 1")
 	fi
 	ssh root@"$MGD_IP" "/opt/cargo-bay/mgadm bgp status neighbors 65100"
