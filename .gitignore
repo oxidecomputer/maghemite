@@ -1,4 +1,5 @@
 target
+ci
 *.sw*
 rusty-tags.vi
 cargo-bay
