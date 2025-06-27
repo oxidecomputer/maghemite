@@ -4,6 +4,7 @@
 #: variety = "basic"
 #: target = "helios-2.0"
 #: rust_toolchain = "stable"
+#: skip_clone = true
 #: access_repos = [
 #:   "oxidecomputer/testbed",
 #: ]
