@@ -35,7 +35,7 @@ rustc --version
 
 banner 'clone'
 mkdir -p "$WORK/ci"
-git clone git@github.com:oxidecomputer/testbed.git "$WORK/ci/testbed"
+git clone https://github.com/oxidecomputer/testbed "$WORK/ci/testbed"
 
 banner 'build'
 cd "$WORK/ci/testbed"
