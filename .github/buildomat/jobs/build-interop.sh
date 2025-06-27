@@ -20,7 +20,6 @@ set -e
 # Allow this program to run either under buildomat, or in a local clone:
 #
 if [[ $CI == true ]]; then
-	top=$PWD
 	WORK=/work
 
 	pfexec pkg install protobuf git
@@ -29,23 +28,17 @@ else
 		printf 'ERROR: set WORK when running manually\n' >&2
 		exit 1
 	fi
-
-	#
-	# Be resilient against someone running this while not in the repository
-	# root directory:
-	#
-	top=$(cd "$(dirname "$0")"/../../.. && pwd)
 fi
 
 cargo --version
 rustc --version
 
 banner 'clone'
-mkdir "$top/ci"
-git clone https://github.com/oxidecomputer/testbed "$top/ci/testbed"
+mkdir -p "$WORK/ci"
+git clone git@github.com:oxidecomputer/testbed.git "$WORK/ci/testbed"
 
 banner 'build'
-cd "$top/ci/testbed"
+cd "$WORK/ci/testbed"
 cargo build \
     -p interop-lab \
     -p wrangler
@@ -53,7 +46,7 @@ cargo build --tests
 
 banner 'prep'
 
-mkdir out
+mkdir -p out
 cp target/debug/{interop,wrangler} out/
 # grab just the file ending in the hash, not the file ending in ".d"
 TEST=$(find target/debug/deps -maxdepth 1 -type f -name 'baseline-*' -exec ls -t {} + | grep -v -E '.*\.d$' | head -1)
@@ -61,7 +54,7 @@ mv "$TEST" 'out/baseline'
 
 banner 'archive'
 
-cd "$top/ci"
+cd "$WORK/ci"
 cat <<EOF > exclude-file.txt
 testbed/.git
 testbed/a4x2
@@ -74,8 +67,8 @@ tar cvzXf exclude-file.txt \
 
 banner 'dhcp-server'
 
-git clone https://github.com/oxidecomputer/omicron.git "$top/ci/omicron"
-cd "$top/ci/omicron"
+git clone https://github.com/oxidecomputer/omicron.git "$WORK/ci/omicron"
+cd "$WORK/ci/omicron"
 source env.sh
 if [[ $CI == true ]]; then
 	source .github/buildomat/ci-env.sh
