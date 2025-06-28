@@ -12,7 +12,7 @@ use crate::dendrite::{
 use crate::error::Error;
 use ddm::{
     add_tunnel_routes, new_ddm_client, remove_tunnel_routes,
-    update_tunnel_endpoints, BOUNDARY_SERVICES_VNI,
+    BOUNDARY_SERVICES_VNI,
 };
 use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client as DdmClient;
@@ -126,18 +126,14 @@ fn full_sync(
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
     let rib = db.full_rib();
-    let loc_rib = db.loc_rib();
 
     // Make sure our tunnel endpoint address is on the switch ASIC
     ensure_tep_addr(tep, dpd, rt.clone(), log);
 
-    // Announce tunnel endpoints via ddm
-    update_tunnel_endpoints(tep, ddm, &loc_rib, rt.clone(), log);
-
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
     for (prefix, _paths) in rib.iter() {
-        sync_prefix(tep, &loc_rib, prefix, dpd, ddm, log, &rt)?;
+        sync_prefix(tep, &db.loc_rib(), prefix, dpd, ddm, log, &rt)?;
     }
 
     Ok(())
@@ -217,6 +213,20 @@ fn sync_prefix(
     });
 
     //
+    // Update the ASIC routing tables
+    //
+
+    // Routes that are in the best set but not on the asic should be added.
+    let add: HashSet<RouteHash> =
+        best.difference(&dpd_current).cloned().collect();
+
+    // Routes that are on the asic but not in the best set should be removed.
+    let del: HashSet<RouteHash> =
+        dpd_current.difference(&best).cloned().collect();
+
+    update_dendrite(add.iter(), del.iter(), dpd, rt.clone(), log)?;
+
+    //
     // Update the ddm tunnel advertisements
     //
 
@@ -225,8 +235,8 @@ fn sync_prefix(
         .into_iter()
         .map(|x| TunnelOrigin {
             boundary_addr: tep,
-            metric: DEFAULT_ROUTE_PRIORITY,
             overlay_prefix: x.cidr,
+            metric: DEFAULT_ROUTE_PRIORITY,
             vni: BOUNDARY_SERVICES_VNI,
         })
         .collect::<HashSet<_>>();
@@ -241,20 +251,6 @@ fn sync_prefix(
 
     add_tunnel_routes(tep, ddm, &add, rt.clone(), log);
     remove_tunnel_routes(ddm, &del, rt.clone(), log);
-
-    //
-    // Update the ASIC routing tables
-    //
-
-    // Routes that are in the best set but not on the asic should be added.
-    let add: HashSet<RouteHash> =
-        best.difference(&dpd_current).cloned().collect();
-
-    // Routes that are on the asic but not in the best set should be removed.
-    let del: HashSet<RouteHash> =
-        dpd_current.difference(&best).cloned().collect();
-
-    update_dendrite(add.iter(), del.iter(), dpd, rt.clone(), log)?;
 
     Ok(())
 }

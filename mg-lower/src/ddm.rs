@@ -5,45 +5,10 @@
 use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client;
 use oxnet::Ipv6Net;
-use rdb::db::Rib;
-use rdb::{Prefix, DEFAULT_ROUTE_PRIORITY};
 use slog::{error, info, Logger};
 use std::{collections::HashSet, net::Ipv6Addr, sync::Arc};
 
 pub(crate) const BOUNDARY_SERVICES_VNI: u32 = 99;
-
-pub(crate) fn update_tunnel_endpoints(
-    tep: Ipv6Addr, // tunnel endpoint address
-    client: &Client,
-    routes: &Rib,
-    rt: Arc<tokio::runtime::Handle>,
-    log: &Logger,
-) {
-    let current: HashSet<TunnelOrigin> = match rt
-        .block_on(async { client.get_originated_tunnel_endpoints().await })
-        .map(|x| x.into_inner())
-    {
-        Ok(x) => x,
-        Err(e) => {
-            error!(log, "get originated tunnel endpoints: {e}");
-            return;
-        }
-    }
-    .into_iter()
-    .collect();
-
-    let target: HashSet<TunnelOrigin> = routes
-        .iter()
-        .filter(|(_prefix, path)| !path.is_empty())
-        .map(|(prefix, _path)| route_to_tunnel(tep, prefix))
-        .collect();
-
-    let to_add = target.difference(&current);
-    let to_remove = current.difference(&target);
-
-    add_tunnel_endpoints(tep, client, to_add.into_iter(), &rt, log);
-    remove_tunnel_endpoints(client, to_remove.into_iter(), &rt, log);
-}
 
 fn ensure_tep_underlay_origin(
     client: &Client,
@@ -75,31 +40,6 @@ fn ensure_tep_underlay_origin(
     {
         error!(log, "get originated endpoints: {e}");
     };
-}
-
-fn route_to_tunnel(tep: Ipv6Addr, prefix: &Prefix) -> TunnelOrigin {
-    match prefix {
-        Prefix::V4(p) => {
-            TunnelOrigin {
-                overlay_prefix: oxnet::Ipv4Net::new(p.value, p.length)
-                    .unwrap()
-                    .into(),
-                boundary_addr: tep,
-                vni: BOUNDARY_SERVICES_VNI,     //TODO?
-                metric: DEFAULT_ROUTE_PRIORITY, //TODO
-            }
-        }
-        Prefix::V6(p) => {
-            TunnelOrigin {
-                overlay_prefix: oxnet::Ipv6Net::new(p.value, p.length)
-                    .unwrap()
-                    .into(),
-                boundary_addr: tep,
-                vni: BOUNDARY_SERVICES_VNI,     //TODO?
-                metric: DEFAULT_ROUTE_PRIORITY, //TODO
-            }
-        }
-    }
 }
 
 pub(crate) fn add_tunnel_routes(
