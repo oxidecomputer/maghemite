@@ -374,31 +374,6 @@ pub(crate) fn get_routes_for_prefix(
                 if r.tag != MG_LOWER_TAG {
                     continue;
                 }
-                match link_is_up(dpd, &r.port_id, &r.link_id, &rt) {
-                    Err(e) => {
-                        error!(
-                            log,
-                            "nexthop: {} failed to get link state for {:?}/{:?}: {e}",
-                            r.tgt_ip,
-                            r.port_id,
-                            r.link_id
-                        );
-                        continue;
-                    }
-                    Ok(false) => {
-                        warn!(
-                            log,
-                            "nexthop: {} link {:?}/{:?} is not up, \
-                            not installing route for {:?}",
-                            r.tgt_ip,
-                            r.port_id,
-                            r.link_id,
-                            prefix,
-                        );
-                        continue;
-                    }
-                    Ok(true) => {}
-                }
                 match RouteHash::new(
                     cidr.into(),
                     r.port_id.clone(),

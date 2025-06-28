@@ -4,15 +4,13 @@
 
 use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client;
-use oxnet::{IpNet, Ipv6Net};
+use oxnet::Ipv6Net;
 use rdb::db::Rib;
-use rdb::{Prefix, Prefix4, Prefix6, DEFAULT_ROUTE_PRIORITY};
+use rdb::{Prefix, DEFAULT_ROUTE_PRIORITY};
 use slog::{error, info, Logger};
 use std::{collections::HashSet, net::Ipv6Addr, sync::Arc};
 
-use crate::dendrite::RouteHash;
-
-const BOUNDARY_SERVICES_VNI: u32 = 99;
+pub(crate) const BOUNDARY_SERVICES_VNI: u32 = 99;
 
 pub(crate) fn update_tunnel_endpoints(
     tep: Ipv6Addr, // tunnel endpoint address
@@ -107,29 +105,11 @@ fn route_to_tunnel(tep: Ipv6Addr, prefix: &Prefix) -> TunnelOrigin {
 pub(crate) fn add_tunnel_routes(
     tep: Ipv6Addr, // tunnel endpoint address
     client: &Client,
-    routes: &HashSet<RouteHash>,
+    routes: &HashSet<TunnelOrigin>,
     rt: Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) {
-    let teps: Vec<TunnelOrigin> = routes
-        .iter()
-        .map(|rt| {
-            let pfx = match rt.cidr {
-                IpNet::V4(p) => Prefix4 {
-                    value: p.prefix(),
-                    length: p.width(),
-                }
-                .into(),
-                IpNet::V6(p) => Prefix6 {
-                    value: p.prefix(),
-                    length: p.width(),
-                }
-                .into(),
-            };
-            route_to_tunnel(tep, &pfx)
-        })
-        .collect();
-    add_tunnel_endpoints(tep, client, teps.iter(), &rt, log)
+    add_tunnel_endpoints(tep, client, routes.iter(), &rt, log)
 }
 
 pub(crate) fn add_tunnel_endpoints<'a, I: Iterator<Item = &'a TunnelOrigin>>(
@@ -152,31 +132,12 @@ pub(crate) fn add_tunnel_endpoints<'a, I: Iterator<Item = &'a TunnelOrigin>>(
 }
 
 pub(crate) fn remove_tunnel_routes(
-    tep: Ipv6Addr, // tunnel endpoint address
     client: &Client,
-    routes: &HashSet<RouteHash>,
+    routes: &HashSet<TunnelOrigin>,
     rt: Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) {
-    let teps: Vec<TunnelOrigin> = routes
-        .iter()
-        .map(|rt| {
-            let pfx = match rt.cidr {
-                IpNet::V4(p) => Prefix4 {
-                    value: p.prefix(),
-                    length: p.width(),
-                }
-                .into(),
-                IpNet::V6(p) => Prefix6 {
-                    value: p.prefix(),
-                    length: p.width(),
-                }
-                .into(),
-            };
-            route_to_tunnel(tep, &pfx)
-        })
-        .collect();
-    remove_tunnel_endpoints(client, teps.iter(), &rt, log)
+    remove_tunnel_endpoints(client, routes.iter(), &rt, log)
 }
 
 pub(crate) fn remove_tunnel_endpoints<
