@@ -189,23 +189,24 @@ fn sync_prefix(
         Err(e) => {
             error!(
                 log,
-                "sync_prefix: {} failed to get link state for {:?}/{:?}: {e} \
-                    discarding",
-                x.nexthop,
+                "sync_prefix: failed to get link state for {:?}/{:?} \
+                    not installing route {:?} -> {:?}: {e}",
                 x.port_id,
-                x.link_id
+                x.link_id,
+                x.cidr,
+                x.nexthop,
             );
             false
         }
         Ok(false) => {
             warn!(
                 log,
-                "sync_prefix: {} link {:?}/{:?} is not up, \
-                            not installing route for {:?}",
-                x.nexthop,
+                "sync_prefix: link {:?}/{:?} is not up, \
+                    not installing route {:?} -> {:?}",
                 x.port_id,
                 x.link_id,
                 x.cidr,
+                x.nexthop,
             );
             false
         }
