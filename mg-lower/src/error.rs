@@ -7,6 +7,9 @@ pub enum Error {
     #[error("dpd error {0}")]
     Dpd(#[from] dpd_client::Error<dpd_client::types::Error>),
 
+    #[error("ddm error {0}")]
+    Ddm(#[from] ddm_admin_client::Error<ddm_admin_client::types::Error>),
+
     #[error("tfport error {0}")]
     Tfport(String),
 
