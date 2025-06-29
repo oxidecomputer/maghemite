@@ -199,7 +199,13 @@ pub async fn delete_router(
     request: Query<AsnSelector>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
-    let mut routers = lock!(ctx.context().bgp.router);
+    let ctx = ctx.context();
+    let db = ctx.db.clone();
+
+    db.remove_bgp_router(rq.asn)
+        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
+
+    let mut routers = lock!(ctx.bgp.router);
     if let Some(r) = routers.remove(&rq.asn) {
         r.shutdown()
     };
