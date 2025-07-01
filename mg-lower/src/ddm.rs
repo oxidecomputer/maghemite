@@ -6,7 +6,7 @@ use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client;
 use oxnet::Ipv6Net;
 use slog::{error, info, Logger};
-use std::{collections::HashSet, net::Ipv6Addr, sync::Arc};
+use std::{net::Ipv6Addr, sync::Arc};
 
 pub(crate) const BOUNDARY_SERVICES_VNI: u32 = 99;
 
@@ -42,17 +42,7 @@ fn ensure_tep_underlay_origin(
     };
 }
 
-pub(crate) fn add_tunnel_routes(
-    tep: Ipv6Addr, // tunnel endpoint address
-    client: &Client,
-    routes: &HashSet<TunnelOrigin>,
-    rt: Arc<tokio::runtime::Handle>,
-    log: &Logger,
-) {
-    add_tunnel_endpoints(tep, client, routes.iter(), &rt, log)
-}
-
-pub(crate) fn add_tunnel_endpoints<'a, I: Iterator<Item = &'a TunnelOrigin>>(
+pub(crate) fn add_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     tep: Ipv6Addr, // tunnel endpoint address
     client: &Client,
     routes: I,
@@ -71,19 +61,7 @@ pub(crate) fn add_tunnel_endpoints<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     }
 }
 
-pub(crate) fn remove_tunnel_routes(
-    client: &Client,
-    routes: &HashSet<TunnelOrigin>,
-    rt: Arc<tokio::runtime::Handle>,
-    log: &Logger,
-) {
-    remove_tunnel_endpoints(client, routes.iter(), &rt, log)
-}
-
-pub(crate) fn remove_tunnel_endpoints<
-    'a,
-    I: Iterator<Item = &'a TunnelOrigin>,
->(
+pub(crate) fn remove_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     client: &Client,
     routes: I,
     rt: &Arc<tokio::runtime::Handle>,

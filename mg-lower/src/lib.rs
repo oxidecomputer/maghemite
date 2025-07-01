@@ -250,8 +250,8 @@ fn sync_prefix(
     let del: HashSet<TunnelOrigin> =
         ddm_current.difference(&best_tunnel).cloned().collect();
 
-    add_tunnel_routes(tep, ddm, &add, rt.clone(), log);
-    remove_tunnel_routes(ddm, &del, rt.clone(), log);
+    add_tunnel_routes(tep, ddm, add.iter(), rt, log);
+    remove_tunnel_routes(ddm, del.iter(), rt, log);
 
     Ok(())
 }
