@@ -12,15 +12,16 @@ use crate::dendrite::{
 use crate::error::Error;
 use ddm::{
     add_tunnel_routes, new_ddm_client, remove_tunnel_routes,
-    update_tunnel_endpoints,
+    BOUNDARY_SERVICES_VNI,
 };
+use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client as DdmClient;
-use dendrite::ensure_tep_addr;
+use dendrite::{ensure_tep_addr, link_is_up};
 use dpd_client::Client as DpdClient;
 use mg_common::stats::MgLowerStats as Stats;
 use rdb::db::Rib;
-use rdb::{Db, Prefix, PrefixChangeNotification};
-use slog::{error, info, Logger};
+use rdb::{Db, Prefix, PrefixChangeNotification, DEFAULT_ROUTE_PRIORITY};
+use slog::{error, info, warn, Logger};
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::mpsc::{channel, RecvTimeoutError};
@@ -129,13 +130,10 @@ fn full_sync(
     // Make sure our tunnel endpoint address is on the switch ASIC
     ensure_tep_addr(tep, dpd, rt.clone(), log);
 
-    // Announce tunnel endpoints via ddm
-    update_tunnel_endpoints(tep, ddm, &rib, rt.clone(), log);
-
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
     for (prefix, _paths) in rib.iter() {
-        sync_prefix(tep, db.loc_rib(), prefix, dpd, ddm, log, &rt)?;
+        sync_prefix(tep, &db.loc_rib(), prefix, dpd, ddm, log, &rt)?;
     }
 
     Ok(())
@@ -152,7 +150,7 @@ fn handle_change(
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
     for prefix in notification.changed.iter() {
-        sync_prefix(tep, db.loc_rib(), prefix, dpd, ddm, log, &rt)?;
+        sync_prefix(tep, &db.loc_rib(), prefix, dpd, ddm, log, &rt)?;
     }
 
     Ok(())
@@ -160,7 +158,7 @@ fn handle_change(
 
 fn sync_prefix(
     tep: Ipv6Addr,
-    rib_loc: Rib,
+    rib_loc: &Rib,
     prefix: &Prefix,
     dpd: &DpdClient,
     ddm: &DdmClient,
@@ -168,7 +166,15 @@ fn sync_prefix(
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
     // The current routes that are on the ASIC.
-    let current = get_routes_for_prefix(dpd, prefix, rt.clone(), log.clone())?;
+    let dpd_current =
+        get_routes_for_prefix(dpd, prefix, rt.clone(), log.clone())?;
+
+    // The current tunnel routes in ddm
+    let ddm_current = rt
+        .block_on(async { ddm.get_originated_tunnel_endpoints().await })?
+        .into_inner()
+        .into_iter()
+        .collect::<HashSet<_>>();
 
     // The best routes in the RIB
     let mut best: HashSet<RouteHash> = HashSet::new();
@@ -178,18 +184,74 @@ fn sync_prefix(
         }
     }
 
+    // Remove paths for which the link is down.
+    best.retain(|x| match link_is_up(dpd, &x.port_id, &x.link_id, rt) {
+        Err(e) => {
+            error!(
+                log,
+                "sync_prefix: failed to get link state for {:?}/{:?} \
+                    not installing route {:?} -> {:?}: {e}",
+                x.port_id,
+                x.link_id,
+                x.cidr,
+                x.nexthop,
+            );
+            false
+        }
+        Ok(false) => {
+            warn!(
+                log,
+                "sync_prefix: link {:?}/{:?} is not up, \
+                    not installing route {:?} -> {:?}",
+                x.port_id,
+                x.link_id,
+                x.cidr,
+                x.nexthop,
+            );
+            false
+        }
+        Ok(true) => true,
+    });
+
+    //
+    // Update the ASIC routing tables
+    //
+
     // Routes that are in the best set but not on the asic should be added.
-    let add: HashSet<RouteHash> = best.difference(&current).cloned().collect();
+    let add: HashSet<RouteHash> =
+        best.difference(&dpd_current).cloned().collect();
 
     // Routes that are on the asic but not in the best set should be removed.
-    let del: HashSet<RouteHash> = current.difference(&best).cloned().collect();
+    let del: HashSet<RouteHash> =
+        dpd_current.difference(&best).cloned().collect();
 
-    // Update DDM tunnel routing
-    add_tunnel_routes(tep, ddm, &add, rt.clone(), log);
-    remove_tunnel_routes(tep, ddm, &del, rt.clone(), log);
-
-    // Update the ASIC routing tables
     update_dendrite(add.iter(), del.iter(), dpd, rt.clone(), log)?;
+
+    //
+    // Update the ddm tunnel advertisements
+    //
+
+    let best_tunnel = best
+        .clone()
+        .into_iter()
+        .map(|x| TunnelOrigin {
+            boundary_addr: tep,
+            overlay_prefix: x.cidr,
+            metric: DEFAULT_ROUTE_PRIORITY,
+            vni: BOUNDARY_SERVICES_VNI,
+        })
+        .collect::<HashSet<_>>();
+
+    // Routes that are in the best set but not in ddm should be added.
+    let add: HashSet<TunnelOrigin> =
+        best_tunnel.difference(&ddm_current).cloned().collect();
+
+    // Routes that are in ddm but not in the best set should be removed.
+    let del: HashSet<TunnelOrigin> =
+        ddm_current.difference(&best_tunnel).cloned().collect();
+
+    add_tunnel_routes(tep, ddm, add.iter(), rt, log);
+    remove_tunnel_routes(ddm, del.iter(), rt, log);
 
     Ok(())
 }
