@@ -26,6 +26,14 @@ ssh() {
 	$SSH_BIN -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$@"
 }
 
+scp() {
+	if [ -z "$SCP_BIN" ]; then
+		SCP_BIN=$(which scp)
+	fi
+
+	$SCP_BIN -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$@"
+}
+
 net_info() {
 	#
 	# grab command output to see what's going on from the buildomat logs
