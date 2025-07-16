@@ -82,6 +82,7 @@ rand = "0.8.5"
 backoff = "0.4"
 mg-common = { path = "mg-common" }
 chrono = { version = "0.4.41", features = ["serde"] }
+oxide-tokio-rt = "0.1.2"
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oxnet = { version = "0.1.2", default-features = false, features = ["schemars", "serde"] }

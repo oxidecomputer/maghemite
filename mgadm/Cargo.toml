@@ -11,6 +11,7 @@ mg-admin-client = { path = "../mg-admin-client" }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+oxide-tokio-rt.workspace = true
 slog.workspace = true
 slog-term.workspace = true
 slog-async.workspace = true

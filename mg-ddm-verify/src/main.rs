@@ -26,8 +26,11 @@ pub struct Sled {
     ip: String,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    oxide_tokio_rt::run(run())
+}
+
+async fn run() -> Result<()> {
     let sleds: Vec<Sled> =
         serde_json::from_str(&std::fs::read_to_string("sleds.json")?)?;
 

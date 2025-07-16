@@ -6,6 +6,11 @@ use anyhow::Result;
 use omicron_zone_package::package::BuildConfig;
 use std::fs::create_dir_all;
 
+#[expect(
+    clippy::disallowed_macros,
+    reason = "using `#[tokio::main]` to avoid an extra dependency \
+     is worth more than a prod-like configuration in a build tool"
+)]
 #[tokio::main]
 async fn main() -> Result<()> {
     let cfg = omicron_zone_package::config::parse("package-manifest.toml")?;
