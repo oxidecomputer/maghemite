@@ -9,6 +9,7 @@ mg-common = { path = "../mg-common" }
 anyhow.workspace = true
 clap.workspace = true
 libnet.workspace = true
+oxide-tokio-rt.workspace = true
 slog.workspace = true
 slog-bunyan.workspace = true
 slog-async.workspace = true

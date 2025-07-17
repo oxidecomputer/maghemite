@@ -52,8 +52,11 @@ enum Commands {
     Bfd(bfd::Commands),
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    oxide_tokio_rt::run(run())
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
     let log = init_logger();
 

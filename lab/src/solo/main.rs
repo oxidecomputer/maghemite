@@ -9,8 +9,11 @@ use libfalcon::error::Error;
 use libfalcon::unit::gb;
 use libfalcon::Runner;
 
-#[tokio::main]
-async fn main() -> Result<(), Error> {
+fn main() -> Result<(), Error> {
+    oxide_tokio_rt::run(main_impl())
+}
+
+async fn main_impl() -> Result<(), Error> {
     let mut d = Runner::new("mgsolo");
 
     // nodes

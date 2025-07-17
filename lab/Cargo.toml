@@ -7,6 +7,7 @@ edition = "2018"
 libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anyhow.workspace = true
 tokio.workspace = true
+oxide-tokio-rt.workspace = true
 
 [[bin]]
 name = "solo"

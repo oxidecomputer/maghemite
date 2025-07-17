@@ -89,9 +89,8 @@ struct Peer {
     addr: Ipv6Addr,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    run().await
+fn main() -> Result<()> {
+    oxide_tokio_rt::run(run())
 }
 
 async fn run() -> Result<()> {

@@ -11,6 +11,7 @@ anstyle.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 colored.workspace = true
+oxide-tokio-rt.workspace = true
 oxnet.workspace = true
 slog-async.workspace = true
 slog-envlogger.workspace = true

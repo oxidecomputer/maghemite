@@ -605,7 +605,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fde0e0ec90c9dfb3b4b1a0891a7dcd0e2bffde2f7efed5fe7c9bb00e5bfb915e"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -932,6 +932,7 @@ dependencies = [
  "ddm",
  "ddm-admin-client",
  "mg-common",
+ "oxide-tokio-rt",
  "oxnet",
  "slog",
  "slog-async",
@@ -953,6 +954,7 @@ dependencies = [
  "hostname 0.3.1",
  "libnet",
  "mg-common",
+ "oxide-tokio-rt",
  "slog",
  "slog-async",
  "slog-bunyan",
@@ -2476,6 +2478,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "libfalcon",
+ "oxide-tokio-rt",
  "tokio",
 ]
 
@@ -2787,6 +2790,7 @@ name = "mg-ddm-verify"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "oxide-tokio-rt",
  "reqwest",
  "serde",
  "serde_json",
@@ -2850,6 +2854,7 @@ dependencies = [
  "humantime",
  "mg-admin-client 0.1.0",
  "mg-common",
+ "oxide-tokio-rt",
  "rdb",
  "serde_json",
  "slog",
@@ -2877,6 +2882,7 @@ dependencies = [
  "mg-common",
  "mg-lower",
  "omicron-common",
+ "oxide-tokio-rt",
  "oximeter",
  "oximeter-producer",
  "rand 0.8.5",
@@ -3510,6 +3516,17 @@ name = "owo-colors"
 version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1036865bb9422d3300cf723f657c2851d0e9ab12567854b1f4eba3d77decf564"
+
+[[package]]
+name = "oxide-tokio-rt"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84bd87abf37c68d414e4df90a545857542140e07206f75039b8f63b244da87b8"
+dependencies = [
+ "anyhow",
+ "tokio",
+ "tokio-dtrace",
+]
 
 [[package]]
 name = "oxide-vpc"
@@ -5645,6 +5662,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-dtrace"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5eb4bcf85c373ff09a8beb87a477c2df185cd8842a770386a88bc3ff7ac5abb"
+dependencies = [
+ "thiserror 2.0.12",
+ "tokio",
+ "usdt",
+]
+
+[[package]]
 name = "tokio-macros"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6438,7 +6466,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

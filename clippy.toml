@@ -1,0 +1,4 @@
+[[disallowed-macros]]
+path = "tokio::main"
+reason = "prefer `oxide_tokio_rt` for production software"
+replacement = "oxide_tokio_rt::run"

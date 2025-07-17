@@ -85,11 +85,10 @@ struct RunArgs {
     sled_uuid: Option<Uuid>,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = Cli::parse();
     match args.command {
-        Commands::Run(run_args) => run(run_args).await,
+        Commands::Run(run_args) => oxide_tokio_rt::run(run(run_args)),
         Commands::Apigen => admin::apigen(),
     }
 }

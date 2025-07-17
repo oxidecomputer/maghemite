@@ -107,8 +107,11 @@ struct Dendrite {
     port: u16,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    oxide_tokio_rt::run(run())
+}
+
+async fn run() {
     let arg = Arg::parse();
     let log = init_logger();
 
