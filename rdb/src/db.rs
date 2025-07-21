@@ -18,6 +18,7 @@ use slog::{error, Logger};
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
+use std::num::NonZeroU8;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
@@ -45,12 +46,15 @@ const STATIC4_ROUTES: &str = "static4_routes";
 /// Key used in settings tree for tunnel endpoint setting
 const TEP_KEY: &str = "tep";
 
+/// Key used in settings tree for bestpath fanout setting
+const BESTPATH_FANOUT_KEY: &str = "bestpath_fanout";
+
 /// The handle used to open a persistent key-value tree for BFD neighbor
 /// information.
 const BFD_NEIGHBOR: &str = "bfd_neighbor";
 
-//TODO as parameter
-const BESTPATH_FANOUT: usize = 1;
+/// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
+const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
 pub type Rib = BTreeMap<Prefix, BTreeSet<Path>>;
 
@@ -388,8 +392,17 @@ impl Db {
         }
     }
 
-    pub fn update_loc_rib(rib_in: &Rib, rib_loc: &mut Rib, prefix: Prefix) {
-        let bp = bestpaths(prefix, rib_in, BESTPATH_FANOUT);
+    pub fn update_loc_rib(
+        &self,
+        rib_in: &Rib,
+        rib_loc: &mut Rib,
+        prefix: Prefix,
+    ) {
+        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
+            error!(self.log, "failed to get bestpath fanout: {e}");
+            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
+        });
+        let bp = bestpaths(prefix, rib_in, fanout.get() as usize);
         match bp {
             Some(bp) => {
                 rib_loc.insert(prefix, bp.clone());
@@ -410,7 +423,7 @@ impl Db {
                 rib.insert(prefix, BTreeSet::from([path.clone()]));
             }
         }
-        Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
+        self.update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
     }
 
     pub fn add_static_routes(
@@ -513,7 +526,7 @@ impl Db {
         }
 
         for prefix in pcn.changed.iter() {
-            Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
+            self.update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
         }
         self.notify(pcn);
     }
@@ -530,7 +543,7 @@ impl Db {
             }
         }
 
-        Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
+        self.update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
     }
 
     pub fn remove_static_routes(
@@ -613,6 +626,31 @@ impl Db {
         let tree = self.persistent.open_tree(SETTINGS)?;
         let key = addr.octets();
         tree.insert(TEP_KEY, &key)?;
+        tree.flush()?;
+        Ok(())
+    }
+    pub fn get_bestpath_fanout(&self) -> Result<NonZeroU8, Error> {
+        let tree = self.persistent.open_tree(SETTINGS)?;
+        let result = tree.get(BESTPATH_FANOUT_KEY)?;
+        let fan = match result {
+            Some(value) => {
+                u8::from_be_bytes((*value).try_into().map_err(|_| {
+                    Error::DbKey("invalid bestpath_fanout value in db".into())
+                })?)
+            }
+            None => DEFAULT_BESTPATH_FANOUT,
+        };
+
+        Ok(match NonZeroU8::new(fan) {
+            None => NonZeroU8::new(1).unwrap(),
+            Some(fanout) => fanout,
+        })
+    }
+
+    pub fn set_bestpath_fanout(&self, fanout: NonZeroU8) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(SETTINGS)?;
+        let value = fanout.get().to_be_bytes();
+        tree.insert(BESTPATH_FANOUT_KEY, &value)?;
         tree.flush()?;
         Ok(())
     }

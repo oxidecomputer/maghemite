@@ -89,6 +89,10 @@ pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
     register!(api, update_origin4);
     register!(api, delete_origin4);
 
+    // Bestpath configuration
+    register!(api, read_bestpath_fanout);
+    register!(api, update_bestpath_fanout);
+
     // Policy checker configuration
     register!(api, create_checker);
     register!(api, read_checker);
@@ -786,6 +790,34 @@ pub async fn delete_shaper(
     let ctx = ctx.context();
     let rq = request.into_inner();
     helpers::unload_policy(ctx, rq.asn, PolicyKind::Shaper).await
+}
+
+#[endpoint { method = GET, path = "/bestpath/config/fanout" }]
+pub async fn read_bestpath_fanout(
+    ctx: RequestContext<Arc<HandlerContext>>,
+) -> Result<HttpResponseOk<resource::BestpathFanoutResponse>, HttpError> {
+    let ctx = ctx.context();
+    let fanout = ctx
+        .db
+        .get_bestpath_fanout()
+        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
+
+    Ok(HttpResponseOk(resource::BestpathFanoutResponse { fanout }))
+}
+
+#[endpoint { method = POST, path = "/bestpath/config/fanout" }]
+pub async fn update_bestpath_fanout(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<resource::BestpathFanoutRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context();
+    let rq = request.into_inner();
+
+    ctx.db
+        .set_bestpath_fanout(rq.fanout)
+        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
+
+    Ok(HttpResponseUpdatedNoContent())
 }
 
 pub(crate) mod helpers {
