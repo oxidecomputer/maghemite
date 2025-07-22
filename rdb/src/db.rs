@@ -413,6 +413,24 @@ impl Db {
         }
     }
 
+    // generic helper function to kick off a bestpath run for some
+    // subset of prefixes in rib_in. the caller chooses which prefixes
+    // bestpath is run against via the bestpath_needed closure
+    pub fn trigger_bestpath_when<F>(&self, bestpath_needed: F)
+    where
+        F: Fn(&Prefix, &BTreeSet<Path>) -> bool,
+    {
+        for (prefix, paths) in self.full_rib().iter() {
+            if bestpath_needed(prefix, paths) {
+                self.update_loc_rib(
+                    &lock!(self.rib_in),
+                    &mut lock!(self.rib_loc),
+                    *prefix,
+                );
+            }
+        }
+    }
+
     pub fn add_prefix_path(&self, prefix: Prefix, path: &Path) {
         let mut rib = lock!(self.rib_in);
         match rib.get_mut(&prefix) {
@@ -649,6 +667,7 @@ impl Db {
         let tree = self.persistent.open_tree(SETTINGS)?;
         tree.insert(BESTPATH_FANOUT, &[fanout.get()])?;
         tree.flush()?;
+        self.trigger_bestpath_when(|_pfx, _paths| true);
         Ok(())
     }
 
