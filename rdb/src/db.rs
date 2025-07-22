@@ -46,12 +46,12 @@ const STATIC4_ROUTES: &str = "static4_routes";
 /// Key used in settings tree for tunnel endpoint setting
 const TEP_KEY: &str = "tep";
 
-/// Key used in settings tree for bestpath fanout setting
-const BESTPATH_FANOUT_KEY: &str = "bestpath_fanout";
-
 /// The handle used to open a persistent key-value tree for BFD neighbor
 /// information.
 const BFD_NEIGHBOR: &str = "bfd_neighbor";
+
+/// Key used in settings tree for bestpath fanout setting
+const BESTPATH_FANOUT: &str = "bestpath_fanout";
 
 /// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
 const DEFAULT_BESTPATH_FANOUT: u8 = 1;
@@ -629,28 +629,25 @@ impl Db {
         tree.flush()?;
         Ok(())
     }
+
     pub fn get_bestpath_fanout(&self) -> Result<NonZeroU8, Error> {
         let tree = self.persistent.open_tree(SETTINGS)?;
-        let result = tree.get(BESTPATH_FANOUT_KEY)?;
-        let fan = match result {
-            Some(value) => {
-                u8::from_be_bytes((*value).try_into().map_err(|_| {
-                    Error::DbKey("invalid bestpath_fanout value in db".into())
-                })?)
-            }
+        let fan = match tree.get(BESTPATH_FANOUT)? {
+            // fanout was not in db
             None => DEFAULT_BESTPATH_FANOUT,
+            Some(value) => value[0],
         };
 
         Ok(match NonZeroU8::new(fan) {
-            None => NonZeroU8::new(1).unwrap(),
+            // fanout was in db but was 0 (unexpected)
+            None => NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap(),
             Some(fanout) => fanout,
         })
     }
 
     pub fn set_bestpath_fanout(&self, fanout: NonZeroU8) -> Result<(), Error> {
         let tree = self.persistent.open_tree(SETTINGS)?;
-        let value = fanout.get().to_be_bytes();
-        tree.insert(BESTPATH_FANOUT_KEY, &value)?;
+        tree.insert(BESTPATH_FANOUT, &[fanout.get()])?;
         tree.flush()?;
         Ok(())
     }
