@@ -653,7 +653,12 @@ impl Db {
         let fan = match tree.get(BESTPATH_FANOUT)? {
             // fanout was not in db
             None => DEFAULT_BESTPATH_FANOUT,
-            Some(value) => value[0],
+            Some(value) => {
+                let value: [u8; 1] = (*value).try_into().map_err(|_| {
+                    Error::DbKey("invalid bestpath_fanout value in db".into())
+                })?;
+                value[0]
+            }
         };
 
         Ok(match NonZeroU8::new(fan) {
