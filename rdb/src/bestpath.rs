@@ -36,6 +36,11 @@ pub fn bestpaths(
 ) -> Option<BTreeSet<Path>> {
     let candidates = rib.get(&prefix)?;
 
+    // Short-circuit: if there's only 1 candidate, then it is the best
+    if candidates.len() == 1 {
+        return Some(candidates.clone());
+    }
+
     // Partition the choice space on whether routes are shutdown or not. If we
     // only have shutdown routes then use those. Otherwise use active routes
     let (active, shutdown): (BTreeSet<&Path>, BTreeSet<&Path>) =
