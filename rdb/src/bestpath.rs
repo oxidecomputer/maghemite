@@ -7,18 +7,18 @@ use std::collections::BTreeSet;
 use crate::{db::Rib, types::Path, Prefix};
 use itertools::Itertools;
 
-/// The bestpath algorithms chooses the best set of up to `max` paths for a
+/// The bestpath algorithm chooses the best set of up to `max` paths for a
 /// particular prefix from the RIB. The set of paths chosen will all have
 /// equal RIB priority, MED, local_pref, AS path length and shutdown status.
 /// The bestpath algorithm performs path filtering in the following ordered
-/// sequece of operations.
+/// sequence of operations.
 ///
 /// - partition candidate paths into active and shutdown groups.
 /// - if only shutdown routes exist, select from that group, otherwise
 ///   select from the active group.
 /// - filter the selection group to the set of paths with the smallest
 ///   rib priority
-/// - filter the selection group to the set of paths with the smallest
+/// - filter the selection group to the set of paths with the largest
 ///   local preference
 /// - filter the selection group to the set of paths with the smallest
 ///   AS path length
@@ -60,8 +60,8 @@ pub fn bestpaths(
     let (b, s): (BTreeSet<&Path>, BTreeSet<&Path>) =
         candidates.into_iter().partition(|x| x.bgp.is_some());
 
+    // Some paths are static, return up to `max` paths from static routes
     if !s.is_empty() {
-        // Some paths are static, return up to max paths from static routes
         return Some(s.into_iter().take(max).cloned().collect());
     }
 
@@ -84,7 +84,7 @@ pub fn bestpaths(
         None => 0,
     });
 
-    // Filter down to paths with the shortest length
+    // Filter down to paths with the shortest AS-Path length
     let candidates = candidates.into_iter().min_set_by_key(|x| match x.bgp {
         Some(ref bgp) => bgp.as_path.len(),
         None => 0,
