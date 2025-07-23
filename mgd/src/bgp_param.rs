@@ -8,6 +8,7 @@ use rdb::{ImportExportPolicy, Path, PolicyAction, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
+use std::num::NonZeroU8;
 use std::time::Duration;
 use std::{
     collections::BTreeMap,
@@ -213,6 +214,18 @@ pub struct GracefulShutdownRequest {
 pub struct GetOriginated4Request {
     /// ASN of the router to get originated prefixes from.
     pub asn: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct BestpathFanoutRequest {
+    /// Maximum number of equal-cost paths for ECMP forwarding
+    pub fanout: NonZeroU8,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct BestpathFanoutResponse {
+    /// Current maximum number of equal-cost paths for ECMP forwarding
+    pub fanout: NonZeroU8,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

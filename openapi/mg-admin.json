@@ -5,6 +5,53 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/bestpath/config/fanout": {
+      "get": {
+        "operationId": "read_bestpath_fanout",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BestpathFanoutResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "update_bestpath_fanout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BestpathFanoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bfd/peers": {
       "get": {
         "summary": "Get all the peers and their associated BFD state. Peers are identified by IP",
@@ -1184,6 +1231,34 @@
         },
         "required": [
           "asn"
+        ]
+      },
+      "BestpathFanoutRequest": {
+        "type": "object",
+        "properties": {
+          "fanout": {
+            "description": "Maximum number of equal-cost paths for ECMP forwarding",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "fanout"
+        ]
+      },
+      "BestpathFanoutResponse": {
+        "type": "object",
+        "properties": {
+          "fanout": {
+            "description": "Current maximum number of equal-cost paths for ECMP forwarding",
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "fanout"
         ]
       },
       "BfdPeerConfig": {
