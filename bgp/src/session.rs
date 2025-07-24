@@ -2108,6 +2108,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 shutdown: update.graceful_shutdown(),
                 rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                 bgp: Some(BgpPathProperties {
+                    origin: update.origin().to_u8(),
                     origin_as: peer_as,
                     peer: pc.conn.peer().ip(),
                     id: pc.id,

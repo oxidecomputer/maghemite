@@ -94,6 +94,7 @@ pub fn bgp_bestpaths(
             });
 
     // Filter down to paths with the highest local preference
+    // RFC 4721 Section 9.1.2.
     let candidates =
         candidates
             .into_iter()
@@ -103,6 +104,7 @@ pub fn bgp_bestpaths(
             });
 
     // Filter down to paths with the shortest AS-Path length
+    // RFC 4721 Section 9.1.2.2 (a)
     let candidates =
         candidates
             .into_iter()
@@ -111,12 +113,22 @@ pub fn bgp_bestpaths(
                 None => 0,
             });
 
+    // Filter down to paths with the lowest Origin
+    // RFC 4721 Section 9.1.2.2 (b)
+    let candidates =
+        candidates
+            .into_iter()
+            .min_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => bgp.origin,
+                None => 2, // Incomplete
+            });
+
     // Group candidates by AS for MED selection
+    // RFC 4721 Section 9.1.2.2 (c)
     let as_groups = candidates.into_iter().chunk_by(|path| match path.bgp {
         Some(ref bgp) => bgp.origin_as,
         None => 0,
     });
-
     // Filter AS groups to paths with lowest MED
     let candidates = as_groups.into_iter().flat_map(|(_asn, paths)| {
         paths.min_set_by_key(|path| match path.bgp {
@@ -161,6 +173,7 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: 0, // IGP
                 origin_as: 470,
                 peer: remote_ip1,
                 id: 47,
@@ -183,6 +196,7 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: 0, // IGP
                 origin_as: 480,
                 peer: remote_ip2,
                 id: 48,
@@ -208,6 +222,7 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: 0, // IGP
                 origin_as: 490,
                 peer: remote_ip3,
                 id: 49,

@@ -59,6 +59,7 @@ impl From<StaticRouteKey> for Path {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct BgpPathProperties {
+    pub origin: u8,
     pub origin_as: u32,
     pub id: u32,
     pub peer: IpAddr,

@@ -737,6 +737,7 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: 0, // IGP
                 origin_as: 1111,
                 peer: remote_ip0,
                 id: 1111,
@@ -752,6 +753,7 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: 0, // IGP
                 origin_as: 2222,
                 peer: remote_ip1,
                 id: 2222,
@@ -772,6 +774,7 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: 0, // IGP
                 origin_as: 2222,
                 peer: remote_ip2,
                 id: 2222,

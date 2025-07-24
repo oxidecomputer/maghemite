@@ -641,6 +641,15 @@ impl UpdateMessage {
             .map(|p| p.iter().fold(0, |a, b| a + b.value.len()))
     }
 
+    pub fn origin(&self) -> PathOrigin {
+        for a in &self.path_attributes {
+            if let PathAttributeValue::Origin(origin) = &a.value {
+                return *origin;
+            }
+        }
+        PathOrigin::Incomplete
+    }
+
     pub fn has_community(&self, community: Community) -> bool {
         for a in &self.path_attributes {
             if let PathAttributeValue::Communities(communities) = &a.value {
@@ -1284,6 +1293,12 @@ pub enum PathOrigin {
     Egp = 1,
     /// Incomplete path origin
     Incomplete = 2,
+}
+
+impl PathOrigin {
+    pub fn to_u8(&self) -> u8 {
+        *self as u8
+    }
 }
 
 // A self describing segment found in path sets and sequences.
