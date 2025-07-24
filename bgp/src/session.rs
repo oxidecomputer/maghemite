@@ -2043,14 +2043,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             &pc.conn.peer().ip(),
         );
 
-        let originated = match self.db.get_origin4() {
-            Ok(value) => value,
-            Err(e) => {
-                err!(self; "failed to get originated from db: {e}");
-                Vec::new()
-            }
-        };
-
         if !update.nlri.is_empty() {
             // TODO: parse and prefer nexthop in MP_REACH_NLRI
             //
@@ -2118,6 +2110,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     stale: None,
                 }),
                 vlan_id: lock!(self.session).vlan_id,
+            };
+
+            let originated = match self.db.get_origin4() {
+                Ok(value) => value,
+                Err(e) => {
+                    err!(self; "failed to get originated from db: {e}");
+                    Vec::new()
+                }
             };
 
             self.db.add_bgp_prefixes(
