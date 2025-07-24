@@ -67,18 +67,31 @@ pub fn bestpaths(
         return Some(s.into_iter().take(max).cloned().collect());
     }
 
-    // Begin comparison of BGP Path Attributes
+    // None of the remaining paths are static.
+    // Begin comparison of BGP Path Attributes.
+    Some(bgp_bestpaths(b, max))
+}
 
-    // Filter down to paths that are not stale. The `min_set_by_key` method
-    // allows us to assign "not stale" paths to the `0` set, and "stale" paths
-    // to the `1` set. The method will then return the `0` set.
-    let candidates = b.into_iter().min_set_by_key(|path| match path.bgp {
-        Some(ref bgp) => match bgp.stale {
-            Some(_) => 1,
-            None => 0,
-        },
-        None => 0,
-    });
+/// The BGP-specific portion of the bestpath algorithm. This evaluates BGP path
+/// attributes in order to determine up to `max` suitable paths.
+pub fn bgp_bestpaths(
+    candidates: BTreeSet<&Path>,
+    max: usize,
+) -> BTreeSet<Path> {
+    // Filter down to paths that are not stale (Graceful Restart).
+    // The `min_set_by_key` method allows us to assign "not stale" paths to the
+    // `0` set, and "stale" paths to the `1` set. The method will then return
+    // the `0` set if any "not stale" paths exist.
+    let candidates =
+        candidates
+            .into_iter()
+            .min_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => match bgp.stale {
+                    Some(_) => 1,
+                    None => 0,
+                },
+                None => 0,
+            });
 
     // Filter down to paths with the highest local preference
     let candidates =
@@ -113,7 +126,7 @@ pub fn bestpaths(
     });
 
     // Return up to max elements
-    Some(candidates.take(max).cloned().collect())
+    candidates.take(max).cloned().collect()
 }
 
 #[cfg(test)]
