@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 #[derive(Debug)]
 pub struct PeerConnection<Cnx: BgpConnection> {
     conn: Cnx,
-    id: u32,
+    id: u32, // peer's BGP-ID/Router-ID
 }
 
 /// The states a BGP finite state machine may be at any given time. Many
@@ -2103,6 +2103,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     origin: update.origin().to_u8(),
                     origin_as: peer_as,
                     peer: pc.conn.peer().ip(),
+                    ibgp: self.is_ibgp(),
                     id: pc.id,
                     med: update.multi_exit_discriminator(),
                     local_pref: update.local_pref(),

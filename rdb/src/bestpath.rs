@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use std::collections::BTreeSet;
+use std::net::IpAddr;
 
 use crate::{db::Rib, types::Path, Prefix};
 use itertools::Itertools;
@@ -78,6 +79,25 @@ pub fn bgp_bestpaths(
     candidates: BTreeSet<&Path>,
     max: usize,
 ) -> BTreeSet<Path> {
+    // Per RFC 4721 Section 9.1.2.2:
+    // """
+    // The tie-breaking algorithm begins by considering all equally
+    // preferable routes to the same destination, and then selects routes to
+    // be removed from consideration.  The algorithm terminates as soon as
+    // only one route remains in consideration.  The criteria MUST be
+    // applied in the order specified.
+    // """
+    //
+    // We should be returning at any point the `candidates` only contains
+    // 1 path. "Multipath" is not a standardized BGP behavior, however Cisco
+    // implements that decision after the IGP metric check and many other
+    // routing stacks have followed their lead. Again, following the principle
+    // of least surprise, our multipath decision is made at the same step.
+    //
+    // XXX: This also gives us the opportunity to add trace points, debugs,
+    // or even a "bestpath reason" specific to each step that can provide
+    // better insight into the bestpath calculation itself.
+
     // Filter down to paths that are not stale (Graceful Restart).
     // The `min_set_by_key` method allows us to assign "not stale" paths to the
     // `0` set, and "stale" paths to the `1` set. The method will then return
@@ -92,6 +112,9 @@ pub fn bgp_bestpaths(
                 },
                 None => 0,
             });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
 
     // Filter down to paths with the highest local preference
     // RFC 4721 Section 9.1.2.
@@ -102,6 +125,9 @@ pub fn bgp_bestpaths(
                 Some(ref bgp) => bgp.local_pref.unwrap_or(0),
                 None => 0,
             });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
 
     // Filter down to paths with the shortest AS-Path length
     // RFC 4721 Section 9.1.2.2 (a)
@@ -112,6 +138,9 @@ pub fn bgp_bestpaths(
                 Some(ref bgp) => bgp.as_path.len(),
                 None => 0,
             });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
 
     // Filter down to paths with the lowest Origin
     // RFC 4721 Section 9.1.2.2 (b)
@@ -122,6 +151,9 @@ pub fn bgp_bestpaths(
                 Some(ref bgp) => bgp.origin,
                 None => 2, // Incomplete
             });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
 
     // Group candidates by AS for MED selection
     // RFC 4721 Section 9.1.2.2 (c)
@@ -137,8 +169,61 @@ pub fn bgp_bestpaths(
         })
     });
 
-    // Return up to max elements
-    candidates.take(max).cloned().collect()
+    // Filter down to paths from iBGP when possible, else eBGP
+    // RFC 4721 Section 9.1.2.2 (d)
+    let candidates =
+        candidates
+            .into_iter()
+            .min_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => bgp.ibgp,
+                None => false,
+            });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
+
+    // TODO(OSPF): Filter down to paths with lowest IGP cost
+    // RFC 4721 Section 9.1.2.2 (e)
+    // Note: DDM is currently the only supported IGP and it doesn't interface
+    //       with the external world, so this is N/A.
+
+    // All paths still under consideration this point have identical values
+    // for the earlier checks. Multipath is now allowed if `max` permits it.
+    if max > 1 {
+        // Return up to `max` elements
+        return candidates.into_iter().take(max).cloned().collect();
+    }
+
+    // RFC 4721 Section 9.1.2.2 (f)
+    let candidates =
+        candidates
+            .into_iter()
+            .min_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => bgp.id,
+                None => u32::MAX,
+            });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
+
+    // RFC 4721 Section 9.1.2.2 (g)
+    let candidates =
+        candidates
+            .into_iter()
+            .min_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => match bgp.peer {
+                    IpAddr::V4(addr4) => addr4.to_bits(),
+                    IpAddr::V6(_) => u32::MAX, // TODO(IPv6)
+                },
+                None => u32::MAX,
+            });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
+
+    // The call to .take() here should be unnecessary, but it ensures there's
+    // never a case where multiple paths are returned after the multipath check
+    candidates.into_iter().take(1).cloned().collect()
 }
 
 #[cfg(test)]
@@ -176,6 +261,7 @@ mod test {
                 origin: 0, // IGP
                 origin_as: 470,
                 peer: remote_ip1,
+                ibgp: false,
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -199,6 +285,7 @@ mod test {
                 origin: 0, // IGP
                 origin_as: 480,
                 peer: remote_ip2,
+                ibgp: false,
                 id: 48,
                 med: Some(75),
                 local_pref: Some(100),
@@ -225,6 +312,7 @@ mod test {
                 origin: 0, // IGP
                 origin_as: 490,
                 peer: remote_ip3,
+                ibgp: false,
                 id: 49,
                 med: Some(100),
                 local_pref: Some(100),

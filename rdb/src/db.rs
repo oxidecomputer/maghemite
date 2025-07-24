@@ -740,6 +740,7 @@ mod test {
                 origin: 0, // IGP
                 origin_as: 1111,
                 peer: remote_ip0,
+                ibgp: false,
                 id: 1111,
                 med: Some(1111),
                 local_pref: Some(1111),
@@ -756,6 +757,7 @@ mod test {
                 origin: 0, // IGP
                 origin_as: 2222,
                 peer: remote_ip1,
+                ibgp: false,
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(2222),
@@ -777,6 +779,7 @@ mod test {
                 origin: 0, // IGP
                 origin_as: 2222,
                 peer: remote_ip2,
+                ibgp: false,
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(4444),
