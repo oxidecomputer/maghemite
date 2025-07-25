@@ -2790,7 +2790,9 @@ name = "mg-ddm-verify"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ddm",
  "oxide-tokio-rt",
+ "oxnet",
  "reqwest",
  "serde",
  "serde_json",
