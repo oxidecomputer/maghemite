@@ -3,22 +3,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
+use ddm::exchange::PathVector;
+use oxnet::Ipv6Net;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::net::Ipv6Addr;
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Destination {
-    addr: Ipv6Addr,
-    len: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Prefix {
-    destination: Destination,
-    path: Vec<String>,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct Sled {
@@ -40,11 +29,11 @@ async fn run() -> Result<()> {
         .map(|x| (x.name.clone(), x.ip.clone()))
         .collect();
 
-    let mut sled_prefixes = HashMap::<String, Vec<Prefix>>::new();
-    let mut sled_originated = HashMap::<String, Vec<Destination>>::new();
+    let mut sled_prefixes = HashMap::<String, Vec<PathVector>>::new();
+    let mut sled_originated = HashMap::<String, Vec<Ipv6Net>>::new();
 
     for sled in &all_sleds {
-        let response: HashMap<String, Vec<Prefix>> = serde_json::from_str(
+        let response: HashMap<String, Vec<PathVector>> = serde_json::from_str(
             &reqwest::get(format!(
                 "http://{}:8000/prefixes",
                 &sled_to_ip[sled]
@@ -61,7 +50,7 @@ async fn run() -> Result<()> {
 
         sled_prefixes.insert(sled.clone(), response[next_hop].clone());
 
-        let originated: Vec<Destination> = serde_json::from_str(
+        let originated: Vec<Ipv6Net> = serde_json::from_str(
             &reqwest::get(format!(
                 "http://{}:8000/originated",
                 &sled_to_ip[sled]
