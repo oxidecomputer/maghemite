@@ -311,18 +311,6 @@ impl From<Prefix6> for Prefix {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct BgpAttributes4 {
-    pub origin: Ipv4Addr,
-    pub path: Vec<Asn>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct BgpAttributes6 {
-    pub origin: Ipv4Addr,
-    pub path: Vec<Asn>,
-}
-
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Asn {
     TwoOctet(u16),
@@ -359,12 +347,6 @@ impl Asn {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum Status {
-    Up,
-    Down,
-}
-
 pub fn to_buf<T: ?Sized + Serialize>(value: &T) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     ciborium::into_writer(&value, &mut buf)?;
@@ -393,27 +375,6 @@ impl FromStr for PolicyAction {
 pub struct Policy {
     pub action: PolicyAction,
     pub priority: u16,
-}
-
-#[derive(Clone, Default, Debug)]
-pub struct OriginChangeSet {
-    pub added: HashSet<Prefix4>,
-    pub removed: HashSet<Prefix4>,
-}
-
-impl OriginChangeSet {
-    pub fn added<V: Into<HashSet<Prefix4>>>(v: V) -> Self {
-        Self {
-            added: v.into(),
-            ..Default::default()
-        }
-    }
-    pub fn removed<V: Into<HashSet<Prefix4>>>(v: V) -> Self {
-        Self {
-            removed: v.into(),
-            ..Default::default()
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
