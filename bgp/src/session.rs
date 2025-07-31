@@ -1926,7 +1926,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
 
         // remove peer prefixes from db
-        self.db.remove_bgp_peer_prefixes(&pc.conn.peer().ip());
+        self.db.remove_bgp_prefixes_from_peer(&pc.conn.peer().ip());
 
         FsmState::Idle
     }

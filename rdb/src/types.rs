@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::fmt::Display;
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
@@ -465,4 +465,11 @@ impl From<Prefix6> for PrefixChangeNotification {
             changed: BTreeSet::from([value.into()]),
         }
     }
+}
+
+#[derive(Clone, Copy, Eq, Debug, Ord, PartialEq, PartialOrd)]
+pub enum AddressFamily {
+    Ipv4,
+    Ipv6,
+    All,
 }

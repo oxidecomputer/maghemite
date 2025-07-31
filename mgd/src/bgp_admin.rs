@@ -22,7 +22,9 @@ use dropshot::{
     RequestContext, TypedBody,
 };
 use mg_common::lock;
-use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
+use rdb::{
+    types::AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy, Prefix,
+};
 use slog::info;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -418,7 +420,7 @@ pub async fn get_imported(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let imported = get_router!(ctx, rq.asn)?.db.full_rib();
+    let imported = get_router!(ctx, rq.asn)?.db.full_rib(AddressFamily::All);
     Ok(HttpResponseOk(imported.into()))
 }
 
@@ -429,7 +431,7 @@ pub async fn get_selected(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let selected = get_router!(ctx, rq.asn)?.db.loc_rib();
+    let selected = get_router!(ctx, rq.asn)?.db.loc_rib(AddressFamily::All);
     Ok(HttpResponseOk(selected.into()))
 }
 
@@ -845,7 +847,7 @@ pub(crate) mod helpers {
     ) -> Result<HttpResponseDeleted, Error> {
         info!(ctx.log, "remove neighbor: {}", addr);
 
-        ctx.db.remove_bgp_peer_prefixes(&addr);
+        ctx.db.remove_bgp_prefixes_from_peer(&addr);
         ctx.db.remove_bgp_neighbor(addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 
