@@ -12,7 +12,7 @@ use mg_common::lock;
 use mg_common::log::init_logger;
 use mg_common::stats::MgLowerStats;
 use rand::Fill;
-use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
+use rdb::{AddressFamily, BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use signal::handle_signals;
 use slog::{error, Logger};
 use std::collections::BTreeMap;
@@ -269,7 +269,7 @@ fn start_bfd_sessions(
 
 fn initialize_static_routes(db: &rdb::Db) {
     let routes = db
-        .get_static4()
+        .get_static(AddressFamily::All)
         .expect("failed to get static routes from db");
     db.add_static_routes(&routes).unwrap_or_else(|e| {
         panic!("failed to initialize static routes {routes:#?}: {e}")

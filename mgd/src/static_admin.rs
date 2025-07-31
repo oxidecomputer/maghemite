@@ -7,12 +7,12 @@ use dropshot::{
     endpoint, ApiDescription, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use rdb::{Path, Prefix4, StaticRouteKey};
+use rdb::{AddressFamily, Path, Prefix4, Prefix6, StaticRouteKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::Ipv4Addr,
+    net::{Ipv4Addr, Ipv6Addr},
     sync::Arc,
 };
 
@@ -50,10 +50,47 @@ impl From<StaticRoute4> for StaticRouteKey {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AddStaticRoute6Request {
+    routes: StaticRoute6List,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DeleteStaticRoute6Request {
+    routes: StaticRoute6List,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct StaticRoute6List {
+    list: Vec<StaticRoute6>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct StaticRoute6 {
+    pub prefix: Prefix6,
+    pub nexthop: Ipv6Addr,
+    pub vlan_id: Option<u16>,
+    pub rib_priority: u8,
+}
+
+impl From<StaticRoute6> for StaticRouteKey {
+    fn from(val: StaticRoute6) -> Self {
+        StaticRouteKey {
+            prefix: val.prefix.into(),
+            nexthop: val.nexthop.into(),
+            vlan_id: val.vlan_id,
+            rib_priority: val.rib_priority,
+        }
+    }
+}
+
 pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
     register!(api, static_add_v4_route);
     register!(api, static_remove_v4_route);
     register!(api, static_list_v4_routes);
+    register!(api, static_add_v6_route);
+    register!(api, static_remove_v6_route);
+    register!(api, static_list_v6_routes);
 }
 
 #[endpoint { method = PUT, path = "/static/route4" }]
@@ -103,7 +140,65 @@ pub async fn static_list_v4_routes(
     let static_db = ctx
         .context()
         .db
-        .get_static4()
+        .get_static(AddressFamily::Ipv4)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    let mut static_rib: GetRibResult = BTreeMap::new();
+    for srk in static_db {
+        let key = srk.prefix.to_string();
+        let paths = static_rib.entry(key).or_default();
+        paths.insert(srk.into());
+    }
+
+    Ok(HttpResponseOk(static_rib))
+}
+
+#[endpoint { method = PUT, path = "/static/route6" }]
+pub async fn static_add_v6_route(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<AddStaticRoute6Request>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let routes: Vec<StaticRouteKey> = request
+        .into_inner()
+        .routes
+        .list
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    ctx.context()
+        .db
+        .add_static_routes(&routes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = DELETE, path = "/static/route6" }]
+pub async fn static_remove_v6_route(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<DeleteStaticRoute6Request>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let routes: Vec<StaticRouteKey> = request
+        .into_inner()
+        .routes
+        .list
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    ctx.context()
+        .db
+        .remove_static_routes(&routes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    Ok(HttpResponseDeleted())
+}
+
+#[endpoint { method = GET, path = "/static/route6" }]
+pub async fn static_list_v6_routes(
+    ctx: RequestContext<Arc<HandlerContext>>,
+) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
+    let static_db = ctx
+        .context()
+        .db
+        .get_static(AddressFamily::Ipv6)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     let mut static_rib: GetRibResult = BTreeMap::new();

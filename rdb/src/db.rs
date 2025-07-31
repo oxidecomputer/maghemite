@@ -14,6 +14,7 @@ use crate::error::Error;
 use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
+use sled::Tree;
 use slog::{error, Logger};
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -717,26 +718,62 @@ impl Db {
         &self,
         routes: &Vec<StaticRouteKey>,
     ) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+        let mut pcn = PrefixChangeNotification::default();
+        let (routes4, routes6) = routes.iter().cloned().fold(
+            (Vec::new(), Vec::new()),
+            |(mut v4, mut v6), srk| {
+                match srk.prefix {
+                    Prefix::V4(_) => v4.push(srk),
+                    Prefix::V6(_) => v6.push(srk),
+                }
+                (v4, v6)
+            },
+        );
 
-        let mut route_keys = Vec::new();
-        for route in routes {
-            let key = serde_json::to_string(route)?;
-            route_keys.push(key);
+        {
+            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+
+            let mut route_keys = Vec::new();
+            for route in routes4 {
+                let key = serde_json::to_string(&route)?;
+                route_keys.push(key);
+            }
+
+            tree.transaction(|tx_db| {
+                for key in &route_keys {
+                    tx_db.insert(key.as_str(), "")?;
+                }
+                Ok(())
+            })?;
+            tree.flush()?;
+
+            for route in routes {
+                self.add_prefix_path(&route.prefix, &Path::from(*route));
+                pcn.changed.insert(route.prefix);
+            }
         }
 
-        tree.transaction(|tx_db| {
-            for key in &route_keys {
-                tx_db.insert(key.as_str(), "")?;
-            }
-            Ok(())
-        })?;
-        tree.flush()?;
+        {
+            let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
 
-        let mut pcn = PrefixChangeNotification::default();
-        for route in routes {
-            self.add_prefix_path(&route.prefix, &Path::from(*route));
-            pcn.changed.insert(route.prefix);
+            let mut route_keys = Vec::new();
+            for route in routes6 {
+                let key = serde_json::to_string(&route)?;
+                route_keys.push(key);
+            }
+
+            tree.transaction(|tx_db| {
+                for key in &route_keys {
+                    tx_db.insert(key.as_str(), "")?;
+                }
+                Ok(())
+            })?;
+            tree.flush()?;
+
+            for route in routes {
+                self.add_prefix_path(&route.prefix, &Path::from(*route));
+                pcn.changed.insert(route.prefix);
+            }
         }
 
         self.notify(pcn);
@@ -752,8 +789,10 @@ impl Db {
         self.notify(pcn);
     }
 
-    pub fn get_static4(&self) -> Result<Vec<StaticRouteKey>, Error> {
-        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+    fn get_static_from_tree(
+        &self,
+        tree: Tree,
+    ) -> Result<Vec<StaticRouteKey>, Error> {
         Ok(tree
             .scan_prefix(vec![])
             .filter_map(|item| {
@@ -784,13 +823,50 @@ impl Db {
             .collect())
     }
 
+    pub fn get_static(
+        &self,
+        af: AddressFamily,
+    ) -> Result<Vec<StaticRouteKey>, Error> {
+        match af {
+            AddressFamily::Ipv4 => {
+                let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+                self.get_static_from_tree(tree)
+            }
+            AddressFamily::Ipv6 => {
+                let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
+                self.get_static_from_tree(tree)
+            }
+            AddressFamily::All => {
+                let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+                let mut routes = self.get_static_from_tree(tree)?;
+                let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
+                routes.extend(self.get_static_from_tree(tree)?);
+                Ok(routes)
+            }
+        }
+    }
+
     pub fn get_static4_count(&self) -> Result<usize, Error> {
         let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
         Ok(tree.len())
     }
 
     pub fn get_static_nexthop4_count(&self) -> Result<usize, Error> {
-        let entries = self.get_static4()?;
+        let entries = self.get_static(AddressFamily::Ipv4)?;
+        let mut nexthops = BTreeSet::new();
+        for e in entries {
+            nexthops.insert(e.nexthop);
+        }
+        Ok(nexthops.len())
+    }
+
+    pub fn get_static6_count(&self) -> Result<usize, Error> {
+        let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
+        Ok(tree.len())
+    }
+
+    pub fn get_static_nexthop6_count(&self) -> Result<usize, Error> {
+        let entries = self.get_static(AddressFamily::Ipv6)?;
         let mut nexthops = BTreeSet::new();
         for e in entries {
             nexthops.insert(e.nexthop);
@@ -913,7 +989,7 @@ impl Db {
 
     fn remove_path_for_prefixes4<F>(
         &self,
-        prefixes: Vec<Prefix4>,
+        prefixes: &[Prefix4],
         prefix_cmp: F,
         rib_in: &mut Rib4,
         rib_loc: &mut Rib4,
@@ -927,7 +1003,7 @@ impl Db {
 
     fn remove_path_for_prefixes6<F>(
         &self,
-        prefixes: Vec<Prefix6>,
+        prefixes: &[Prefix6],
         prefix_cmp: F,
         rib_in: &mut Rib6,
         rib_loc: &mut Rib6,
@@ -964,7 +1040,7 @@ impl Db {
             let mut rib_in = lock!(self.rib4_in);
             let mut rib_loc = lock!(self.rib4_loc);
             self.remove_path_for_prefixes4(
-                prefixes4,
+                &prefixes4,
                 &prefix_cmp,
                 &mut rib_in,
                 &mut rib_loc,
@@ -975,7 +1051,7 @@ impl Db {
             let mut rib_in = lock!(self.rib6_in);
             let mut rib_loc = lock!(self.rib6_loc);
             self.remove_path_for_prefixes6(
-                prefixes6,
+                &prefixes6,
                 &prefix_cmp,
                 &mut rib_in,
                 &mut rib_loc,
@@ -983,75 +1059,60 @@ impl Db {
         }
     }
 
+    fn remove_static_routes_from_tree(
+        &self,
+        tree: Tree,
+        routes: &[StaticRouteKey],
+    ) -> Result<(), Error> {
+        let mut pcn = PrefixChangeNotification::default();
+
+        let mut route_keys = Vec::new();
+        for route in routes {
+            let key = serde_json::to_string(route)?;
+            route_keys.push(key);
+            pcn.changed.insert(route.prefix);
+        }
+
+        tree.transaction(|tx_db| {
+            for key in &route_keys {
+                tx_db.remove(key.as_str())?;
+            }
+            Ok(())
+        })?;
+        tree.flush()?;
+
+        for route in routes {
+            self.remove_prefix_path(&route.prefix, |rib_path: &Path| {
+                rib_path.cmp(&Path::from(*route)) == CmpOrdering::Equal
+            });
+        }
+
+        self.notify(pcn);
+        Ok(())
+    }
+
     pub fn remove_static_routes(
         &self,
-        routes: &Vec<StaticRouteKey>,
+        routes: &[StaticRouteKey],
     ) -> Result<(), Error> {
         let (routes4, routes6) = routes.iter().fold(
             (Vec::new(), Vec::new()),
             |(mut r4, mut r6), srk| {
                 match srk.prefix {
-                    Prefix::V4(_) => r4.push(srk),
-                    Prefix::V6(_) => r6.push(srk),
+                    Prefix::V4(_) => r4.push(*srk),
+                    Prefix::V6(_) => r6.push(*srk),
                 }
                 (r4, r6)
             },
         );
 
         {
-            let mut pcn = PrefixChangeNotification::default();
             let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-
-            let mut route_keys = Vec::new();
-            for route in routes4 {
-                let key = serde_json::to_string(route)?;
-                route_keys.push(key);
-                pcn.changed.insert(route.prefix);
-            }
-
-            tree.transaction(|tx_db| {
-                for key in &route_keys {
-                    tx_db.remove(key.as_str())?;
-                }
-                Ok(())
-            })?;
-            tree.flush()?;
-
-            for route in routes {
-                self.remove_prefix_path(&route.prefix, |rib_path: &Path| {
-                    rib_path.cmp(&Path::from(*route)) == CmpOrdering::Equal
-                });
-            }
-
-            self.notify(pcn);
+            self.remove_static_routes_from_tree(tree, &routes4)?;
         }
-
         {
-            let mut pcn = PrefixChangeNotification::default();
             let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-
-            let mut route_keys = Vec::new();
-            for route in routes6 {
-                let key = serde_json::to_string(route)?;
-                route_keys.push(key);
-                pcn.changed.insert(route.prefix);
-            }
-
-            tree.transaction(|tx_db| {
-                for key in &route_keys {
-                    tx_db.remove(key.as_str())?;
-                }
-                Ok(())
-            })?;
-            tree.flush()?;
-
-            for route in routes {
-                self.remove_prefix_path(&route.prefix, |rib_path: &Path| {
-                    rib_path.cmp(&Path::from(*route)) == CmpOrdering::Equal
-                });
-            }
-
-            self.notify(pcn);
+            self.remove_static_routes_from_tree(tree, &routes6)?;
         }
 
         Ok(())
@@ -1375,7 +1436,7 @@ mod test {
 
         // rib_priority differs, so removal of static_key0
         // should not affect path from static_key1
-        db.remove_static_routes(&vec![static_key0])
+        db.remove_static_routes(&[static_key0])
             .expect("remove_static_routes_failed for {static_key0}");
         let rib_in_paths = vec![static_path1.clone()];
         let loc_rib_paths = vec![static_path1.clone()];
@@ -1489,7 +1550,7 @@ mod test {
 
         // removal of final static route (from static_key1) should result
         // in the prefix being completely deleted
-        db.remove_static_routes(&vec![static_key1])
+        db.remove_static_routes(&[static_key1])
             .expect("remove_static_routes_failed for {static_key1}");
         // expected current state
         // rib_in: (empty)

@@ -1084,6 +1084,85 @@
           }
         }
       }
+    },
+    "/static/route6": {
+      "get": {
+        "operationId": "static_list_v6_routes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_Set_of_Path",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Path"
+                    },
+                    "uniqueItems": true
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "static_add_v6_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddStaticRoute6Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "static_remove_v6_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteStaticRoute6Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1122,6 +1201,17 @@
         "properties": {
           "routes": {
             "$ref": "#/components/schemas/StaticRoute4List"
+          }
+        },
+        "required": [
+          "routes"
+        ]
+      },
+      "AddStaticRoute6Request": {
+        "type": "object",
+        "properties": {
+          "routes": {
+            "$ref": "#/components/schemas/StaticRoute6List"
           }
         },
         "required": [
@@ -2018,6 +2108,17 @@
         "properties": {
           "routes": {
             "$ref": "#/components/schemas/StaticRoute4List"
+          }
+        },
+        "required": [
+          "routes"
+        ]
+      },
+      "DeleteStaticRoute6Request": {
+        "type": "object",
+        "properties": {
+          "routes": {
+            "$ref": "#/components/schemas/StaticRoute6List"
           }
         },
         "required": [
@@ -3314,6 +3415,48 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/StaticRoute4"
+            }
+          }
+        },
+        "required": [
+          "list"
+        ]
+      },
+      "StaticRoute6": {
+        "type": "object",
+        "properties": {
+          "nexthop": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "prefix": {
+            "$ref": "#/components/schemas/Prefix6"
+          },
+          "rib_priority": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "nexthop",
+          "prefix",
+          "rib_priority"
+        ]
+      },
+      "StaticRoute6List": {
+        "type": "object",
+        "properties": {
+          "list": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaticRoute6"
             }
           }
         },
