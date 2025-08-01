@@ -6,10 +6,9 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use mg_admin_client::types;
 use mg_admin_client::Client;
+use oxnet::{Ipv4Net, Ipv6Net};
 use rdb::DEFAULT_RIB_PRIORITY_STATIC;
-use std::net::{AddrParseError, Ipv4Addr, Ipv6Addr};
-use std::num::ParseIntError;
-use thiserror::Error;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -19,30 +18,6 @@ pub enum Commands {
     GetV6Routes,
     AddV6Route(StaticRoute6),
     RemoveV6Routes(StaticRoute6),
-}
-
-#[derive(Debug, Error)]
-pub enum Ipv4NetParseError {
-    #[error("expected CIDR representation <addr>/<mask>")]
-    Cidr,
-
-    #[error("address parse error: {0}")]
-    Addr(#[from] AddrParseError),
-
-    #[error("mask parse error: {0}")]
-    Mask(#[from] ParseIntError),
-}
-
-#[derive(Debug, Error)]
-pub enum Ipv6NetParseError {
-    #[error("expected CIDR representation <addr>/<mask>")]
-    Cidr,
-
-    #[error("address parse error: {0}")]
-    Addr(#[from] AddrParseError),
-
-    #[error("mask parse error: {0}")]
-    Mask(#[from] ParseIntError),
 }
 
 #[derive(Debug, Args)]
@@ -55,28 +30,6 @@ pub struct StaticRoute4 {
     pub rib_priority: u8,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Ipv4Net {
-    pub addr: Ipv4Addr,
-    pub len: u8,
-}
-
-impl std::str::FromStr for Ipv4Net {
-    type Err = Ipv4NetParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split('/').collect();
-        if parts.len() < 2 {
-            return Err(Ipv4NetParseError::Cidr);
-        }
-
-        Ok(Ipv4Net {
-            addr: Ipv4Addr::from_str(parts[0])?,
-            len: u8::from_str(parts[1])?,
-        })
-    }
-}
-
 #[derive(Debug, Args)]
 pub struct StaticRoute6 {
     pub destination: Ipv6Net,
@@ -85,28 +38,6 @@ pub struct StaticRoute6 {
     pub vlan_id: Option<u16>,
     #[clap(long, default_value_t = DEFAULT_RIB_PRIORITY_STATIC)]
     pub rib_priority: u8,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Ipv6Net {
-    pub addr: Ipv6Addr,
-    pub len: u8,
-}
-
-impl std::str::FromStr for Ipv6Net {
-    type Err = Ipv6NetParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split('/').collect();
-        if parts.len() < 2 {
-            return Err(Ipv6NetParseError::Cidr);
-        }
-
-        Ok(Ipv6Net {
-            addr: Ipv6Addr::from_str(parts[0])?,
-            len: u8::from_str(parts[1])?,
-        })
-    }
 }
 
 pub async fn commands(command: Commands, client: Client) -> Result<()> {
@@ -120,8 +51,8 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                 routes: types::StaticRoute4List {
                     list: vec![types::StaticRoute4 {
                         prefix: types::Prefix4 {
-                            value: route.destination.addr,
-                            length: route.destination.len,
+                            value: route.destination.addr(),
+                            length: route.destination.width(),
                         },
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
@@ -136,8 +67,8 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                 routes: types::StaticRoute4List {
                     list: vec![types::StaticRoute4 {
                         prefix: types::Prefix4 {
-                            value: route.destination.addr,
-                            length: route.destination.len,
+                            value: route.destination.addr(),
+                            length: route.destination.width(),
                         },
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
@@ -156,8 +87,8 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                 routes: types::StaticRoute6List {
                     list: vec![types::StaticRoute6 {
                         prefix: types::Prefix6 {
-                            value: route.destination.addr,
-                            length: route.destination.len,
+                            value: route.destination.addr(),
+                            length: route.destination.width(),
                         },
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
@@ -172,8 +103,8 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                 routes: types::StaticRoute6List {
                     list: vec![types::StaticRoute6 {
                         prefix: types::Prefix6 {
-                            value: route.destination.addr,
-                            length: route.destination.len,
+                            value: route.destination.addr(),
+                            length: route.destination.width(),
                         },
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,

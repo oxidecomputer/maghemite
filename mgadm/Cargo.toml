@@ -21,3 +21,4 @@ colored.workspace = true
 humantime.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+oxnet.workspace = true

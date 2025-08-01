@@ -2857,6 +2857,7 @@ dependencies = [
  "mg-admin-client 0.1.0",
  "mg-common",
  "oxide-tokio-rt",
+ "oxnet",
  "rdb",
  "serde_json",
  "slog",
