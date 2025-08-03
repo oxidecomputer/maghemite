@@ -52,3 +52,21 @@ impl std::str::FromStr for types::Prefix4 {
         })
     }
 }
+
+impl types::Prefix4 {
+    pub fn new(ip: std::net::Ipv4Addr, length: u8) -> Self {
+        Self {
+            value: mg_common::net::zero_host_bits_v4(ip, length),
+            length,
+        }
+    }
+}
+
+impl types::Prefix6 {
+    pub fn new(ip: std::net::Ipv6Addr, length: u8) -> Self {
+        Self {
+            value: mg_common::net::zero_host_bits_v6(ip, length),
+            length,
+        }
+    }
+}

@@ -13,3 +13,4 @@ reqwest.workspace = true
 progenitor.workspace = true
 schemars.workspace = true
 chrono.workspace = true
+mg-common.workspace = true

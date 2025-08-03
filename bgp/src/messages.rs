@@ -555,6 +555,7 @@ impl UpdateMessage {
     fn prefixes_from_wire(mut buf: &[u8]) -> Result<Vec<Prefix>, Error> {
         let mut result = Vec::new();
         while !buf.is_empty() {
+            // XXX: handle error for individual prefix?
             let (out, pfx) = Prefix::from_wire(buf)?;
             result.push(pfx);
             buf = out;
@@ -700,6 +701,7 @@ impl Prefix {
     }
 
     fn from_wire(input: &[u8]) -> Result<(&[u8], Prefix), Error> {
+        // XXX: length validation?
         let (input, len) = parse_u8(input)?;
         let (input, value) = take(len.div_ceil(8))(input)?;
         Ok((
@@ -712,147 +714,19 @@ impl Prefix {
     }
 
     pub fn as_prefix4(&self) -> rdb::Prefix4 {
-        let v = &self.value;
-        match self.length {
-            0 => rdb::Prefix4 {
-                value: Ipv4Addr::UNSPECIFIED,
-                length: 0,
-            },
-            x if x <= 8 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], 0, 0, 0]),
-                length: x,
-            },
-            x if x <= 16 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], 0, 0]),
-                length: x,
-            },
-            x if x <= 24 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], v[2], 0]),
-                length: x,
-            },
-            x => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], v[2], v[3]]),
-                length: x,
-            },
-        }
+        let mut bytes = [0u8; 4];
+        let len = std::cmp::min(self.value.len(), 4);
+        bytes[..len].copy_from_slice(&self.value[..len]);
+        let addr = Ipv4Addr::from(bytes);
+        rdb::Prefix4::new(addr, self.length)
     }
 
     pub fn as_prefix6(&self) -> rdb::Prefix6 {
-        let v = &self.value;
-        match self.length {
-            0 => rdb::Prefix6 {
-                value: Ipv6Addr::UNSPECIFIED,
-                length: 0,
-            },
-            x if x <= 8 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 16 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 24 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 32 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 40 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0,
-                ]),
-                length: x,
-            },
-            x if x <= 48 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 56 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], 0, 0, 0, 0, 0, 0,
-                    0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 64 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], 0, 0, 0, 0,
-                    0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 72 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], 0, 0,
-                    0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 80 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 88 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 96 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 104 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 112 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], v[13], 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 120 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], v[13], v[14], 0,
-                ]),
-                length: x,
-            },
-            x => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], v[13], v[14], v[15],
-                ]),
-                length: x,
-            },
-        }
+        let mut bytes = [0u8; 16];
+        let len = std::cmp::min(self.value.len(), 16);
+        bytes[..len].copy_from_slice(&self.value[..len]);
+        let addr = Ipv6Addr::from(bytes);
+        rdb::Prefix6::new(addr, self.length)
     }
 
     pub fn within(&self, x: &Prefix) -> bool {

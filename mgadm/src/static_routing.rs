@@ -50,10 +50,10 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = types::AddStaticRoute4Request {
                 routes: types::StaticRoute4List {
                     list: vec![types::StaticRoute4 {
-                        prefix: types::Prefix4 {
-                            value: route.destination.addr(),
-                            length: route.destination.width(),
-                        },
+                        prefix: types::Prefix4::new(
+                            route.destination.addr(),
+                            route.destination.width(),
+                        ),
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,
@@ -66,10 +66,10 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = types::DeleteStaticRoute4Request {
                 routes: types::StaticRoute4List {
                     list: vec![types::StaticRoute4 {
-                        prefix: types::Prefix4 {
-                            value: route.destination.addr(),
-                            length: route.destination.width(),
-                        },
+                        prefix: types::Prefix4::new(
+                            route.destination.addr(),
+                            route.destination.width(),
+                        ),
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,

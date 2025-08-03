@@ -808,6 +808,8 @@ impl Db {
                 };
 
                 let key = String::from_utf8_lossy(&key);
+                // XXX: figure out how to handle removal of old static routes
+                //      where the host bits aren't zeroed out
                 let rkey: StaticRouteKey = match serde_json::from_str(&key) {
                     Ok(item) => item,
                     Err(e) => {

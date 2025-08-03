@@ -5,6 +5,7 @@
 use crate::error::Error;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use mg_common::net::{zero_host_bits_v4, zero_host_bits_v6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -200,6 +201,13 @@ impl Ord for Prefix4 {
 }
 
 impl Prefix4 {
+    pub fn new(ip: Ipv4Addr, length: u8) -> Self {
+        Self {
+            value: zero_host_bits_v4(ip, length),
+            length,
+        }
+    }
+
     pub fn db_key(&self) -> Vec<u8> {
         let mut buf: Vec<u8> = self.value.octets().into();
         buf.push(self.length);
@@ -270,6 +278,15 @@ impl Ord for Prefix6 {
 impl fmt::Display for Prefix6 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}", self.value, self.length)
+    }
+}
+
+impl Prefix6 {
+    pub fn new(ip: Ipv6Addr, length: u8) -> Self {
+        Self {
+            value: zero_host_bits_v6(ip, length),
+            length,
+        }
     }
 }
 

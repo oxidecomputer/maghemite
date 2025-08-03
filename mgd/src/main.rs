@@ -271,6 +271,7 @@ fn initialize_static_routes(db: &rdb::Db) {
     let routes = db
         .get_static(AddressFamily::All)
         .expect("failed to get static routes from db");
+    // XXX: remove old routes where host bits are non-zero
     db.add_static_routes(&routes).unwrap_or_else(|e| {
         panic!("failed to initialize static routes {routes:#?}: {e}")
     })

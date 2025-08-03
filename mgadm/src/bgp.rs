@@ -499,10 +499,9 @@ impl From<Neighbor> for types::Neighbor {
                         .clone()
                         .into_iter()
                         .map(|x| {
-                            types::Prefix::V4(types::Prefix4 {
-                                length: x.length,
-                                value: x.value,
-                            })
+                            types::Prefix::V4(types::Prefix4::new(
+                                x.value, x.length,
+                            ))
                         })
                         .collect(),
                 ),
@@ -514,10 +513,9 @@ impl From<Neighbor> for types::Neighbor {
                         .clone()
                         .into_iter()
                         .map(|x| {
-                            types::Prefix::V4(types::Prefix4 {
-                                length: x.length,
-                                value: x.value,
-                            })
+                            types::Prefix::V4(types::Prefix4::new(
+                                x.value, x.length,
+                            ))
                         })
                         .collect(),
                 ),
@@ -775,10 +773,7 @@ async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| types::Prefix4 {
-                length: x.length,
-                value: x.value,
-            })
+            .map(|x| types::Prefix4::new(x.value, x.length))
             .collect(),
     })
     .await?;
@@ -792,10 +787,7 @@ async fn update_origin4(originate: Originate4, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| types::Prefix4 {
-                length: x.length,
-                value: x.value,
-            })
+            .map(|x| types::Prefix4::new(x.value, x.length))
             .collect(),
     })
     .await?;
