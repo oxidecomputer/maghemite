@@ -215,7 +215,7 @@ impl Ord for Prefix4 {
 impl Prefix4 {
     pub fn new(ip: Ipv4Addr, length: u8) -> Self {
         let mut new = Self { value: ip, length };
-        new.zero_host_bits();
+        new.unset_host_bits();
         new
     }
 
@@ -239,7 +239,7 @@ impl Prefix4 {
         }
     }
 
-    pub fn host_bits_are_zero(&self) -> bool {
+    pub fn host_bits_are_unset(&self) -> bool {
         let mask = match self.length {
             0 => 0,
             _ => (!0u32) << (32 - self.length),
@@ -248,7 +248,7 @@ impl Prefix4 {
         self.value.to_bits() & mask == self.value.to_bits()
     }
 
-    pub fn zero_host_bits(&mut self) {
+    pub fn unset_host_bits(&mut self) {
         let mask = match self.length {
             0 => 0,
             _ => (!0u32) << (32 - self.length),
@@ -313,11 +313,11 @@ impl fmt::Display for Prefix6 {
 impl Prefix6 {
     pub fn new(ip: Ipv6Addr, length: u8) -> Self {
         let mut new = Self { value: ip, length };
-        new.zero_host_bits();
+        new.unset_host_bits();
         new
     }
 
-    pub fn host_bits_are_zero(&self) -> bool {
+    pub fn host_bits_are_unset(&self) -> bool {
         let mask = match self.length {
             0 => 0,
             _ => (!0u128) << (128 - self.length),
@@ -326,7 +326,7 @@ impl Prefix6 {
         self.value.to_bits() & mask == self.value.to_bits()
     }
 
-    pub fn zero_host_bits(&mut self) {
+    pub fn unset_host_bits(&mut self) {
         let mask = match self.length {
             0 => 0,
             _ => (!0u128) << (128 - self.length),
@@ -382,17 +382,17 @@ impl Prefix {
         }
     }
 
-    pub fn host_bits_are_zero(&self) -> bool {
+    pub fn host_bits_are_unset(&self) -> bool {
         match self {
-            Self::V4(p4) => p4.host_bits_are_zero(),
-            Self::V6(p6) => p6.host_bits_are_zero(),
+            Self::V4(p4) => p4.host_bits_are_unset(),
+            Self::V6(p6) => p6.host_bits_are_unset(),
         }
     }
 
-    pub fn zero_host_bits(&mut self) {
+    pub fn unset_host_bits(&mut self) {
         match self {
-            Self::V4(p4) => p4.zero_host_bits(),
-            Self::V6(p6) => p6.zero_host_bits(),
+            Self::V4(p4) => p4.unset_host_bits(),
+            Self::V6(p6) => p6.unset_host_bits(),
         }
     }
 }

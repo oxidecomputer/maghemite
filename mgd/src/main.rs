@@ -277,7 +277,7 @@ fn initialize_static_routes(db: &rdb::Db) {
     let (good, bad) = routes.into_iter().fold(
         (Vec::new(), Vec::new()),
         |(mut good, mut bad), srk| {
-            match srk.prefix.host_bits_are_zero() {
+            match srk.prefix.host_bits_are_unset() {
                 true => good.push(srk),
                 false => bad.push(srk),
             }
