@@ -42,7 +42,7 @@ pub struct StaticRoute4 {
 impl From<StaticRoute4> for StaticRouteKey {
     fn from(val: StaticRoute4) -> Self {
         StaticRouteKey {
-            prefix: val.prefix.into(),
+            prefix: Prefix4::new(val.prefix.value, val.prefix.length).into(),
             nexthop: val.nexthop.into(),
             vlan_id: val.vlan_id,
             rib_priority: val.rib_priority,
@@ -76,7 +76,7 @@ pub struct StaticRoute6 {
 impl From<StaticRoute6> for StaticRouteKey {
     fn from(val: StaticRoute6) -> Self {
         StaticRouteKey {
-            prefix: val.prefix.into(),
+            prefix: Prefix6::new(val.prefix.value, val.prefix.length).into(),
             nexthop: val.nexthop.into(),
             vlan_id: val.vlan_id,
             rib_priority: val.rib_priority,

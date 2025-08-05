@@ -5,7 +5,6 @@
 use crate::error::Error;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use mg_common::net::{zero_host_bits_v4, zero_host_bits_v6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -109,6 +108,19 @@ pub struct StaticRouteKey {
     pub rib_priority: u8,
 }
 
+impl Display for StaticRouteKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[prefix={}, nexthop={}, vlan_id={}, rib_priority={}]",
+            self.prefix,
+            self.nexthop,
+            self.vlan_id.unwrap_or(0),
+            self.rib_priority
+        )
+    }
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Route4Key {
     pub prefix: Prefix4,
@@ -202,10 +214,9 @@ impl Ord for Prefix4 {
 
 impl Prefix4 {
     pub fn new(ip: Ipv4Addr, length: u8) -> Self {
-        Self {
-            value: zero_host_bits_v4(ip, length),
-            length,
-        }
+        let mut new = Self { value: ip, length };
+        new.zero_host_bits();
+        new
     }
 
     pub fn db_key(&self) -> Vec<u8> {
@@ -226,6 +237,24 @@ impl Prefix4 {
                 length: v[4],
             })
         }
+    }
+
+    pub fn host_bits_are_zero(&self) -> bool {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u32) << (32 - self.length),
+        };
+
+        self.value.to_bits() & mask == self.value.to_bits()
+    }
+
+    pub fn zero_host_bits(&mut self) {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u32) << (32 - self.length),
+        };
+
+        self.value = Ipv4Addr::from_bits(self.value.to_bits() & mask)
     }
 }
 
@@ -283,10 +312,27 @@ impl fmt::Display for Prefix6 {
 
 impl Prefix6 {
     pub fn new(ip: Ipv6Addr, length: u8) -> Self {
-        Self {
-            value: zero_host_bits_v6(ip, length),
-            length,
-        }
+        let mut new = Self { value: ip, length };
+        new.zero_host_bits();
+        new
+    }
+
+    pub fn host_bits_are_zero(&self) -> bool {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u128) << (128 - self.length),
+        };
+
+        self.value.to_bits() & mask == self.value.to_bits()
+    }
+
+    pub fn zero_host_bits(&mut self) {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u128) << (128 - self.length),
+        };
+
+        self.value = Ipv6Addr::from_bits(self.value.to_bits() & mask)
     }
 }
 
@@ -325,6 +371,29 @@ impl From<Prefix4> for Prefix {
 impl From<Prefix6> for Prefix {
     fn from(value: Prefix6) -> Self {
         Self::V6(value)
+    }
+}
+
+impl Prefix {
+    pub fn new(ip: IpAddr, length: u8) -> Self {
+        match ip {
+            IpAddr::V4(ip4) => Self::V4(Prefix4::new(ip4, length)),
+            IpAddr::V6(ip6) => Self::V6(Prefix6::new(ip6, length)),
+        }
+    }
+
+    pub fn host_bits_are_zero(&self) -> bool {
+        match self {
+            Self::V4(p4) => p4.host_bits_are_zero(),
+            Self::V6(p6) => p6.host_bits_are_zero(),
+        }
+    }
+
+    pub fn zero_host_bits(&mut self) {
+        match self {
+            Self::V4(p4) => p4.zero_host_bits(),
+            Self::V6(p6) => p6.zero_host_bits(),
+        }
     }
 }
 

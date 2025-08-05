@@ -47,7 +47,7 @@ impl From<TunnelOrigin> for TunnelOriginV2 {
     }
 }
 
-pub fn zero_host_bits_v4(ip: Ipv4Addr, length: u8) -> Ipv4Addr {
+pub fn zero_ipv4_addr_host_bits(ip: Ipv4Addr, length: u8) -> Ipv4Addr {
     let mask = match length {
         0 => 0,
         _ => (!0u32) << (32 - length),
@@ -56,7 +56,7 @@ pub fn zero_host_bits_v4(ip: Ipv4Addr, length: u8) -> Ipv4Addr {
     Ipv4Addr::from_bits(ip.to_bits() & mask)
 }
 
-pub fn zero_host_bits_v6(ip: Ipv6Addr, length: u8) -> Ipv6Addr {
+pub fn zero_ipv6_addr_host_bits(ip: Ipv6Addr, length: u8) -> Ipv6Addr {
     let mask = match length {
         0 => 0,
         _ => (!0u128) << (128 - length),
