@@ -8,6 +8,7 @@ pub mod net;
 pub mod nexus;
 pub mod smf;
 pub mod stats;
+pub mod test;
 
 #[macro_export]
 macro_rules! lock {

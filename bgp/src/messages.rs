@@ -2478,6 +2478,7 @@ pub enum Safi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mg_common::{cidr, ip, parse};
     use pretty_assertions::assert_eq;
     use pretty_hex::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
@@ -2607,11 +2608,11 @@ mod tests {
     fn prefix_within() {
         // Test IPv4 prefix containment
         let ipv4_prefixes: &[Prefix] = &[
-            "10.10.10.10/32".parse().unwrap(),
-            "10.10.10.0/24".parse().unwrap(),
-            "10.10.0.0/16".parse().unwrap(),
-            "10.0.0.0/8".parse().unwrap(),
-            "0.0.0.0/0".parse().unwrap(),
+            cidr!("10.10.10.10/32"),
+            cidr!("10.10.10.0/24"),
+            cidr!("10.10.0.0/16"),
+            cidr!("10.0.0.0/8"),
+            cidr!("0.0.0.0/0"),
         ];
 
         for i in 0..ipv4_prefixes.len() {
@@ -2627,11 +2628,11 @@ mod tests {
 
         // Test IPv6 prefix containment
         let ipv6_prefixes: &[Prefix] = &[
-            "2001:db8:1:1::1/128".parse().unwrap(),
-            "2001:db8:1:1::/64".parse().unwrap(),
-            "2001:db8:1::/48".parse().unwrap(),
-            "2001:db8::/32".parse().unwrap(),
-            "::/0".parse().unwrap(),
+            cidr!("2001:db8:1:1::1/128"),
+            cidr!("2001:db8:1:1::/64"),
+            cidr!("2001:db8:1::/48"),
+            cidr!("2001:db8::/32"),
+            cidr!("::/0"),
         ];
 
         for i in 0..ipv6_prefixes.len() {
@@ -2646,22 +2647,22 @@ mod tests {
         }
 
         // Test non-overlapping prefixes
-        let a: Prefix = "10.10.0.0/16".parse().unwrap();
-        let b: Prefix = "10.20.0.0/16".parse().unwrap();
+        let a: Prefix = cidr!("10.10.0.0/16");
+        let b: Prefix = cidr!("10.20.0.0/16");
         assert!(!a.within(&b));
-        let a: Prefix = "10.10.0.0/24".parse().unwrap();
+        let a: Prefix = cidr!("10.10.0.0/24");
         assert!(!a.within(&b));
 
-        let a: Prefix = "2001:db8:1::/48".parse().unwrap();
-        let b: Prefix = "2001:db8:2::/48".parse().unwrap();
+        let a: Prefix = cidr!("2001:db8:1::/48");
+        let b: Prefix = cidr!("2001:db8:2::/48");
         assert!(!a.within(&b));
 
         // Test default routes contain same-family prefixes
-        let ipv4_default: Prefix = "0.0.0.0/0".parse().unwrap();
-        let ipv6_default: Prefix = "::/0".parse().unwrap();
+        let ipv4_default: Prefix = cidr!("0.0.0.0/0");
+        let ipv6_default: Prefix = cidr!("::/0");
 
-        let any_ipv4: Prefix = "192.168.1.0/24".parse().unwrap();
-        let any_ipv6: Prefix = "2001:db8::/48".parse().unwrap();
+        let any_ipv4: Prefix = cidr!("192.168.1.0/24");
+        let any_ipv6: Prefix = cidr!("2001:db8::/48");
 
         assert!(any_ipv4.within(&ipv4_default));
         assert!(any_ipv6.within(&ipv6_default));
@@ -2685,56 +2686,56 @@ mod tests {
             PrefixConversionTestCase::new_ipv4(
                 "IPv4 default route",
                 0,
-                "0.0.0.0".parse().unwrap(),
+                ip!("0.0.0.0"),
                 "0.0.0.0",
             ),
             // Input: 10.255.255.255/8 -> 10.0.0.0/8 (host bits zeroed)
             PrefixConversionTestCase::new_ipv4(
                 "IPv4 Class A with host bits",
                 8,
-                "10.255.255.255".parse().unwrap(),
+                ip!("10.255.255.255"),
                 "10.0.0.0",
             ),
             // Input: 172.31.255.255/12 -> 172.16.0.0/12 (host bits zeroed)
             PrefixConversionTestCase::new_ipv4(
                 "IPv4 large private network with host bits",
                 12,
-                "172.31.255.255".parse().unwrap(),
+                ip!("172.31.255.255"),
                 "172.16.0.0",
             ),
             // Input: 172.16.255.255/16 -> 172.16.0.0/16 (host bits zeroed)
             PrefixConversionTestCase::new_ipv4(
                 "IPv4 common allocation with host bits",
                 16,
-                "172.16.255.255".parse().unwrap(),
+                ip!("172.16.255.255"),
                 "172.16.0.0",
             ),
             // Input: 203.0.113.255/20 -> 203.0.112.0/20 (host bits zeroed)
             PrefixConversionTestCase::new_ipv4(
                 "IPv4 prefix with host bits in last 12 bits",
                 20,
-                "203.0.113.255".parse().unwrap(),
+                ip!("203.0.113.255"),
                 "203.0.112.0",
             ),
             // Input: 192.168.1.123/24 -> 192.168.1.0/24 (host bits zeroed)
             PrefixConversionTestCase::new_ipv4(
                 "IPv4 common subnet with host bits",
                 24,
-                "192.168.1.123".parse().unwrap(),
+                ip!("192.168.1.123"),
                 "192.168.1.0",
             ),
             // Input: 198.51.100.7/30 -> 198.51.100.4/30 (host bits zeroed)
             PrefixConversionTestCase::new_ipv4(
                 "IPv4 point-to-point link with host bits",
                 30,
-                "198.51.100.7".parse().unwrap(),
+                ip!("198.51.100.7"),
                 "198.51.100.4",
             ),
             // Input: 10.0.0.1/32 -> 10.0.0.1/32 (no host bits to zero)
             PrefixConversionTestCase::new_ipv4(
                 "IPv4 host route - no host bits to zero",
                 32,
-                "10.0.0.1".parse().unwrap(),
+                ip!("10.0.0.1"),
                 "10.0.0.1",
             ),
             // IPv6 test cases
@@ -2742,49 +2743,49 @@ mod tests {
             PrefixConversionTestCase::new_ipv6(
                 "IPv6 default route",
                 0,
-                "::".parse().unwrap(),
+                ip!("::"),
                 "::",
             ),
             // Input: fd00:ffff:ffff:ffff:ffff:ffff:ffff:ffff/8 -> fd00::/8 (host bits zeroed)
             PrefixConversionTestCase::new_ipv6(
                 "IPv6 unique local address prefix with host bits",
                 8,
-                "fd00:ffff:ffff:ffff:ffff:ffff:ffff:ffff".parse().unwrap(),
+                ip!("fd00:ffff:ffff:ffff:ffff:ffff:ffff:ffff"),
                 "fd00::",
             ),
             // Input: 2001:db8:1234:5678:9abc:def0:1122:3344/32 -> 2001:db8::/32 (host bits zeroed)
             PrefixConversionTestCase::new_ipv6(
                 "IPv6 common allocation size with host bits",
                 32,
-                "2001:db8:1234:5678:9abc:def0:1122:3344".parse().unwrap(),
+                ip!("2001:db8:1234:5678:9abc:def0:1122:3344"),
                 "2001:db8::",
             ),
             // Input: 2001:db8:1234:ffff:ffff:ffff:ffff:ffff/48 -> 2001:db8:1234::/48 (host bits zeroed)
             PrefixConversionTestCase::new_ipv6(
                 "IPv6 site prefix with host bits in last 80 bits",
                 48,
-                "2001:db8:1234:ffff:ffff:ffff:ffff:ffff".parse().unwrap(),
+                ip!("2001:db8:1234:ffff:ffff:ffff:ffff:ffff"),
                 "2001:db8:1234::",
             ),
             // Input: 2001:db8::1234:5678:9abc:def0/64 -> 2001:db8::/64 (host bits zeroed)
             PrefixConversionTestCase::new_ipv6(
                 "IPv6 common prefix length with host bits",
                 64,
-                "2001:db8::1234:5678:9abc:def0".parse().unwrap(),
+                ip!("2001:db8::1234:5678:9abc:def0"),
                 "2001:db8::",
             ),
             // Input: 2001:db8::ff/120 -> 2001:db8::/120 (host bits zeroed)
             PrefixConversionTestCase::new_ipv6(
                 "IPv6 leaves only 8 host bits",
                 120,
-                "2001:db8::ff".parse().unwrap(),
+                ip!("2001:db8::ff"),
                 "2001:db8::",
             ),
             // Input: 2001:db8::1/128 -> 2001:db8::1/128 (no host bits to zero)
             PrefixConversionTestCase::new_ipv6(
                 "IPv6 host route - no host bits to zero",
                 128,
-                "2001:db8::1".parse().unwrap(),
+                ip!("2001:db8::1"),
                 "2001:db8::1",
             ),
         ];
