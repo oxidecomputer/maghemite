@@ -716,7 +716,7 @@ impl Db {
 
     pub fn add_static_routes(
         &self,
-        routes: &Vec<StaticRouteKey>,
+        routes: &[StaticRouteKey],
     ) -> Result<(), Error> {
         let mut pcn = PrefixChangeNotification::default();
         let (routes4, routes6) = routes.iter().cloned().fold(
@@ -1300,10 +1300,28 @@ impl Reaper {
 
 #[cfg(test)]
 mod test {
-    use crate::{db::Db, Path, Prefix};
+    use crate::{
+        db::Db, AddressFamily, Path, Prefix, Prefix4, Prefix6, StaticRouteKey,
+        DEFAULT_RIB_PRIORITY_STATIC,
+    };
     use mg_common::log::*;
-    use std::net::IpAddr;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
+
+    fn get_test_db() -> Db {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        std::fs::create_dir_all("/tmp").expect("create tmp dir");
+        let log = init_file_logger("rib.log");
+        let db_path = format!(
+            "/tmp/rib_test_{}_{}.db",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        );
+        let _ = std::fs::remove_dir_all(&db_path);
+        Db::new(&db_path, log.clone()).expect("create db")
+    }
 
     pub fn check_prefix_path(
         db: &Db,
@@ -1422,10 +1440,9 @@ mod test {
 
         // both paths have the same next-hop, but not all fields
         // from StaticRouteKey match (rib_priority is different).
-        db.add_static_routes(&vec![static_key0, static_key1])
-            .expect(
-                "add_static_routes failed for {static_key0} and {static_key1}",
-            );
+        db.add_static_routes(&[static_key0, static_key1]).expect(
+            "add_static_routes failed for {static_key0} and {static_key1}",
+        );
 
         // expected current state
         // rib_in:
@@ -1570,5 +1587,267 @@ mod test {
         // rib should be empty again
         assert!(db.full_rib(AddressFamily::All).is_empty());
         assert!(db.loc_rib(AddressFamily::All).is_empty());
+    }
+
+    #[test]
+    fn test_static_routing_ipv4_basic() {
+        let db = get_test_db();
+        let nexthop = IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap());
+
+        // Test adding IPv4 static routes
+        let prefix4 =
+            Prefix4::new(Ipv4Addr::from_str("192.168.1.0").unwrap(), 24);
+        let static_route = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop,
+            vlan_id: Some(100),
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Add the route
+        db.add_static_routes(&[static_route]).unwrap();
+
+        // Verify route was added
+        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0], static_route);
+
+        // Check that it appears in RIB
+        let rib_routes = db.full_rib(AddressFamily::Ipv4);
+        assert_eq!(rib_routes.len(), 1);
+        assert!(rib_routes.contains_key(&Prefix::V4(prefix4)));
+
+        // Remove the route
+        db.remove_static_routes(&[static_route]).unwrap();
+
+        // Verify route was removed
+        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        assert!(routes.is_empty());
+
+        // Check that RIB is empty
+        let rib_routes = db.full_rib(AddressFamily::Ipv4);
+        assert!(rib_routes.is_empty());
+    }
+
+    #[test]
+    fn test_static_routing_ipv6_basic() {
+        let db = get_test_db();
+        let nexthop = IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap());
+
+        // Test adding IPv6 static routes
+        let prefix6 =
+            Prefix6::new(Ipv6Addr::from_str("2001:db8::").unwrap(), 64);
+        let static_route = StaticRouteKey {
+            prefix: Prefix::V6(prefix6),
+            nexthop,
+            vlan_id: Some(200),
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Add the route
+        db.add_static_routes(&[static_route]).unwrap();
+
+        // Verify route was added
+        let routes = db.get_static(AddressFamily::Ipv6).unwrap();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0], static_route);
+
+        // Check that it appears in RIB
+        let rib_routes = db.full_rib(AddressFamily::Ipv6);
+        assert_eq!(rib_routes.len(), 1);
+        assert!(rib_routes.contains_key(&Prefix::V6(prefix6)));
+
+        // Remove the route
+        db.remove_static_routes(&[static_route]).unwrap();
+
+        // Verify route was removed
+        let routes = db.get_static(AddressFamily::Ipv6).unwrap();
+        assert!(routes.is_empty());
+
+        // Check that RIB is empty
+        let rib_routes = db.full_rib(AddressFamily::Ipv6);
+        assert!(rib_routes.is_empty());
+    }
+
+    #[test]
+    fn test_static_routing_mixed_address_families() {
+        let db = get_test_db();
+
+        // Create IPv4 and IPv6 routes
+        let prefix4 = Prefix4::new(Ipv4Addr::from_str("10.0.0.0").unwrap(), 8);
+        let prefix6 = Prefix6::new(Ipv6Addr::from_str("fd00::").unwrap(), 8);
+
+        let route4 = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        let route6 = StaticRouteKey {
+            prefix: Prefix::V6(prefix6),
+            nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
+            vlan_id: Some(300),
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Add both routes
+        db.add_static_routes(&[route4, route6]).unwrap();
+
+        // Test IPv4-only retrieval
+        let ipv4_routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        assert_eq!(ipv4_routes.len(), 1);
+        assert_eq!(ipv4_routes[0], route4);
+
+        // Test IPv6-only retrieval
+        let ipv6_routes = db.get_static(AddressFamily::Ipv6).unwrap();
+        assert_eq!(ipv6_routes.len(), 1);
+        assert_eq!(ipv6_routes[0], route6);
+
+        // Test all address families retrieval
+        let all_routes = db.get_static(AddressFamily::All).unwrap();
+        assert_eq!(all_routes.len(), 2);
+        assert!(all_routes.contains(&route4));
+        assert!(all_routes.contains(&route6));
+
+        // Test counts
+        assert_eq!(db.get_static4_count().unwrap(), 1);
+        assert_eq!(db.get_static6_count().unwrap(), 1);
+
+        // Remove routes and verify cleanup
+        db.remove_static_routes(&[route4, route6]).unwrap();
+        assert_eq!(db.get_static4_count().unwrap(), 0);
+        assert_eq!(db.get_static6_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_static_routing_multiple_routes_same_prefix() {
+        let db = get_test_db();
+        let prefix4 =
+            Prefix4::new(Ipv4Addr::from_str("172.16.0.0").unwrap(), 16);
+
+        // Create multiple routes to the same prefix with different next-hops and priorities
+        let route1 = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap()),
+            vlan_id: None,
+            rib_priority: 100,
+        };
+
+        let route2 = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.2").unwrap()),
+            vlan_id: Some(100),
+            rib_priority: 200,
+        };
+
+        // Add both routes
+        db.add_static_routes(&[route1, route2]).unwrap();
+
+        // Verify both routes were added
+        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        assert_eq!(routes.len(), 2);
+        assert!(routes.contains(&route1));
+        assert!(routes.contains(&route2));
+
+        // Remove one route, other should remain
+        db.remove_static_routes(&[route1]).unwrap();
+        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0], route2);
+
+        // Remove final route
+        db.remove_static_routes(&[route2]).unwrap();
+        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        assert!(routes.is_empty());
+    }
+
+    #[test]
+    fn test_static_routing_vlan_id_handling() {
+        let db = get_test_db();
+        let prefix4 =
+            Prefix4::new(Ipv4Addr::from_str("203.0.113.0").unwrap(), 24);
+
+        // Test route without VLAN ID
+        let route_no_vlan = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("198.51.100.1").unwrap()),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Test route with VLAN ID
+        let route_with_vlan = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("198.51.100.2").unwrap()),
+            vlan_id: Some(4094), // Maximum VLAN ID
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Add both routes
+        db.add_static_routes(&[route_no_vlan, route_with_vlan])
+            .unwrap();
+
+        // Verify both routes were added correctly
+        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        assert_eq!(routes.len(), 2);
+
+        let no_vlan_route =
+            routes.iter().find(|r| r.vlan_id.is_none()).unwrap();
+        assert_eq!(no_vlan_route.vlan_id, None);
+
+        let vlan_route = routes.iter().find(|r| r.vlan_id.is_some()).unwrap();
+        assert_eq!(vlan_route.vlan_id, Some(4094));
+
+        // Clean up
+        db.remove_static_routes(&[route_no_vlan, route_with_vlan])
+            .unwrap();
+    }
+
+    #[test]
+    fn test_prefix_host_bit_normalization() {
+        let db = get_test_db();
+
+        // Test that Prefix4::new() properly zeros host bits
+        let prefix4_with_host_bits =
+            Prefix4::new(Ipv4Addr::from_str("192.168.1.5").unwrap(), 24);
+        assert_eq!(
+            prefix4_with_host_bits.value,
+            Ipv4Addr::from_str("192.168.1.0").unwrap()
+        );
+        assert_eq!(prefix4_with_host_bits.length, 24);
+
+        // Test that Prefix6::new() properly zeros host bits
+        let prefix6_with_host_bits =
+            Prefix6::new(Ipv6Addr::from_str("2001:db8::1234").unwrap(), 64);
+        assert_eq!(
+            prefix6_with_host_bits.value,
+            Ipv6Addr::from_str("2001:db8::").unwrap()
+        );
+        assert_eq!(prefix6_with_host_bits.length, 64);
+
+        // Test with static route to ensure normalization works through the full stack
+        let route = StaticRouteKey {
+            prefix: Prefix::V4(prefix4_with_host_bits),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap()),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        db.add_static_routes(&[route]).unwrap();
+        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        assert_eq!(routes.len(), 1);
+
+        // Verify the stored route has normalized prefix
+        if let Prefix::V4(stored_prefix) = routes[0].prefix {
+            assert_eq!(
+                stored_prefix.value,
+                Ipv4Addr::from_str("192.168.1.0").unwrap()
+            );
+        } else {
+            panic!("Expected IPv4 prefix");
+        }
+
+        db.remove_static_routes(&[route]).unwrap();
     }
 }

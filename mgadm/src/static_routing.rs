@@ -117,3 +117,66 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_route_conversion_to_api_types() {
+        // IPv4 test case
+        let route4 = StaticRoute4 {
+            destination: Ipv4Net::from_str("192.168.0.0/16").unwrap(),
+            nexthop: Ipv4Addr::from_str("10.0.0.1").unwrap(),
+            vlan_id: Some(100),
+            rib_priority: 50,
+        };
+
+        let api_route4 = types::StaticRoute4 {
+            prefix: types::Prefix4::new(
+                route4.destination.addr(),
+                route4.destination.width(),
+            ),
+            nexthop: route4.nexthop,
+            vlan_id: route4.vlan_id,
+            rib_priority: route4.rib_priority,
+        };
+
+        assert_eq!(
+            api_route4.prefix.value,
+            Ipv4Addr::from_str("192.168.0.0").unwrap()
+        );
+        assert_eq!(api_route4.prefix.length, 16);
+        assert_eq!(api_route4.nexthop, route4.nexthop);
+        assert_eq!(api_route4.vlan_id, route4.vlan_id);
+        assert_eq!(api_route4.rib_priority, route4.rib_priority);
+
+        // IPv6 test case
+        let route6 = StaticRoute6 {
+            destination: Ipv6Net::from_str("fd00::/8").unwrap(),
+            nexthop: Ipv6Addr::from_str("fe80::1").unwrap(),
+            vlan_id: Some(300),
+            rib_priority: 75,
+        };
+
+        let api_route6 = types::StaticRoute6 {
+            prefix: types::Prefix6::new(
+                route6.destination.addr(),
+                route6.destination.width(),
+            ),
+            nexthop: route6.nexthop,
+            vlan_id: route6.vlan_id,
+            rib_priority: route6.rib_priority,
+        };
+
+        assert_eq!(
+            api_route6.prefix.value,
+            Ipv6Addr::from_str("fd00::").unwrap()
+        );
+        assert_eq!(api_route6.prefix.length, 8);
+        assert_eq!(api_route6.nexthop, route6.nexthop);
+        assert_eq!(api_route6.vlan_id, route6.vlan_id);
+        assert_eq!(api_route6.rib_priority, route6.rib_priority);
+    }
+}
