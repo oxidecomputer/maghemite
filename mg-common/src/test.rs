@@ -4,13 +4,16 @@
 
 //! Test utilities and macros for use across multiple crates.
 
+pub const DEFAULT_INTERVAL: u64 = 1;
+pub const DEFAULT_ITERATIONS: u64 = 30;
+
 #[macro_export]
 macro_rules! wait_for_eq {
     ($lhs:expr, $rhs:expr, $period:expr, $count:expr) => {
         wait_for!($lhs, ==, $rhs, $period, $count);
     };
     ($lhs:expr, $rhs:expr) => {
-        wait_for!($lhs, ==, $rhs, 1, 30);
+        wait_for!($lhs, ==, $rhs, mg_common::test::DEFAULT_INTERVAL, mg_common::test::DEFAULT_ITERATIONS);
     };
 }
 
@@ -20,7 +23,7 @@ macro_rules! wait_for_neq {
         wait_for!($lhs, !=, $rhs, $period, $count);
     };
     ($lhs:expr, $rhs:expr) => {
-        wait_for!($lhs, !=, $rhs, 1, 30);
+        wait_for!($lhs, !=, $rhs, mg_common::test::DEFAULT_INTERVAL, mg_common::test::DEFAULT_ITERATIONS);
     };
 }
 
@@ -40,7 +43,7 @@ macro_rules! wait_for {
         }
     };
     ($lhs:expr, $op:tt, $rhs:expr) => {
-        wait_for!($lhs, $op, $rhs, 1, 30);
+        wait_for!($lhs, $op, $rhs, mg_common::test::DEFAULT_INTERVAL, mg_common::test::DEFAULT_ITERATIONS);
     };
 }
 
