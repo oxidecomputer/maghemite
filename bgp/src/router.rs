@@ -16,8 +16,8 @@ use crate::policy::load_checker;
 use crate::policy::load_shaper;
 use crate::session::{FsmEvent, NeighborInfo, SessionInfo, SessionRunner};
 use mg_common::{lock, read_lock, write_lock};
-use rdb::Prefix4;
 use rdb::{Asn, Db};
+use rdb::{Prefix4, Prefix6};
 use rhai::AST;
 use slog::Logger;
 use std::collections::BTreeMap;
@@ -304,6 +304,75 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn withdraw_origin4(&self, prefixes: &Vec<Prefix>) {
+        let mut update = UpdateMessage {
+            path_attributes: self.base_attributes(),
+            ..Default::default()
+        };
+
+        for p in prefixes {
+            update.withdrawn.push(p.clone());
+        }
+
+        if !update.withdrawn.is_empty() {
+            read_lock!(self.fanout).send_all(&update);
+        }
+    }
+
+    pub fn create_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+        let prefix6: Vec<Prefix6> =
+            prefixes.iter().cloned().map(|x| x.as_prefix6()).collect();
+        self.db.create_origin6(&prefix6)?;
+        self.announce_origin6(&prefixes);
+        Ok(())
+    }
+
+    pub fn set_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+        let origin6 = self.db.get_origin6()?;
+        let current: BTreeSet<&Prefix6> = origin6.iter().collect();
+
+        let prefix6: Vec<Prefix6> =
+            prefixes.iter().cloned().map(|x| x.as_prefix6()).collect();
+
+        let new: BTreeSet<&Prefix6> = prefix6.iter().collect();
+
+        let to_withdraw: Vec<_> =
+            current.difference(&new).map(|x| (**x).into()).collect();
+
+        let to_announce: Vec<_> =
+            new.difference(&current).map(|x| (**x).into()).collect();
+
+        self.db.set_origin6(&prefix6)?;
+
+        self.withdraw_origin6(&to_withdraw);
+        self.announce_origin6(&to_announce);
+        Ok(())
+    }
+
+    pub fn clear_origin6(&self) -> Result<(), Error> {
+        let current = self.db.get_origin6()?;
+        let prefix: Vec<Prefix> =
+            current.iter().cloned().map(Into::into).collect();
+        self.withdraw_origin6(&prefix);
+        self.db.clear_origin6()?;
+        Ok(())
+    }
+
+    fn announce_origin6(&self, prefixes: &Vec<Prefix>) {
+        let mut update = UpdateMessage {
+            path_attributes: self.base_attributes(),
+            ..Default::default()
+        };
+
+        for p in prefixes {
+            update.nlri.push(p.clone());
+        }
+
+        if !update.nlri.is_empty() {
+            read_lock!(self.fanout).send_all(&update);
+        }
+    }
+
+    pub fn withdraw_origin6(&self, prefixes: &Vec<Prefix>) {
         let mut update = UpdateMessage {
             path_attributes: self.base_attributes(),
             ..Default::default()

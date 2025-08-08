@@ -334,6 +334,47 @@ impl Prefix6 {
 
         self.value = Ipv6Addr::from_bits(self.value.to_bits() & mask)
     }
+
+    pub fn db_key(&self) -> Vec<u8> {
+        let mut buf: Vec<u8> = self.value.octets().into();
+        buf.push(self.length);
+        buf
+    }
+
+    pub fn from_db_key(v: &[u8]) -> Result<Self, Error> {
+        if v.len() < 17 {
+            Err(Error::DbKey(format!(
+                "buffer too short for prefix 6 key {} < 17",
+                v.len()
+            )))
+        } else {
+            let octets: [u8; 16] = v[0..16].try_into().map_err(|_| {
+                Error::DbKey("failed to convert to IPv6 octets".to_string())
+            })?;
+            Ok(Prefix6 {
+                value: Ipv6Addr::from(octets),
+                length: v[16],
+            })
+        }
+    }
+}
+
+impl FromStr for Prefix6 {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (value, length) =
+            s.split_once('/').ok_or("malformed route key".to_string())?;
+
+        Ok(Self {
+            value: value
+                .parse()
+                .map_err(|_| "malformed ip addr".to_string())?,
+            length: length
+                .parse()
+                .map_err(|_| "malformed length".to_string())?,
+        })
+    }
 }
 
 #[derive(

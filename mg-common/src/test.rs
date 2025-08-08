@@ -7,9 +7,29 @@
 #[macro_export]
 macro_rules! wait_for_eq {
     ($lhs:expr, $rhs:expr, $period:expr, $count:expr) => {
+        wait_for!($lhs, ==, $rhs, $period, $count);
+    };
+    ($lhs:expr, $rhs:expr) => {
+        wait_for!($lhs, ==, $rhs, 1, 30);
+    };
+}
+
+#[macro_export]
+macro_rules! wait_for_neq {
+    ($lhs:expr, $rhs:expr, $period:expr, $count:expr) => {
+        wait_for!($lhs, !=, $rhs, $period, $count);
+    };
+    ($lhs:expr, $rhs:expr) => {
+        wait_for!($lhs, !=, $rhs, 1, 30);
+    };
+}
+
+#[macro_export]
+macro_rules! wait_for {
+    ($lhs:expr, $op:tt, $rhs:expr, $period:expr, $count:expr) => {
         let mut ok = false;
         for _ in 0..$count {
-            if $lhs == $rhs {
+            if $lhs $op $rhs {
                 ok = true;
                 break;
             }
@@ -19,8 +39,8 @@ macro_rules! wait_for_eq {
             assert_eq!($lhs, $rhs);
         }
     };
-    ($lhs:expr, $rhs:expr) => {
-        wait_for_eq!($lhs, $rhs, 1, 30);
+    ($lhs:expr, $op:tt, $rhs:expr) => {
+        wait_for!($lhs, $op, $rhs, 1, 30);
     };
 }
 

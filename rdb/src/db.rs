@@ -25,9 +25,13 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{sleep, spawn};
 
-/// The handle used to open a persistent key-value tree for BGP origin
+/// The handle used to open a persistent key-value tree for BGP IPv4 origin
 /// information.
-const BGP_ORIGIN: &str = "bgp_origin";
+const BGP_ORIGIN4: &str = "bgp_origin";
+
+/// The handle used to open a persistent key-value tree for BGP IPv6 origin
+/// information.
+const BGP_ORIGIN6: &str = "bgp_origin6";
 
 /// The handle used to open a persistent key-value tree for BGP router
 /// information.
@@ -485,7 +489,7 @@ impl Db {
     }
 
     pub fn set_origin4(&self, ps: &[Prefix4]) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN)?;
+        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
         tree.clear()?;
         for p in ps.iter() {
             tree.insert(p.db_key(), "")?;
@@ -495,14 +499,14 @@ impl Db {
     }
 
     pub fn clear_origin4(&self) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN)?;
+        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
         tree.clear()?;
         tree.flush()?;
         Ok(())
     }
 
     pub fn get_origin4(&self) -> Result<Vec<Prefix4>, Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN)?;
+        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
         let result = tree
             .scan_prefix(vec![])
             .filter_map(|item| {
@@ -522,6 +526,62 @@ impl Db {
                         error!(
                             self.log,
                             "db: error parsing bgp origin entry value: {e}"
+                        );
+                        return None;
+                    }
+                })
+            })
+            .collect();
+        Ok(result)
+    }
+
+    pub fn create_origin6(&self, ps: &[Prefix6]) -> Result<(), Error> {
+        let current = self.get_origin6()?;
+        if !current.is_empty() {
+            return Err(Error::Conflict("origin already exists".to_string()));
+        }
+
+        self.set_origin6(ps)
+    }
+
+    pub fn set_origin6(&self, ps: &[Prefix6]) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
+        tree.clear()?;
+        for p in ps.iter() {
+            tree.insert(p.db_key(), "")?;
+        }
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn clear_origin6(&self) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
+        tree.clear()?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn get_origin6(&self) -> Result<Vec<Prefix6>, Error> {
+        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
+        let result = tree
+            .scan_prefix(vec![])
+            .filter_map(|item| {
+                let (key, _value) = match item {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error fetching bgp origin6 entry: {e}"
+                        );
+                        return None;
+                    }
+                };
+                Some(match Prefix6::from_db_key(&key) {
+                    Ok(item) => item,
+                    Err(e) => {
+                        error!(
+                            self.log,
+                            "db: error parsing bgp origin6 entry value: {e}"
                         );
                         return None;
                     }
@@ -714,6 +774,35 @@ impl Db {
         };
     }
 
+    fn add_static_routes_to_tree(
+        &self,
+        tree: Tree,
+        routes: &[StaticRouteKey],
+        pcn: &mut PrefixChangeNotification,
+    ) -> Result<(), Error> {
+        let mut route_keys = Vec::new();
+
+        for route in routes {
+            let key = serde_json::to_string(&route)?;
+            route_keys.push(key);
+        }
+
+        tree.transaction(|tx_db| {
+            for key in &route_keys {
+                tx_db.insert(key.as_str(), "")?;
+            }
+            Ok(())
+        })?;
+        tree.flush()?;
+
+        for route in routes {
+            self.add_prefix_path(&route.prefix, &Path::from(*route));
+            pcn.changed.insert(route.prefix);
+        }
+
+        Ok(())
+    }
+
     pub fn add_static_routes(
         &self,
         routes: &[StaticRouteKey],
@@ -732,48 +821,12 @@ impl Db {
 
         {
             let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-
-            let mut route_keys = Vec::new();
-            for route in routes4 {
-                let key = serde_json::to_string(&route)?;
-                route_keys.push(key);
-            }
-
-            tree.transaction(|tx_db| {
-                for key in &route_keys {
-                    tx_db.insert(key.as_str(), "")?;
-                }
-                Ok(())
-            })?;
-            tree.flush()?;
-
-            for route in routes {
-                self.add_prefix_path(&route.prefix, &Path::from(*route));
-                pcn.changed.insert(route.prefix);
-            }
+            self.add_static_routes_to_tree(tree, &routes4, &mut pcn)?;
         }
 
         {
             let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-
-            let mut route_keys = Vec::new();
-            for route in routes6 {
-                let key = serde_json::to_string(&route)?;
-                route_keys.push(key);
-            }
-
-            tree.transaction(|tx_db| {
-                for key in &route_keys {
-                    tx_db.insert(key.as_str(), "")?;
-                }
-                Ok(())
-            })?;
-            tree.flush()?;
-
-            for route in routes {
-                self.add_prefix_path(&route.prefix, &Path::from(*route));
-                pcn.changed.insert(route.prefix);
-            }
+            self.add_static_routes_to_tree(tree, &routes6, &mut pcn)?;
         }
 
         self.notify(pcn);
@@ -1670,6 +1723,48 @@ mod test {
     }
 
     #[test]
+    fn test_static_routing_ipv6_vlan_id_handling() {
+        let db = get_test_db();
+        let prefix6 =
+            Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48);
+
+        // Test route without VLAN ID
+        let route_no_vlan = StaticRouteKey {
+            prefix: Prefix::V6(prefix6),
+            nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Test route with VLAN ID
+        let route_with_vlan = StaticRouteKey {
+            prefix: Prefix::V6(prefix6),
+            nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::2").unwrap()),
+            vlan_id: Some(4094), // Maximum VLAN ID
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Add both routes
+        db.add_static_routes(&[route_no_vlan, route_with_vlan])
+            .unwrap();
+
+        // Verify both routes were added correctly
+        let routes = db.get_static(AddressFamily::Ipv6).unwrap();
+        assert_eq!(routes.len(), 2);
+
+        let no_vlan_route =
+            routes.iter().find(|r| r.vlan_id.is_none()).unwrap();
+        assert_eq!(no_vlan_route.vlan_id, None);
+
+        let vlan_route = routes.iter().find(|r| r.vlan_id.is_some()).unwrap();
+        assert_eq!(vlan_route.vlan_id, Some(4094));
+
+        // Clean up
+        db.remove_static_routes(&[route_no_vlan, route_with_vlan])
+            .unwrap();
+    }
+
+    #[test]
     fn test_static_routing_mixed_address_families() {
         let db = get_test_db();
 
@@ -1849,5 +1944,152 @@ mod test {
         }
 
         db.remove_static_routes(&[route]).unwrap();
+    }
+
+    #[test]
+    fn test_ipv4_origin_crud() {
+        let db = get_test_db();
+
+        // Test creating IPv4 origins
+        let prefixes = vec![
+            Prefix4::new(Ipv4Addr::new(192, 168, 1, 0), 24),
+            Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
+        ];
+
+        // Create origin4 - should succeed
+        db.create_origin4(&prefixes).expect("create origin4");
+
+        // Get origin4 - should return created prefixes
+        let retrieved = db.get_origin4().expect("get origin4");
+        assert_eq!(retrieved.len(), 2);
+        assert!(retrieved.contains(&prefixes[0]));
+        assert!(retrieved.contains(&prefixes[1]));
+
+        // Try to create again - should fail with conflict
+        assert!(db.create_origin4(&prefixes).is_err());
+
+        // Update origin4 with different prefixes
+        let new_prefixes = vec![Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12)];
+        db.set_origin4(&new_prefixes).expect("set origin4");
+
+        let updated = db.get_origin4().expect("get updated origin4");
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0], new_prefixes[0]);
+
+        // Clear origin4
+        db.clear_origin4().expect("clear origin4");
+        let empty = db.get_origin4().expect("get empty origin4");
+        assert!(empty.is_empty());
+
+        // Create again after clear - should succeed
+        db.create_origin4(&prefixes).expect("create after clear");
+        let final_result = db.get_origin4().expect("get final origin4");
+        assert_eq!(final_result.len(), 2);
+    }
+
+    #[test]
+    fn test_ipv6_origin_crud() {
+        let db = get_test_db();
+
+        // Test creating IPv6 origins
+        let prefixes = vec![
+            Prefix6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32),
+            Prefix6::new(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 0), 8),
+        ];
+
+        // Create origin6 - should succeed
+        db.create_origin6(&prefixes).expect("create origin6");
+
+        // Get origin6 - should return created prefixes
+        let retrieved = db.get_origin6().expect("get origin6");
+        assert_eq!(retrieved.len(), 2);
+        assert!(retrieved.contains(&prefixes[0]));
+        assert!(retrieved.contains(&prefixes[1]));
+
+        // Try to create again - should fail with conflict
+        assert!(db.create_origin6(&prefixes).is_err());
+
+        // Update origin6 with different prefixes
+        let new_prefixes = vec![Prefix6::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 0),
+            48,
+        )];
+        db.set_origin6(&new_prefixes).expect("set origin6");
+
+        let updated = db.get_origin6().expect("get updated origin6");
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0], new_prefixes[0]);
+
+        // Clear origin6
+        db.clear_origin6().expect("clear origin6");
+        let empty = db.get_origin6().expect("get empty origin6");
+        assert!(empty.is_empty());
+
+        // Create again after clear - should succeed
+        db.create_origin6(&prefixes).expect("create after clear");
+        let final_result = db.get_origin6().expect("get final origin6");
+        assert_eq!(final_result.len(), 2);
+    }
+
+    #[test]
+    fn test_prefix4_db_key_serialization() {
+        let prefix = Prefix4::new(Ipv4Addr::new(192, 168, 100, 0), 24);
+        let key = prefix.db_key();
+
+        // IPv4 address should be 4 bytes + 1 byte for length
+        assert_eq!(key.len(), 5);
+        assert_eq!(key[4], 24); // length byte
+
+        // Test round-trip serialization
+        let recovered =
+            Prefix4::from_db_key(&key).expect("recover from db key");
+        assert_eq!(recovered, prefix);
+    }
+
+    #[test]
+    fn test_prefix6_db_key_serialization() {
+        let prefix = Prefix6::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0xdead, 0xbeef, 0, 0, 0, 0),
+            64,
+        );
+        let key = prefix.db_key();
+
+        // IPv6 address should be 16 bytes + 1 byte for length
+        assert_eq!(key.len(), 17);
+        assert_eq!(key[16], 64); // length byte
+
+        // Test round-trip serialization
+        let recovered =
+            Prefix6::from_db_key(&key).expect("recover from db key");
+        assert_eq!(recovered, prefix);
+    }
+
+    #[test]
+    fn test_prefix4_from_str() {
+        let prefix_str = "192.168.1.0/24";
+        let prefix: Prefix4 = prefix_str.parse().expect("parse IPv4 prefix");
+        assert_eq!(prefix.value, Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(prefix.length, 24);
+
+        // Test invalid format
+        assert!("invalid".parse::<Prefix4>().is_err());
+        assert!("192.168.1".parse::<Prefix4>().is_err());
+        assert!("192.168.1.0/abc".parse::<Prefix4>().is_err());
+    }
+
+    #[test]
+    fn test_prefix6_from_str() {
+        let prefix_str = "2001:db8::/32";
+        let prefix: Prefix6 = prefix_str.parse().expect("parse IPv6 prefix");
+        assert_eq!(
+            prefix.value,
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0)
+        );
+        assert_eq!(prefix.length, 32);
+
+        // Test invalid format
+        assert!("invalid".parse::<Prefix6>().is_err());
+        assert!("2001:db8:".parse::<Prefix6>().is_err());
+        assert!("2001:db8::/abc".parse::<Prefix6>().is_err());
     }
 }

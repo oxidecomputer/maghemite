@@ -813,6 +813,15 @@ impl From<rdb::Prefix4> for Prefix {
     }
 }
 
+impl From<rdb::Prefix6> for Prefix {
+    fn from(p: rdb::Prefix6) -> Self {
+        Self {
+            value: p.value.octets().into(),
+            length: p.length,
+        }
+    }
+}
+
 /// A self-describing BGP path attribute
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PathAttribute {

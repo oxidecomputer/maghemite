@@ -4,7 +4,7 @@
 
 use bgp::config::PeerConfig;
 use bgp::session::{FsmStateKind, MessageHistory};
-use rdb::{ImportExportPolicy, Path, PolicyAction, Prefix4};
+use rdb::{ImportExportPolicy, Path, PolicyAction, Prefix4, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -185,6 +185,15 @@ pub struct Origin4 {
 
     /// Set of prefixes to originate.
     pub prefixes: Vec<Prefix4>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Origin6 {
+    /// ASN of the router to originate from.
+    pub asn: u32,
+
+    /// Set of prefixes to originate.
+    pub prefixes: Vec<Prefix6>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
