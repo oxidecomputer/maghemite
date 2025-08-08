@@ -1,6 +1,6 @@
 #!/bin/bash
 #:
-#: name = "test-rdb"
+#: name = "test-mgadm"
 #: variety = "basic"
 #: target = "helios-2.0"
 #: rust_toolchain = "stable"
