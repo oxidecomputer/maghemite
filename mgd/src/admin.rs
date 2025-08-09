@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{bfd_admin, bgp_admin, static_admin};
+use crate::{bfd_admin, bgp_admin, rib_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp_admin::BgpContext;
 use dropshot::{ApiDescription, ConfigDropshot, HttpServerStarter};
@@ -68,6 +68,7 @@ macro_rules! register {
 pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     let mut api = ApiDescription::new();
 
+    rib_admin::api_description(&mut api);
     bgp_admin::api_description(&mut api);
     static_admin::api_description(&mut api);
     bfd_admin::api_description(&mut api);

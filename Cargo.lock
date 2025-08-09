@@ -2736,14 +2736,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "colored",
  "mg-common",
  "percent-encoding",
  "progenitor",
+ "rdb",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
  "slog",
+ "tabwriter",
 ]
 
 [[package]]
@@ -4370,6 +4373,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "ciborium",
+ "clap",
  "itertools 0.13.0",
  "mg-common",
  "schemars",

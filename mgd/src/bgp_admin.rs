@@ -22,9 +22,7 @@ use dropshot::{
     RequestContext, TypedBody,
 };
 use mg_common::lock;
-use rdb::{
-    types::AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy, Prefix,
-};
+use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
 use slog::info;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -120,8 +118,6 @@ pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
 
     register!(api, get_neighbors);
     register!(api, get_exported);
-    register!(api, get_imported);
-    register!(api, get_selected);
     register!(api, message_history);
 }
 
@@ -483,28 +479,6 @@ pub async fn get_exported(
     }
 
     Ok(HttpResponseOk(exported))
-}
-
-#[endpoint { method = GET, path = "/bgp/status/imported" }]
-pub async fn get_imported(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
-) -> Result<HttpResponseOk<Rib>, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    let imported = get_router!(ctx, rq.asn)?.db.full_rib(AddressFamily::All);
-    Ok(HttpResponseOk(imported.into()))
-}
-
-#[endpoint { method = GET, path = "/bgp/status/selected" }]
-pub async fn get_selected(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
-) -> Result<HttpResponseOk<Rib>, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    let selected = get_router!(ctx, rq.asn)?.db.loc_rib(AddressFamily::All);
-    Ok(HttpResponseOk(selected.into()))
 }
 
 #[endpoint { method = GET, path = "/bgp/status/neighbors" }]

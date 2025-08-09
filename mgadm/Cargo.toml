@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 bgp = { path = "../bgp" }
-rdb = { path = "../rdb" }
 mg-common = { path = "../mg-common" }
 mg-admin-client = { path = "../mg-admin-client" }
 tokio.workspace = true
@@ -16,9 +15,10 @@ slog.workspace = true
 slog-term.workspace = true
 slog-async.workspace = true
 slog-envlogger.workspace = true
-tabwriter.workspace = true
 colored.workspace = true
 humantime.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 oxnet.workspace = true
+tabwriter.workspace = true
+rdb = { version = "0.1.0", path = "../rdb", features = ["clap"] }

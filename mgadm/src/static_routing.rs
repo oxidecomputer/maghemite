@@ -7,7 +7,7 @@ use clap::{Args, Subcommand};
 use mg_admin_client::types;
 use mg_admin_client::Client;
 use oxnet::{Ipv4Net, Ipv6Net};
-use rdb::DEFAULT_RIB_PRIORITY_STATIC;
+use rdb::{Prefix4, Prefix6, DEFAULT_RIB_PRIORITY_STATIC};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Subcommand, Debug)]
@@ -50,7 +50,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = types::AddStaticRoute4Request {
                 routes: types::StaticRoute4List {
                     list: vec![types::StaticRoute4 {
-                        prefix: types::Prefix4::new(
+                        prefix: Prefix4::new(
                             route.destination.addr(),
                             route.destination.width(),
                         ),
@@ -66,7 +66,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = types::DeleteStaticRoute4Request {
                 routes: types::StaticRoute4List {
                     list: vec![types::StaticRoute4 {
-                        prefix: types::Prefix4::new(
+                        prefix: Prefix4::new(
                             route.destination.addr(),
                             route.destination.width(),
                         ),
@@ -86,7 +86,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = types::AddStaticRoute6Request {
                 routes: types::StaticRoute6List {
                     list: vec![types::StaticRoute6 {
-                        prefix: types::Prefix6 {
+                        prefix: Prefix6 {
                             value: route.destination.addr(),
                             length: route.destination.width(),
                         },
@@ -102,7 +102,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = types::DeleteStaticRoute6Request {
                 routes: types::StaticRoute6List {
                     list: vec![types::StaticRoute6 {
-                        prefix: types::Prefix6 {
+                        prefix: Prefix6 {
                             value: route.destination.addr(),
                             length: route.destination.width(),
                         },
@@ -134,7 +134,7 @@ mod tests {
         };
 
         let api_route4 = types::StaticRoute4 {
-            prefix: types::Prefix4::new(
+            prefix: Prefix4::new(
                 route4.destination.addr(),
                 route4.destination.width(),
             ),
@@ -161,7 +161,7 @@ mod tests {
         };
 
         let api_route6 = types::StaticRoute6 {
-            prefix: types::Prefix6::new(
+            prefix: Prefix6::new(
                 route6.destination.addr(),
                 route6.destination.width(),
             ),

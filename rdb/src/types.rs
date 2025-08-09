@@ -191,7 +191,7 @@ impl Policy4Key {
 }
 
 #[derive(
-    Debug, Copy, Clone, Serialize, Deserialize, Eq, PartialEq, JsonSchema,
+    Debug, Copy, Clone, Serialize, Deserialize, Eq, Hash, PartialEq, JsonSchema,
 )]
 pub struct Prefix4 {
     pub value: Ipv4Addr,
@@ -415,6 +415,20 @@ impl From<Prefix6> for Prefix {
     }
 }
 
+impl FromStr for Prefix {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(prefix4) = s.parse::<Prefix4>() {
+            Ok(Self::V4(prefix4))
+        } else if let Ok(prefix6) = s.parse::<Prefix6>() {
+            Ok(Self::V6(prefix6))
+        } else {
+            Err("malformed prefix".to_string())
+        }
+    }
+}
+
 impl Prefix {
     pub fn new(ip: IpAddr, length: u8) -> Self {
         match ip {
@@ -594,9 +608,44 @@ impl From<Prefix6> for PrefixChangeNotification {
     }
 }
 
-#[derive(Clone, Copy, Eq, Debug, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone,
+    Copy,
+    Eq,
+    Debug,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    Default,
+)]
 pub enum AddressFamily {
     Ipv4,
     Ipv6,
+    /// All routes (IPv4 and IPv6)
+    #[default]
     All,
+}
+
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+pub enum ProtocolFilter {
+    /// BGP routes only
+    Bgp,
+    /// Static routes only
+    Static,
 }

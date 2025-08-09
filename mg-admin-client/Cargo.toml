@@ -14,3 +14,6 @@ progenitor.workspace = true
 schemars.workspace = true
 chrono.workspace = true
 mg-common.workspace = true
+rdb = { version = "0.1.0", path = "../rdb" }
+tabwriter.workspace = true
+colored.workspace = true

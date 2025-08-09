@@ -1011,39 +1011,6 @@
         }
       }
     },
-    "/bgp/status/imported": {
-      "get": {
-        "operationId": "get_imported",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AsnSelector"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Rib"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/bgp/status/neighbors": {
       "get": {
         "operationId": "get_neighbors",
@@ -1084,19 +1051,68 @@
         }
       }
     },
-    "/bgp/status/selected": {
+    "/rib/status/imported": {
       "get": {
-        "operationId": "get_selected",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AsnSelector"
+        "operationId": "get_imported",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "protocol",
+            "description": "Filter by protocol (optional)",
+            "schema": {
+              "$ref": "#/components/schemas/ProtocolFilter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rib"
+                }
               }
             }
           },
-          "required": true
-        },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/rib/status/selected": {
+      "get": {
+        "operationId": "get_selected",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "protocol",
+            "description": "Filter by protocol (optional)",
+            "schema": {
+              "$ref": "#/components/schemas/ProtocolFilter"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "successful operation",
@@ -3642,6 +3658,42 @@
           "nlri",
           "path_attributes",
           "withdrawn"
+        ]
+      },
+      "AddressFamily": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "Ipv4",
+              "Ipv6"
+            ]
+          },
+          {
+            "description": "All routes (IPv4 and IPv6)",
+            "type": "string",
+            "enum": [
+              "All"
+            ]
+          }
+        ]
+      },
+      "ProtocolFilter": {
+        "oneOf": [
+          {
+            "description": "BGP routes only",
+            "type": "string",
+            "enum": [
+              "Bgp"
+            ]
+          },
+          {
+            "description": "Static routes only",
+            "type": "string",
+            "enum": [
+              "Static"
+            ]
+          }
         ]
       }
     },

@@ -6,15 +6,12 @@ use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
 use mg_admin_client::types::NeighborResetOp as MgdNeighborResetOp;
-use mg_admin_client::types::{
-    self, ImportExportPolicy, NeighborResetRequest, Path, Rib,
-};
+use mg_admin_client::types::{self, ImportExportPolicy, NeighborResetRequest};
 use mg_admin_client::Client;
 use rdb::types::{PolicyAction, Prefix, Prefix4, Prefix6};
-use std::collections::BTreeMap;
 use std::fs::read_to_string;
 use std::io::{stdout, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use tabwriter::TabWriter;
 
@@ -70,18 +67,6 @@ pub enum StatusCmd {
 
     /// Get the prefixes exported by a BGP router.
     Exported {
-        #[clap(env)]
-        asn: u32,
-    },
-
-    /// Get the prefixes imported by a BGP router.
-    Imported {
-        #[clap(env)]
-        asn: u32,
-    },
-
-    /// Get the selected paths chosen from imported paths.
-    Selected {
         #[clap(env)]
         asn: u32,
     },
@@ -535,11 +520,7 @@ impl From<Neighbor> for types::Neighbor {
                     prefixes
                         .clone()
                         .into_iter()
-                        .map(|x| {
-                            types::Prefix::V4(types::Prefix4::new(
-                                x.value, x.length,
-                            ))
-                        })
+                        .map(|x| Prefix::V4(Prefix4::new(x.value, x.length)))
                         .collect(),
                 ),
                 None => ImportExportPolicy::NoFiltering,
@@ -549,11 +530,7 @@ impl From<Neighbor> for types::Neighbor {
                     prefixes
                         .clone()
                         .into_iter()
-                        .map(|x| {
-                            types::Prefix::V4(types::Prefix4::new(
-                                x.value, x.length,
-                            ))
-                        })
+                        .map(|x| Prefix::V4(Prefix4::new(x.value, x.length)))
                         .collect(),
                 ),
                 None => ImportExportPolicy::NoFiltering,
@@ -640,8 +617,6 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         Commands::Status(cmd) => match cmd.command {
             StatusCmd::Neighbors { asn } => get_neighbors(c, asn).await?,
             StatusCmd::Exported { asn } => get_exported(c, asn).await?,
-            StatusCmd::Imported { asn } => get_imported(c, asn).await?,
-            StatusCmd::Selected { asn } => get_selected(c, asn).await?,
         },
 
         Commands::Clear(cmd) => match cmd.command {
@@ -753,26 +728,6 @@ async fn get_exported(c: Client, asn: u32) -> Result<()> {
     Ok(())
 }
 
-async fn get_imported(c: Client, asn: u32) -> Result<()> {
-    let imported = c
-        .get_imported(&types::AsnSelector { asn })
-        .await?
-        .into_inner();
-
-    print_rib(imported);
-    Ok(())
-}
-
-async fn get_selected(c: Client, asn: u32) -> Result<()> {
-    let selected = c
-        .get_selected(&types::AsnSelector { asn })
-        .await?
-        .into_inner();
-
-    print_rib(selected);
-    Ok(())
-}
-
 async fn list_nbr(asn: u32, c: Client) -> Result<()> {
     let nbrs = c.read_neighbors(asn).await?;
     println!("{nbrs:#?}");
@@ -822,7 +777,7 @@ async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| types::Prefix4::new(x.value, x.length))
+            .map(|x| Prefix4::new(x.value, x.length))
             .collect(),
     })
     .await?;
@@ -836,7 +791,7 @@ async fn update_origin4(originate: Originate4, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| types::Prefix4::new(x.value, x.length))
+            .map(|x| Prefix4::new(x.value, x.length))
             .collect(),
     })
     .await?;
@@ -861,7 +816,7 @@ async fn create_origin6(originate: Originate6, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| types::Prefix6::new(x.value, x.length))
+            .map(|x| Prefix6::new(x.value, x.length))
             .collect(),
     })
     .await?;
@@ -875,7 +830,7 @@ async fn update_origin6(originate: Originate6, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| types::Prefix6::new(x.value, x.length))
+            .map(|x| Prefix6::new(x.value, x.length))
             .collect(),
     })
     .await?;
@@ -898,100 +853,6 @@ async fn apply(filename: String, c: Client) -> Result<()> {
     let request: types::ApplyRequest = serde_json::from_str(&contents)?;
     c.bgp_apply(&request).await?;
     Ok(())
-}
-
-fn print_rib(rib: Rib) {
-    type CliRib = BTreeMap<Prefix, Vec<Path>>;
-
-    let mut static_routes = CliRib::new();
-    let mut bgp_routes = CliRib::new();
-    for (prefix, paths) in rib.0.into_iter() {
-        // TODO: handle Prefix generically when IPv6 support is added
-        // (requires impl std::str::FromStr for Prefix/Prefix6)
-        let pfx: Prefix = Prefix::V4(match prefix.parse::<Prefix4>() {
-            Ok(p4) => p4,
-            Err(e) => {
-                eprintln!("failed to parse prefix [{prefix}]: {e}");
-                continue;
-            }
-        });
-        let (br, sr): (Vec<Path>, Vec<Path>) =
-            paths.into_iter().partition(|p| p.bgp.is_some());
-        if !sr.is_empty() {
-            static_routes.insert(pfx, sr);
-        }
-        if !br.is_empty() {
-            bgp_routes.insert(pfx, br);
-        }
-    }
-
-    if !static_routes.is_empty() {
-        let mut tw = TabWriter::new(stdout());
-        writeln!(
-            &mut tw,
-            "{}\t{}\t{}",
-            "Prefix".dimmed(),
-            "Nexthop".dimmed(),
-            "RIB Priority".dimmed(),
-        )
-        .unwrap();
-
-        for (prefix, paths) in static_routes.into_iter() {
-            write!(&mut tw, "{prefix}").unwrap();
-            for path in paths.into_iter() {
-                writeln!(
-                    &mut tw,
-                    "\t{}\t{:?}",
-                    path.nexthop, path.rib_priority,
-                )
-                .unwrap();
-            }
-        }
-        println!("{}", "Static Routes".dimmed());
-        println!("{}", "=============".dimmed());
-        tw.flush().unwrap();
-    }
-
-    if !bgp_routes.is_empty() {
-        let mut tw = TabWriter::new(stdout());
-        writeln!(
-            &mut tw,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            "Prefix".dimmed(),
-            "Nexthop".dimmed(),
-            "RIB Priority".dimmed(),
-            "Local Pref".dimmed(),
-            "Origin AS".dimmed(),
-            "Peer ID".dimmed(),
-            "MED".dimmed(),
-            "AS Path".dimmed(),
-            "Stale".dimmed(),
-        )
-        .unwrap();
-
-        for (prefix, paths) in bgp_routes.into_iter() {
-            write!(&mut tw, "{prefix}").unwrap();
-            for path in paths.into_iter() {
-                let bgp = path.bgp.as_ref().unwrap();
-                writeln!(
-                    &mut tw,
-                    "\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}",
-                    path.nexthop,
-                    path.rib_priority,
-                    bgp.local_pref,
-                    bgp.origin_as,
-                    Ipv4Addr::from(bgp.id),
-                    bgp.med,
-                    bgp.as_path,
-                    bgp.stale,
-                )
-                .unwrap();
-            }
-        }
-        println!("{}", "BGP Routes".dimmed());
-        println!("{}", "=============".dimmed());
-        tw.flush().unwrap();
-    }
 }
 
 async fn create_chk(filename: String, asn: u32, c: Client) -> Result<()> {

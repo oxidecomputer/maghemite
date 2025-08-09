@@ -27,6 +27,7 @@ mod bgp_admin;
 mod bgp_param;
 mod error;
 mod oxstats;
+mod rib_admin;
 mod signal;
 mod smf;
 mod static_admin;
