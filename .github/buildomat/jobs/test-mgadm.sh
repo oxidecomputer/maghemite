@@ -28,4 +28,3 @@ curl -sSfL --retry 10 https://get.nexte.st/"$NEXTEST_VERSION"/"$PLATFORM" | gunz
 pushd mgadm
 
 cargo nextest run
-cp *.log /work/
