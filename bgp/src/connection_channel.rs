@@ -30,8 +30,19 @@ lazy_static! {
 /// messages to listeners for those addresses.
 pub struct Network {
     #[allow(clippy::type_complexity)]
-    endpoints:
+    pub endpoints:
         Mutex<HashMap<SocketAddr, Sender<(SocketAddr, Endpoint<Message>)>>>,
+}
+
+impl std::fmt::Display for Network {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{")?;
+        for sockaddr in lock!(self.endpoints).iter() {
+            write!(f, "{sockaddr:?}")?;
+        }
+        write!(f, "}}")?;
+        Ok(())
+    }
 }
 
 /// A listener that can listen for messages on our simulated network.
@@ -194,8 +205,12 @@ impl BgpConnection for BgpConnectionChannel {
         let guard = lock!(self.conn_tx);
         match *guard {
             Some(ref ch) => {
-                ch.send(msg)
-                    .map_err(|e| Error::ChannelSend(e.to_string()))?;
+                if let Err(e) =
+                    ch.send(msg).map_err(|e| Error::ChannelSend(e.to_string()))
+                {
+                    error!(self.log, "NET state: {}", *NET);
+                    return Err(e);
+                }
             }
             None => {
                 return Err(Error::NotConnected);
