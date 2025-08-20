@@ -45,10 +45,10 @@ pub enum Error {
     #[error("bad length")]
     BadLength { expected: u8, found: u8 },
 
-    #[error("io {0}")]
+    #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("channel recv {0}")]
+    #[error("channel recv: {0}")]
     ChannelRecv(#[from] std::sync::mpsc::RecvError),
 
     #[error("timeout")]
@@ -57,7 +57,7 @@ pub enum Error {
     #[error("disconnected")]
     Disconnected,
 
-    #[error("channel send {0}")]
+    #[error("channel send: {0}")]
     ChannelSend(String),
 
     #[error("unexpected end of input")]
@@ -158,13 +158,13 @@ pub enum Error {
     #[error("Invalid address")]
     InvalidAddress(String),
 
-    #[error("Datastore error {0}")]
+    #[error("Datastore error: {0}")]
     Datastore(#[from] rdb::error::Error),
 
-    #[error("Internal communication error {0}")]
+    #[error("Internal communication error: {0}")]
     InternalCommunication(String),
 
-    #[error("Unexpected ASN {0}")]
+    #[error("Unexpected ASN: {0}")]
     UnexpectedAsn(ExpectationMismatch<u32>),
 
     #[error("Hold time too small")]
@@ -182,7 +182,7 @@ pub enum Error {
     #[error("Drop due to user defined policy")]
     PolicyCheckFailed,
 
-    #[error("Policy error {0}")]
+    #[error("Policy error: {0}")]
     PolicyError(#[from] crate::policy::Error),
 
     #[error("Message conversion: {0}")]

@@ -826,7 +826,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     // ACK the open with a reciprocal open and a keepalive and transition
                     // to open confirm.
                     if let Err(e) = self.send_open(&conn) {
-                        err!(self; "send open failed {e}");
+                        err!(self; "connect: send open failed (FsmEvent::Message(Message::Open)): {e}");
                         return FsmState::Idle;
                     }
                     self.send_keepalive(&conn);
@@ -847,7 +847,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                     inf!(self; "accepted connection from {}", accepted.peer());
                     if let Err(e) = self.send_open(&accepted) {
-                        err!(self; "send open failed {e}");
+                        err!(self; "connect: send open failed (FsmEvent::Connected) {e}");
                         return FsmState::Idle;
                     }
                     {
@@ -872,7 +872,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                     inf!(self; "connected to {}", conn.peer());
                     if let Err(e) = self.send_open(&conn) {
-                        err!(self; "send open failed {e}");
+                        err!(self; "connect: send open failed (FsmEvent::TcpConnectionConfirmed) {e}");
                         return FsmState::Idle;
                     }
                     {
@@ -948,7 +948,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
                 inf!(self; "active: accepted connection from {}", accepted.peer());
                 if let Err(e) = self.send_open(&accepted) {
-                    err!(self; "active: send open failed {e}");
+                    err!(self; "active: send open failed (FsmEvent::Connected) {e}");
                     return FsmState::Idle;
                 }
                 lock!(self.clock.timers.connect_retry_timer).disable();
@@ -1001,7 +1001,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // ACK the open with a reciprocal open and a keepalive and transition
         // to open confirm.
         if let Err(e) = self.send_open(&conn) {
-            err!(self; "send open failed {e}");
+            err!(self; "send open failed (on_active) {e}");
             return FsmState::Idle;
         }
         self.send_keepalive(&conn);
@@ -1066,7 +1066,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                     inf!(self; "accepted connection from {}", accepted.peer());
                     if let Err(e) = self.send_open(&accepted) {
-                        err!(self; "send open failed {e}");
+                        err!(self; "open_sent: send open failed (FsmEvent::Connected) {e}");
                         return FsmState::Idle;
                     }
                     {
@@ -1197,7 +1197,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                     inf!(self; "accepted connection from {}", accepted.peer());
                     if let Err(e) = self.send_open(&accepted) {
-                        err!(self; "send open failed {e}");
+                        err!(self; "open_confirm: send open failed (FsmEvent::Connected) {e}");
                         return FsmState::Idle;
                     }
                     {
@@ -1635,7 +1635,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn send_keepalive(&self, conn: &Cnx) {
         trc!(self; "sending keepalive");
         if let Err(e) = conn.send(Message::KeepAlive) {
-            err!(self; "failed to send keepalive {e}");
+            err!(self; "failed to send keepalive: {e}");
             self.counters
                 .keepalive_send_failure
                 .fetch_add(1, Ordering::Relaxed);
@@ -1652,7 +1652,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             afi: Afi::Ipv4 as u16,
             safi: Safi::NlriUnicast as u8,
         })) {
-            err!(self; "failed to send route refresh {e}");
+            err!(self; "failed to send route refresh: {e}");
             self.counters
                 .keepalive_send_failure
                 .fetch_add(1, Ordering::Relaxed);
@@ -1686,7 +1686,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         lock!(self.message_history).send(msg.clone());
 
         if let Err(e) = conn.send(msg) {
-            err!(self; "failed to send notification {e}");
+            err!(self; "failed to send notification: {e}");
             self.counters
                 .notification_send_failure
                 .fetch_add(1, Ordering::Relaxed);
@@ -1752,7 +1752,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         self.counters.opens_sent.fetch_add(1, Ordering::Relaxed);
         if let Err(e) = conn.send(out) {
-            err!(self; "failed to send open {e}");
+            err!(self; "failed to send open: {e}");
             self.counters
                 .open_send_failure
                 .fetch_add(1, Ordering::Relaxed);
@@ -1905,7 +1905,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
 
         if let Err(e) = conn.send(out) {
-            err!(self; "failed to send update {e}");
+            err!(self; "failed to send update: {e}");
             self.counters
                 .update_send_failure
                 .fetch_add(1, Ordering::Relaxed);
