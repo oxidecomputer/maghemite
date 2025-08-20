@@ -9,41 +9,96 @@ pub const DEFAULT_ITERATIONS: u64 = 30;
 
 #[macro_export]
 macro_rules! wait_for_eq {
+    ($lhs:expr, $rhs:expr, $period:expr, $count:expr, $msg:tt) => {
+        wait_for!($lhs == $rhs, $period, $count, $msg);
+    };
     ($lhs:expr, $rhs:expr, $period:expr, $count:expr) => {
-        wait_for!($lhs, ==, $rhs, $period, $count);
+        wait_for!($lhs == $rhs, $period, $count);
+    };
+    ($lhs:expr, $rhs:expr, $msg:tt) => {
+        wait_for!(
+            $lhs == $rhs,
+            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_ITERATIONS,
+            $msg
+        );
     };
     ($lhs:expr, $rhs:expr) => {
-        wait_for!($lhs, ==, $rhs, mg_common::test::DEFAULT_INTERVAL, mg_common::test::DEFAULT_ITERATIONS);
+        wait_for!(
+            $lhs == $rhs,
+            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_ITERATIONS
+        );
     };
 }
 
 #[macro_export]
 macro_rules! wait_for_neq {
+    ($lhs:expr, $rhs:expr, $period:expr, $count:expr, $msg:tt) => {
+        wait_for!($lhs != $rhs, $period, $count, $msg);
+    };
     ($lhs:expr, $rhs:expr, $period:expr, $count:expr) => {
-        wait_for!($lhs, !=, $rhs, $period, $count);
+        wait_for!($lhs != $rhs, $period, $count);
+    };
+    ($lhs:expr, $rhs:expr, $msg:tt) => {
+        wait_for!(
+            $lhs != $rhs,
+            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_ITERATIONS,
+            $msg
+        );
     };
     ($lhs:expr, $rhs:expr) => {
-        wait_for!($lhs, !=, $rhs, mg_common::test::DEFAULT_INTERVAL, mg_common::test::DEFAULT_ITERATIONS);
+        wait_for!(
+            $lhs != $rhs,
+            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_ITERATIONS
+        );
     };
 }
 
 #[macro_export]
 macro_rules! wait_for {
-    ($lhs:expr, $op:tt, $rhs:expr, $period:expr, $count:expr) => {
+    ($cond:expr, $period:expr, $count:expr, $msg:tt) => {
         let mut ok = false;
         for _ in 0..$count {
-            if $lhs $op $rhs {
+            if $cond {
                 ok = true;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_secs($period));
         }
         if !ok {
-            assert_eq!($lhs, $rhs);
+            assert!($cond, $msg);
         }
     };
-    ($lhs:expr, $op:tt, $rhs:expr) => {
-        wait_for!($lhs, $op, $rhs, mg_common::test::DEFAULT_INTERVAL, mg_common::test::DEFAULT_ITERATIONS);
+    ($cond:expr, $period:expr, $count:expr) => {
+        let mut ok = false;
+        for _ in 0..$count {
+            if $cond {
+                ok = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_secs($period));
+        }
+        if !ok {
+            assert!($cond);
+        }
+    };
+    ($cond:expr, $msg:tt) => {
+        wait_for!(
+            $cond,
+            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_ITERATIONS,
+            $msg
+        );
+    };
+    ($cond:expr) => {
+        wait_for!(
+            $cond,
+            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_ITERATIONS
+        );
     };
 }
 

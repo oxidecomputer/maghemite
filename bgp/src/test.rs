@@ -42,8 +42,16 @@ fn test_basic_peering() {
     // Ensure that r1's peer session to r2 has gone back to connect.
     r2.shutdown();
     d2.shutdown();
-    wait_for_neq!(r1_session.state(), FsmStateKind::Established);
-    wait_for_neq!(r2_session.state(), FsmStateKind::Established);
+    wait_for_neq!(
+        r1_session.state(),
+        FsmStateKind::Established,
+        "r1 state should NOT be established after shutdown of r2"
+    );
+    wait_for_neq!(
+        r2_session.state(),
+        FsmStateKind::Established,
+        "r2 state should NOT be established after being shutdown"
+    );
 
     r2.run();
     let d2_clone = d2.clone();
@@ -53,8 +61,16 @@ fn test_basic_peering() {
     r2.send_event(FsmEvent::ManualStart)
         .expect("manual start session two");
 
-    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
-    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+    wait_for_eq!(
+        r1_session.state(),
+        FsmStateKind::Established,
+        "r1 state should be established after manual start of r2"
+    );
+    wait_for_eq!(
+        r2_session.state(),
+        FsmStateKind::Established,
+        "r2 state should be established after manual start of r2"
+    );
 
     // Clean up properly
     r1.shutdown();
@@ -83,8 +99,16 @@ fn test_basic_update() {
     // session timeout.
     r1.shutdown();
     d1.shutdown();
-    wait_for_neq!(r2_session.state(), FsmStateKind::Established);
-    wait_for_neq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_neq!(
+        r1_session.state(),
+        FsmStateKind::Established,
+        "r2 state should NOT be established after shutdown of r1"
+    );
+    wait_for_neq!(
+        r2_session.state(),
+        FsmStateKind::Established,
+        "r1 state should NOT be established after being shutdown"
+    );
     wait_for_eq!(r2.db.get_prefix_paths(&prefix).is_empty(), true);
 
     // Clean up properly
