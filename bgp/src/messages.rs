@@ -555,6 +555,7 @@ impl UpdateMessage {
     fn prefixes_from_wire(mut buf: &[u8]) -> Result<Vec<Prefix>, Error> {
         let mut result = Vec::new();
         while !buf.is_empty() {
+            // XXX: handle error for individual prefix?
             let (out, pfx) = Prefix::from_wire(buf)?;
             result.push(pfx);
             buf = out;
@@ -700,6 +701,7 @@ impl Prefix {
     }
 
     fn from_wire(input: &[u8]) -> Result<(&[u8], Prefix), Error> {
+        // XXX: length validation?
         let (input, len) = parse_u8(input)?;
         let (input, value) = take(len.div_ceil(8))(input)?;
         Ok((
@@ -712,147 +714,19 @@ impl Prefix {
     }
 
     pub fn as_prefix4(&self) -> rdb::Prefix4 {
-        let v = &self.value;
-        match self.length {
-            0 => rdb::Prefix4 {
-                value: Ipv4Addr::UNSPECIFIED,
-                length: 0,
-            },
-            x if x <= 8 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], 0, 0, 0]),
-                length: x,
-            },
-            x if x <= 16 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], 0, 0]),
-                length: x,
-            },
-            x if x <= 24 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], v[2], 0]),
-                length: x,
-            },
-            x => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], v[2], v[3]]),
-                length: x,
-            },
-        }
+        let mut bytes = [0u8; 4];
+        let len = std::cmp::min(self.value.len(), 4);
+        bytes[..len].copy_from_slice(&self.value[..len]);
+        let addr = Ipv4Addr::from(bytes);
+        rdb::Prefix4::new(addr, self.length)
     }
 
     pub fn as_prefix6(&self) -> rdb::Prefix6 {
-        let v = &self.value;
-        match self.length {
-            0 => rdb::Prefix6 {
-                value: Ipv6Addr::UNSPECIFIED,
-                length: 0,
-            },
-            x if x <= 8 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 16 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 24 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 32 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 40 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0,
-                ]),
-                length: x,
-            },
-            x if x <= 48 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 56 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], 0, 0, 0, 0, 0, 0,
-                    0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 64 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], 0, 0, 0, 0,
-                    0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 72 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], 0, 0,
-                    0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 80 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 88 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 96 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 104 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 112 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], v[13], 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 120 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], v[13], v[14], 0,
-                ]),
-                length: x,
-            },
-            x => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], v[13], v[14], v[15],
-                ]),
-                length: x,
-            },
-        }
+        let mut bytes = [0u8; 16];
+        let len = std::cmp::min(self.value.len(), 16);
+        bytes[..len].copy_from_slice(&self.value[..len]);
+        let addr = Ipv6Addr::from(bytes);
+        rdb::Prefix6::new(addr, self.length)
     }
 
     pub fn within(&self, x: &Prefix) -> bool {
@@ -866,15 +740,39 @@ impl Prefix {
             return false;
         }
 
+        // Check address family compatibility
+        let self_is_ipv4 = self.value.len() <= 4;
+        let x_is_ipv4 = x.value.len() <= 4;
+
+        // Cross-family comparisons should return false
+        if self_is_ipv4 != x_is_ipv4 {
+            return false;
+        }
+
         let mut a = self.value.clone();
         a.resize(16, 0);
-        let mut a = u128::from_le_bytes(a.try_into().unwrap());
+        let mut a = u128::from_be_bytes(a.try_into().unwrap());
 
         let mut b = x.value.clone();
         b.resize(16, 0);
-        let mut b = u128::from_le_bytes(b.try_into().unwrap());
+        let mut b = u128::from_be_bytes(b.try_into().unwrap());
 
-        let mask = (1u128 << x.length) - 1;
+        if x.length == 128 {
+            return a == b; // For /128, no masking needed
+        }
+
+        // Handle /0 case - everything is within the default route
+        if x.length == 0 {
+            return true;
+        }
+
+        // Prevent overflow when shift amount is >= 128
+        let shift_amount = 128 - x.length;
+        if shift_amount >= 128 {
+            return false; // Invalid case
+        }
+
+        let mask = !0u128 << shift_amount;
         a &= mask;
         b &= mask;
 
@@ -908,6 +806,15 @@ impl std::str::FromStr for Prefix {
 
 impl From<rdb::Prefix4> for Prefix {
     fn from(p: rdb::Prefix4) -> Self {
+        Self {
+            value: p.value.octets().into(),
+            length: p.length,
+        }
+    }
+}
+
+impl From<rdb::Prefix6> for Prefix {
+    fn from(p: rdb::Prefix6) -> Self {
         Self {
             value: p.value.octets().into(),
             length: p.length,
@@ -2580,8 +2487,58 @@ pub enum Safi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mg_common::{cidr, ip, parse};
     use pretty_assertions::assert_eq;
     use pretty_hex::*;
+    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::str::FromStr;
+
+    #[derive(Debug)]
+    enum AddressFamily {
+        IPv4,
+        IPv6,
+    }
+
+    #[derive(Debug)]
+    struct PrefixConversionTestCase {
+        description: &'static str,
+        address_family: AddressFamily,
+        prefix_length: u8,
+        input_bytes: Vec<u8>,
+        expected_address: &'static str,
+    }
+
+    impl PrefixConversionTestCase {
+        fn new_ipv4(
+            description: &'static str,
+            prefix_length: u8,
+            input_addr: Ipv4Addr,
+            expected_address: &'static str,
+        ) -> Self {
+            Self {
+                description,
+                address_family: AddressFamily::IPv4,
+                prefix_length,
+                input_bytes: input_addr.octets().to_vec(),
+                expected_address,
+            }
+        }
+
+        fn new_ipv6(
+            description: &'static str,
+            prefix_length: u8,
+            input_addr: Ipv6Addr,
+            expected_address: &'static str,
+        ) -> Self {
+            Self {
+                description,
+                address_family: AddressFamily::IPv6,
+                prefix_length,
+                input_bytes: input_addr.octets().to_vec(),
+                expected_address,
+            }
+        }
+    }
 
     #[test]
     fn header_round_trip() {
@@ -2658,31 +2615,240 @@ mod tests {
 
     #[test]
     fn prefix_within() {
-        let prefixes: &[Prefix] = &[
-            "10.10.10.10/32".parse().unwrap(),
-            "10.10.10.0/24".parse().unwrap(),
-            "10.10.0.0/16".parse().unwrap(),
-            "10.0.0.0/8".parse().unwrap(),
+        // Test IPv4 prefix containment
+        let ipv4_prefixes: &[Prefix] = &[
+            cidr!("10.10.10.10/32"),
+            cidr!("10.10.10.0/24"),
+            cidr!("10.10.0.0/16"),
+            cidr!("10.0.0.0/8"),
+            cidr!("0.0.0.0/0"),
         ];
 
-        for i in 0..prefixes.len() {
-            for j in i..prefixes.len() {
+        for i in 0..ipv4_prefixes.len() {
+            for j in i..ipv4_prefixes.len() {
                 // shorter prefixes contain longer or equal
-                assert!(prefixes[i].within(&prefixes[j]));
+                assert!(ipv4_prefixes[i].within(&ipv4_prefixes[j]));
                 if i != j {
                     // longer prefixes should not contain shorter
-                    assert!(!prefixes[j].within(&prefixes[i]))
+                    assert!(!ipv4_prefixes[j].within(&ipv4_prefixes[i]))
                 }
             }
         }
 
-        let a: Prefix = "10.10.0.0/16".parse().unwrap();
-        let b: Prefix = "10.20.0.0/16".parse().unwrap();
+        // Test IPv6 prefix containment
+        let ipv6_prefixes: &[Prefix] = &[
+            cidr!("2001:db8:1:1::1/128"),
+            cidr!("2001:db8:1:1::/64"),
+            cidr!("2001:db8:1::/48"),
+            cidr!("2001:db8::/32"),
+            cidr!("::/0"),
+        ];
+
+        for i in 0..ipv6_prefixes.len() {
+            for j in i..ipv6_prefixes.len() {
+                // shorter prefixes contain longer or equal
+                assert!(ipv6_prefixes[i].within(&ipv6_prefixes[j]));
+                if i != j {
+                    // longer prefixes should not contain shorter
+                    assert!(!ipv6_prefixes[j].within(&ipv6_prefixes[i]))
+                }
+            }
+        }
+
+        // Test non-overlapping prefixes
+        let a: Prefix = cidr!("10.10.0.0/16");
+        let b: Prefix = cidr!("10.20.0.0/16");
         assert!(!a.within(&b));
-        let a: Prefix = "10.10.0.0/24".parse().unwrap();
+        let a: Prefix = cidr!("10.10.0.0/24");
         assert!(!a.within(&b));
 
-        let b: Prefix = "0.0.0.0/0".parse().unwrap();
-        assert!(a.within(&b));
+        let a: Prefix = cidr!("2001:db8:1::/48");
+        let b: Prefix = cidr!("2001:db8:2::/48");
+        assert!(!a.within(&b));
+
+        // Test default routes contain same-family prefixes
+        let ipv4_default: Prefix = cidr!("0.0.0.0/0");
+        let ipv6_default: Prefix = cidr!("::/0");
+
+        let any_ipv4: Prefix = cidr!("192.168.1.0/24");
+        let any_ipv6: Prefix = cidr!("2001:db8::/48");
+
+        assert!(any_ipv4.within(&ipv4_default));
+        assert!(any_ipv6.within(&ipv6_default));
+
+        // Test cross-family default route edge cases
+        // IPv4 prefixes should NOT be within IPv6 default route
+        assert!(!any_ipv4.within(&ipv6_default));
+        assert!(!ipv4_default.within(&ipv6_default));
+
+        // IPv6 prefixes should NOT be within IPv4 default route
+        assert!(!any_ipv6.within(&ipv4_default));
+        assert!(!ipv6_default.within(&ipv4_default));
+    }
+
+    #[test]
+    fn prefix_conversion() {
+        // Test both IPv4 and IPv6 prefix conversions including edge cases and host bit zeroing
+        let test_cases = vec![
+            // IPv4 test cases
+            // Input: 0.0.0.0 (default route)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 default route",
+                0,
+                ip!("0.0.0.0"),
+                "0.0.0.0",
+            ),
+            // Input: 10.255.255.255/8 -> 10.0.0.0/8 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 Class A with host bits",
+                8,
+                ip!("10.255.255.255"),
+                "10.0.0.0",
+            ),
+            // Input: 172.31.255.255/12 -> 172.16.0.0/12 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 large private network with host bits",
+                12,
+                ip!("172.31.255.255"),
+                "172.16.0.0",
+            ),
+            // Input: 172.16.255.255/16 -> 172.16.0.0/16 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 common allocation with host bits",
+                16,
+                ip!("172.16.255.255"),
+                "172.16.0.0",
+            ),
+            // Input: 203.0.113.255/20 -> 203.0.112.0/20 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 prefix with host bits in last 12 bits",
+                20,
+                ip!("203.0.113.255"),
+                "203.0.112.0",
+            ),
+            // Input: 192.168.1.123/24 -> 192.168.1.0/24 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 common subnet with host bits",
+                24,
+                ip!("192.168.1.123"),
+                "192.168.1.0",
+            ),
+            // Input: 198.51.100.7/30 -> 198.51.100.4/30 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 point-to-point link with host bits",
+                30,
+                ip!("198.51.100.7"),
+                "198.51.100.4",
+            ),
+            // Input: 10.0.0.1/32 -> 10.0.0.1/32 (no host bits to zero)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 host route - no host bits to zero",
+                32,
+                ip!("10.0.0.1"),
+                "10.0.0.1",
+            ),
+            // IPv6 test cases
+            // Input: :: (all zeros, default route)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 default route",
+                0,
+                ip!("::"),
+                "::",
+            ),
+            // Input: fd00:ffff:ffff:ffff:ffff:ffff:ffff:ffff/8 -> fd00::/8 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 unique local address prefix with host bits",
+                8,
+                ip!("fd00:ffff:ffff:ffff:ffff:ffff:ffff:ffff"),
+                "fd00::",
+            ),
+            // Input: 2001:db8:1234:5678:9abc:def0:1122:3344/32 -> 2001:db8::/32 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 common allocation size with host bits",
+                32,
+                ip!("2001:db8:1234:5678:9abc:def0:1122:3344"),
+                "2001:db8::",
+            ),
+            // Input: 2001:db8:1234:ffff:ffff:ffff:ffff:ffff/48 -> 2001:db8:1234::/48 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 site prefix with host bits in last 80 bits",
+                48,
+                ip!("2001:db8:1234:ffff:ffff:ffff:ffff:ffff"),
+                "2001:db8:1234::",
+            ),
+            // Input: 2001:db8::1234:5678:9abc:def0/64 -> 2001:db8::/64 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 common prefix length with host bits",
+                64,
+                ip!("2001:db8::1234:5678:9abc:def0"),
+                "2001:db8::",
+            ),
+            // Input: 2001:db8::ff/120 -> 2001:db8::/120 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 leaves only 8 host bits",
+                120,
+                ip!("2001:db8::ff"),
+                "2001:db8::",
+            ),
+            // Input: 2001:db8::1/128 -> 2001:db8::1/128 (no host bits to zero)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 host route - no host bits to zero",
+                128,
+                ip!("2001:db8::1"),
+                "2001:db8::1",
+            ),
+        ];
+
+        for test_case in test_cases {
+            let prefix = Prefix {
+                length: test_case.prefix_length,
+                value: test_case.input_bytes,
+            };
+
+            match test_case.address_family {
+                AddressFamily::IPv4 => {
+                    let rdb_prefix4 = prefix.as_prefix4();
+                    assert_eq!(
+                        rdb_prefix4.length, test_case.prefix_length,
+                        "IPv4 length mismatch for {}",
+                        test_case.description
+                    );
+                    assert_eq!(
+                        rdb_prefix4.value,
+                        Ipv4Addr::from_str(test_case.expected_address).unwrap(),
+                        "IPv4 address mismatch for {}: expected {}, got {}",
+                        test_case.description,
+                        test_case.expected_address,
+                        rdb_prefix4.value
+                    );
+                    assert!(
+                        rdb_prefix4.host_bits_are_unset(),
+                        "IPv4 host bits not properly zeroed for {}",
+                        test_case.description
+                    );
+                }
+                AddressFamily::IPv6 => {
+                    let rdb_prefix6 = prefix.as_prefix6();
+                    assert_eq!(
+                        rdb_prefix6.length, test_case.prefix_length,
+                        "IPv6 length mismatch for {}",
+                        test_case.description
+                    );
+                    assert_eq!(
+                        rdb_prefix6.value,
+                        Ipv6Addr::from_str(test_case.expected_address).unwrap(),
+                        "IPv6 address mismatch for {}: expected {}, got {}",
+                        test_case.description,
+                        test_case.expected_address,
+                        rdb_prefix6.value
+                    );
+                    assert!(
+                        rdb_prefix6.host_bits_are_unset(),
+                        "IPv6 host bits not properly zeroed for {}",
+                        test_case.description
+                    );
+                }
+            }
+        }
     }
 }

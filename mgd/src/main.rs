@@ -12,7 +12,7 @@ use mg_common::lock;
 use mg_common::log::init_logger;
 use mg_common::stats::MgLowerStats;
 use rand::Fill;
-use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
+use rdb::{AddressFamily, BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use signal::handle_signals;
 use slog::{error, Logger};
 use std::collections::BTreeMap;
@@ -27,6 +27,7 @@ mod bgp_admin;
 mod bgp_param;
 mod error;
 mod oxstats;
+mod rib_admin;
 mod signal;
 mod smf;
 mod static_admin;
@@ -267,13 +268,30 @@ fn start_bfd_sessions(
     }
 }
 
+// Read static routes from disk, filter out invalid entries, and
+// re-add them to the db (updating both the on-disk db and the rib)
 fn initialize_static_routes(db: &rdb::Db) {
     let routes = db
-        .get_static4()
+        .get_static(AddressFamily::All)
         .expect("failed to get static routes from db");
-    db.add_static_routes(&routes).unwrap_or_else(|e| {
-        panic!("failed to initialize static routes {routes:#?}: {e}")
-    })
+
+    let (good, bad) = routes.into_iter().fold(
+        (Vec::new(), Vec::new()),
+        |(mut good, mut bad), srk| {
+            match srk.prefix.host_bits_are_unset() {
+                true => good.push(srk),
+                false => bad.push(srk),
+            }
+            (good, bad)
+        },
+    );
+
+    db.remove_static_routes(&bad).unwrap_or_else(|e| {
+        panic!("failed to remove invalid static routes {bad:#?}: {e}")
+    });
+    db.add_static_routes(&good).unwrap_or_else(|e| {
+        panic!("failed to initialize valid static routes {good:#?}: {e}")
+    });
 }
 
 fn get_tunnel_endpoint_ula(db: &rdb::Db) -> Ipv6Addr {

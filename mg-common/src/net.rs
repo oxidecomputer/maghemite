@@ -1,4 +1,4 @@
-use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+use oxnet::IpNet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -18,7 +18,7 @@ pub struct TunnelOrigin {
     Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct TunnelOriginV2 {
-    pub overlay_prefix: IpPrefix,
+    pub overlay_prefix: IpNet,
     pub boundary_addr: Ipv6Addr,
     pub vni: u32,
     #[serde(default)]
@@ -28,14 +28,7 @@ pub struct TunnelOriginV2 {
 impl From<TunnelOriginV2> for TunnelOrigin {
     fn from(value: TunnelOriginV2) -> Self {
         TunnelOrigin {
-            overlay_prefix: match value.overlay_prefix {
-                IpPrefix::V4(x) => {
-                    IpNet::V4(Ipv4Net::new_unchecked(x.addr, x.len))
-                }
-                IpPrefix::V6(x) => {
-                    IpNet::V6(Ipv6Net::new_unchecked(x.addr, x.len))
-                }
-            },
+            overlay_prefix: value.overlay_prefix,
             boundary_addr: value.boundary_addr,
             vni: value.vni,
             metric: value.metric,
@@ -46,16 +39,7 @@ impl From<TunnelOriginV2> for TunnelOrigin {
 impl From<TunnelOrigin> for TunnelOriginV2 {
     fn from(value: TunnelOrigin) -> Self {
         TunnelOriginV2 {
-            overlay_prefix: match value.overlay_prefix {
-                IpNet::V4(x) => IpPrefix::V4(Ipv4Prefix {
-                    addr: x.addr(),
-                    len: x.width(),
-                }),
-                IpNet::V6(x) => IpPrefix::V6(Ipv6Prefix {
-                    addr: x.addr(),
-                    len: x.width(),
-                }),
-            },
+            overlay_prefix: value.overlay_prefix,
             boundary_addr: value.boundary_addr,
             vni: value.vni,
             metric: value.metric,
@@ -63,26 +47,20 @@ impl From<TunnelOrigin> for TunnelOriginV2 {
     }
 }
 
-#[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
-pub struct Ipv6Prefix {
-    pub addr: Ipv6Addr,
-    pub len: u8,
+pub fn zero_ipv4_addr_host_bits(ip: Ipv4Addr, length: u8) -> Ipv4Addr {
+    let mask = match length {
+        0 => 0,
+        _ => (!0u32) << (32 - length),
+    };
+
+    Ipv4Addr::from_bits(ip.to_bits() & mask)
 }
 
-#[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
-pub struct Ipv4Prefix {
-    pub addr: Ipv4Addr,
-    pub len: u8,
-}
+pub fn zero_ipv6_addr_host_bits(ip: Ipv6Addr, length: u8) -> Ipv6Addr {
+    let mask = match length {
+        0 => 0,
+        _ => (!0u128) << (128 - length),
+    };
 
-#[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
-pub enum IpPrefix {
-    V4(Ipv4Prefix),
-    V6(Ipv6Prefix),
+    Ipv6Addr::from_bits(ip.to_bits() & mask)
 }

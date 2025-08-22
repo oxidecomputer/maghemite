@@ -187,7 +187,7 @@ impl Timer {
 
     /// Make the timer tick, decrementing the value by the specified resolution.
     /// The decrementing actino is saturating, so ticking once the timer has
-    /// reached zero is a no-op. Use `expred` to check for expiration.
+    /// reached zero is a no-op. Use `expired` to check for expiration.
     pub fn tick(&self, resolution: Duration) {
         let mut value = lock!(self.value);
         if value.0 {
@@ -215,6 +215,11 @@ impl Timer {
     pub fn expired(&self) -> bool {
         let v = lock!(self.value);
         v.0 && v.1.is_zero()
+    }
+
+    /// Display time remaining on this timer
+    pub fn remaining(&self) -> Duration {
+        lock!(self.value).1
     }
 
     /// Reset the value of a timer to the timers interval.

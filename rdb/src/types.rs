@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::fmt::Display;
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
@@ -108,6 +108,19 @@ pub struct StaticRouteKey {
     pub rib_priority: u8,
 }
 
+impl Display for StaticRouteKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[prefix={}, nexthop={}, vlan_id={}, rib_priority={}]",
+            self.prefix,
+            self.nexthop,
+            self.vlan_id.unwrap_or(0),
+            self.rib_priority
+        )
+    }
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Route4Key {
     pub prefix: Prefix4,
@@ -178,7 +191,7 @@ impl Policy4Key {
 }
 
 #[derive(
-    Debug, Copy, Clone, Serialize, Deserialize, Eq, PartialEq, JsonSchema,
+    Debug, Copy, Clone, Serialize, Deserialize, Eq, Hash, PartialEq, JsonSchema,
 )]
 pub struct Prefix4 {
     pub value: Ipv4Addr,
@@ -200,6 +213,12 @@ impl Ord for Prefix4 {
 }
 
 impl Prefix4 {
+    pub fn new(ip: Ipv4Addr, length: u8) -> Self {
+        let mut new = Self { value: ip, length };
+        new.unset_host_bits();
+        new
+    }
+
     pub fn db_key(&self) -> Vec<u8> {
         let mut buf: Vec<u8> = self.value.octets().into();
         buf.push(self.length);
@@ -218,6 +237,24 @@ impl Prefix4 {
                 length: v[4],
             })
         }
+    }
+
+    pub fn host_bits_are_unset(&self) -> bool {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u32) << (32 - self.length),
+        };
+
+        self.value.to_bits() & mask == self.value.to_bits()
+    }
+
+    pub fn unset_host_bits(&mut self) {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u32) << (32 - self.length),
+        };
+
+        self.value = Ipv4Addr::from_bits(self.value.to_bits() & mask)
     }
 }
 
@@ -273,6 +310,73 @@ impl fmt::Display for Prefix6 {
     }
 }
 
+impl Prefix6 {
+    pub fn new(ip: Ipv6Addr, length: u8) -> Self {
+        let mut new = Self { value: ip, length };
+        new.unset_host_bits();
+        new
+    }
+
+    pub fn host_bits_are_unset(&self) -> bool {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u128) << (128 - self.length),
+        };
+
+        self.value.to_bits() & mask == self.value.to_bits()
+    }
+
+    pub fn unset_host_bits(&mut self) {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u128) << (128 - self.length),
+        };
+
+        self.value = Ipv6Addr::from_bits(self.value.to_bits() & mask)
+    }
+
+    pub fn db_key(&self) -> Vec<u8> {
+        let mut buf: Vec<u8> = self.value.octets().into();
+        buf.push(self.length);
+        buf
+    }
+
+    pub fn from_db_key(v: &[u8]) -> Result<Self, Error> {
+        if v.len() < 17 {
+            Err(Error::DbKey(format!(
+                "buffer too short for prefix 6 key {} < 17",
+                v.len()
+            )))
+        } else {
+            let octets: [u8; 16] = v[0..16].try_into().map_err(|_| {
+                Error::DbKey("failed to convert to IPv6 octets".to_string())
+            })?;
+            Ok(Prefix6 {
+                value: Ipv6Addr::from(octets),
+                length: v[16],
+            })
+        }
+    }
+}
+
+impl FromStr for Prefix6 {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (value, length) =
+            s.split_once('/').ok_or("malformed route key".to_string())?;
+
+        Ok(Self {
+            value: value
+                .parse()
+                .map_err(|_| "malformed ip addr".to_string())?,
+            length: length
+                .parse()
+                .map_err(|_| "malformed length".to_string())?,
+        })
+    }
+}
+
 #[derive(
     Debug,
     Copy,
@@ -311,16 +415,41 @@ impl From<Prefix6> for Prefix {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct BgpAttributes4 {
-    pub origin: Ipv4Addr,
-    pub path: Vec<Asn>,
+impl FromStr for Prefix {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(prefix4) = s.parse::<Prefix4>() {
+            Ok(Self::V4(prefix4))
+        } else if let Ok(prefix6) = s.parse::<Prefix6>() {
+            Ok(Self::V6(prefix6))
+        } else {
+            Err("malformed prefix".to_string())
+        }
+    }
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct BgpAttributes6 {
-    pub origin: Ipv4Addr,
-    pub path: Vec<Asn>,
+impl Prefix {
+    pub fn new(ip: IpAddr, length: u8) -> Self {
+        match ip {
+            IpAddr::V4(ip4) => Self::V4(Prefix4::new(ip4, length)),
+            IpAddr::V6(ip6) => Self::V6(Prefix6::new(ip6, length)),
+        }
+    }
+
+    pub fn host_bits_are_unset(&self) -> bool {
+        match self {
+            Self::V4(p4) => p4.host_bits_are_unset(),
+            Self::V6(p6) => p6.host_bits_are_unset(),
+        }
+    }
+
+    pub fn unset_host_bits(&mut self) {
+        match self {
+            Self::V4(p4) => p4.unset_host_bits(),
+            Self::V6(p6) => p6.unset_host_bits(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
@@ -359,12 +488,6 @@ impl Asn {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum Status {
-    Up,
-    Down,
-}
-
 pub fn to_buf<T: ?Sized + Serialize>(value: &T) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     ciborium::into_writer(&value, &mut buf)?;
@@ -393,27 +516,6 @@ impl FromStr for PolicyAction {
 pub struct Policy {
     pub action: PolicyAction,
     pub priority: u16,
-}
-
-#[derive(Clone, Default, Debug)]
-pub struct OriginChangeSet {
-    pub added: HashSet<Prefix4>,
-    pub removed: HashSet<Prefix4>,
-}
-
-impl OriginChangeSet {
-    pub fn added<V: Into<HashSet<Prefix4>>>(v: V) -> Self {
-        Self {
-            added: v.into(),
-            ..Default::default()
-        }
-    }
-    pub fn removed<V: Into<HashSet<Prefix4>>>(v: V) -> Self {
-        Self {
-            removed: v.into(),
-            ..Default::default()
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
@@ -504,4 +606,46 @@ impl From<Prefix6> for PrefixChangeNotification {
             changed: BTreeSet::from([value.into()]),
         }
     }
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Eq,
+    Debug,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    Default,
+)]
+pub enum AddressFamily {
+    Ipv4,
+    Ipv6,
+    /// All routes (IPv4 and IPv6)
+    #[default]
+    All,
+}
+
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+pub enum ProtocolFilter {
+    /// BGP routes only
+    Bgp,
+    /// Static routes only
+    Static,
 }

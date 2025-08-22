@@ -2736,13 +2736,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "colored",
+ "mg-common",
  "percent-encoding",
  "progenitor",
+ "rdb",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
  "slog",
+ "tabwriter",
 ]
 
 [[package]]
@@ -2790,7 +2794,9 @@ name = "mg-ddm-verify"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ddm",
  "oxide-tokio-rt",
+ "oxnet",
  "reqwest",
  "serde",
  "serde_json",
@@ -2855,6 +2861,7 @@ dependencies = [
  "mg-admin-client 0.1.0",
  "mg-common",
  "oxide-tokio-rt",
+ "oxnet",
  "rdb",
  "serde_json",
  "slog",
@@ -4366,6 +4373,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "ciborium",
+ "clap",
  "itertools 0.13.0",
  "mg-common",
  "schemars",

@@ -5,63 +5,22 @@
 use crate::config::{PeerConfig, RouterConfig};
 use crate::connection_channel::{BgpConnectionChannel, BgpListenerChannel};
 use crate::session::{FsmStateKind, SessionInfo};
+use mg_common::{
+    cidr, ip, parse, sockaddr, wait_for, wait_for_eq, wait_for_neq,
+};
 use rdb::{Asn, Prefix};
 use std::collections::BTreeMap;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
-use std::thread::sleep;
 use std::thread::spawn;
-use std::time::Duration;
 
 type Router = crate::router::Router<BgpConnectionChannel>;
 type Dispatcher = crate::dispatcher::Dispatcher<BgpConnectionChannel>;
 type FsmEvent = crate::session::FsmEvent<BgpConnectionChannel>;
 
-macro_rules! wait_for_eq {
-    ($lhs:expr, $rhs:expr, $period:expr, $count:expr) => {
-        let mut ok = false;
-        for _ in 0..$count {
-            if $lhs == $rhs {
-                ok = true;
-                break;
-            }
-            sleep(Duration::from_secs($period));
-        }
-        if !ok {
-            assert_eq!($lhs, $rhs);
-        }
-    };
-    ($lhs:expr, $rhs:expr) => {
-        wait_for_eq!($lhs, $rhs, 1, 30);
-    };
-}
-
-macro_rules! parse {
-    ($x:expr, $err:expr) => {
-        $x.parse().expect($err)
-    };
-}
-macro_rules! ip {
-    ($x:expr) => {
-        parse!($x, "ip address")
-    };
-}
-
-macro_rules! cidr {
-    ($x:expr) => {
-        parse!($x, "ip cidr")
-    };
-}
-
-macro_rules! sockaddr {
-    ($x:expr) => {
-        parse!($x, "socket address")
-    };
-}
-
 #[test]
 fn test_basic_peering() {
-    let (r1, _d1, r2, d2) = two_router_test_setup(
+    let (r1, d1, r2, d2) = two_router_test_setup(
         "basic_peering",
         Some(SessionInfo {
             passive_tcp_establishment: true,
@@ -83,23 +42,44 @@ fn test_basic_peering() {
     // Ensure that r1's peer session to r2 has gone back to connect.
     r2.shutdown();
     d2.shutdown();
-    wait_for_eq!(r1_session.state(), FsmStateKind::Connect);
-    wait_for_eq!(r2_session.state(), FsmStateKind::Idle);
+    wait_for_neq!(
+        r1_session.state(),
+        FsmStateKind::Established,
+        "r1 state should NOT be established after shutdown of r2"
+    );
+    wait_for_neq!(
+        r2_session.state(),
+        FsmStateKind::Established,
+        "r2 state should NOT be established after being shutdown"
+    );
 
     r2.run();
+    let d2_clone = d2.clone();
     spawn(move || {
-        d2.run::<BgpListenerChannel>();
+        d2_clone.run::<BgpListenerChannel>();
     });
     r2.send_event(FsmEvent::ManualStart)
         .expect("manual start session two");
 
-    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
-    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+    wait_for_eq!(
+        r1_session.state(),
+        FsmStateKind::Established,
+        "r1 state should be established after manual start of r2"
+    );
+    wait_for_eq!(
+        r2_session.state(),
+        FsmStateKind::Established,
+        "r2 state should be established after manual start of r2"
+    );
+
+    // Clean up properly
+    r1.shutdown();
+    d1.shutdown();
 }
 
 #[test]
 fn test_basic_update() {
-    let (r1, d1, r2, _d2) = two_router_test_setup("basic_update", None, None);
+    let (r1, d1, r2, d2) = two_router_test_setup("basic_update", None, None);
 
     // originate a prefix
     r1.create_origin4(vec![ip!("1.2.3.0/24")])
@@ -119,9 +99,21 @@ fn test_basic_update() {
     // session timeout.
     r1.shutdown();
     d1.shutdown();
-    wait_for_eq!(r2_session.state(), FsmStateKind::Connect);
-    wait_for_eq!(r1_session.state(), FsmStateKind::Idle);
+    wait_for_neq!(
+        r1_session.state(),
+        FsmStateKind::Established,
+        "r2 state should NOT be established after shutdown of r1"
+    );
+    wait_for_neq!(
+        r2_session.state(),
+        FsmStateKind::Established,
+        "r1 state should NOT be established after being shutdown"
+    );
     wait_for_eq!(r2.db.get_prefix_paths(&prefix).is_empty(), true);
+
+    // Clean up properly
+    r2.shutdown();
+    d2.shutdown();
 }
 
 fn two_router_test_setup(

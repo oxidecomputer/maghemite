@@ -88,6 +88,10 @@ pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
     register!(api, read_origin4);
     register!(api, update_origin4);
     register!(api, delete_origin4);
+    register!(api, create_origin6);
+    register!(api, read_origin6);
+    register!(api, update_origin6);
+    register!(api, delete_origin6);
 
     // Bestpath configuration
     register!(api, read_bestpath_fanout);
@@ -114,8 +118,6 @@ pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
 
     register!(api, get_neighbors);
     register!(api, get_exported);
-    register!(api, get_imported);
-    register!(api, get_selected);
     register!(api, message_history);
 }
 
@@ -365,6 +367,74 @@ pub async fn delete_origin4(
     Ok(HttpResponseDeleted())
 }
 
+#[endpoint { method = PUT, path = "/bgp/config/origin6" }]
+pub async fn create_origin6(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<resource::Origin6>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
+    let ctx = ctx.context();
+
+    get_router!(ctx, rq.asn)?
+        .create_origin6(prefixes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = GET, path = "/bgp/config/origin6" }]
+pub async fn read_origin6(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<resource::Origin6>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    let mut originated = get_router!(ctx, rq.asn)?
+        .db
+        .get_origin6()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    // stable output order for clients
+    originated.sort();
+
+    Ok(HttpResponseOk(resource::Origin6 {
+        asn: rq.asn,
+        prefixes: originated,
+    }))
+}
+
+#[endpoint { method = POST, path = "/bgp/config/origin6" }]
+pub async fn update_origin6(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<resource::Origin6>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
+    let ctx = ctx.context();
+
+    get_router!(ctx, rq.asn)?
+        .set_origin6(prefixes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+#[endpoint { method = DELETE, path = "/bgp/config/origin6" }]
+pub async fn delete_origin6(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    get_router!(ctx, rq.asn)?
+        .clear_origin6()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    Ok(HttpResponseDeleted())
+}
+
 #[endpoint { method = GET, path = "/bgp/status/exported" }]
 pub async fn get_exported(
     ctx: RequestContext<Arc<HandlerContext>>,
@@ -409,28 +479,6 @@ pub async fn get_exported(
     }
 
     Ok(HttpResponseOk(exported))
-}
-
-#[endpoint { method = GET, path = "/bgp/status/imported" }]
-pub async fn get_imported(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
-) -> Result<HttpResponseOk<Rib>, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    let imported = get_router!(ctx, rq.asn)?.db.full_rib();
-    Ok(HttpResponseOk(imported.into()))
-}
-
-#[endpoint { method = GET, path = "/bgp/status/selected" }]
-pub async fn get_selected(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<AsnSelector>,
-) -> Result<HttpResponseOk<Rib>, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    let selected = get_router!(ctx, rq.asn)?.db.loc_rib();
-    Ok(HttpResponseOk(selected.into()))
 }
 
 #[endpoint { method = GET, path = "/bgp/status/neighbors" }]
@@ -845,7 +893,7 @@ pub(crate) mod helpers {
     ) -> Result<HttpResponseDeleted, Error> {
         info!(ctx.log, "remove neighbor: {}", addr);
 
-        ctx.db.remove_bgp_peer_prefixes(&addr);
+        ctx.db.remove_bgp_prefixes_from_peer(&addr);
         ctx.db.remove_bgp_neighbor(addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 
