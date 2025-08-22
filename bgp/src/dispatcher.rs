@@ -5,7 +5,7 @@
 use crate::connection::{BgpConnection, BgpListener};
 use crate::session::FsmEvent;
 use mg_common::lock;
-use slog::Logger;
+use slog::{debug, Logger};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,11 +35,12 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
         }
     }
     pub fn run<Listener: BgpListener<Cnx>>(&self) {
-        loop {
+        'listener: loop {
             if self.shutdown.load(Ordering::Acquire) {
                 self.shutdown.store(false, Ordering::Release);
-                break;
+                break 'listener;
             }
+            debug!(self.log, "bgp dispatcher binding {}", &self.listen);
             let listener = match Listener::bind(&self.listen) {
                 Ok(l) => l,
                 Err(e) => {
@@ -48,35 +49,37 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                         "bgp dispatcher failed to listen {e}"
                     );
                     sleep(Duration::from_secs(1));
-                    continue;
+                    continue 'listener;
                 }
             };
-            let accepted = match listener.accept(
-                self.log.clone(),
-                self.addr_to_session.clone(),
-                Duration::from_millis(100),
-            ) {
-                Ok(c) => c,
-                Err(crate::error::Error::Timeout) => {
-                    continue;
-                }
-                Err(e) => {
-                    slog::error!(self.log, "accept error: {e}");
-                    continue;
-                }
-            };
-            let addr = accepted.peer().ip();
-            match lock!(self.addr_to_session).get(&addr) {
-                Some(tx) => {
-                    if let Err(e) = tx.send(FsmEvent::Connected(accepted)) {
-                        slog::error!(
-                            self.log,
-                            "failed to send connected event to session: {e}",
-                        );
-                        continue;
+            'accept: loop {
+                let accepted = match listener.accept(
+                    self.log.clone(),
+                    self.addr_to_session.clone(),
+                    Duration::from_millis(100),
+                ) {
+                    Ok(c) => c,
+                    Err(crate::error::Error::Timeout) => {
+                        continue 'accept;
                     }
+                    Err(e) => {
+                        slog::error!(self.log, "accept error: {e}");
+                        continue 'listener;
+                    }
+                };
+                let addr = accepted.peer().ip();
+                match lock!(self.addr_to_session).get(&addr) {
+                    Some(tx) => {
+                        if let Err(e) = tx.send(FsmEvent::Connected(accepted)) {
+                            slog::error!(
+                                self.log,
+                                "failed to send connected event to session: {e}",
+                            );
+                            continue 'listener;
+                        }
+                    }
+                    None => continue 'accept,
                 }
-                None => continue,
             }
         }
     }
