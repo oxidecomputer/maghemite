@@ -18,12 +18,27 @@ type Router = crate::router::Router<BgpConnectionChannel>;
 type Dispatcher = crate::dispatcher::Dispatcher<BgpConnectionChannel>;
 type FsmEvent = crate::session::FsmEvent<BgpConnectionChannel>;
 
-#[test]
-fn test_basic_peering() {
+// This test effectively does the following:
+// 1. Sets up a basic pair of routers, r1 and r2
+//    - r1 either uses active or passive tcp establishment
+// 2. Brings up a BGP session between r1 and r2
+// 3. Ensures the BGP FSM moves into Established on both r1 and r2
+// 4. Shuts down r2
+// 5. Ensures r2's BGP FSM moves into Idle
+// 6. Ensures r1's BGP FSM moves into Active (passive tcp establishment)
+//    or Connect (active tcp establishment)
+// 7. Restarts r2
+// 8. Ensures the BGP session between r1 and r2 moves back into Established
+fn basic_peering_helper(passive: bool) {
+    let test_str = match passive {
+        true => "basic_peering_passive",
+        false => "basic_peering_active",
+    };
+
     let (r1, d1, r2, d2) = two_router_test_setup(
-        "basic_peering",
+        test_str,
         Some(SessionInfo {
-            passive_tcp_establishment: true,
+            passive_tcp_establishment: passive,
             ..Default::default()
         }),
         None,
@@ -39,19 +54,33 @@ fn test_basic_peering() {
     wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
     // Shut down r2 and ensure that r2's peer session has gone back to idle.
-    // Ensure that r1's peer session to r2 has gone back to connect.
     r2.shutdown();
     d2.shutdown();
-    wait_for_neq!(
-        r1_session.state(),
-        FsmStateKind::Established,
-        "r1 state should NOT be established after shutdown of r2"
-    );
-    wait_for_neq!(
+    wait_for_eq!(
         r2_session.state(),
-        FsmStateKind::Established,
-        "r2 state should NOT be established after being shutdown"
+        FsmStateKind::Idle,
+        "r2 state should be Idle after being shutdown"
     );
+
+    // Ensure r1's FSM moves through the correct states after the session drops.
+    // (r1 should see the Hold Time expire after r2 shuts down)
+    if passive {
+        // passive means wait for connections, i.e. the FSM moves from
+        // Idle -> Active when the IdleHoldTimer expires
+        wait_for_eq!(
+            r1_session.state(),
+            FsmStateKind::Active,
+            "r1 state should move into Active when session uses passive tcp establishment"
+        );
+    } else {
+        // active (!passive) means actively attempt to open a connection, i.e.
+        // the FSM moves from Idle -> Connect when the IdleHoldTimer expires
+        wait_for_eq!(
+            r1_session.state(),
+            FsmStateKind::Connect,
+            "r1 state should move into Connect when session uses active tcp establishment"
+        );
+    }
 
     r2.run();
     let d2_clone = d2.clone();
@@ -64,12 +93,12 @@ fn test_basic_peering() {
     wait_for_eq!(
         r1_session.state(),
         FsmStateKind::Established,
-        "r1 state should be established after manual start of r2"
+        "r1 state should move to Established after manual start of r2"
     );
     wait_for_eq!(
         r2_session.state(),
         FsmStateKind::Established,
-        "r2 state should be established after manual start of r2"
+        "r2 state should move to Established after manual start"
     );
 
     // Clean up properly
@@ -77,6 +106,25 @@ fn test_basic_peering() {
     d1.shutdown();
 }
 
+#[test]
+fn test_basic_peering_passive() {
+    basic_peering_helper(true);
+}
+
+#[test]
+fn test_basic_peering_active() {
+    basic_peering_helper(false);
+}
+
+// This test does the following:
+// 1. Sets up a basic pair of routers
+// 2. Configures r1 to originate an IPv4 Unicast prefix
+// 3. Brings up a BGP session between r1 and r2
+// 4. Ensures the BGP FSM moves into Established on both r1 and r2
+// 5. Ensures r2 has succesfully received and installed the prefix
+// 6. Shuts down r1
+// 7. Ensures the BGP FSM moves out of Established on both r1 and r2
+// 8. Ensures r2 has successfully uninstalled the implicitly withdrawn prefix
 #[test]
 fn test_basic_update() {
     let (r1, d1, r2, d2) = two_router_test_setup("basic_update", None, None);
