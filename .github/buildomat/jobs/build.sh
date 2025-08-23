@@ -37,6 +37,7 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
+pfexec pkg install clang-15
 cargo --version
 rustc --version
 

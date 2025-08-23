@@ -1,5 +1,10 @@
 #!/bin/bash
 
+export MAGHEMITE_VERSION=`git rev-parse HEAD`
+export SOFTNPU_VERSION=591c64bf9765b6ed7cd8615ceb8cf6f8d117bd28
+export SIDECAR_LITE_VERSION=5495af091b87062f6f5666537f211e9827300f35
+export DENDRITE_VERSION=55d4d6e1efb425517aa9e25621e98df8ccbf12fc
+
 function cleanup {
     pfexec chown -R `id -un`:`id -gn` .
 }
@@ -24,17 +29,19 @@ set -o xtrace
 
 cargo --version
 rustc --version
+pfexec pkg install clang-15
 
 dladm
 ipadm
 
 banner "collect"
-get_artifact softnpu image 64beaff129b7f63a04a53dd5ed0ec09f012f5756 softnpu
-get_artifact sidecar-lite release d815d8e2b310de8a7461241d9f9f1b5c762e1e65 libsidecar_lite.so
-get_artifact sidecar-lite release d815d8e2b310de8a7461241d9f9f1b5c762e1e65 scadm
-get_artifact dendrite image 270dc8eb421b8514bf1ed00ab956025dc326b9df dendrite-softnpu.tar.gz
-get_artifact maghemite release 2bfd39000c878c45675651a7588c015c486e7f43 ddmd
-get_artifact maghemite release 2bfd39000c878c45675651a7588c015c486e7f43 ddmadm
+
+get_artifact softnpu image $SOFTNPU_VERSION softnpu
+get_artifact sidecar-lite release $SIDECAR_LITE_VERSION libsidecar_lite.so
+get_artifact sidecar-lite release $SIDECAR_LITE_VERSION scadm
+get_artifact dendrite image $DENDRITE_VERSION dendrite-softnpu.tar.gz
+get_artifact maghemite release $MAGHEMITE_VERSION ddm
+get_artifact maghemite release $MAGHEMITE_VERSION ddmadm
 
 pushd download
 chmod +x softnpu

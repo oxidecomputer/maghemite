@@ -49,6 +49,8 @@ set -o xtrace
 cargo --version
 rustc --version
 
+pfexec pkg install clang-15 pkg-config
+
 banner build
 ptime -m cargo build --release --verbose -p ddmd -p ddmadm -p mgd -p mgadm
 

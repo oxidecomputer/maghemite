@@ -154,13 +154,12 @@ where
     let (local_v4_addrs, local_v6_addrs) = get_local_addrs(dpd, &rt)?;
 
     for r in to_add {
-        let cidr = r.cidr;
         let tag = dpd.inner().tag.clone();
         let port_id = r.port_id.clone();
         let link_id = r.link_id;
         let vlan_id = r.vlan_id;
 
-        let target = match (r.cidr, r.nexthop) {
+        match (r.cidr, r.nexthop) {
             (IpNet::V4(c), IpAddr::V4(tgt_ip)) => {
                 if c.width() == 32 && local_v4_addrs.contains(&c.prefix()) {
                     warn!(
@@ -179,14 +178,25 @@ where
                     continue;
                 }
 
-                types::Ipv4Route {
+                let target = types::Ipv4Route {
                     tag,
                     port_id,
                     link_id,
                     tgt_ip,
                     vlan_id,
+                };
+
+                let update = types::Ipv4RouteUpdate {
+                    cidr: c,
+                    target,
+                    replace: false,
+                };
+                if let Err(e) =
+                    rt.block_on(async { dpd.route_ipv4_add(&update).await })
+                {
+                    error!(log, "failed to create route {:?}: {}", r, e);
+                    return Err(e.into());
                 }
-                .into()
             }
             (IpNet::V6(c), IpAddr::V6(tgt_ip)) => {
                 if c.width() == 128 && local_v6_addrs.contains(&c.prefix()) {
@@ -206,14 +216,25 @@ where
                     continue;
                 }
 
-                types::Ipv6Route {
+                let target = types::Ipv6Route {
                     tag,
                     port_id,
                     link_id,
                     tgt_ip,
                     vlan_id,
+                };
+
+                let update = types::Ipv6RouteUpdate {
+                    cidr: c,
+                    target,
+                    replace: false,
+                };
+                if let Err(e) =
+                    rt.block_on(async { dpd.route_ipv6_add(&update).await })
+                {
+                    error!(log, "failed to create route {:?}: {}", r, e);
+                    return Err(e.into());
                 }
-                .into()
             }
             _ => {
                 error!(
@@ -223,12 +244,6 @@ where
                 continue;
             }
         };
-
-        let add = types::RouteAdd { cidr, target };
-        if let Err(e) = rt.block_on(async { dpd.route_ipv4_add(&add).await }) {
-            error!(log, "failed to create route {:?}: {}", r, e);
-            Err(e)?;
-        }
     }
     for r in to_del {
         let port_id = r.port_id.clone();

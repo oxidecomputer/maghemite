@@ -21,6 +21,7 @@ set -e
 NEXTEST_VERSION='0.9.97'
 PLATFORM='illumos'
 
+pfexec pkg install clang-15
 cargo --version
 rustc --version
 curl -sSfL --retry 10 https://get.nexte.st/"$NEXTEST_VERSION"/"$PLATFORM" | gunzip | tar -xvf - -C ~/.cargo/bin

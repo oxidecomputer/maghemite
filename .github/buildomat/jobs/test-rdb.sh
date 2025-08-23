@@ -23,6 +23,7 @@ PLATFORM='illumos'
 
 cargo --version
 rustc --version
+pfexec pkg install clang-15
 curl -sSfL --retry 10 https://get.nexte.st/"$NEXTEST_VERSION"/"$PLATFORM" | gunzip | tar -xvf - -C ~/.cargo/bin
 
 pushd rdb
