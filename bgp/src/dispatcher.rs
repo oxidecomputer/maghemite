@@ -44,10 +44,7 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
             let listener = match Listener::bind(&self.listen) {
                 Ok(l) => l,
                 Err(e) => {
-                    slog::error!(
-                        self.log,
-                        "bgp dispatcher failed to listen {e}"
-                    );
+                    slog::error!(self.log, "bgp listener failed to bind: {e}");
                     sleep(Duration::from_secs(1));
                     continue 'listener;
                 }
@@ -58,7 +55,14 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                     self.addr_to_session.clone(),
                     Duration::from_millis(100),
                 ) {
-                    Ok(c) => c,
+                    Ok(c) => {
+                        slog::debug!(
+                            self.log,
+                            "accepted connection from {}",
+                            c.peer()
+                        );
+                        c
+                    }
                     Err(crate::error::Error::Timeout) => {
                         continue 'accept;
                     }

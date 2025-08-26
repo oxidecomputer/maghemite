@@ -411,7 +411,7 @@ impl BgpConnectionTcp {
             conn.set_read_timeout(Some(timeout))?;
         }
 
-        info!(log, "spawning recv loop");
+        info!(log, "[{peer}] spawning recv loop");
 
         spawn(move || loop {
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {

@@ -15,7 +15,7 @@ use crate::messages::{
 use crate::policy::{CheckerResult, ShaperResult};
 use crate::router::Router;
 use crate::to_canonical;
-use mg_common::{dbg, err, inf, trc, wrn};
+use mg_common::{dbg, err, inf, parse, sockaddr, trc, wrn};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
@@ -839,7 +839,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             Cnx::new(self.bind_addr, self.neighbor.host, self.log.clone());
         debug!(
             self.log,
-            "SessionRunner on_connect() connecting: {} {}",
+            "SessionRunner on_connect() connecting: bind_addr={} peer={}",
             self.bind_addr.unwrap_or("0.0.0.0:179".parse().unwrap()),
             self.neighbor.host
         );
@@ -857,9 +857,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 break FsmState::Idle;
             }
             let event = match self.event_rx.recv() {
-                Ok(event) => event,
+                Ok(event) => {
+                    dbg!(self; "on connect event rx: {}", event.title());
+                    event
+                }
                 Err(e) => {
-                    err!(self; "on connect event rx: {e}");
+                    err!(self; "on connect event rx error: {e}");
                     continue;
                 }
             };
@@ -948,7 +951,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         err!(self; "{e}");
                         return FsmState::Idle;
                     }
-                    inf!(self; "connected to {}", conn.peer());
+                    inf!(self; "connected to {} from {}",
+                        conn.peer(),
+                        conn.local().unwrap_or(sockaddr!("0.0.0.0:0"))
+                    );
                     if let Err(e) = self.send_open(&conn) {
                         err!(self; "connect: send open failed (FsmEvent::TcpConnectionConfirmed) {e}");
                         return FsmState::Idle;
