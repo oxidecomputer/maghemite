@@ -11,14 +11,44 @@ use crate::{
     router::Router,
     session::{FsmStateKind, SessionInfo},
 };
+use lazy_static::lazy_static;
+use mg_common::test::LoopbackIpManager;
 use mg_common::*;
 use rdb::{Asn, Prefix};
 use std::{
     collections::BTreeMap,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{mpsc::channel, Arc, Mutex},
     thread::spawn,
 };
+
+lazy_static! {
+    static ref LOOPBACK_MANAGER: Arc<Mutex<LoopbackIpManager>> = {
+        let ifname = if cfg!(target_os = "macos") || cfg!(target_os = "illumos")
+        {
+            "lo0"
+        } else if cfg!(target_os = "linux") {
+            "lo"
+        } else {
+            panic!("unsupported platform");
+        };
+
+        Arc::new(Mutex::new(LoopbackIpManager::new(ifname)))
+    };
+}
+
+/// Ensure test IP addresses are available for TCP tests
+/// This will install 127.0.0.2 and 127.0.0.3 if not already present
+fn ensure_loop_ips(addresses: &[IpAddr]) {
+    lazy_static::initialize(&LOOPBACK_MANAGER);
+    let mut manager = lock!(LOOPBACK_MANAGER);
+    manager.add(addresses);
+    // Install addresses on first use
+    if let Err(e) = manager.install() {
+        eprintln!("Warning: Failed to install loopback IPs: {e}");
+        eprintln!("TCP tests may fail without additional loopback addresses");
+    }
+}
 
 struct TestRouter<Cnx: BgpConnection> {
     router: Arc<Router<Cnx>>,
@@ -38,6 +68,119 @@ impl<Cnx: BgpConnection + 'static> TestRouter<Cnx> {
             d.run::<Listener>();
         });
     }
+}
+
+struct LogicalRouter {
+    name: String,
+    asn: Asn,
+    id: u32,
+    listen_addr: SocketAddr,
+    neighbors: Vec<Neighbor>,
+}
+
+struct Neighbor {
+    peer_config: PeerConfig,
+    session_info: Option<SessionInfo>,
+}
+
+fn n_router_test_setup<Cnx, Listener>(
+    test_name: &str,
+    routers: &[LogicalRouter],
+) -> Vec<TestRouter<Cnx>>
+where
+    Cnx: BgpConnection + Clone + Send + 'static,
+    Listener: BgpListener<Cnx> + 'static,
+{
+    std::fs::create_dir_all("/tmp").expect("create tmp dir");
+
+    let mut test_routers = Vec::with_capacity(routers.len());
+    let mut session_senders = Vec::new();
+
+    // Create all routers first
+    for logical_router in routers.iter() {
+        let log = mg_common::log::init_file_logger(&format!(
+            "{}.{test_name}.log",
+            logical_router.name
+        ));
+
+        // Create database
+        let db_path = format!("/tmp/{}.{test_name}.db", logical_router.name);
+        let _ = std::fs::remove_dir_all(&db_path);
+        let db = rdb::Db::new(&db_path, log.clone()).expect("create db");
+
+        // Create dispatcher
+        let addr_to_session = Arc::new(Mutex::new(BTreeMap::new()));
+        let dispatcher = Arc::new(Dispatcher::<Cnx>::new(
+            addr_to_session.clone(),
+            logical_router.listen_addr.to_string(),
+            log.clone(),
+        ));
+
+        // Create router
+        let router = Arc::new(Router::<Cnx>::new(
+            RouterConfig {
+                asn: logical_router.asn,
+                id: logical_router.id,
+            },
+            log.clone(),
+            db.clone(),
+            addr_to_session.clone(),
+        ));
+
+        // Start router and dispatcher
+        router.run();
+        let d = dispatcher.clone();
+        spawn(move || {
+            d.run::<Listener>();
+        });
+
+        // Set up all peer sessions for this router - each session gets its own channel pair
+        for neighbor in &logical_router.neighbors {
+            let (session_tx, session_rx) = channel();
+
+            // Manually clone PeerConfig since it doesn't implement Clone
+            let peer_config = PeerConfig {
+                name: neighbor.peer_config.name.clone(),
+                host: neighbor.peer_config.host,
+                hold_time: neighbor.peer_config.hold_time,
+                idle_hold_time: neighbor.peer_config.idle_hold_time,
+                delay_open: neighbor.peer_config.delay_open,
+                connect_retry: neighbor.peer_config.connect_retry,
+                keepalive: neighbor.peer_config.keepalive,
+                resolution: neighbor.peer_config.resolution,
+            };
+
+            router
+                .new_session(
+                    peer_config,
+                    logical_router.listen_addr,
+                    session_tx.clone(),
+                    session_rx,
+                    neighbor.session_info.clone().unwrap_or_default(),
+                )
+                .unwrap_or_else(|_| {
+                    panic!("new session on router {}", logical_router.name)
+                });
+
+            // Store the sender so we can send ManualStart later
+            session_senders.push(session_tx);
+        }
+
+        // Store components
+        test_routers.push(TestRouter {
+            router: router.clone(),
+            dispatcher,
+        });
+    }
+
+    // Start all sessions
+    for session_tx in session_senders {
+        session_tx
+            .send(crate::session::FsmEvent::ManualStart)
+            .expect("send manual start event");
+    }
+
+    test_routers
 }
 
 // This test effectively does the following:
@@ -221,10 +364,7 @@ fn basic_update<
     r2.shutdown();
 }
 
-fn two_router_test_setup<
-    Cnx: BgpConnection + 'static,
-    Listener: BgpListener<Cnx> + 'static,
->(
+fn two_router_test_setup<Cnx, Listener>(
     name: &str,
     r1_info: Option<SessionInfo>,
     r2_info: Option<SessionInfo>,
@@ -234,7 +374,8 @@ fn two_router_test_setup<
     r2_peer: SocketAddr,
 ) -> (TestRouter<Cnx>, TestRouter<Cnx>)
 where
-    Cnx: Clone + Send,
+    Cnx: BgpConnection + Clone + Send + 'static,
+    Listener: BgpListener<Cnx> + 'static,
 {
     let log = mg_common::log::init_file_logger(&format!("r1.{name}.log"));
 
@@ -446,4 +587,131 @@ fn test_basic_update_tcp() {
         sockaddr!("127.0.0.1:20021"),
         sockaddr!("127.0.0.1:20020"),
     )
+}
+
+#[test]
+fn test_three_router_mesh_tcp() {
+    let r1_addr = ip!("127.0.0.1");
+    let r2_addr = ip!("127.0.0.2");
+    let r3_addr = ip!("127.0.0.3");
+
+    // Ensure additional loopback IPs are available for this test
+    ensure_loop_ips(&[r1_addr, r2_addr, r3_addr]);
+
+    // Set up 3 routers in a chain topology: r1 <-> r2 <-> r3
+    // This validates that the BgpListener can handle multiple connections efficiently
+    // Router 2 will have connections to both r1 and r3, testing the BgpListener optimization
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: sockaddr!("127.0.0.1:21000"),
+            neighbors: vec![Neighbor {
+                peer_config: PeerConfig {
+                    name: "r2".into(),
+                    host: sockaddr!("127.0.0.2:21001"),
+                    hold_time: 6,
+                    idle_hold_time: 6,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                },
+                session_info: None,
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: sockaddr!("127.0.0.2:21001"),
+            neighbors: vec![
+                Neighbor {
+                    peer_config: PeerConfig {
+                        name: "r1".into(),
+                        host: sockaddr!("127.0.0.1:21000"),
+                        hold_time: 6,
+                        idle_hold_time: 6,
+                        delay_open: 0,
+                        connect_retry: 1,
+                        keepalive: 3,
+                        resolution: 100,
+                    },
+                    session_info: None,
+                },
+                Neighbor {
+                    peer_config: PeerConfig {
+                        name: "r3".into(),
+                        host: sockaddr!("127.0.0.3:21002"),
+                        hold_time: 6,
+                        idle_hold_time: 6,
+                        delay_open: 0,
+                        connect_retry: 1,
+                        keepalive: 3,
+                        resolution: 100,
+                    },
+                    session_info: None,
+                },
+            ],
+        },
+        LogicalRouter {
+            name: "r3".to_string(),
+            asn: Asn::FourOctet(4200000003),
+            id: 3,
+            listen_addr: sockaddr!("127.0.0.3:21002"),
+            neighbors: vec![Neighbor {
+                peer_config: PeerConfig {
+                    name: "r2".into(),
+                    host: sockaddr!("127.0.0.2:21001"),
+                    hold_time: 6,
+                    idle_hold_time: 6,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                },
+                session_info: None,
+            }],
+        },
+    ];
+
+    let test_routers = n_router_test_setup::<BgpConnectionTcp, BgpListenerTcp>(
+        "three_router_mesh_tcp",
+        &routers,
+    );
+
+    // Verify BGP sessions reach Established state
+    // This test validates that the BgpListener can handle multiple connections efficiently
+    // Router 2 has connections to both r1 and r3, testing the BgpListener optimization
+
+    // Get sessions from each router
+    let r1_session = test_routers[0]
+        .router
+        .get_session(ip!("127.0.0.2")) // r1 peers with r2 at 127.0.0.2
+        .expect("get r1->r2 session");
+    let r2_r1_session = test_routers[1]
+        .router
+        .get_session(ip!("127.0.0.1")) // r2 peers with r1 at 127.0.0.1
+        .expect("get r2->r1 session");
+    let r2_r3_session = test_routers[1]
+        .router
+        .get_session(ip!("127.0.0.3")) // r2 peers with r3 at 127.0.0.3
+        .expect("get r2->r3 session");
+    let r3_session = test_routers[2]
+        .router
+        .get_session(ip!("127.0.0.2")) // r3 peers with r2 at 127.0.0.2
+        .expect("get r3->r2 session");
+
+    // Wait for sessions to reach Established state
+    // This validates that the BgpListener optimization allows multiple connections
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_r3_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r3_session.state(), FsmStateKind::Established);
+
+    // Clean up
+    for router in test_routers.iter() {
+        router.shutdown();
+    }
 }
