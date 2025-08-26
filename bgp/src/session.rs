@@ -951,7 +951,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         err!(self; "{e}");
                         return FsmState::Idle;
                     }
-                    inf!(self; "connected to {} from {}",
+                    inf!(self; "connected to peer {} from local {}",
                         conn.peer(),
                         conn.local().unwrap_or(sockaddr!("0.0.0.0:0"))
                     );

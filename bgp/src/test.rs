@@ -12,6 +12,7 @@ use crate::{
     session::{FsmStateKind, SessionInfo},
 };
 use lazy_static::lazy_static;
+use mg_common::log::init_file_logger;
 use mg_common::test::LoopbackIpManager;
 use mg_common::*;
 use rdb::{Asn, Prefix};
@@ -33,21 +34,22 @@ lazy_static! {
             panic!("unsupported platform");
         };
 
-        Arc::new(Mutex::new(LoopbackIpManager::new(ifname)))
+        let log = init_file_logger("loopback-manager.log");
+
+        Arc::new(Mutex::new(LoopbackIpManager::new(ifname, log)))
     };
 }
 
 /// Ensure test IP addresses are available for TCP tests
-/// This will install 127.0.0.2 and 127.0.0.3 if not already present
-fn ensure_loop_ips(addresses: &[IpAddr]) {
+/// Returns a guard that will clean up the IPs when dropped
+fn ensure_loop_ips(addresses: &[IpAddr]) -> mg_common::test::IpAllocation {
     lazy_static::initialize(&LOOPBACK_MANAGER);
-    let mut manager = lock!(LOOPBACK_MANAGER);
-    manager.add(addresses);
-    // Install addresses on first use
-    if let Err(e) = manager.install() {
-        eprintln!("Warning: Failed to install loopback IPs: {e}");
-        eprintln!("TCP tests may fail without additional loopback addresses");
-    }
+
+    mg_common::test::LoopbackIpManager::allocate(
+        LOOPBACK_MANAGER.clone(),
+        addresses,
+    )
+    .expect("failed to create loopback manager")
 }
 
 struct TestRouter<Cnx: BgpConnection> {
@@ -86,7 +88,7 @@ struct Neighbor {
 fn n_router_test_setup<Cnx, Listener>(
     test_name: &str,
     routers: &[LogicalRouter],
-) -> Vec<TestRouter<Cnx>>
+) -> (Vec<TestRouter<Cnx>>, Option<mg_common::test::IpAllocation>)
 where
     Cnx: BgpConnection + Clone + Send + 'static,
     Listener: BgpListener<Cnx> + 'static,
@@ -95,6 +97,17 @@ where
 
     let mut test_routers = Vec::with_capacity(routers.len());
     let mut session_senders = Vec::new();
+    let mut ip_addresses = Vec::new();
+
+    // Manage local addresses for TCP tests
+    let ip_guard = if std::any::type_name::<Cnx>().contains("Tcp") {
+        routers
+            .iter()
+            .for_each(|lr| ip_addresses.push(lr.listen_addr.ip()));
+        Some(ensure_loop_ips(&ip_addresses))
+    } else {
+        None
+    };
 
     // Create all routers first
     for logical_router in routers.iter() {
@@ -180,7 +193,7 @@ where
             .expect("send manual start event");
     }
 
-    test_routers
+    (test_routers, ip_guard)
 }
 
 // This test effectively does the following:
@@ -201,8 +214,6 @@ fn basic_peering<
     passive: bool,
     r1_addr: SocketAddr,
     r2_addr: SocketAddr,
-    r1_peer: SocketAddr,
-    r2_peer: SocketAddr,
 ) {
     let is_tcp = std::any::type_name::<Cnx>().contains("Tcp");
     let test_str = match (passive, is_tcp) {
@@ -212,7 +223,7 @@ fn basic_peering<
         (false, false) => "basic_peering_active",
     };
 
-    let (r1, r2) = two_router_test_setup::<Cnx, Listener>(
+    let (r1, r2, _ip_guard) = two_router_test_setup::<Cnx, Listener>(
         test_str,
         Some(SessionInfo {
             passive_tcp_establishment: passive,
@@ -221,22 +232,16 @@ fn basic_peering<
         None,
         r1_addr,
         r2_addr,
-        r1_peer,
-        r2_peer,
     );
 
-    // Generate consistent IPs based on the addresses we used for session lookup
-    let (r1_peer_ip, r2_peer_ip) = if is_tcp {
-        (ip!("127.0.0.1"), ip!("127.0.0.1")) // TCP can use same IP with different ports
-    } else {
-        // Channel-based: extract IPs from the peer host addresses we used
-        (r1_peer.ip(), r2_peer.ip()) // r1 looks for r2, r2 looks for r1
-    };
-
-    let r1_session =
-        r1.router.get_session(r1_peer_ip).expect("get session one");
-    let r2_session =
-        r2.router.get_session(r2_peer_ip).expect("get session two");
+    let r1_session = r1
+        .router
+        .get_session(r2_addr.ip())
+        .expect("get session one");
+    let r2_session = r2
+        .router
+        .get_session(r1_addr.ip())
+        .expect("get session two");
 
     // Give peer sessions a few seconds and ensure we have reached the
     // established state on both sides.
@@ -307,8 +312,6 @@ fn basic_update<
 >(
     r1_addr: SocketAddr,
     r2_addr: SocketAddr,
-    r1_peer: SocketAddr,
-    r2_peer: SocketAddr,
 ) {
     let is_tcp = std::any::type_name::<Cnx>().contains("Tcp");
     let test_name = if is_tcp {
@@ -316,8 +319,8 @@ fn basic_update<
     } else {
         "basic_update"
     };
-    let (r1, r2) = two_router_test_setup::<Cnx, Listener>(
-        test_name, None, None, r1_addr, r2_addr, r1_peer, r2_peer,
+    let (r1, r2, _ip_guard) = two_router_test_setup::<Cnx, Listener>(
+        test_name, None, None, r1_addr, r2_addr,
     );
 
     // originate a prefix
@@ -325,19 +328,15 @@ fn basic_update<
         .create_origin4(vec![ip!("1.2.3.0/24")])
         .expect("originate");
 
-    // Generate consistent IPs based on the addresses we used for session lookup
-    let (r1_peer_ip, r2_peer_ip) = if is_tcp {
-        (ip!("127.0.0.1"), ip!("127.0.0.1")) // TCP can use same IP with different ports
-    } else {
-        // Channel-based: extract IPs from the peer host addresses we used
-        (r1_peer.ip(), r2_peer.ip()) // r1 looks for r2, r2 looks for r1
-    };
-
     // once we reach established the originated routes should have propagated
-    let r1_session =
-        r1.router.get_session(r1_peer_ip).expect("get session one");
-    let r2_session =
-        r2.router.get_session(r2_peer_ip).expect("get session two");
+    let r1_session = r1
+        .router
+        .get_session(r2_addr.ip())
+        .expect("get session one");
+    let r2_session = r2
+        .router
+        .get_session(r1_addr.ip())
+        .expect("get session two");
     wait_for_eq!(r1_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
@@ -370,9 +369,11 @@ fn two_router_test_setup<Cnx, Listener>(
     r2_info: Option<SessionInfo>,
     r1_addr: SocketAddr,
     r2_addr: SocketAddr,
-    r1_peer: SocketAddr,
-    r2_peer: SocketAddr,
-) -> (TestRouter<Cnx>, TestRouter<Cnx>)
+) -> (
+    TestRouter<Cnx>,
+    TestRouter<Cnx>,
+    Option<mg_common::test::IpAllocation>,
+)
 where
     Cnx: BgpConnection + Clone + Send + 'static,
     Listener: BgpListener<Cnx> + 'static,
@@ -380,6 +381,12 @@ where
     let log = mg_common::log::init_file_logger(&format!("r1.{name}.log"));
 
     std::fs::create_dir_all("/tmp").expect("create tmp dir");
+
+    let ip_guard = if std::any::type_name::<Cnx>().contains("Tcp") {
+        Some(ensure_loop_ips(&[r1_addr.ip(), r2_addr.ip()]))
+    } else {
+        None
+    };
 
     // Router 1 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -415,7 +422,7 @@ where
         .new_session(
             PeerConfig {
                 name: "r2".into(),
-                host: r1_peer,
+                host: r2_addr,
                 hold_time: 6,
                 idle_hold_time: 6,
                 delay_open: 0,
@@ -477,7 +484,7 @@ where
         .new_session(
             PeerConfig {
                 name: "r1".into(),
-                host: r2_peer,
+                host: r1_addr,
                 hold_time: 6,
                 idle_hold_time: 6,
                 delay_open: 0,
@@ -501,38 +508,56 @@ where
         dispatcher: d2,
     };
 
-    (r1, r2)
+    (r1, r2, ip_guard)
 }
 
-// In order to facilitate test cases being run in parallel, sockaddrs must
-// be unique, although the reasoning is different for Channels and TCP.
+// Channels vs TCP:
+// ================
 //
 // Channels:
-// The current BgpConnectionChannel implementation does not have a single
-// listener that splits off individual connections as they are accept()'d. It
-// uses the Listener's SocketAddr as the key in a HashMap to coordinate the
-// exchange of the local and remote halves of a duplex channel, therefore a
-// Listener is implicitly coupled to a single channel. Given this, each
-// Channel-based test case will supply unique IPs. The port provided here is
-// pinned to 179 (BGP) as a convention, but is not strictly necessary.
+// The current BgpConnectionChannel implementation does not have a listener
+// that is capable of splitting off individual connections as they are
+// accept()'d. It instead uses the Listener's SocketAddr as the key in a HashMap
+// to coordinate the exchange of the local and remote halves of a duplex
+// channel, meaning a Listener is inherently coupled to a single channel. Given
+// this, each Channel-based logical router can only support a single peer.
 //
 // TCP:
-// A single TcpListener can accept() multiple connections, as you'd expect from
-// a typical OS TCP/IP implementation.  However, since the test has multiple
-// logical routers making use of the same TCP/IP stack, each listener must
-// bind() to a different port to avoid collisions (i.e. EADDRINUSE). To avoid
-// the need for IP management, we use the unspecified address (0.0.0.0) as the
-// local listener, and the loopback address (127.0.0.1) as the remote peer.
-// Port numbers supplied here must be unique per logical router.
+// Contrary to Channels, the BgpConnectionTcp implementation makes use of a
+// TcpListener that can accept() multiple connections, as you'd expect from a
+// typical OS TCP/IP implementation. Since the test has multiple logical routers
+// making use of the same TCP/IP stack, each listener must bind() to a unique
+// (ip:port) to avoid collisions (i.e. EADDRINUSE). While the TCP stack can
+// support connections to multiple peers with the same address and unique
+// ports, the `addr_to_session` data structure is keyed by IP address not
+// sockaddr and thus cannot distinguish between two ports on the same IP, e.g.
+// 127.0.0.1:10179 and 127.0.0.1:20179. It is therefore necessary to have
+// unique addresses on the system in order to facilitate the use of multiple
+// logical routers.
+//
+// Impact on tests:
+// ================
+//
+// Each tests must provide unique sockaddr to be used for the BGP session.
+// For TCP tests, loopback addresses (within 127.0.0.0/8) are preferred.
+
+//
+// Channel-based tests
+//
+#[test]
+fn test_basic_update() {
+    basic_update::<BgpConnectionChannel, BgpListenerChannel>(
+        sockaddr!("10.0.0.1:179"),
+        sockaddr!("10.0.0.2:179"),
+    )
+}
 
 #[test]
 fn test_basic_peering_passive() {
     basic_peering::<BgpConnectionChannel, BgpListenerChannel>(
         true,
-        sockaddr!("10.0.0.1:179"),
-        sockaddr!("10.0.0.2:179"),
-        sockaddr!("10.0.0.2:179"),
-        sockaddr!("10.0.0.1:179"),
+        sockaddr!("11.0.0.1:179"),
+        sockaddr!("11.0.0.2:179"),
     )
 }
 
@@ -540,21 +565,20 @@ fn test_basic_peering_passive() {
 fn test_basic_peering_active() {
     basic_peering::<BgpConnectionChannel, BgpListenerChannel>(
         false,
-        sockaddr!("11.0.0.1:179"),
-        sockaddr!("11.0.0.2:179"),
-        sockaddr!("11.0.0.2:179"),
-        sockaddr!("11.0.0.1:179"),
+        sockaddr!("12.0.0.1:179"),
+        sockaddr!("12.0.0.2:179"),
     )
 }
 
+//
+// TCP-based tests
+//
 #[test]
 fn test_basic_peering_passive_tcp() {
     basic_peering::<BgpConnectionTcp, BgpListenerTcp>(
         true,
-        sockaddr!("0.0.0.0:20000"),
-        sockaddr!("0.0.0.0:20001"),
-        sockaddr!("127.0.0.1:20001"),
-        sockaddr!("127.0.0.1:20000"),
+        sockaddr!("127.0.0.1:179"),
+        sockaddr!("127.0.0.2:179"),
     )
 }
 
@@ -562,55 +586,41 @@ fn test_basic_peering_passive_tcp() {
 fn test_basic_peering_active_tcp() {
     basic_peering::<BgpConnectionTcp, BgpListenerTcp>(
         false,
-        sockaddr!("0.0.0.0:20010"),
-        sockaddr!("0.0.0.0:20011"),
-        sockaddr!("127.0.0.1:20011"),
-        sockaddr!("127.0.0.1:20010"),
-    )
-}
-
-#[test]
-fn test_basic_update() {
-    basic_update::<BgpConnectionChannel, BgpListenerChannel>(
-        sockaddr!("12.0.0.1:179"),
-        sockaddr!("12.0.0.2:179"),
-        sockaddr!("12.0.0.2:179"),
-        sockaddr!("12.0.0.1:179"),
+        sockaddr!("127.0.0.3:179"),
+        sockaddr!("127.0.0.4:179"),
     )
 }
 
 #[test]
 fn test_basic_update_tcp() {
     basic_update::<BgpConnectionTcp, BgpListenerTcp>(
-        sockaddr!("0.0.0.0:20020"),
-        sockaddr!("0.0.0.0:20021"),
-        sockaddr!("127.0.0.1:20021"),
-        sockaddr!("127.0.0.1:20020"),
+        sockaddr!("127.0.0.5:179"),
+        sockaddr!("127.0.0.6:179"),
     )
 }
 
 #[test]
-fn test_three_router_mesh_tcp() {
-    let r1_addr = ip!("127.0.0.1");
-    let r2_addr = ip!("127.0.0.2");
-    let r3_addr = ip!("127.0.0.3");
+fn test_three_router_chain_tcp() {
+    let r1_addr = "127.0.0.7";
+    let r2_addr = "127.0.0.8";
+    let r3_addr = "127.0.0.9";
 
     // Ensure additional loopback IPs are available for this test
-    ensure_loop_ips(&[r1_addr, r2_addr, r3_addr]);
+    let _ip_guard =
+        ensure_loop_ips(&[ip!(r1_addr), ip!(r2_addr), ip!(r3_addr)]);
 
     // Set up 3 routers in a chain topology: r1 <-> r2 <-> r3
-    // This validates that the BgpListener can handle multiple connections efficiently
-    // Router 2 will have connections to both r1 and r3, testing the BgpListener optimization
+    // This validates that the BgpListener can handle multiple connections
     let routers = vec![
         LogicalRouter {
             name: "r1".to_string(),
             asn: Asn::FourOctet(4200000001),
             id: 1,
-            listen_addr: sockaddr!("127.0.0.1:21000"),
+            listen_addr: sockaddr!(&format!("{r1_addr}:179")),
             neighbors: vec![Neighbor {
                 peer_config: PeerConfig {
                     name: "r2".into(),
-                    host: sockaddr!("127.0.0.2:21001"),
+                    host: sockaddr!(&format!("{r2_addr}:179")),
                     hold_time: 6,
                     idle_hold_time: 6,
                     delay_open: 0,
@@ -625,12 +635,12 @@ fn test_three_router_mesh_tcp() {
             name: "r2".to_string(),
             asn: Asn::FourOctet(4200000002),
             id: 2,
-            listen_addr: sockaddr!("127.0.0.2:21001"),
+            listen_addr: sockaddr!(&format!("{r2_addr}:179")),
             neighbors: vec![
                 Neighbor {
                     peer_config: PeerConfig {
                         name: "r1".into(),
-                        host: sockaddr!("127.0.0.1:21000"),
+                        host: sockaddr!(&format!("{r1_addr}:179")),
                         hold_time: 6,
                         idle_hold_time: 6,
                         delay_open: 0,
@@ -643,7 +653,7 @@ fn test_three_router_mesh_tcp() {
                 Neighbor {
                     peer_config: PeerConfig {
                         name: "r3".into(),
-                        host: sockaddr!("127.0.0.3:21002"),
+                        host: sockaddr!(&format!("{r3_addr}:179")),
                         hold_time: 6,
                         idle_hold_time: 6,
                         delay_open: 0,
@@ -659,11 +669,11 @@ fn test_three_router_mesh_tcp() {
             name: "r3".to_string(),
             asn: Asn::FourOctet(4200000003),
             id: 3,
-            listen_addr: sockaddr!("127.0.0.3:21002"),
+            listen_addr: sockaddr!(&format!("{r3_addr}:179")),
             neighbors: vec![Neighbor {
                 peer_config: PeerConfig {
                     name: "r2".into(),
-                    host: sockaddr!("127.0.0.2:21001"),
+                    host: sockaddr!(&format!("{r2_addr}:179")),
                     hold_time: 6,
                     idle_hold_time: 6,
                     delay_open: 0,
@@ -676,39 +686,36 @@ fn test_three_router_mesh_tcp() {
         },
     ];
 
-    let test_routers = n_router_test_setup::<BgpConnectionTcp, BgpListenerTcp>(
-        "three_router_mesh_tcp",
-        &routers,
-    );
+    let (test_routers, _ip_guard2) = n_router_test_setup::<
+        BgpConnectionTcp,
+        BgpListenerTcp,
+    >("three_router_mesh_tcp", &routers);
 
     // Verify BGP sessions reach Established state
-    // This test validates that the BgpListener can handle multiple connections efficiently
-    // Router 2 has connections to both r1 and r3, testing the BgpListener optimization
+    // This test validates that the BgpListener can handle multiple connections
 
     // Get sessions from each router
-    let r1_session = test_routers[0]
+    let r1_r2_session = test_routers[0]
         .router
-        .get_session(ip!("127.0.0.2")) // r1 peers with r2 at 127.0.0.2
+        .get_session(ip!(r2_addr))
         .expect("get r1->r2 session");
     let r2_r1_session = test_routers[1]
         .router
-        .get_session(ip!("127.0.0.1")) // r2 peers with r1 at 127.0.0.1
+        .get_session(ip!(r1_addr))
         .expect("get r2->r1 session");
     let r2_r3_session = test_routers[1]
         .router
-        .get_session(ip!("127.0.0.3")) // r2 peers with r3 at 127.0.0.3
+        .get_session(ip!(r3_addr))
         .expect("get r2->r3 session");
-    let r3_session = test_routers[2]
+    let r3_r2_session = test_routers[2]
         .router
-        .get_session(ip!("127.0.0.2")) // r3 peers with r2 at 127.0.0.2
+        .get_session(ip!(r2_addr))
         .expect("get r3->r2 session");
 
-    // Wait for sessions to reach Established state
-    // This validates that the BgpListener optimization allows multiple connections
-    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r1_r2_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_r1_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_r3_session.state(), FsmStateKind::Established);
-    wait_for_eq!(r3_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r3_r2_session.state(), FsmStateKind::Established);
 
     // Clean up
     for router in test_routers.iter() {
