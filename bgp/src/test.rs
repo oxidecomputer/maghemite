@@ -13,7 +13,7 @@ use crate::{
 };
 use lazy_static::lazy_static;
 use mg_common::log::init_file_logger;
-use mg_common::test::LoopbackIpManager;
+use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
 use rdb::{Asn, Prefix};
 use std::{
@@ -22,6 +22,9 @@ use std::{
     sync::{mpsc::channel, Arc, Mutex},
     thread::spawn,
 };
+
+// Use non-standard port outside the privileged range to avoid needing privs
+const TEST_BGP_PORT: u16 = 10179;
 
 lazy_static! {
     static ref LOOPBACK_MANAGER: Arc<Mutex<LoopbackIpManager>> = {
@@ -42,7 +45,7 @@ lazy_static! {
 
 /// Ensure test IP addresses are available for TCP tests
 /// Returns a guard that will clean up the IPs when dropped
-fn ensure_loop_ips(addresses: &[IpAddr]) -> mg_common::test::IpAllocation {
+fn ensure_loop_ips(addresses: &[IpAddr]) -> IpAllocation {
     lazy_static::initialize(&LOOPBACK_MANAGER);
 
     mg_common::test::LoopbackIpManager::allocate(
@@ -85,10 +88,10 @@ struct Neighbor {
     session_info: Option<SessionInfo>,
 }
 
-fn n_router_test_setup<Cnx, Listener>(
+fn test_setup<Cnx, Listener>(
     test_name: &str,
     routers: &[LogicalRouter],
-) -> (Vec<TestRouter<Cnx>>, Option<mg_common::test::IpAllocation>)
+) -> (Vec<TestRouter<Cnx>>, Option<IpAllocation>)
 where
     Cnx: BgpConnection + Clone + Send + 'static,
     Listener: BgpListener<Cnx> + 'static,
@@ -111,7 +114,7 @@ where
 
     // Create all routers first
     for logical_router in routers.iter() {
-        let log = mg_common::log::init_file_logger(&format!(
+        let log = init_file_logger(&format!(
             "{}.{test_name}.log",
             logical_router.name
         ));
@@ -123,14 +126,14 @@ where
 
         // Create dispatcher
         let addr_to_session = Arc::new(Mutex::new(BTreeMap::new()));
-        let dispatcher = Arc::new(Dispatcher::<Cnx>::new(
+        let dispatcher = Arc::new(Dispatcher::new(
             addr_to_session.clone(),
             logical_router.listen_addr.to_string(),
             log.clone(),
         ));
 
         // Create router
-        let router = Arc::new(Router::<Cnx>::new(
+        let router = Arc::new(Router::new(
             RouterConfig {
                 asn: logical_router.asn,
                 id: logical_router.id,
@@ -147,28 +150,18 @@ where
             d.run::<Listener>();
         });
 
-        // Set up all peer sessions for this router - each session gets its own channel pair
+        // Set up all peer sessions for this router
         for neighbor in &logical_router.neighbors {
-            let (session_tx, session_rx) = channel();
-
-            // Manually clone PeerConfig since it doesn't implement Clone
-            let peer_config = PeerConfig {
-                name: neighbor.peer_config.name.clone(),
-                host: neighbor.peer_config.host,
-                hold_time: neighbor.peer_config.hold_time,
-                idle_hold_time: neighbor.peer_config.idle_hold_time,
-                delay_open: neighbor.peer_config.delay_open,
-                connect_retry: neighbor.peer_config.connect_retry,
-                keepalive: neighbor.peer_config.keepalive,
-                resolution: neighbor.peer_config.resolution,
-            };
+            // Each session gets its own channel pair for FsmEvents
+            let (event_tx, event_rx) = channel();
+            let peer_config = neighbor.peer_config.clone();
 
             router
                 .new_session(
                     peer_config,
                     logical_router.listen_addr,
-                    session_tx.clone(),
-                    session_rx,
+                    event_tx.clone(),
+                    event_rx,
                     neighbor.session_info.clone().unwrap_or_default(),
                 )
                 .unwrap_or_else(|_| {
@@ -176,7 +169,7 @@ where
                 });
 
             // Store the sender so we can send ManualStart later
-            session_senders.push(session_tx);
+            session_senders.push(event_tx);
         }
 
         // Store components
@@ -207,7 +200,7 @@ where
 //    or Connect (active tcp establishment)
 // 7. Restarts r2
 // 8. Ensures the BGP session between r1 and r2 moves back into Established
-fn basic_peering<
+fn basic_peering_helper<
     Cnx: BgpConnection + 'static,
     Listener: BgpListener<Cnx> + 'static,
 >(
@@ -223,16 +216,55 @@ fn basic_peering<
         (false, false) => "basic_peering_active",
     };
 
-    let (r1, r2, _ip_guard) = two_router_test_setup::<Cnx, Listener>(
-        test_str,
-        Some(SessionInfo {
-            passive_tcp_establishment: passive,
-            ..Default::default()
-        }),
-        None,
-        r1_addr,
-        r2_addr,
-    );
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            neighbors: vec![Neighbor {
+                peer_config: PeerConfig {
+                    name: "r2".into(),
+                    host: r2_addr,
+                    hold_time: 6,
+                    idle_hold_time: 6,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                },
+                session_info: Some(SessionInfo {
+                    passive_tcp_establishment: passive,
+                    ..Default::default()
+                }),
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            neighbors: vec![Neighbor {
+                peer_config: PeerConfig {
+                    name: "r1".into(),
+                    host: r1_addr,
+                    hold_time: 6,
+                    idle_hold_time: 6,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                },
+                session_info: None,
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard) =
+        test_setup::<Cnx, Listener>(test_str, &routers);
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
 
     let r1_session = r1
         .router
@@ -306,7 +338,7 @@ fn basic_peering<
 // 6. Shuts down r1
 // 7. Ensures the BGP FSM moves out of Established on both r1 and r2
 // 8. Ensures r2 has successfully uninstalled the implicitly withdrawn prefix
-fn basic_update<
+fn basic_update_helper<
     Cnx: BgpConnection + 'static,
     Listener: BgpListener<Cnx> + 'static,
 >(
@@ -319,9 +351,53 @@ fn basic_update<
     } else {
         "basic_update"
     };
-    let (r1, r2, _ip_guard) = two_router_test_setup::<Cnx, Listener>(
-        test_name, None, None, r1_addr, r2_addr,
-    );
+
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            neighbors: vec![Neighbor {
+                peer_config: PeerConfig {
+                    name: "r2".into(),
+                    host: r2_addr,
+                    hold_time: 6,
+                    idle_hold_time: 6,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                },
+                session_info: None,
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            neighbors: vec![Neighbor {
+                peer_config: PeerConfig {
+                    name: "r1".into(),
+                    host: r1_addr,
+                    hold_time: 6,
+                    idle_hold_time: 6,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                },
+                session_info: None,
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard) =
+        test_setup::<Cnx, Listener>(test_name, &routers);
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
 
     // originate a prefix
     r1.router
@@ -363,154 +439,6 @@ fn basic_update<
     r2.shutdown();
 }
 
-fn two_router_test_setup<Cnx, Listener>(
-    name: &str,
-    r1_info: Option<SessionInfo>,
-    r2_info: Option<SessionInfo>,
-    r1_addr: SocketAddr,
-    r2_addr: SocketAddr,
-) -> (
-    TestRouter<Cnx>,
-    TestRouter<Cnx>,
-    Option<mg_common::test::IpAllocation>,
-)
-where
-    Cnx: BgpConnection + Clone + Send + 'static,
-    Listener: BgpListener<Cnx> + 'static,
-{
-    let log = mg_common::log::init_file_logger(&format!("r1.{name}.log"));
-
-    std::fs::create_dir_all("/tmp").expect("create tmp dir");
-
-    let ip_guard = if std::any::type_name::<Cnx>().contains("Tcp") {
-        Some(ensure_loop_ips(&[r1_addr.ip(), r2_addr.ip()]))
-    } else {
-        None
-    };
-
-    // Router 1 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    let db_path = format!("/tmp/r1.{name}.db");
-    let _ = std::fs::remove_dir_all(&db_path);
-    let db = rdb::Db::new(&db_path, log.clone()).expect("create db");
-
-    let a2s1 = Arc::new(Mutex::new(BTreeMap::new()));
-    let d1 = Arc::new(Dispatcher::<Cnx>::new(
-        a2s1.clone(),
-        r1_addr.to_string(),
-        log.clone(),
-    ));
-
-    let (r1_event_tx, event_rx) = channel();
-    let r1_router = Arc::new(Router::<Cnx>::new(
-        RouterConfig {
-            asn: Asn::FourOctet(4200000001),
-            id: 1,
-        },
-        log.clone(),
-        db.clone(),
-        a2s1.clone(),
-    ));
-
-    r1_router.run();
-    let d = d1.clone();
-    spawn(move || {
-        d.run::<Listener>();
-    });
-
-    r1_router
-        .new_session(
-            PeerConfig {
-                name: "r2".into(),
-                host: r2_addr,
-                hold_time: 6,
-                idle_hold_time: 6,
-                delay_open: 0,
-                connect_retry: 1,
-                keepalive: 3,
-                resolution: 100,
-            },
-            r1_addr,
-            r1_event_tx.clone(),
-            event_rx,
-            r1_info.unwrap_or_default(),
-        )
-        .expect("new session on router one");
-
-    r1_event_tx
-        .send(crate::session::FsmEvent::ManualStart)
-        .expect("session manual start on router one");
-
-    let r1 = TestRouter {
-        router: r1_router,
-        dispatcher: d1,
-    };
-
-    // Router 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    let log = mg_common::log::init_file_logger(&format!("r2.{name}.log"));
-
-    let db_path = format!("/tmp/r2.{name}.db");
-    let _ = std::fs::remove_dir_all(&db_path);
-    let db = rdb::Db::new(&db_path, log.clone())
-        .expect("create datastore for router 2");
-
-    let a2s2 = Arc::new(Mutex::new(BTreeMap::new()));
-    let d2 = Arc::new(Dispatcher::<Cnx>::new(
-        a2s2.clone(),
-        r2_addr.to_string(),
-        log.clone(),
-    ));
-
-    let (r2_event_tx, event_rx) = channel();
-
-    let r2_router = Arc::new(Router::<Cnx>::new(
-        RouterConfig {
-            asn: Asn::FourOctet(4200000002),
-            id: 2,
-        },
-        log.clone(),
-        db.clone(),
-        a2s2.clone(),
-    ));
-
-    r2_router.run();
-    let d = d2.clone();
-    spawn(move || {
-        d.run::<Listener>();
-    });
-
-    r2_router
-        .new_session(
-            PeerConfig {
-                name: "r1".into(),
-                host: r1_addr,
-                hold_time: 6,
-                idle_hold_time: 6,
-                delay_open: 0,
-                connect_retry: 1,
-                keepalive: 3,
-                resolution: 100,
-            },
-            r2_addr,
-            r2_event_tx.clone(),
-            event_rx,
-            r2_info.unwrap_or_default(),
-        )
-        .expect("new session on router two");
-
-    r2_event_tx
-        .send(crate::session::FsmEvent::ManualStart)
-        .expect("start session on router two");
-
-    let r2 = TestRouter {
-        router: r2_router,
-        dispatcher: d2,
-    };
-
-    (r1, r2, ip_guard)
-}
-
 // Channels vs TCP:
 // ================
 //
@@ -546,27 +474,27 @@ where
 //
 #[test]
 fn test_basic_update() {
-    basic_update::<BgpConnectionChannel, BgpListenerChannel>(
-        sockaddr!("10.0.0.1:179"),
-        sockaddr!("10.0.0.2:179"),
+    basic_update_helper::<BgpConnectionChannel, BgpListenerChannel>(
+        sockaddr!(&format!("10.0.0.1:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("10.0.0.2:{TEST_BGP_PORT}")),
     )
 }
 
 #[test]
 fn test_basic_peering_passive() {
-    basic_peering::<BgpConnectionChannel, BgpListenerChannel>(
+    basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         true,
-        sockaddr!("11.0.0.1:179"),
-        sockaddr!("11.0.0.2:179"),
+        sockaddr!(&format!("11.0.0.1:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("11.0.0.2:{TEST_BGP_PORT}")),
     )
 }
 
 #[test]
 fn test_basic_peering_active() {
-    basic_peering::<BgpConnectionChannel, BgpListenerChannel>(
+    basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         false,
-        sockaddr!("12.0.0.1:179"),
-        sockaddr!("12.0.0.2:179"),
+        sockaddr!(&format!("12.0.0.1:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("12.0.0.2:{TEST_BGP_PORT}")),
     )
 }
 
@@ -575,27 +503,27 @@ fn test_basic_peering_active() {
 //
 #[test]
 fn test_basic_peering_passive_tcp() {
-    basic_peering::<BgpConnectionTcp, BgpListenerTcp>(
+    basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
         true,
-        sockaddr!("127.0.0.1:179"),
-        sockaddr!("127.0.0.2:179"),
+        sockaddr!(&format!("127.0.0.1:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("127.0.0.2:{TEST_BGP_PORT}")),
     )
 }
 
 #[test]
 fn test_basic_peering_active_tcp() {
-    basic_peering::<BgpConnectionTcp, BgpListenerTcp>(
+    basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
         false,
-        sockaddr!("127.0.0.3:179"),
-        sockaddr!("127.0.0.4:179"),
+        sockaddr!(&format!("127.0.0.3:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("127.0.0.4:{TEST_BGP_PORT}")),
     )
 }
 
 #[test]
 fn test_basic_update_tcp() {
-    basic_update::<BgpConnectionTcp, BgpListenerTcp>(
-        sockaddr!("127.0.0.5:179"),
-        sockaddr!("127.0.0.6:179"),
+    basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        sockaddr!(&format!("127.0.0.5:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("127.0.0.6:{TEST_BGP_PORT}")),
     )
 }
 
@@ -616,11 +544,11 @@ fn test_three_router_chain_tcp() {
             name: "r1".to_string(),
             asn: Asn::FourOctet(4200000001),
             id: 1,
-            listen_addr: sockaddr!(&format!("{r1_addr}:179")),
+            listen_addr: sockaddr!(&format!("{r1_addr}:{TEST_BGP_PORT}")),
             neighbors: vec![Neighbor {
                 peer_config: PeerConfig {
                     name: "r2".into(),
-                    host: sockaddr!(&format!("{r2_addr}:179")),
+                    host: sockaddr!(&format!("{r2_addr}:{TEST_BGP_PORT}")),
                     hold_time: 6,
                     idle_hold_time: 6,
                     delay_open: 0,
@@ -635,12 +563,12 @@ fn test_three_router_chain_tcp() {
             name: "r2".to_string(),
             asn: Asn::FourOctet(4200000002),
             id: 2,
-            listen_addr: sockaddr!(&format!("{r2_addr}:179")),
+            listen_addr: sockaddr!(&format!("{r2_addr}:{TEST_BGP_PORT}")),
             neighbors: vec![
                 Neighbor {
                     peer_config: PeerConfig {
                         name: "r1".into(),
-                        host: sockaddr!(&format!("{r1_addr}:179")),
+                        host: sockaddr!(&format!("{r1_addr}:{TEST_BGP_PORT}")),
                         hold_time: 6,
                         idle_hold_time: 6,
                         delay_open: 0,
@@ -653,7 +581,7 @@ fn test_three_router_chain_tcp() {
                 Neighbor {
                     peer_config: PeerConfig {
                         name: "r3".into(),
-                        host: sockaddr!(&format!("{r3_addr}:179")),
+                        host: sockaddr!(&format!("{r3_addr}:{TEST_BGP_PORT}")),
                         hold_time: 6,
                         idle_hold_time: 6,
                         delay_open: 0,
@@ -669,11 +597,11 @@ fn test_three_router_chain_tcp() {
             name: "r3".to_string(),
             asn: Asn::FourOctet(4200000003),
             id: 3,
-            listen_addr: sockaddr!(&format!("{r3_addr}:179")),
+            listen_addr: sockaddr!(&format!("{r3_addr}:{TEST_BGP_PORT}")),
             neighbors: vec![Neighbor {
                 peer_config: PeerConfig {
                     name: "r2".into(),
-                    host: sockaddr!(&format!("{r2_addr}:179")),
+                    host: sockaddr!(&format!("{r2_addr}:{TEST_BGP_PORT}")),
                     hold_time: 6,
                     idle_hold_time: 6,
                     delay_open: 0,
@@ -686,10 +614,10 @@ fn test_three_router_chain_tcp() {
         },
     ];
 
-    let (test_routers, _ip_guard2) = n_router_test_setup::<
+    let (test_routers, _ip_guard2) = test_setup::<
         BgpConnectionTcp,
         BgpListenerTcp,
-    >("three_router_mesh_tcp", &routers);
+    >("three_router_chain_tcp", &routers);
 
     // Verify BGP sessions reach Established state
     // This test validates that the BgpListener can handle multiple connections

@@ -752,6 +752,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 lock!(self.clock.timers.idle_hold_timer).disable();
                 if lock!(self.session).passive_tcp_establishment {
                     let conn = Cnx::new(
+                        // XXX: if we add an update-source feature, this likely
+                        // needs to be updated to pass a source other than
+                        // bind_addr, since that's used by the dispatcher for
+                        // inbound connections. In non-test environments,
+                        // bind_addr defaults to [::]:179, and that's not a
+                        // sensible sockaddr to bind to in this context.
                         self.bind_addr,
                         self.neighbor.host,
                         self.log.clone(),

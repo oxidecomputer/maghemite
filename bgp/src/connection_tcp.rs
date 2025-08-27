@@ -12,6 +12,8 @@ use crate::session::FsmEvent;
 use crate::to_canonical;
 use libc::{c_int, sockaddr_storage};
 use mg_common::lock;
+#[cfg(test)]
+use slog::debug;
 use slog::{error, info, trace, warn, Logger};
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -73,6 +75,8 @@ impl Md5Sas {
 #[derive(Clone)]
 pub struct BgpConnectionTcp {
     peer: SocketAddr,
+    #[cfg(test)]
+    source: Option<SocketAddr>,
     conn: Arc<Mutex<Option<TcpStream>>>, //TODO split into tx/rx?
     #[cfg(target_os = "illumos")]
     sas: Arc<Mutex<Option<Md5Sas>>>,
@@ -129,6 +133,8 @@ impl BgpConnection for BgpConnectionTcp {
         let conn = Arc::new(Mutex::new(None));
         Self {
             peer,
+            #[cfg(test)]
+            source: _source,
             conn,
             log,
             dropped: Arc::new(AtomicBool::new(false)),
@@ -203,6 +209,21 @@ impl BgpConnection for BgpConnectionTcp {
             ) {
                 error!(self.log, "set md5 key for tcp conn failed: {e}");
                 return Err(e);
+            }
+        }
+
+        #[cfg(test)]
+        if let Some(source) = self.source {
+            let mut src = source;
+            // clear source port, we only want to set the source ip
+            src.set_port(0);
+            let ba: socket2::SockAddr = src.into();
+            match s.bind(&ba) {
+                Ok(_) => debug!(self.log, "binded to {src} for connect socket"),
+                Err(e) => error!(
+                    self.log,
+                    "bind to {src} failed for connect socket: {e}"
+                ),
             }
         }
 
@@ -389,6 +410,8 @@ impl BgpConnectionTcp {
         )?;
         Ok(Self {
             peer,
+            #[cfg(test)]
+            source: Some(_source),
             conn: Arc::new(Mutex::new(Some(conn))),
             log,
             dropped,
