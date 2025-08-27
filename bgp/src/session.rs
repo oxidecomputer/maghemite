@@ -948,8 +948,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     return FsmState::OpenSent(accepted);
                 }
 
-                // The the peer has accepted the TCP connection we have
-                // initiated.
+                // The peer has accepted the TCP connection we have initiated.
                 FsmEvent::TcpConnectionConfirmed => {
                     lock!(self.session).connect_retry_counter = 0;
                     lock!(self.clock.timers.connect_retry_timer).disable();
@@ -1041,7 +1040,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     err!(self; "active: send open failed (FsmEvent::Connected) {e}");
                     return FsmState::Idle;
                 }
-                lock!(self.clock.timers.connect_retry_timer).disable();
                 {
                     let ht = lock!(self.clock.timers.hold_timer);
                     ht.reset();
