@@ -453,7 +453,7 @@ impl Display for OpenMessage {
         // XXX: add format support for capabilities (self.parameters)
         write!(
             f,
-            "Open [ version: {}, asn: {}, hold time: {}, id: {} ]",
+            "Open [ version: {}, asn: {}, hold_time: {}, id: {} ]",
             self.version, self.asn, self.hold_time, self.id
         )
     }
@@ -722,7 +722,7 @@ impl Display for UpdateMessage {
 
         write!(
             f,
-            "Update[ path attributes({p_str}) withdrawn({w_str}) nlri({n_str}) ]",
+            "Update[ path_attributes({p_str}) withdrawn({w_str}) nlri({n_str}) ]",
         )
     }
 }
@@ -1524,7 +1524,7 @@ impl Display for NotificationMessage {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "Notification [ Error code: {}, Error Subcode: {}, Data: {:?} ]",
+            "Notification [ error_code: {}, error_subcode: {}, data: {:?} ]",
             self.error_code, self.error_subcode, self.data
         )
     }

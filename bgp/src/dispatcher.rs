@@ -76,6 +76,7 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                         dispatcher_log!(self,
                             debug,
                             "accepted inbound connection from: {}", c.peer();
+                            "peer" => c.peer(),
                             "listen_address" => &self.listen
                         );
                         c
