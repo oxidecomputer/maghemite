@@ -11,11 +11,12 @@
 //! sets.
 use crate::bestpath::bestpaths;
 use crate::error::Error;
+use crate::log::rdb_log;
 use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
 use sled::Tree;
-use slog::{error, Logger};
+use slog::Logger;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
@@ -24,6 +25,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{sleep, spawn};
+
+const UNIT_PERSISTENT: &str = "persistent";
+const UNIT_RIB: &str = "rib";
 
 /// The handle used to open a persistent key-value tree for BGP IPv4 origin
 /// information.
@@ -145,9 +149,14 @@ impl Db {
     fn notify(&self, n: PrefixChangeNotification) {
         for Watcher { tag, sender } in read_lock!(self.watchers).iter() {
             if let Err(e) = sender.send(n.clone()) {
-                error!(
-                    self.log,
-                    "failed to send notification to watcher '{tag}': {e}"
+                rdb_log!(
+                    self,
+                    error,
+                    "failed to send prefix change notification to watcher {tag}: {e}";
+                    "unit" => UNIT_RIB,
+                    "message" => "prefix_change_notification",
+                    "message_contents" => format!("{n}"),
+                    "error" => format!("{e}")
                 );
             }
         }
@@ -348,10 +357,11 @@ impl Db {
             .filter_map(|item| {
                 let (key, value) = match item {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching bgp router entry: {e}"
+                    Err(ref e) => {
+                        rdb_log!(self,
+                            error,
+                            "error fetching bgp router entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -359,9 +369,10 @@ impl Db {
                 let key = match String::from_utf8_lossy(&key).parse() {
                     Ok(item) => item,
                     Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing bgp router entry key: {e}"
+                        rdb_log!(self,
+                            error,
+                            "error parsing bgp router entry key {key:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -370,9 +381,10 @@ impl Db {
                 let value: BgpRouterInfo = match serde_json::from_str(&value) {
                     Ok(item) => item,
                     Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing bgp router entry value: {e}"
+                        rdb_log!(self,
+                            error,
+                            "error parsing bgp router entry value {value:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -407,10 +419,12 @@ impl Db {
             .filter_map(|item| {
                 let (_key, value) = match item {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching bgp neighbor entry: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error fetching bgp neighbor entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -419,10 +433,12 @@ impl Db {
                 let value: BgpNeighborInfo = match serde_json::from_str(&value)
                 {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing bgp neighbor entry value: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing bgp neighbor entry value {value:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -457,18 +473,25 @@ impl Db {
             .filter_map(|item| {
                 let (_key, value) = match item {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(self.log, "db: error fetching bfd entry: {e}");
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing bfd entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
+                        );
                         return None;
                     }
                 };
                 let value = String::from_utf8_lossy(&value);
                 let value: BfdPeerConfig = match serde_json::from_str(&value) {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing bfd neighbor entry value: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing bfd entry value {value:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -512,20 +535,24 @@ impl Db {
             .filter_map(|item| {
                 let (key, _value) = match item {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching bgp origin entry: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error fetching bgp origin entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
                 };
                 Some(match Prefix4::from_db_key(&key) {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing bgp origin entry value: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing bgp origin entry value {key:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -568,10 +595,12 @@ impl Db {
             .filter_map(|item| {
                 let (key, _value) = match item {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching bgp origin6 entry: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error fetching bgp origin entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -579,9 +608,11 @@ impl Db {
                 Some(match Prefix6::from_db_key(&key) {
                     Ok(item) => item,
                     Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing bgp origin6 entry value: {e}"
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing bgp origin entry value {key:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -636,7 +667,12 @@ impl Db {
         prefix: &Prefix4,
     ) {
         let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
-            error!(self.log, "failed to get bestpath fanout: {e}");
+            rdb_log!(
+                self,
+                error,
+                "failed to get bestpath fanout: {e}";
+                "unit" => UNIT_PERSISTENT
+            );
             NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
         });
 
@@ -668,7 +704,12 @@ impl Db {
         prefix: &Prefix6,
     ) {
         let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
-            error!(self.log, "failed to get bestpath fanout: {e}");
+            rdb_log!(
+                self,
+                error,
+                "failed to get bestpath fanout: {e}";
+                "unit" => UNIT_PERSISTENT
+            );
             NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
         });
 
@@ -851,10 +892,12 @@ impl Db {
             .filter_map(|item| {
                 let (key, _) = match item {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching static route entry: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error fetching static route entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -866,9 +909,11 @@ impl Db {
                 let rkey: StaticRouteKey = match serde_json::from_str(&key) {
                     Ok(item) => item,
                     Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing static router entry: {e}"
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing static route entry {key:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }

@@ -608,6 +608,16 @@ impl From<Prefix6> for PrefixChangeNotification {
     }
 }
 
+impl Display for PrefixChangeNotification {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut pcn = String::new();
+        for p in self.changed.iter() {
+            pcn.push_str(&format!("{p} "));
+        }
+        write!(f, "PrefixChangeNotification [ {pcn}]")
+    }
+}
+
 #[derive(
     Clone,
     Copy,
