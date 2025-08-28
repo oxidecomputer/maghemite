@@ -9,11 +9,10 @@
 /// rapidly using a simulated network.
 use crate::connection::{BgpConnection, BgpListener, MAX_MD5SIG_KEYLEN};
 use crate::error::Error;
+use crate::log::{connection_log, connection_log_lite};
 use crate::messages::Message;
 use crate::session::FsmEvent;
 use mg_common::lock;
-use slog::debug;
-use slog::error;
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
@@ -21,6 +20,8 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 use std::time::Duration;
+
+const MOD_CONNECTION: &str = "connection_channel";
 
 lazy_static! {
     static ref NET: Network = Network::new();
@@ -173,7 +174,11 @@ impl BgpConnection for BgpConnectionChannel {
         _ttl_sec: Option<u8>,
         _md5_key: Option<String>,
     ) -> Result<(), Error> {
-        debug!(self.log, "[{}] connecting", self.peer);
+        connection_log!(self,
+            debug,
+            "connecting to {}", self.peer();
+            "timeout" => timeout.as_millis()
+        );
         let (local, remote) = channel();
         match NET.connect(self.addr, self.peer, remote) {
             Ok(()) => {
@@ -195,7 +200,12 @@ impl BgpConnection for BgpConnectionChannel {
                 Ok(())
             }
             Err(e) => {
-                error!(self.log, "connect: {e:?}");
+                connection_log!(self,
+                    error,
+                    "connect error: {e:?}";
+                    "timeout" => timeout.as_millis(),
+                    "error" => format!("{e}")
+                );
                 Err(e)
             }
         }
@@ -205,10 +215,21 @@ impl BgpConnection for BgpConnectionChannel {
         let guard = lock!(self.conn_tx);
         match *guard {
             Some(ref ch) => {
+                connection_log!(self,
+                    trace,
+                    "send {} message via channel to {}", msg.title(), self.peer();
+                    "message" => msg.title(),
+                    "message_contents" => format!("{msg}")
+                );
                 if let Err(e) =
                     ch.send(msg).map_err(|e| Error::ChannelSend(e.to_string()))
                 {
-                    error!(self.log, "NET state: {}", *NET);
+                    connection_log!(self,
+                        error,
+                        "error sending message via channel to {}: {e}", self.peer();
+                        "error" => format!("{e}"),
+                        "network_state" => format!("{}", *NET)
+                    );
                     return Err(e);
                 }
             }
@@ -272,14 +293,27 @@ impl BgpConnectionChannel {
         log: Logger,
     ) {
         slog::info!(log, "spawning recv loop");
+        connection_log_lite!(log,
+            info,
+            "spawning recv loop for {peer}";
+            "peer" => format!("{peer}")
+        );
         spawn(move || loop {
             match rx.recv() {
                 Ok(msg) => {
-                    debug!(log, "[{peer}] recv: {msg:#?}");
+                    connection_log_lite!(log,
+                        debug,
+                        "recv {} msg from {peer}", msg.title();
+                        "peer" => format!("{peer}"),
+                        "message" => msg.title(),
+                        "message_contents" => format!("{msg}")
+                    );
                     if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
-                        error!(
-                            log,
-                            "[{peer}] failed to send fsm message to sm: {e}"
+                        connection_log_lite!(log,
+                            error,
+                            "error sending event to {peer}: {e}";
+                            "peer" => format!("{peer}"),
+                            "error" => format!("{e}")
                         );
                     }
                 }

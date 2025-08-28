@@ -4,6 +4,7 @@
 
 use crate::connection::{BgpConnection, BgpListener, MAX_MD5SIG_KEYLEN};
 use crate::error::Error;
+use crate::log::{connection_log, connection_log_lite};
 use crate::messages::{
     ErrorCode, ErrorSubcode, Header, Message, MessageType, NotificationMessage,
     OpenMessage, RouteRefreshMessage, UpdateMessage,
@@ -12,9 +13,7 @@ use crate::session::FsmEvent;
 use crate::to_canonical;
 use libc::{c_int, sockaddr_storage};
 use mg_common::lock;
-#[cfg(test)]
-use slog::debug;
-use slog::{error, info, trace, warn, Logger};
+use slog::Logger;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
@@ -25,6 +24,8 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 use std::time::Duration;
+
+const MOD_CONNECTION: &str = "connection_tcp";
 
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;
@@ -174,7 +175,13 @@ impl BgpConnection for BgpConnectionTcp {
             if let Err(e) =
                 set_md5_sig_fd(s.as_raw_fd(), len as u16, keyval, self.peer)
             {
-                error!(self.log, "set md5 key for tcp conn failed: {e}");
+                connection_log!(self,
+                    error,
+                    "failed to set md5 key: {e}";
+                    "connection" => format!("{:?}", lock!(self.conn)),
+                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                    "error" => format!("{e}")
+                );
                 return Err(e);
             }
         }
@@ -184,15 +191,23 @@ impl BgpConnection for BgpConnectionTcp {
             let sources = match source_address_select(self.peer.ip()) {
                 Ok(s) => s,
                 Err(e) => {
-                    error!(
-                        self.log,
-                        "source address selection for {}: {e}", self.peer
+                    connection_log!(self,
+                        error,
+                        "error selecting source address: {e}";
+                        "connection" => format!("{:?}", lock!(self.conn)),
+                        "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                        "error" => format!("{e}")
                     );
                     return Err(Error::InvalidAddress(e.to_string()));
                 }
             };
             if sources.is_empty() {
-                error!(self.log, "no source address for {}", self.peer);
+                connection_log!(self,
+                    error,
+                    "no source address found";
+                    "connection" => format!("{:?}", lock!(self.conn)),
+                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+                );
                 return Err(Error::InvalidAddress(String::from(
                     "no source address",
                 )));
@@ -207,7 +222,13 @@ impl BgpConnection for BgpConnectionTcp {
                 local,
                 self.peer,
             ) {
-                error!(self.log, "set md5 key for tcp conn failed: {e}");
+                connection_log!(self,
+                    error,
+                    "failed to set md5 key: {e}";
+                    "connection" => format!("{:?}", lock!(self.conn)),
+                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                    "error" => format!("{e}")
+                );
                 return Err(e);
             }
         }
@@ -219,10 +240,19 @@ impl BgpConnection for BgpConnectionTcp {
             src.set_port(0);
             let ba: socket2::SockAddr = src.into();
             match s.bind(&ba) {
-                Ok(_) => debug!(self.log, "binded to {src} for connect socket"),
-                Err(e) => error!(
-                    self.log,
-                    "bind to {src} failed for connect socket: {e}"
+                Ok(()) => connection_log!(self,
+                    debug,
+                    "successful bind to source: {src}";
+                    "connection" => format!("{:?}", lock!(self.conn)),
+                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+                ),
+
+                Err(e) => connection_log!(self,
+                    error,
+                    "failed to bind to {src}: {e}";
+                    "connection" => format!("{:?}", lock!(self.conn)),
+                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                    "error" => format!("{e}")
                 ),
             }
         }
@@ -253,7 +283,13 @@ impl BgpConnection for BgpConnectionTcp {
                 Ok(())
             }
             Err(e) => {
-                error!(self.log, "connect error: {e}");
+                connection_log!(self,
+                    error,
+                    "connect error: {e}";
+                    "connection" => format!("{:?}", lock!(self.conn)),
+                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                    "error" => format!("{e}")
+                );
                 Err(Error::Io(e))
             }
         }
@@ -280,9 +316,12 @@ impl BgpConnection for BgpConnectionTcp {
         let sockaddr = match result {
             Ok(sa) => sa,
             Err(e) => {
-                warn!(
-                    self.log,
-                    "failed to get local address for TCP connection: {e}"
+                connection_log!(self,
+                    warn,
+                    "failed to get local address: {e}";
+                    "connection" => format!("{:?}", lock!(self.conn)),
+                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                    "error" => format!("{e}")
                 );
                 return None;
             }
@@ -335,7 +374,12 @@ impl BgpConnection for BgpConnectionTcp {
         keylen: u16,
         key: [u8; MAX_MD5SIG_KEYLEN],
     ) -> Result<(), Error> {
-        info!(self.log, "setting md5 auth for {}", self.peer);
+        connection_log!(self,
+            info,
+            "setting md5 auth for {}", self.peer;
+            "connection" => format!("{:?}", lock!(self.conn)),
+            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+        );
         let conn = lock!(self.conn);
         let fd = match conn.as_ref() {
             None => return Err(Error::NotConnected),
@@ -351,7 +395,12 @@ impl BgpConnection for BgpConnectionTcp {
         keylen: u16,
         key: [u8; MAX_MD5SIG_KEYLEN],
     ) -> Result<(), Error> {
-        info!(self.log, "setting md5 auth for {}", self.peer);
+        connection_log!(self,
+            info,
+            "setting md5 auth for {}", self.peer;
+            "connection" => format!("{:?}", lock!(self.conn)),
+            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+        );
         let conn = lock!(self.conn);
         match conn.as_ref() {
             None => return Err(Error::NotConnected),
@@ -363,7 +412,13 @@ impl BgpConnection for BgpConnectionTcp {
                 if let Err(e) =
                     self.set_md5_sig_fd(c.as_raw_fd(), &s, vec![local], peer)
                 {
-                    error!(self.log, "set md5 key for tcp conn failed: {e}");
+                    connection_log!(self,
+                        error,
+                        "failed to set md5 key: {e}";
+                        "connection" => format!("{:?}", lock!(self.conn)),
+                        "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                        "error" => format!("{e}")
+                    );
                     return Err(e);
                 }
             }
@@ -434,7 +489,11 @@ impl BgpConnectionTcp {
             conn.set_read_timeout(Some(timeout))?;
         }
 
-        info!(log, "[{peer}] spawning recv loop");
+        connection_log_lite!(log,
+            info,
+            "spawning recv loop for {peer}";
+            "peer" => format!("{peer}")
+        );
 
         spawn(move || loop {
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {
@@ -442,11 +501,19 @@ impl BgpConnectionTcp {
             }
             match Self::recv_msg(&mut conn, dropped.clone(), &log) {
                 Ok(msg) => {
-                    trace!(log, "[{peer}] recv: {msg:#?}");
+                    connection_log_lite!(log,
+                        trace,
+                        "recv {} msg from {peer}", msg.title();
+                        "peer" => format!("{peer}"),
+                        "message" => msg.title(),
+                        "message_contents" => format!("{msg}")
+                    );
                     if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
-                        warn!(
-                            log,
-                            "[{peer}] connection: error sending event {e}"
+                        connection_log_lite!(log,
+                            warn,
+                            "error sending event to {peer}: {e}";
+                            "peer" => format!("{peer}"),
+                            "error" => format!("{e}")
                         );
                         break;
                     }
@@ -514,7 +581,12 @@ impl BgpConnectionTcp {
             MessageType::Open => match OpenMessage::from_wire(&msgbuf) {
                 Ok(m) => m.into(),
                 Err(e) => {
-                    error!(log, "open message error: {e}");
+                    connection_log_lite!(log,
+                        error,
+                        "open message error: {e}";
+                        "stream" => format!("{stream:?}"),
+                        "error" => format!("{e}")
+                    );
 
                     let subcode = match e {
                         Error::UnsupportedCapability(_) => {
@@ -530,7 +602,12 @@ impl BgpConnectionTcp {
                         ErrorSubcode::Open(subcode),
                         Vec::new(),
                     ) {
-                        warn!(log, "send notification: {e}");
+                        connection_log_lite!(log,
+                            error,
+                            "error sending notification: {e}";
+                            "stream" => format!("{stream:?}"),
+                            "error" => format!("{e}")
+                        );
                     }
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::Other,
@@ -580,7 +657,13 @@ impl BgpConnectionTcp {
         log: &Logger,
         msg: Message,
     ) -> Result<(), Error> {
-        trace!(log, "sending {:#?}", msg);
+        connection_log_lite!(log,
+            trace,
+            "sending {} msg", msg.title();
+            "message" => msg.title(),
+            "message_contents" => format!("{msg}"),
+            "stream" => format!("{stream:?}")
+        );
         let msg_buf = msg.to_wire()?;
         let header = Header {
             length: (msg_buf.len() + Header::WIRE_SIZE).try_into().map_err(
@@ -594,7 +677,13 @@ impl BgpConnectionTcp {
         };
         let mut buf = header.to_wire().to_vec();
         buf.extend_from_slice(&msg_buf);
-        trace!(log, "sending {:x?}", buf);
+        connection_log_lite!(log,
+            trace,
+            "sending {} msg with header", msg.title();
+            "message" => msg.title(),
+            "message_contents" => format!("{buf:x?}"),
+            "stream" => format!("{stream:?}")
+        );
         stream.write_all(&buf)?;
         Ok(())
     }
@@ -626,7 +715,13 @@ impl BgpConnectionTcp {
                     if let Err(e) =
                         libnet::pf_key::tcp_md5_key_remove(a.into(), b.into())
                     {
-                        error!(self.log, "failed to drop sa {a} -> {b}: {e}");
+                        connection_log!(self,
+                            error,
+                            "failed to drop sa {a} -> {b}: {e}";
+                            "connection" => format!("{:?}", lock!(self.conn)),
+                            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                            "error" => format!("{e}")
+                        );
                     }
                 }
             }
@@ -696,9 +791,11 @@ impl BgpConnectionTcp {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire)
             .is_err();
         if running {
-            debug!(
-                self.log,
-                "security association keepalive loop already running",
+            connection_log!(self,
+                debug,
+                "security association keepalive loop already running";
+                "connection" => format!("{:?}", lock!(self.conn)),
+                "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
             );
             return;
         }
@@ -707,7 +804,13 @@ impl BgpConnectionTcp {
         // get set up before setting up the socket.
         Self::do_sa_keepalive(&self.sas, &self.log);
 
-        debug!(self.log, "spawning security association keepalive loop");
+        connection_log!(self,
+            debug,
+            // space after loop is needed... because macros?
+            "spawning security association keepalive loop ";
+            "connection" => format!("{:?}", lock!(self.conn)),
+            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+        );
         let dropped = self.dropped.clone();
         let log = self.log.clone();
         let sas = self.sas.clone();
@@ -745,7 +848,13 @@ impl BgpConnectionTcp {
                             b.into(),
                             valid_time,
                         ) {
-                            error!(log, "pf_key update {a} -> {b}: {e}");
+                            connection_log!(self,
+                                error,
+                                "error updating pf_key {a} -> {b}: {e}";
+                                "connection" => format!("{:?}", lock!(self.conn)),
+                                "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                                "error" => format!("{e}")
+                            );
                         }
                     } else if let Err(e) = libnet::pf_key::tcp_md5_key_add(
                         a.into(),
@@ -753,7 +862,13 @@ impl BgpConnectionTcp {
                         sas.key.as_str(),
                         valid_time,
                     ) {
-                        error!(log, "pf_key add {a} -> {b}: {e}");
+                        connection_log!(self,
+                            error,
+                            "error adding pf_key {a} -> {b}: {e}";
+                            "connection" => format!("{:?}", lock!(self.conn)),
+                            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                            "error" => format!("{e}")
+                        );
                     }
                 }
             }

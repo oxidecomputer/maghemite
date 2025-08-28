@@ -88,6 +88,28 @@ impl Message {
             Self::RouteRefresh(m) => m.to_wire(),
         }
     }
+
+    pub fn title(&self) -> &str {
+        match self {
+            Message::Open(_) => "open",
+            Message::Update(_) => "update",
+            Message::Notification(_) => "notification",
+            Message::KeepAlive => "keepalive",
+            Message::RouteRefresh(_) => "route refresh",
+        }
+    }
+}
+
+impl Display for Message {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            Message::Open(o) => write!(f, "{o}"),
+            Message::Update(u) => write!(f, "{u}"),
+            Message::Notification(n) => write!(f, "{n}"),
+            Message::KeepAlive => write!(f, "Keepalive"),
+            Message::RouteRefresh(r) => write!(f, "{r}"),
+        }
+    }
 }
 
 impl From<OpenMessage> for Message {

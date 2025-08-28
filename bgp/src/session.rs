@@ -16,7 +16,7 @@ use crate::messages::{
 use crate::policy::{CheckerResult, ShaperResult};
 use crate::router::Router;
 use crate::to_canonical;
-use mg_common::{lock, parse, read_lock, sockaddr, write_lock};
+use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
@@ -30,7 +30,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-const MOD_SESSION: &str = "session_runner";
+const MOD_SESSION_RUNNER: &str = "session_runner";
 
 #[derive(Debug)]
 pub struct PeerConnection<Cnx: BgpConnection> {
@@ -875,9 +875,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let conn =
             Cnx::new(self.bind_addr, self.neighbor.host, self.log.clone());
         session_log!(self, debug,
-            "connecting: bind_addr={} peer={}",
-            self.bind_addr
-                .unwrap_or("0.0.0.0:179".parse().unwrap()),
+            "connecting: bind_addr={:?} peer={}",
+            self.bind_addr,
             self.neighbor.host;
             "fsm_state" => format!("{}", self.state()).as_str()
         );
@@ -1028,9 +1027,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Idle;
                     }
                     session_log!(self, info,
-                        "connected to peer {} from local {}",
+                        "connected to peer {} from local {:?}",
                         conn.peer(),
-                        conn.local().unwrap_or(sockaddr!("0.0.0.0:0"));
+                        conn.local();
                         "fsm_state" => format!("{}", self.state()).as_str()
                     );
                     if let Err(e) = self.send_open(&conn) {
