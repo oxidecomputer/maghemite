@@ -21,7 +21,7 @@ use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use slog::{debug, Logger};
+use slog::Logger;
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::{self, Display, Formatter};
 use std::net::SocketAddr;
@@ -640,7 +640,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.initialize_capabilities();
 
         // Run the BGP peer state machine.
-        dbg!(self; "starting peer state machine");
+        dbg!(self, "session_runner", "starting peer state machine");
         let mut current = FsmState::<Cnx>::Idle;
 
         loop {
@@ -668,7 +668,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // If we have made a state transition log that and update the
             // appropriate state variables.
             if current.kind() != previous {
-                inf!(self; "{} -> {}", previous, current.kind());
+                inf!(
+                    self,
+                    "session_runner",
+                    "{} -> {}",
+                    previous,
+                    current.kind()
+                );
                 match current.kind() {
                     FsmStateKind::Idle => {
                         self.counters
@@ -740,15 +746,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let event = match self.event_rx.recv() {
             Ok(event) => event,
             Err(e) => {
-                err!(self; "idle: event rx {e}");
+                err!(self, "session_runner", "idle: event rx {e}");
                 return FsmState::Idle;
             }
         };
-        dbg!(self; "received event {}", event.title());
+        dbg!(self, "session_runner", "received event {}", event.title());
 
         match event {
             FsmEvent::ManualStart => {
-                inf!(self; "event manual start");
+                inf!(self, "session_runner", "event manual start");
                 lock!(self.clock.timers.idle_hold_timer).disable();
                 if lock!(self.session).passive_tcp_establishment {
                     let conn = Cnx::new(
@@ -774,14 +780,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // PeerConfig as an unsigned int, so is therefore always valid. If
             // IdleHoldTimer is 0, then DampPeerOscillation is disabled.
             FsmEvent::IdleHoldTimerExpires => {
-                inf!(self; "event idle hold time expire");
+                inf!(self, "session_runner", "event idle hold time expire");
                 self.counters
                     .idle_hold_timer_expirations
                     .fetch_add(1, Ordering::Relaxed);
 
                 {
                     let ihl = lock!(self.clock.timers.idle_hold_timer);
-                    dbg!(self; "IdleHoldTimer: [enabled={} expired={} interval={} remaining={}]",
+                    dbg!(self,
+                        "session_runner",
+                        "IdleHoldTimer: [enabled={} expired={} interval={} remaining={}]",
                         ihl.enabled(),
                         ihl.expired(),
                         ihl.interval.as_secs(),
@@ -805,25 +813,38 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .unexpected_keepalive_message
                     .fetch_add(1, Ordering::Relaxed);
-                wrn!(self; "unexpected keepalive message in idle");
+                wrn!(
+                    self,
+                    "session_runner",
+                    "unexpected keepalive message in idle"
+                );
                 FsmState::Idle
             }
             FsmEvent::Message(Message::Open(_)) => {
                 self.counters
                     .unexpected_open_message
                     .fetch_add(1, Ordering::Relaxed);
-                wrn!(self; "unexpected open message in idle");
+                wrn!(self, "session_runner", "unexpected open message in idle");
                 FsmState::Idle
             }
             FsmEvent::Message(Message::Update(_)) => {
                 self.counters
                     .unexpected_update_message
                     .fetch_add(1, Ordering::Relaxed);
-                wrn!(self; "unexpected update message in idle");
+                wrn!(
+                    self,
+                    "session_runner",
+                    "unexpected update message in idle"
+                );
                 FsmState::Idle
             }
             x => {
-                wrn!(self; "event {:?} not allowed in idle", x);
+                wrn!(
+                    self,
+                    "session_runner",
+                    "event {:?} not allowed in idle",
+                    x
+                );
                 FsmState::Idle
             }
         }
@@ -843,9 +864,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // Start with an initial connection attempt
         let conn =
             Cnx::new(self.bind_addr, self.neighbor.host, self.log.clone());
-        debug!(
-            self.log,
-            "SessionRunner on_connect() connecting: bind_addr={} peer={}",
+        dbg!(
+            self,
+            "session_runner",
+            "on_connect() connecting: bind_addr={} peer={}",
             self.bind_addr.unwrap_or("0.0.0.0:179".parse().unwrap()),
             self.neighbor.host
         );
@@ -855,7 +877,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             min_ttl,
             md5_auth_key.clone(),
         ) {
-            wrn!(self; "initial connect attempt failed: {e}");
+            wrn!(
+                self,
+                "session_runner",
+                "initial connect attempt failed: {e}"
+            );
         }
         loop {
             // Check to see if a shutdown has been requested.
@@ -864,17 +890,26 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             let event = match self.event_rx.recv() {
                 Ok(event) => {
-                    dbg!(self; "on connect event rx: {}", event.title());
+                    dbg!(
+                        self,
+                        "session_runner",
+                        "on connect event rx: {}",
+                        event.title()
+                    );
                     event
                 }
                 Err(e) => {
-                    err!(self; "on connect event rx error: {e}");
+                    err!(
+                        self,
+                        "session_runner",
+                        "on connect event rx error: {e}"
+                    );
                     continue;
                 }
             };
             match event {
                 FsmEvent::Reset => {
-                    inf!(self; "exit connect due to reset");
+                    inf!(self, "session_runner", "exit connect due to reset");
                     lock!(self.session).connect_retry_counter = 0;
                     lock!(self.clock.timers.connect_retry_timer).disable();
                     return FsmState::Idle;
@@ -890,7 +925,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         min_ttl,
                         md5_auth_key.clone(),
                     ) {
-                        wrn!(self; "connect attempt failed: {e}");
+                        wrn!(
+                            self,
+                            "session_runner",
+                            "connect attempt failed: {e}"
+                        );
                     }
                     lock!(self.session).connect_retry_counter += 1;
                 }
@@ -904,7 +943,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .opens_received
                         .fetch_add(1, Ordering::Relaxed);
                     if let Err(e) = self.handle_open(&conn, &om) {
-                        wrn!(self; "failed to handle open message: {e}");
+                        wrn!(
+                            self,
+                            "session_runner",
+                            "failed to handle open message: {e}"
+                        );
                         //TODO send a notification to the peer letting them know we are
                         //     rejecting the open message?
                         return FsmState::Active(conn);
@@ -913,7 +956,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     // ACK the open with a reciprocal open and a keepalive and transition
                     // to open confirm.
                     if let Err(e) = self.send_open(&conn) {
-                        err!(self; "connect: send open failed (FsmEvent::Message(Message::Open)): {e}");
+                        err!(self, "session_runner", "connect: send open failed (FsmEvent::Message(Message::Open)): {e}");
                         return FsmState::Idle;
                     }
                     self.send_keepalive(&conn);
@@ -929,12 +972,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     lock!(self.session).connect_retry_counter = 0;
                     lock!(self.clock.timers.connect_retry_timer).disable();
                     if let Err(e) = self.ensure_connection_policy(&accepted) {
-                        err!(self; "{e}");
+                        err!(self, "session_runner", "{e}");
                         return FsmState::Idle;
                     }
-                    inf!(self; "accepted connection from {}", accepted.peer());
+                    inf!(
+                        self,
+                        "session_runner",
+                        "accepted connection from {}",
+                        accepted.peer()
+                    );
                     if let Err(e) = self.send_open(&accepted) {
-                        err!(self; "connect: send open failed (FsmEvent::Connected) {e}");
+                        err!(self, "session_runner", "connect: send open failed (FsmEvent::Connected) {e}");
                         return FsmState::Idle;
                     }
                     {
@@ -953,15 +1001,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     lock!(self.session).connect_retry_counter = 0;
                     lock!(self.clock.timers.connect_retry_timer).disable();
                     if let Err(e) = self.ensure_connection_policy(&conn) {
-                        err!(self; "{e}");
+                        err!(self, "session_runner", "{e}");
                         return FsmState::Idle;
                     }
-                    inf!(self; "connected to peer {} from local {}",
+                    inf!(
+                        self,
+                        "session_runner",
+                        "connected to peer {} from local {}",
                         conn.peer(),
                         conn.local().unwrap_or(sockaddr!("0.0.0.0:0"))
                     );
                     if let Err(e) = self.send_open(&conn) {
-                        err!(self; "connect: send open failed (FsmEvent::TcpConnectionConfirmed) {e}");
+                        err!(self, "session_runner", "connect: send open failed (FsmEvent::TcpConnectionConfirmed) {e}");
                         return FsmState::Idle;
                     }
                     {
@@ -978,18 +1029,31 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.counters
                         .unexpected_keepalive_message
                         .fetch_add(1, Ordering::Relaxed);
-                    wrn!(self; "unexpected keep alive message in connect");
+                    wrn!(
+                        self,
+                        "session_runner",
+                        "unexpected keep alive message in connect"
+                    );
                 }
                 FsmEvent::Message(Message::Update(_)) => {
                     self.counters
                         .unexpected_update_message
                         .fetch_add(1, Ordering::Relaxed);
-                    wrn!(self; "unexpected update message in connect");
+                    wrn!(
+                        self,
+                        "session_runner",
+                        "unexpected update message in connect"
+                    );
                 }
                 // Some other event we don't care about fired, log it and carry
                 // on.
                 x => {
-                    wrn!(self; "event {:?} not allowed in connect", x);
+                    wrn!(
+                        self,
+                        "session_runner",
+                        "event {:?} not allowed in connect",
+                        x
+                    );
                     continue;
                 }
             }
@@ -1001,7 +1065,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let event = match self.event_rx.recv() {
             Ok(event) => event,
             Err(e) => {
-                err!(self; "on active event rx: {e}");
+                err!(self, "session_runner", "on active event rx: {e}");
                 return FsmState::Active(conn);
             }
         };
@@ -1010,7 +1074,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // an open message from the peer.
         let om = match event {
             FsmEvent::Reset => {
-                inf!(self; "exit active due to reset");
+                inf!(self, "session_runner", "exit active due to reset");
                 return FsmState::Idle;
             }
             FsmEvent::Message(Message::Open(om)) => {
@@ -1022,7 +1086,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 om
             }
             FsmEvent::ConnectRetryTimerExpires => {
-                inf!(self; "active: connect retry timer expired");
+                inf!(
+                    self,
+                    "session_runner",
+                    "active: connect retry timer expired"
+                );
                 self.counters
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
@@ -1032,12 +1100,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // initiated by the peer.
             FsmEvent::Connected(accepted) => {
                 if let Err(e) = self.ensure_connection_policy(&accepted) {
-                    err!(self; "{e}");
+                    err!(self, "session_runner", "{e}");
                     return FsmState::Idle;
                 }
-                inf!(self; "active: accepted connection from {}", accepted.peer());
+                inf!(
+                    self,
+                    "session_runner",
+                    "active: accepted connection from {}",
+                    accepted.peer()
+                );
                 if let Err(e) = self.send_open(&accepted) {
-                    err!(self; "active: send open failed (FsmEvent::Connected) {e}");
+                    err!(
+                        self,
+                        "session_runner",
+                        "active: send open failed (FsmEvent::Connected) {e}"
+                    );
                     return FsmState::Idle;
                 }
                 {
@@ -1063,25 +1140,36 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .unexpected_keepalive_message
                     .fetch_add(1, Ordering::Relaxed);
-                wrn!(self; "unexpected keepalive message in active");
+                wrn!(
+                    self,
+                    "session_runner",
+                    "unexpected keepalive message in active"
+                );
                 return FsmState::Active(conn);
             }
             FsmEvent::Message(Message::Update(_)) => {
                 self.counters
                     .unexpected_update_message
                     .fetch_add(1, Ordering::Relaxed);
-                wrn!(self; "unexpected update message in active");
+                wrn!(
+                    self,
+                    "session_runner",
+                    "unexpected update message in active"
+                );
                 return FsmState::Active(conn);
             }
             other => {
-                wrn!(self;
+                wrn!(
+                    self,
+                    "session_runner",
                     "active: expected open message, received {:#?}, ignoring",
-                    other);
+                    other
+                );
                 return FsmState::Active(conn);
             }
         };
         if let Err(e) = self.handle_open(&conn, &om) {
-            wrn!(self; "failed to handle open message: {e}");
+            wrn!(self, "session_runner", "failed to handle open message: {e}");
             //TODO send a notification to the peer letting them know we are
             //     rejecting the open message?
             return FsmState::Active(conn);
@@ -1090,7 +1178,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // ACK the open with a reciprocal open and a keepalive and transition
         // to open confirm.
         if let Err(e) = self.send_open(&conn) {
-            err!(self; "send open failed (on_active) {e}");
+            err!(self, "session_runner", "send open failed (on_active) {e}");
             return FsmState::Idle;
         }
         self.send_keepalive(&conn);
@@ -1102,7 +1190,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let event = match self.event_rx.recv() {
             Ok(event) => event,
             Err(e) => {
-                err!(self; "on open sent event rx: {e}");
+                err!(self, "session_runner", "on open sent event rx: {e}");
                 return FsmState::OpenSent(conn);
             }
         };
@@ -1111,7 +1199,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // receiving a reciprocal open message from the peer.
         let om = match event {
             FsmEvent::Reset => {
-                inf!(self; "exit open sent due to reset");
+                inf!(self, "session_runner", "exit open sent due to reset");
                 return FsmState::Idle;
             }
             FsmEvent::Message(Message::Open(om)) => {
@@ -1123,7 +1211,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 om
             }
             FsmEvent::HoldTimerExpires => {
-                wrn!(self; "open sent: hold timer expired");
+                wrn!(self, "session_runner", "open sent: hold timer expired");
                 self.counters
                     .hold_timer_expirations
                     .fetch_add(1, Ordering::Relaxed);
@@ -1134,14 +1222,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .unexpected_keepalive_message
                     .fetch_add(1, Ordering::Relaxed);
-                wrn!(self; "unexpected keepalive message in open sent");
+                wrn!(
+                    self,
+                    "session_runner",
+                    "unexpected keepalive message in open sent"
+                );
                 return FsmState::Active(conn);
             }
             FsmEvent::Message(Message::Update(_)) => {
                 self.counters
                     .unexpected_update_message
                     .fetch_add(1, Ordering::Relaxed);
-                wrn!(self; "unexpected update message in open sent");
+                wrn!(
+                    self,
+                    "session_runner",
+                    "unexpected update message in open sent"
+                );
                 return FsmState::Active(conn);
             }
             FsmEvent::Connected(accepted) => {
@@ -1150,12 +1246,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     lock!(self.session).connect_retry_counter = 0;
                     lock!(self.clock.timers.connect_retry_timer).disable();
                     if let Err(e) = self.ensure_connection_policy(&accepted) {
-                        err!(self; "{e}");
+                        err!(self, "session_runner", "{e}");
                         return FsmState::Idle;
                     }
-                    inf!(self; "accepted connection from {}", accepted.peer());
+                    inf!(
+                        self,
+                        "session_runner",
+                        "accepted connection from {}",
+                        accepted.peer()
+                    );
                     if let Err(e) = self.send_open(&accepted) {
-                        err!(self; "open_sent: send open failed (FsmEvent::Connected) {e}");
+                        err!(self, "session_runner", "open_sent: send open failed (FsmEvent::Connected) {e}");
                         return FsmState::Idle;
                     }
                     {
@@ -1173,7 +1274,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             FsmEvent::IdleHoldTimerExpires => {
                 wrn!(
-                    self;
+                    self,
+                    "session_runner",
                     "open sent: received IdleHoldTimerExpires event, ignoring"
                 );
                 self.counters
@@ -1184,8 +1286,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             other => {
                 wrn!(
-                    self;
-                    "open sent: expected open, received {:#?}, ignoring", other
+                    self,
+                    "session_runner",
+                    "open sent: expected open, received {:#?}, ignoring",
+                    other
                 );
                 lock!(self.clock.timers.connect_retry_timer).enable();
                 return FsmState::Active(conn);
@@ -1194,10 +1298,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Err(e) = self.handle_open(&conn, &om) {
             match e {
                 Error::PolicyCheckFailed => {
-                    inf!(self; "{}", e)
+                    inf!(self, "session_runner", "{}", e)
                 }
                 e => {
-                    wrn!(self; "failed to handle open message: {e}");
+                    wrn!(
+                        self,
+                        "session_runner",
+                        "failed to handle open message: {e}"
+                    );
                     //TODO send a notification to the peer letting them know we are
                     //     rejecting the open message?
                     lock!(self.clock.timers.connect_retry_timer).enable();
@@ -1219,13 +1327,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let event = match self.event_rx.recv() {
             Ok(event) => event,
             Err(e) => {
-                err!(self; "on open confirm: event rx {e}");
+                err!(self, "session_runner", "on open confirm: event rx {e}");
                 return FsmState::OpenConfirm(pc);
             }
         };
         match event {
             FsmEvent::Reset => {
-                inf!(self; "exit open confirm due to reset");
+                inf!(self, "session_runner", "exit open confirm due to reset");
                 FsmState::Idle
             }
             // The peer has ACK'd our open message with a keepalive. Start the
@@ -1254,7 +1362,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .lock()
                     .unwrap()
                     .receive(m.clone().into());
-                wrn!(self; "notification received: {:#?}", m);
+                wrn!(self, "session_runner", "notification received: {:#?}", m);
                 lock!(self.session).connect_retry_counter += 1;
                 lock!(self.clock.timers.hold_timer).disable();
                 lock!(self.clock.timers.keepalive_timer).disable();
@@ -1264,7 +1372,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmState::Idle
             }
             FsmEvent::HoldTimerExpires => {
-                wrn!(self; "open sent: hold timer expired");
+                wrn!(self, "session_runner", "open sent: hold timer expired");
                 lock!(self.clock.timers.hold_timer).disable();
                 self.send_hold_timer_expired_notification(&pc.conn);
                 self.counters
@@ -1276,14 +1384,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .unexpected_open_message
                     .fetch_add(1, Ordering::Relaxed);
-                wrn!(self; "unexpected open message in open confirm");
+                wrn!(
+                    self,
+                    "session_runner",
+                    "unexpected open message in open confirm"
+                );
                 FsmState::Idle
             }
             FsmEvent::Message(Message::Update(_)) => {
                 self.counters
                     .unexpected_update_message
                     .fetch_add(1, Ordering::Relaxed);
-                wrn!(self; "unexpected update message in open confirm");
+                wrn!(
+                    self,
+                    "session_runner",
+                    "unexpected update message in open confirm"
+                );
                 FsmState::Idle
             }
             FsmEvent::Connected(accepted) => {
@@ -1292,12 +1408,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     lock!(self.session).connect_retry_counter = 0;
                     lock!(self.clock.timers.connect_retry_timer).disable();
                     if let Err(e) = self.ensure_connection_policy(&accepted) {
-                        err!(self; "{e}");
+                        err!(self, "session_runner", "{e}");
                         return FsmState::Idle;
                     }
-                    inf!(self; "accepted connection from {}", accepted.peer());
+                    inf!(
+                        self,
+                        "session_runner",
+                        "accepted connection from {}",
+                        accepted.peer()
+                    );
                     if let Err(e) = self.send_open(&accepted) {
-                        err!(self; "open_confirm: send open failed (FsmEvent::Connected) {e}");
+                        err!(self, "session_runner", "open_confirm: send open failed (FsmEvent::Connected) {e}");
                         return FsmState::Idle;
                     }
                     {
@@ -1315,7 +1436,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             FsmEvent::IdleHoldTimerExpires => {
                 wrn!(
-                    self;
+                    self, "session_runner",
                     "open confirm: received IdleHoldTimerExpires event, ignoring"
                 );
                 self.counters
@@ -1327,8 +1448,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // An event we are not expecting, log it and re-enter this state.
             other => {
                 wrn!(
-                    self;
-                    "event {:?} not expected in open confirm, ignoring", other
+                    self,
+                    "session_runner",
+                    "event {:?} not expected in open confirm, ignoring",
+                    other
                 );
                 FsmState::OpenConfirm(pc)
             }
@@ -1342,7 +1465,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             Ok(value) => value,
             Err(e) => {
                 //TODO possible death loop. Should we just panic here?
-                err!(self; "failed to get originated from db: {e}");
+                err!(
+                    self,
+                    "session_runner",
+                    "failed to get originated from db: {e}"
+                );
                 return FsmState::SessionSetup(pc);
             }
         };
@@ -1373,7 +1500,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             if let Err(e) =
                 self.send_update(update, &pc.conn, ShaperApplication::Current)
             {
-                err!(self; "sending update to peer failed {e}");
+                err!(
+                    self,
+                    "session_runner",
+                    "sending update to peer failed {e}"
+                );
                 return self.exit_established(pc);
             }
         }
@@ -1415,13 +1546,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 //TODO possible death loop. Should we just panic here? Is it
                 // even possible to recover from an error here as it likely
                 // means the channel is toast.
-                err!(self; "on established: event rx {e}");
+                err!(self, "session_runner", "on established: event rx {e}");
                 return FsmState::Established(pc);
             }
         };
         match event {
             FsmEvent::Reset => {
-                inf!(self; "exit established due to reset");
+                inf!(self, "session_runner", "exit established due to reset");
                 self.exit_established(pc)
             }
             // When the keepliave timer fires, send a keepliave to the peer.
@@ -1434,7 +1565,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // from the peer within the hold time - so exit the established
             // state and restart the peer FSM from the connect state.
             FsmEvent::HoldTimerExpires => {
-                wrn!(self; "hold timer expired");
+                wrn!(self, "session_runner", "hold timer expired");
                 self.counters
                     .hold_timer_expirations
                     .fetch_add(1, Ordering::Relaxed);
@@ -1446,7 +1577,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // timer and apply the update to the RIB.
             FsmEvent::Message(Message::Update(m)) => {
                 lock!(self.clock.timers.hold_timer).reset();
-                inf!(self; "update received: {m:#?}");
+                inf!(self, "session_runner", "update received: {m:#?}");
                 let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
                 self.apply_update(m.clone(), &pc, peer_as);
                 lock!(self.message_history).receive(m.into());
@@ -1458,7 +1589,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             FsmEvent::Message(Message::RouteRefresh(m)) => {
                 lock!(self.clock.timers.hold_timer).reset();
-                inf!(self; "route refresh received: {m:#?}");
+                inf!(self, "session_runner", "route refresh received: {m:#?}");
                 self.message_history
                     .lock()
                     .unwrap()
@@ -1467,7 +1598,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .route_refresh_received
                     .fetch_add(1, Ordering::Relaxed);
                 if let Err(e) = self.handle_refresh(m, &pc) {
-                    err!(self; "handle refresh: {e:}");
+                    err!(self, "session_runner", "handle refresh: {e:}");
                     self.exit_established(pc)
                 } else {
                     FsmState::Established(pc)
@@ -1477,7 +1608,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // We've received a notification from the peer. They are displeased
             // with us. Exit established and restart from the connect state.
             FsmEvent::Message(Message::Notification(m)) => {
-                wrn!(self; "notification received: {m:#?}");
+                wrn!(self, "session_runner", "notification received: {m:#?}");
                 lock!(self.message_history).receive(m.into());
                 self.counters
                     .notifications_received
@@ -1488,7 +1619,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // We've received a keepliave from the peer, reset the hold timer
             // and re-enter the established state.
             FsmEvent::Message(Message::KeepAlive) => {
-                trc!(self; "keepalive received");
+                trc!(self, "session_runner", "keepalive received");
                 self.counters
                     .keepalives_received
                     .fetch_add(1, Ordering::Relaxed);
@@ -1505,7 +1636,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     &pc.conn,
                     ShaperApplication::Current,
                 ) {
-                    err!(self; "sending update to peer failed {e}");
+                    err!(
+                        self,
+                        "session_runner",
+                        "sending update to peer failed {e}"
+                    );
                     return self.exit_established(pc);
                 }
                 FsmState::Established(pc)
@@ -1525,7 +1660,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .unexpected_open_message
                     .fetch_add(1, Ordering::Relaxed);
-                wrn!(self; "unexpected open message in open established");
+                wrn!(
+                    self,
+                    "session_runner",
+                    "unexpected open message in open established"
+                );
                 FsmState::Established(pc)
             }
 
@@ -1535,7 +1674,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     ShaperApplication::Difference(previous),
                 ) {
                     Err(e) => {
-                        err!(self; "originate failed: {e}");
+                        err!(self, "session_runner", "originate failed: {e}");
                         self.exit_established(pc)
                     }
                     Ok(()) => FsmState::Established(pc),
@@ -1547,7 +1686,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     Ok(value) => value,
                     Err(e) => {
                         //TODO possible death loop. Should we just panic here?
-                        err!(self; "failed to get originated from db: {e}");
+                        err!(
+                            self,
+                            "session_runner",
+                            "failed to get originated from db: {e}"
+                        );
                         return FsmState::SessionSetup(pc);
                     }
                 };
@@ -1602,7 +1745,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     &pc.conn,
                     ShaperApplication::Current,
                 ) {
-                    err!(self; "sending update to peer failed {e}");
+                    err!(
+                        self,
+                        "session_runner",
+                        "sending update to peer failed {e}"
+                    );
                     return self.exit_established(pc);
                 }
 
@@ -1612,7 +1759,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             FsmEvent::PathAttributesChanged => {
                 match self.originate_update(&pc, ShaperApplication::Current) {
                     Err(e) => {
-                        err!(self; "originate failed: {e}");
+                        err!(self, "session_runner", "originate failed: {e}");
                         self.exit_established(pc)
                     }
                     Ok(()) => FsmState::Established(pc),
@@ -1632,7 +1779,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             // Some unexpeted event, log and re-enter established.
             e => {
-                wrn!(self; "unhandled event: {e:?}");
+                wrn!(self, "session_runner", "unhandled event: {e:?}");
                 FsmState::Established(pc)
             }
         }
@@ -1640,7 +1787,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     // Housekeeping items to do when a session shutdown is requested.
     pub fn on_shutdown(&self) {
-        inf!(self; "shutting down");
+        inf!(self, "session_runner", "shutting down");
 
         // Go back to the beginning of the state machine.
         *(lock!(self.state)) = FsmStateKind::Idle;
@@ -1649,7 +1796,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.shutdown.store(false, Ordering::Release);
         self.running.store(false, Ordering::Release);
 
-        inf!(self; "shutdown complete");
+        inf!(self, "session_runner", "shutdown complete");
     }
 
     /// Send an event to the state machine driving this peer session.
@@ -1704,7 +1851,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 },
                 Err(e) => {
-                    err!(self; "open checker exec: {e}");
+                    err!(self, "session_runner", "open checker exec: {e}");
                 }
             }
         }
@@ -1750,9 +1897,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Send a keepalive message to the session peer.
     fn send_keepalive(&self, conn: &Cnx) {
-        trc!(self; "sending keepalive");
+        trc!(self, "session_runner", "sending keepalive");
         if let Err(e) = conn.send(Message::KeepAlive) {
-            err!(self; "failed to send keepalive: {e}");
+            err!(self, "session_runner", "failed to send keepalive: {e}");
             self.counters
                 .keepalive_send_failure
                 .fetch_add(1, Ordering::Relaxed);
@@ -1764,12 +1911,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn send_route_refresh(&self, conn: &Cnx) {
-        trc!(self; "sending route refresh");
+        trc!(self, "session_runner", "sending route refresh");
         if let Err(e) = conn.send(Message::RouteRefresh(RouteRefreshMessage {
             afi: Afi::Ipv4 as u16,
             safi: Safi::NlriUnicast as u8,
         })) {
-            err!(self; "failed to send route refresh: {e}");
+            err!(self, "session_runner", "failed to send route refresh: {e}");
             self.counters
                 .keepalive_send_failure
                 .fetch_add(1, Ordering::Relaxed);
@@ -1794,7 +1941,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         error_code: ErrorCode,
         error_subcode: ErrorSubcode,
     ) {
-        inf!(self; "sending notification {error_code:?}/{error_subcode:?}");
+        inf!(
+            self,
+            "session_runner",
+            "sending notification {error_code:?}/{error_subcode:?}"
+        );
         let msg = Message::Notification(NotificationMessage {
             error_code,
             error_subcode,
@@ -1803,7 +1954,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         lock!(self.message_history).send(msg.clone());
 
         if let Err(e) = conn.send(msg) {
-            err!(self; "failed to send notification: {e}");
+            err!(self, "session_runner", "failed to send notification: {e}");
             self.counters
                 .notification_send_failure
                 .fetch_add(1, Ordering::Relaxed);
@@ -1860,7 +2011,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 },
                 Err(e) => {
-                    err!(self; "open shaper exec: {e}");
+                    err!(self, "session_runner", "open shaper exec: {e}");
                 }
             }
         }
@@ -1869,7 +2020,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         self.counters.opens_sent.fetch_add(1, Ordering::Relaxed);
         if let Err(e) = conn.send(out) {
-            err!(self; "failed to send open: {e}");
+            err!(self, "session_runner", "failed to send open: {e}");
             self.counters
                 .open_send_failure
                 .fetch_add(1, Ordering::Relaxed);
@@ -1957,7 +2108,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let nexthop = to_canonical(match conn.local() {
             Some(sockaddr) => sockaddr.ip(),
             None => {
-                wrn!(self; "connection has no local address");
+                wrn!(self, "session_runner", "connection has no local address");
                 return Err(Error::Disconnected);
             }
         });
@@ -2022,7 +2173,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
 
         if let Err(e) = conn.send(out) {
-            err!(self; "failed to send update: {e}");
+            err!(self, "session_runner", "failed to send update: {e}");
             self.counters
                 .update_send_failure
                 .fetch_add(1, Ordering::Relaxed);
@@ -2052,7 +2203,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// and reset/re-enable the timer if so.
     fn reset_idle_hold_timer(&self) {
         let ihl = lock!(self.clock.timers.idle_hold_timer);
-        dbg!(self; "resetting idle_hold_timer from {}: IdleHoldTimer [enabled={} expired={} interval={} remaining={}]",
+        dbg!(self,
+            "session_runner",
+            "resetting idle_hold_timer from {}: IdleHoldTimer [enabled={} expired={} interval={} remaining={}]",
             self.state(),
             ihl.enabled(),
             ihl.expired(),
@@ -2074,7 +2227,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ) {
         if let Err(e) = self.check_update(&update) {
             wrn!(
-                self;
+                self,
+                "session_runner",
                 "Update check failed for {:#?}: {e}. Ignoring",
                 update,
             );
@@ -2099,7 +2253,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 },
                 Err(e) => {
-                    err!(self; "update checker exec: {e}");
+                    err!(self, "session_runner", "update checker exec: {e}");
                 }
             }
         }
@@ -2132,7 +2286,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
-                err!(self; "failed to get originated from db: {e}");
+                err!(
+                    self,
+                    "session_runner",
+                    "failed to get originated from db: {e}"
+                );
                 // This is not a protocol level issue
                 return Ok(());
             }
@@ -2180,7 +2338,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
-                err!(self; "failed to get originated from db: {e}");
+                err!(
+                    self,
+                    "session_runner",
+                    "failed to get originated from db: {e}"
+                );
                 Vec::new()
             }
         };
@@ -2221,7 +2383,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Some(nh) => nh,
                 None => {
                     wrn!(
-                        self;
+                        self, "session_runner",
                         "update with nlri entries and no nexthop recieved {update:#?}"
                     );
                     self.counters
@@ -2308,7 +2470,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             };
             for segment in path {
                 if segment.value.contains(&asn) {
-                    wrn!(self; "self in AS path: {:?}", update);
+                    wrn!(
+                        self,
+                        "session_runner",
+                        "self in AS path: {:?}",
+                        update
+                    );
                     return Err(Error::SelfLoopDetected);
                 }
             }

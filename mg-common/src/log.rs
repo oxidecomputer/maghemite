@@ -25,60 +25,65 @@ pub fn build_logger<W: Write + Send + 'static>(w: W) -> Logger {
 
 #[macro_export]
 macro_rules! trc {
-    ($self:ident; $($args:tt)+) => {
+    ($self:ident, $unit:tt, $($args:tt)+) => {
         slog::trace!(
             $self.log,
             "[{}] {}",
             lock!($self.neighbor.name),
-            format!($($args)+)
+            format!($($args)+);
+            "unit" => $unit
         )
     }
 }
 
 #[macro_export]
 macro_rules! dbg {
-    ($self:ident; $($args:tt)+) => {
+    ($self:ident, $unit:tt, $($args:tt)+) => {
         slog::debug!(
             $self.log,
             "[{}] {}",
             lock!($self.neighbor.name),
-            format!($($args)+)
+            format!($($args)+);
+            "unit" => $unit
         )
     }
 }
 
 #[macro_export]
 macro_rules! inf {
-    ($self:ident; $($args:tt)+) => {
+    ($self:ident, $unit:tt, $($args:tt)+) => {
         slog::info!(
             $self.log,
             "[{}] {}",
             lock!($self.neighbor.name),
-            format!($($args)+)
+            format!($($args)+);
+            "unit" => $unit
         )
     }
 }
 
 #[macro_export]
 macro_rules! wrn {
-    ($self:ident; $($args:tt)+) => {
+    ($self:ident, $unit:tt, $($args:tt)+) => {
         slog::warn!(
             $self.log,
             "[{}] {}",
             lock!($self.neighbor.name),
-            format!($($args)+)
+            format!($($args)+);
+            "unit" => $unit
         )
     }
 }
 
 #[macro_export]
 macro_rules! err {
-    ($self:ident; $($args:tt)+) => {
+    ($self:ident, $unit:tt, $($args:tt)+) => {
         slog::error!(
             $self.log,
             "[{}] {}",
             lock!($self.neighbor.name),
-            format!($($args)+)
+            format!($($args)+);
+            "unit" => $unit
         )
     }
 }
