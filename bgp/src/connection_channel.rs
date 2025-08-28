@@ -292,7 +292,6 @@ impl BgpConnectionChannel {
         _timeout: Duration, //TODO shutdown detection
         log: Logger,
     ) {
-        slog::info!(log, "spawning recv loop");
         connection_log_lite!(log,
             info,
             "spawning recv loop for {peer}";

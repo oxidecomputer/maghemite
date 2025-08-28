@@ -32,6 +32,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::spawn;
 use std::time::Duration;
 
+const UNIT_SESSION_RUNNER: &str = "session_runner";
+
 pub struct Router<Cnx: BgpConnection> {
     /// The underlying routing information base (RIB) databse this router
     /// will update in response to BGP update messages (imported routes)
@@ -109,8 +111,13 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             let session = s.clone();
             slog::info!(
                 self.log,
-                "[{}] spawning session",
-                lock!(session.neighbor.name)
+                "spawning session for {}",
+                lock!(session.neighbor.name);
+                slog::o!(
+                    "component" => crate::COMPONENT_BGP,
+                    "module" => crate::MOD_ROUTER,
+                    "unit" => UNIT_SESSION_RUNNER,
+                )
             );
             spawn(move || {
                 session.start();
@@ -214,8 +221,13 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let r = runner.clone();
         slog::info!(
             self.log,
-            "[{}] spawning new session",
-            lock!(runner.neighbor.name)
+            "spawning session for {}",
+            lock!(runner.neighbor.name);
+            slog::o!(
+                "component" => crate::COMPONENT_BGP,
+                "module" => crate::MOD_ROUTER,
+                "unit" => UNIT_SESSION_RUNNER,
+            )
         );
         spawn(move || {
             r.start();

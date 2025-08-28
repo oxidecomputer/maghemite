@@ -31,8 +31,10 @@ pub mod connection_channel;
 
 pub const BGP_PORT: u16 = 179;
 pub const COMPONENT_BGP: &str = "bgp";
+pub const MOD_ROUTER: &str = "router";
 pub const MOD_NEIGHBOR: &str = "neighbor";
 pub const MOD_CLOCK: &str = "clock";
+pub const MOD_POLICY: &str = "policy";
 
 //TODO use IpAddr::to_canonical once it stabilizes.
 pub fn to_canonical(addr: IpAddr) -> IpAddr {

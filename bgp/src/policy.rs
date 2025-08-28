@@ -38,6 +38,8 @@ use slog::{debug, info, Logger};
 use std::collections::HashSet;
 use std::net::IpAddr;
 
+const UNIT_CHECKER: &str = "checker";
+
 #[derive(Debug, Clone, Copy)]
 pub enum Direction {
     Incoming,
@@ -242,21 +244,22 @@ pub fn new_rhai_engine() -> Engine {
     engine
 }
 
-fn set_engine_logger(
-    engine: &mut Engine,
-    log: Logger,
-    component: &str,
-    asn: u32,
-) {
+fn set_engine_logger(engine: &mut Engine, log: Logger, unit: &str, asn: u32) {
     //TODO have a log scraper ship these to somewhere the user can get at them
-    let info_log =
-        log.new(slog::o!("component" => component.to_string(), "asn" => asn));
+    let info_log = log.new(slog::o!(
+            "asn" => asn,
+            "unit" => unit.to_string(),
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_POLICY));
     engine.on_print(move |s| {
         info!(info_log, "{}", s);
     });
 
-    let debug_log =
-        log.new(slog::o!("component" => component.to_string(), "asn" => asn));
+    let debug_log = log.new(slog::o!(
+            "asn" => asn,
+            "unit" => unit.to_string(),
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_POLICY));
     engine.on_debug(move |s, src, pos| {
         debug!(debug_log, "[{src:?}:{pos}] {}", s);
     });
@@ -285,7 +288,7 @@ pub fn check_incoming_open(
 
     let mut scope = new_rhai_scope(&ctx);
     let mut engine = new_rhai_engine();
-    set_engine_logger(&mut engine, log, "checker", asn);
+    set_engine_logger(&mut engine, log, UNIT_CHECKER, asn);
 
     Ok(engine.call_fn::<CheckerResult>(
         &mut scope,
@@ -310,7 +313,7 @@ pub fn check_incoming_update(
 
     let mut scope = new_rhai_scope(&ctx);
     let mut engine = new_rhai_engine();
-    set_engine_logger(&mut engine, log, "checker", asn);
+    set_engine_logger(&mut engine, log, UNIT_CHECKER, asn);
 
     Ok(engine.call_fn::<CheckerResult>(
         &mut scope,
@@ -335,7 +338,7 @@ pub fn shape_outgoing_open(
 
     let mut scope = new_rhai_scope(&ctx);
     let mut engine = new_rhai_engine();
-    set_engine_logger(&mut engine, log, "checker", asn);
+    set_engine_logger(&mut engine, log, UNIT_CHECKER, asn);
 
     Ok(engine.call_fn::<ShaperResult>(
         &mut scope,
@@ -360,7 +363,7 @@ pub fn shape_outgoing_update(
 
     let mut scope = new_rhai_scope(&ctx);
     let mut engine = new_rhai_engine();
-    set_engine_logger(&mut engine, log, "checker", asn);
+    set_engine_logger(&mut engine, log, UNIT_CHECKER, asn);
 
     Ok(engine.call_fn::<ShaperResult>(
         &mut scope,
