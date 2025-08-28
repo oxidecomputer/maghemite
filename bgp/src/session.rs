@@ -7,6 +7,7 @@ use crate::config::PeerConfig;
 use crate::connection::{BgpConnection, MAX_MD5SIG_KEYLEN};
 use crate::error::{Error, ExpectationMismatch};
 use crate::fanout::Fanout;
+use crate::log::session_runner::{dbg, err, inf, trc, wrn};
 use crate::messages::{
     AddPathElement, Afi, Capability, Community, ErrorCode, ErrorSubcode,
     Message, NotificationMessage, OpenMessage, OptionalParameter,
@@ -15,8 +16,7 @@ use crate::messages::{
 use crate::policy::{CheckerResult, ShaperResult};
 use crate::router::Router;
 use crate::to_canonical;
-use mg_common::{dbg, err, inf, parse, sockaddr, trc, wrn};
-use mg_common::{lock, read_lock, write_lock};
+use mg_common::{lock, parse, read_lock, sockaddr, write_lock};
 use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
