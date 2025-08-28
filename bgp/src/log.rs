@@ -1,64 +1,83 @@
-#[macro_use]
-pub mod session_runner {
-    macro_rules! trc {
-        ($self:ident, $unit:tt, $($args:tt)+) => {
-            slog::trace!(
-                $self.log,
-                "[{}] {}",
-                lock!($self.neighbor.name),
-                format!($($args)+);
-                "unit" => $unit
-            )
-        }
-    }
-
-    macro_rules! dbg {
-        ($self:ident, $unit:tt, $($args:tt)+) => {
-            slog::debug!(
-                $self.log,
-                "[{}] {}",
-                lock!($self.neighbor.name),
-                format!($($args)+);
-                "unit" => $unit
-            )
-        }
-    }
-
-    macro_rules! inf {
-        ($self:ident, $unit:tt, $($args:tt)+) => {
-            slog::info!(
-                $self.log,
-                "[{}] {}",
-                lock!($self.neighbor.name),
-                format!($($args)+);
-                "unit" => $unit
-            )
-        }
-    }
-
-    macro_rules! wrn {
-        ($self:ident, $unit:tt, $($args:tt)+) => {
-            slog::warn!(
-                $self.log,
-                "[{}] {}",
-                lock!($self.neighbor.name),
-                format!($($args)+);
-                "unit" => $unit
-            )
-        }
-    }
-
-    macro_rules! err {
-        ($self:ident, $unit:tt, $($args:tt)+) => {
-            slog::error!(
-                $self.log,
-                "[{}] {}",
-                lock!($self.neighbor.name),
-                format!($($args)+);
-                "unit" => $unit
-            )
-        }
-    }
-
-    pub(crate) use {dbg, err, inf, trc, wrn};
+macro_rules! session_log {
+    ($self:expr, $level:ident, $msg:expr; $($key:expr => $value:expr),*) => {
+        slog::$level!($self.log,
+            $msg;
+            "component" => crate::COMPONENT_BGP,
+            "unit" => crate::UNIT_NEIGHBOR,
+            "module" => MOD_SESSION,
+            "peer_name" => lock!($self.neighbor.name).as_str(),
+            "remote" => $self.neighbor.host,
+            $($key => $value),*
+        );
+    };
+    ($self:expr, $level:ident, $msg:expr, $($args:expr),*; $($key:expr => $value:expr),*) => {
+        slog::$level!($self.log,
+            $msg, $($args),*;
+            "component" => crate::COMPONENT_BGP,
+            "unit" => crate::UNIT_NEIGHBOR,
+            "module" => MOD_SESSION,
+            "peer_name" => lock!($self.neighbor.name).as_str(),
+            "remote" => $self.neighbor.host,
+            $($key => $value),*
+        );
+    };
+    ($self:expr, $level:ident, $msg:expr) => {
+        slog::$level!($self.log,
+            $msg;
+            "component" => crate::COMPONENT_BGP,
+            "unit" => crate::UNIT_NEIGHBOR,
+            "module" => MOD_SESSION,
+            "peer_name" => lock!($self.neighbor.name).as_str(),
+            "remote" => $self.neighbor.host,
+        );
+    };
+    ($self:expr, $level:ident, $msg:expr, $($args:expr),*) => {
+        slog::$level!($self.log,
+            $msg, $($args),*;
+            "component" => crate::COMPONENT_BGP,
+            "unit" => crate::UNIT_NEIGHBOR,
+            "module" => MOD_SESSION,
+            "peer_name" => lock!($self.neighbor.name).as_str(),
+            "remote" => $self.neighbor.host,
+        );
+    };
 }
+
+macro_rules! dispatcher_log {
+    ($self:expr, $level:ident, $msg:expr; $($key:expr => $value:expr),*) => {
+        slog::$level!($self.log,
+            $msg;
+            "component" => crate::COMPONENT_BGP,
+            "unit" => crate::UNIT_LISTENER,
+            "module" => MOD_DISPATCHER,
+            $($key => $value),*
+        );
+    };
+    ($self:expr, $level:ident, $msg:expr, $($args:expr),*; $($key:expr => $value:expr),*) => {
+        slog::$level!($self.log,
+            $msg, $($args),*;
+            "component" => crate::COMPONENT_BGP,
+            "unit" => crate::UNIT_LISTENER,
+            "module" => MOD_DISPATCHER,
+            $($key => $value),*
+        );
+    };
+    ($self:expr, $level:ident, $msg:expr) => {
+        slog::$level!($self.log,
+            $msg;
+            "component" => crate::COMPONENT_BGP,
+            "unit" => crate::UNIT_LISTENER,
+            "module" => MOD_DISPATCHER,
+        );
+    };
+    ($self:expr, $level:ident, $msg:expr, $($args:expr),*) => {
+        slog::$level!($self.log,
+            $msg, $($args),*;
+            "component" => crate::COMPONENT_BGP,
+            "unit" => crate::UNIT_LISTENER,
+            "module" => MOD_DISPATCHER,
+        );
+    };
+}
+
+pub(crate) use {dispatcher_log, session_log};

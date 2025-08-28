@@ -13,6 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
+    fmt::{Display, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
 
@@ -425,6 +426,17 @@ impl OpenMessage {
     }
 }
 
+impl Display for OpenMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        // XXX: add format support for capabilities (self.parameters)
+        write!(
+            f,
+            "Open [ version: {}, asn: {}, hold time: {}, id: {} ]",
+            self.version, self.asn, self.hold_time, self.id
+        )
+    }
+}
+
 /// A type-length-value object. The length is implicit in the length of the
 /// value tracked by Vec.
 pub struct Tlv {
@@ -666,6 +678,30 @@ impl UpdateMessage {
         }
         self.path_attributes
             .push(PathAttributeValue::Communities(vec![community]).into());
+    }
+}
+
+impl Display for UpdateMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let mut w_str = String::new();
+        for w in self.withdrawn.iter() {
+            w_str.push_str(&format!("{} ", w.as_prefix4()));
+        }
+
+        let mut n_str = String::new();
+        for n in self.nlri.iter() {
+            n_str.push_str(&format!("{} ", n.as_prefix4()));
+        }
+
+        let mut p_str = String::new();
+        for p in self.path_attributes.iter() {
+            p_str.push_str(&format!("{} ", p.value));
+        }
+
+        write!(
+            f,
+            "Update[ path attributes({p_str}) withdrawn({w_str}) nlri({n_str}) ]",
+        )
     }
 }
 
@@ -1126,6 +1162,58 @@ impl PathAttributeValue {
     }
 }
 
+impl Display for PathAttributeValue {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            PathAttributeValue::Origin(po) => write!(f, "{po}"),
+            PathAttributeValue::AsPath(path_segs) => {
+                let mut path = String::new();
+                for seg in path_segs.iter() {
+                    for val in seg.value.iter() {
+                        let mut v = val.to_string();
+                        v.push(' ');
+                        path.push_str(&v);
+                    }
+                }
+                write!(f, "{path}")
+            }
+            PathAttributeValue::NextHop(nh) => write!(f, "{nh}"),
+            PathAttributeValue::MultiExitDisc(med) => write!(f, "{med}"),
+            PathAttributeValue::LocalPref(pref) => write!(f, "{pref}"),
+            // XXX: Do real formatting
+            PathAttributeValue::Aggregator(agg) => write!(
+                f,
+                "{} {} {} {} {} {}",
+                agg[0], agg[1], agg[2], agg[3], agg[4], agg[5]
+            ),
+            PathAttributeValue::Communities(comms) => {
+                let mut comm_str = String::new();
+                for comm in comms.iter() {
+                    let mut c = u32::from(*comm).to_string();
+                    c.push(' ');
+                    comm_str.push_str(&c);
+                }
+                write!(f, "{comm_str}")
+            }
+            PathAttributeValue::As4Path(path_segs) => {
+                let mut path = String::new();
+                for seg in path_segs.iter() {
+                    for val in seg.value.iter() {
+                        path.push_str(val.to_string().as_str());
+                    }
+                }
+                write!(f, "{path}")
+            }
+            // XXX: Do real formatting
+            PathAttributeValue::As4Aggregator(agg) => write!(
+                f,
+                "{} {} {} {} {} {} {} {}",
+                agg[0], agg[1], agg[2], agg[3], agg[4], agg[5], agg[6], agg[7]
+            ),
+        }
+    }
+}
+
 /// BGP community value
 #[derive(
     Debug,
@@ -1191,6 +1279,12 @@ pub enum PathOrigin {
     Egp = 1,
     /// Incomplete path origin
     Incomplete = 2,
+}
+
+impl Display for PathOrigin {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "{}", *self as u8)
+    }
 }
 
 // A self describing segment found in path sets and sequences.
@@ -1404,6 +1498,16 @@ impl NotificationMessage {
     }
 }
 
+impl Display for NotificationMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Notification [ Error code: {}, Error Subcode: {}, Data: {:?} ]",
+            self.error_code, self.error_subcode, self.data
+        )
+    }
+}
+
 // A message sent between peers to ask for re-advertisement of all outbound
 // routes. Defined in RFC 2918.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1430,6 +1534,16 @@ impl RouteRefreshMessage {
     }
 }
 
+impl Display for RouteRefreshMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Route Refresh [ afi: {}, safi: {} ]",
+            self.afi, self.safi
+        )
+    }
+}
+
 /// This enumeration contains possible notification error codes.
 #[derive(
     Debug,
@@ -1453,8 +1567,26 @@ pub enum ErrorCode {
     Cease,
 }
 
+impl Display for ErrorCode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let val = *self as u8;
+        match self {
+            ErrorCode::Header => write!(f, "{val}(Header)"),
+            ErrorCode::Open => write!(f, "{val}(Open)"),
+            ErrorCode::Update => write!(f, "{val}(Update)"),
+            ErrorCode::HoldTimerExpired => {
+                write!(f, "{val}(HoldTimerExpired)")
+            }
+            ErrorCode::Fsm => write!(f, "{val}(FSM)"),
+            ErrorCode::Cease => write!(f, "{val}(Cease)"),
+        }
+    }
+}
+
 /// This enumeration contains possible notification error subcodes.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorSubcode {
     Header(HeaderErrorSubcode),
@@ -1502,6 +1634,27 @@ impl ErrorSubcode {
     }
 }
 
+impl Display for ErrorSubcode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            ErrorSubcode::Header(header_error_subcode) => {
+                write!(f, "{header_error_subcode}(Header)")
+            }
+            ErrorSubcode::Open(open_error_subcode) => {
+                write!(f, "{open_error_subcode}(Open)")
+            }
+            ErrorSubcode::Update(update_error_subcode) => {
+                write!(f, "{update_error_subcode}(Update)")
+            }
+            ErrorSubcode::HoldTime(i) => write!(f, "{i}(HoldTime)"),
+            ErrorSubcode::Fsm(i) => write!(f, "{i}(FSM)"),
+            ErrorSubcode::Cease(cease_error_subcode) => {
+                write!(f, "{cease_error_subcode}(Cease)")
+            }
+        }
+    }
+}
+
 /// Header error subcode types
 #[derive(
     Debug,
@@ -1521,6 +1674,24 @@ pub enum HeaderErrorSubcode {
     ConnectionNotSynchronized,
     BadMessageLength,
     BadMessageType,
+}
+
+impl Display for HeaderErrorSubcode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let val = *self as u8;
+        match self {
+            HeaderErrorSubcode::Unspecific => write!(f, "{val}(Unspecific)"),
+            HeaderErrorSubcode::ConnectionNotSynchronized => {
+                write!(f, "{val}(Connection Not Synchronized)")
+            }
+            HeaderErrorSubcode::BadMessageLength => {
+                write!(f, "{val}(Bad Message Length)")
+            }
+            HeaderErrorSubcode::BadMessageType => {
+                write!(f, "{val}(Bad Message Type)")
+            }
+        }
+    }
 }
 
 /// Open message error subcode types
@@ -1546,6 +1717,32 @@ pub enum OpenErrorSubcode {
     Deprecated,
     UnacceptableHoldTime,
     UnsupportedCapability,
+}
+
+impl Display for OpenErrorSubcode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let val = *self as u8;
+        match self {
+            OpenErrorSubcode::Unspecific => write!(f, "{val}(Unspecific)"),
+            OpenErrorSubcode::UnsupportedVersionNumber => {
+                write!(f, "{val}(UnsupportedVersionNumber)")
+            }
+            OpenErrorSubcode::BadPeerAS => write!(f, "{val}(Bad Peer AS)"),
+            OpenErrorSubcode::BadBgpIdentifier => {
+                write!(f, "{val}(Bad BGP Identifier)")
+            }
+            OpenErrorSubcode::UnsupportedOptionalParameter => {
+                write!(f, "{val}(Unsupported Optional Parameter)")
+            }
+            OpenErrorSubcode::Deprecated => write!(f, "{val}(Deprecated)"),
+            OpenErrorSubcode::UnacceptableHoldTime => {
+                write!(f, "{val}(Unacceptable Hold Time)")
+            }
+            OpenErrorSubcode::UnsupportedCapability => {
+                write!(f, "{val}(Unsupported Capability)")
+            }
+        }
+    }
 }
 
 /// Update message error subcode types
@@ -1577,6 +1774,46 @@ pub enum UpdateErrorSubcode {
     MalformedAsPath,
 }
 
+impl Display for UpdateErrorSubcode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let val = *self as u8;
+        match self {
+            UpdateErrorSubcode::Unspecific => write!(f, "{val}(Unspecific)"),
+            UpdateErrorSubcode::MalformedAttributeList => {
+                write!(f, "{val}(Malformed Attribute List)")
+            }
+            UpdateErrorSubcode::UnrecognizedWellKnownAttribute => {
+                write!(f, "{val}(Unrecognized Well-Known Attribute)")
+            }
+            UpdateErrorSubcode::MissingWellKnownAttribute => {
+                write!(f, "{val}(Missing Well-Known Attribute)")
+            }
+            UpdateErrorSubcode::AttributeFlags => {
+                write!(f, "{val}(Attribute Flags)")
+            }
+            UpdateErrorSubcode::AttributeLength => {
+                write!(f, "{val}(Attribute Length)")
+            }
+            UpdateErrorSubcode::InvalidOriginAttribute => {
+                write!(f, "{val}(Invalid Origin Attribute)")
+            }
+            UpdateErrorSubcode::Deprecated => write!(f, "{val}(Deprecated)"),
+            UpdateErrorSubcode::InvalidNexthopAttribute => {
+                write!(f, "{val}(Invalid Nexthop Attribute)")
+            }
+            UpdateErrorSubcode::OptionalAttribute => {
+                write!(f, "{val}(Optional Attribute)")
+            }
+            UpdateErrorSubcode::InvalidNetworkField => {
+                write!(f, "{val}(Invalid Network Field)")
+            }
+            UpdateErrorSubcode::MalformedAsPath => {
+                write!(f, "{val}(Malformed AS Path)")
+            }
+        }
+    }
+}
+
 /// Cease error subcode types from RFC 4486
 #[derive(
     Debug,
@@ -1601,6 +1838,39 @@ pub enum CeaseErrorSubcode {
     OtherConfigurationChange,
     ConnectionCollisionResolution,
     OutOfResources,
+}
+
+impl Display for CeaseErrorSubcode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let val = *self as u8;
+        match self {
+            CeaseErrorSubcode::Unspecific => write!(f, "{val}(Unspecific)"),
+            CeaseErrorSubcode::MaximumNumberofPrefixesReached => {
+                write!(f, "{val}(Maximum Number of Prefixes Reached)")
+            }
+            CeaseErrorSubcode::AdministrativeShutdown => {
+                write!(f, "{val}(Administrative Shutdown)")
+            }
+            CeaseErrorSubcode::PeerDeconfigured => {
+                write!(f, "{val}(Peer Deconfigured)")
+            }
+            CeaseErrorSubcode::AdministrativeReset => {
+                write!(f, "{val}(Administratively Reset)")
+            }
+            CeaseErrorSubcode::ConnectionRejected => {
+                write!(f, "{val}(Connection Rejected)")
+            }
+            CeaseErrorSubcode::OtherConfigurationChange => {
+                write!(f, "{val}(Other Configuration Rejected)")
+            }
+            CeaseErrorSubcode::ConnectionCollisionResolution => {
+                write!(f, "{val}(Connection Collition Resolution)")
+            }
+            CeaseErrorSubcode::OutOfResources => {
+                write!(f, "{val}(Out of Resources)")
+            }
+        }
+    }
 }
 
 /// The IANA/IETF currently defines the following optional parameter types.

@@ -3,9 +3,10 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::connection::{BgpConnection, BgpListener};
+use crate::log::dispatcher_log;
 use crate::session::FsmEvent;
 use mg_common::lock;
-use slog::{debug, Logger};
+use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,6 +14,8 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::Duration;
+
+const MOD_DISPATCHER: &str = "dispatcher";
 
 pub struct Dispatcher<Cnx: BgpConnection> {
     pub addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
@@ -34,17 +37,31 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
             shutdown: AtomicBool::new(false),
         }
     }
+
     pub fn run<Listener: BgpListener<Cnx>>(&self) {
         'listener: loop {
             if self.shutdown.load(Ordering::Acquire) {
+                dispatcher_log!(self,
+                    info,
+                    "shutting down";
+                    "listen_address" => &self.listen
+                );
                 self.shutdown.store(false, Ordering::Release);
                 break 'listener;
             }
-            debug!(self.log, "bgp dispatcher binding {}", &self.listen);
+            dispatcher_log!(self,
+                debug,
+                "listener bind: {}", &self.listen;
+                "listen_address" => &self.listen
+            );
             let listener = match Listener::bind(&self.listen) {
                 Ok(l) => l,
                 Err(e) => {
-                    slog::error!(self.log, "bgp listener failed to bind: {e}");
+                    dispatcher_log!(self,
+                        error,
+                        "listener bind error: {e}";
+                        "listen_address" => &self.listen
+                    );
                     sleep(Duration::from_secs(1));
                     continue 'listener;
                 }
@@ -56,10 +73,10 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                     Duration::from_millis(100),
                 ) {
                     Ok(c) => {
-                        slog::debug!(
-                            self.log,
-                            "accepted connection from {}",
-                            c.peer()
+                        dispatcher_log!(self,
+                            debug,
+                            "accepted inbound connection from: {}", c.peer();
+                            "listen_address" => &self.listen
                         );
                         c
                     }
@@ -67,7 +84,11 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                         continue 'accept;
                     }
                     Err(e) => {
-                        slog::error!(self.log, "accept error: {e}");
+                        dispatcher_log!(self,
+                            error,
+                            "listener accept error: {e}";
+                            "listen_address" => &self.listen
+                        );
                         continue 'listener;
                     }
                 };
@@ -75,9 +96,11 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                 match lock!(self.addr_to_session).get(&addr) {
                     Some(tx) => {
                         if let Err(e) = tx.send(FsmEvent::Connected(accepted)) {
-                            slog::error!(
-                                self.log,
-                                "failed to send connected event to session: {e}",
+                            dispatcher_log!(self,
+                                error,
+                                "failed to send connected event to session for {addr}: {e}";
+                                "listen_address" => &self.listen,
+                                "address" => format!("{addr}")
                             );
                             continue 'listener;
                         }
