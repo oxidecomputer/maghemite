@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 use std::time::Duration;
 
-const MOD_CONNECTION: &str = "connection_tcp";
+const UNIT_CONNECTION: &str = "connection_tcp";
 
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;

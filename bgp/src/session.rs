@@ -30,7 +30,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-const MOD_SESSION_RUNNER: &str = "session_runner";
+const UNIT_SESSION_RUNNER: &str = "session_runner";
 
 #[derive(Debug)]
 pub struct PeerConnection<Cnx: BgpConnection> {
@@ -332,7 +332,7 @@ impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
 }
 
 impl<Cnx: BgpConnection> FsmEvent<Cnx> {
-    fn title(&self) -> &str {
+    pub fn title(&self) -> &str {
         match self {
             Self::Message(_) => "message",
             Self::Connected(_) => "connected",

@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 use std::time::Duration;
 
-const MOD_CONNECTION: &str = "connection_channel";
+const UNIT_CONNECTION: &str = "connection_channel";
 
 lazy_static! {
     static ref NET: Network = Network::new();

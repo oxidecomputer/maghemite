@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn, JoinHandle};
 use std::time::Duration;
 
+const UNIT_TIMER: &str = "timer";
+
 #[derive(Clone)]
 pub struct Clock {
     pub resolution: Duration,
@@ -153,7 +155,12 @@ impl Clock {
         t.tick(resolution);
         if t.expired() {
             if let Err(e) = s.send(event.clone()) {
-                error!(log, "send timer event {:?}: {e}", event);
+                error!(log,
+                    "error sending timer event {}: {e}", event.title();
+                    "component" => crate::COMPONENT_BGP,
+                    "module" => crate::MOD_CLOCK,
+                    "unit" => UNIT_TIMER,
+                );
             }
             t.reset();
         }

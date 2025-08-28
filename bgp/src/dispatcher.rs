@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::Duration;
 
-const MOD_DISPATCHER: &str = "dispatcher";
+const UNIT_DISPATCHER: &str = "dispatcher";
 
 pub struct Dispatcher<Cnx: BgpConnection> {
     pub addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,

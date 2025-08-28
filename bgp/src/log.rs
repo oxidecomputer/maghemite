@@ -3,8 +3,8 @@ macro_rules! session_log {
         slog::$level!($self.log,
             $msg;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_SESSION_RUNNER,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
             "peer_name" => lock!($self.neighbor.name).as_str(),
             "remote" => $self.neighbor.host,
             $($key => $value),*
@@ -14,8 +14,8 @@ macro_rules! session_log {
         slog::$level!($self.log,
             $msg, $($args),*;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_SESSION_RUNNER,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
             "peer_name" => lock!($self.neighbor.name).as_str(),
             "remote" => $self.neighbor.host,
             $($key => $value),*
@@ -25,8 +25,8 @@ macro_rules! session_log {
         slog::$level!($self.log,
             $msg;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_SESSION_RUNNER,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
             "peer_name" => lock!($self.neighbor.name).as_str(),
             "remote" => $self.neighbor.host,
         )
@@ -35,8 +35,8 @@ macro_rules! session_log {
         slog::$level!($self.log,
             $msg, $($args),*;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_SESSION_RUNNER,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
             "peer_name" => lock!($self.neighbor.name).as_str(),
             "remote" => $self.neighbor.host,
         )
@@ -48,8 +48,8 @@ macro_rules! dispatcher_log {
         slog::$level!($self.log,
             $msg;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_DISPATCHER,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_DISPATCHER,
             $($key => $value),*
         )
     };
@@ -57,8 +57,8 @@ macro_rules! dispatcher_log {
         slog::$level!($self.log,
             $msg, $($args),*;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_DISPATCHER,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_DISPATCHER,
             $($key => $value),*
         )
     };
@@ -66,16 +66,16 @@ macro_rules! dispatcher_log {
         slog::$level!($self.log,
             $msg;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_DISPATCHER,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_DISPATCHER,
         )
     };
     ($self:expr, $level:ident, $msg:expr, $($args:expr),*) => {
         slog::$level!($self.log,
             $msg, $($args),*;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_DISPATCHER,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_DISPATCHER,
         )
     };
 }
@@ -85,8 +85,8 @@ macro_rules! connection_log {
         slog::$level!($self.log,
             $msg;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_CONNECTION,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_CONNECTION,
             "peer" => $self.peer(),
             "source" => $self.local(),
             $($key => $value),*
@@ -96,8 +96,8 @@ macro_rules! connection_log {
         slog::$level!($self.log,
             $msg, $($args),*;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_CONNECTION,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_CONNECTION,
             "peer" => $self.peer(),
             "source" => $self.local(),
             $($key => $value),*
@@ -107,8 +107,8 @@ macro_rules! connection_log {
         slog::$level!($self.log,
             $msg;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_CONNECTION,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_CONNECTION,
             "peer" => $self.peer(),
             "source" => $self.local(),
         )
@@ -117,8 +117,8 @@ macro_rules! connection_log {
         slog::$level!($self.log,
             $msg, $($args),*;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_CONNECTION,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_CONNECTION,
             "peer" => $self.peer(),
             "source" => $self.local(),
         )
@@ -131,8 +131,8 @@ macro_rules! connection_log_lite {
         slog::$level!($log,
             $msg;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_CONNECTION,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_CONNECTION,
             $($key => $value),*
         )
     };
@@ -140,8 +140,8 @@ macro_rules! connection_log_lite {
         slog::$level!($log,
             $msg, $($args),*;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_CONNECTION,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_CONNECTION,
             $($key => $value),*
         )
     };
@@ -149,16 +149,16 @@ macro_rules! connection_log_lite {
         slog::$level!($log,
             $msg;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_CONNECTION,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_CONNECTION,
         )
     };
     ($log:expr, $level:ident, $msg:expr, $($args:expr),*) => {
         slog::$level!($log,
             $msg, $($args),*;
             "component" => crate::COMPONENT_BGP,
-            "unit" => crate::UNIT_NEIGHBOR,
-            "module" => MOD_CONNECTION,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_CONNECTION,
         )
     };
 }
