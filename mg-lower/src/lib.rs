@@ -18,10 +18,11 @@ use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client as DdmClient;
 use dendrite::{ensure_tep_addr, link_is_up};
 use dpd_client::Client as DpdClient;
+use log::mgl_log;
 use mg_common::stats::MgLowerStats as Stats;
 use rdb::db::Rib;
 use rdb::{Db, Prefix, PrefixChangeNotification, DEFAULT_ROUTE_PRIORITY};
-use slog::{error, info, warn, Logger};
+use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::mpsc::{channel, RecvTimeoutError};
@@ -32,9 +33,13 @@ use std::time::Duration;
 mod ddm;
 mod dendrite;
 mod error;
+mod log;
 
 /// Tag used for managing both dpd and rdb elements.
 const MG_LOWER_TAG: &str = "mg-lower";
+const COMPONENT_MG_LOWER: &str = MG_LOWER_TAG;
+const MOD_SYNC: &str = "sync";
+const UNIT_EVENT_LOOP: &str = "event_loop";
 
 /// This is the primary entry point for the lower half. It loops forever,
 /// observing changes in the routing databse and synchronizing them to the
@@ -63,8 +68,12 @@ pub fn run(
         if let Err(e) =
             full_sync(tep, &db, &log, &dpd, &ddm, &stats, rt.clone())
         {
-            error!(log, "initializing failed: {e}");
-            info!(log, "restarting sync loop in one second");
+            mgl_log!(log,
+                error,
+                "initialization failed: {e}";
+                "error" => format!("{e}")
+            );
+            mgl_log!(log, info, "restarting sync loop in one second";);
             sleep(Duration::from_secs(1));
             continue;
         };
@@ -82,8 +91,12 @@ pub fn run(
                         &ddm,
                         rt.clone(),
                     ) {
-                        error!(log, "handling change failed: {e}");
-                        info!(log, "restarting sync loop");
+                        mgl_log!(log,
+                            error,
+                            "handling change failed: {e}";
+                            "error" => format!("{e}")
+                        );
+                        mgl_log!(log, info, "restarting sync loop";);
                         continue;
                     }
                 }
@@ -99,14 +112,22 @@ pub fn run(
                         &stats,
                         rt.clone(),
                     ) {
-                        error!(log, "initializing failed: {e}");
-                        info!(log, "restarting sync loop in one second");
+                        mgl_log!(log,
+                            error,
+                            "initialization failed: {e}";
+                            "error" => format!("{e}")
+                        );
+                        mgl_log!(log, info, "restarting sync loop in one second";);
                         sleep(Duration::from_secs(1));
                         continue;
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    error!(log, "mg-lower rdb watcher disconnected");
+                    mgl_log!(log,
+                        error,
+                        "mg-lower rdb watcher disconnected";
+                        "error" => format!("{}", RecvTimeoutError::Disconnected)
+                    );
                     break;
                 }
             }
@@ -204,26 +225,29 @@ fn sync_prefix(
     // Remove paths for which the link is down.
     best.retain(|x| match link_is_up(dpd, &x.port_id, &x.link_id, rt) {
         Err(e) => {
-            error!(
-                log,
-                "sync_prefix: failed to get link state for {:?}/{:?} \
-                    not installing route {:?} -> {:?}: {e}",
-                x.port_id,
-                x.link_id,
-                x.cidr,
-                x.nexthop,
+            mgl_log!(log,
+                error,
+                "skipping install of route {} via {} ({}/{}), \
+                error getting link state: {e}",
+                x.cidr, x.nexthop, x.port_id, x.link_id;
+                "prefix" => format!("{}", x.cidr),
+                "nexthop" => format!("{}", x.nexthop),
+                "port" => format!("{}", x.port_id),
+                "link" => format!("{}", x.link_id),
+                "error" => format!("{e}")
             );
             false
         }
         Ok(false) => {
-            warn!(
-                log,
-                "sync_prefix: link {:?}/{:?} is not up, \
-                    not installing route {:?} -> {:?}",
-                x.port_id,
-                x.link_id,
-                x.cidr,
-                x.nexthop,
+            mgl_log!(log,
+                warn,
+                "skipping install of route {} via {} ({}/{}), \
+                link is not up",
+                x.cidr, x.nexthop, x.port_id, x.link_id;
+                "prefix" => format!("{}", x.cidr),
+                "nexthop" => format!("{}", x.nexthop),
+                "port" => format!("{}", x.port_id),
+                "link" => format!("{}", x.link_id)
             );
             false
         }

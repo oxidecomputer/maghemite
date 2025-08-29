@@ -2,8 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::Error;
-use crate::MG_LOWER_TAG;
+use crate::{log::dpd_log, Error, MG_LOWER_TAG};
 use dpd_client::types;
 use dpd_client::types::LinkState;
 use dpd_client::Client as DpdClient;
@@ -13,7 +12,7 @@ use oxnet::Ipv4Net;
 use oxnet::Ipv6Net;
 use rdb::Path;
 use rdb::Prefix;
-use slog::{error, warn, Logger};
+use slog::Logger;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -22,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const TFPORT_QSFP_DEVICE_PREFIX: &str = "tfportqsfp";
+const UNIT_DPD: &str = "dpd";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct RouteHash {
@@ -89,7 +89,13 @@ pub(crate) fn ensure_tep_addr(
         .await
     }) {
         if e.status() != Some(reqwest::StatusCode::CONFLICT) {
-            warn!(log, "failed to ensure TEP address {tep} on ASIC: {e}");
+            dpd_log!(
+                log,
+                warn,
+                "failed to ensure TEP address {tep} on ASIC: {e}";
+                "error" => format!("{e}"),
+                "prefix" => format!("{tep}")
+            );
         }
     }
 }
@@ -163,18 +169,18 @@ where
         let target = match (r.cidr, r.nexthop) {
             (IpNet::V4(c), IpAddr::V4(tgt_ip)) => {
                 if c.width() == 32 && local_v4_addrs.contains(&c.prefix()) {
-                    warn!(
-                        log,
-                        "martian detected: prefix={c:?}, \
-                        skipping data plane installation"
+                    dpd_log!(log,
+                        warn,
+                        "skipping data plane installation for martian prefix {c:?}";
+                        "prefix" => format!("{c}")
                     );
                     continue;
                 }
                 if local_v4_addrs.contains(&tgt_ip) {
-                    warn!(
-                        log,
-                        "martian detected: nexthop={tgt_ip:?}, \
-                        skipping data plane installation"
+                    dpd_log!(log,
+                        warn,
+                        "skipping data plane installation for martian nexthop {tgt_ip:?}";
+                        "nexthop" => format!("{tgt_ip}")
                     );
                     continue;
                 }
@@ -190,18 +196,18 @@ where
             }
             (IpNet::V6(c), IpAddr::V6(tgt_ip)) => {
                 if c.width() == 128 && local_v6_addrs.contains(&c.prefix()) {
-                    warn!(
-                        log,
-                        "martian detected: prefix={c:?}, \
-                        skipping data plane installation"
+                    dpd_log!(log,
+                        warn,
+                        "skipping data plane installation for martian prefix {c:?}";
+                        "prefix" => format!("{c}")
                     );
                     continue;
                 }
                 if local_v6_addrs.contains(&tgt_ip) {
-                    warn!(
-                        log,
-                        "martian detected: nexthop={tgt_ip:?}, \
-                        skipping data plane installation"
+                    dpd_log!(log,
+                        warn,
+                        "skipping data plane installation for martian nexthop {tgt_ip:?}";
+                        "nexthop" => format!("{tgt_ip}")
                     );
                     continue;
                 }
@@ -216,9 +222,12 @@ where
                 .into()
             }
             _ => {
-                error!(
-                    log,
-                    "mismatched subnet {} and target {}", r.cidr, r.nexthop
+                // XXX: re-evaluate for RFC 8950 (BGP unnumbered) support
+                dpd_log!(log,
+                    error,
+                    "mismatched address-family for subnet {} and target {}", r.cidr, r.nexthop;
+                    "prefix" => format!("{}", r.cidr),
+                    "nexthop" => format!("{}", r.nexthop)
                 );
                 continue;
             }
@@ -226,7 +235,13 @@ where
 
         let add = types::RouteAdd { cidr, target };
         if let Err(e) = rt.block_on(async { dpd.route_ipv4_add(&add).await }) {
-            error!(log, "failed to create route {:?}: {}", r, e);
+            dpd_log!(log,
+                error,
+                "failed to create route in ASIC {r:?} via {}: {e}", r.nexthop;
+                "error" => format!("{e}"),
+                "prefix" => format!("r:?"),
+                "nexthop" => format!("{}", r.nexthop)
+            );
             Err(e)?;
         }
     }
@@ -246,7 +261,13 @@ where
             dpd.route_ipv4_delete_target(&cidr, &port_id, &link_id, &target)
                 .await
         }) {
-            error!(log, "failed to delete route {:?}: {}", r, e);
+            dpd_log!(log,
+                error,
+                "failed to delete route in ASIC {r:?} via {}: {e}", r.nexthop;
+                "error" => format!("{e}"),
+                "prefix" => format!("r:?"),
+                "nexthop" => format!("{}", r.nexthop)
+            );
             Err(e)?;
         }
     }
@@ -383,9 +404,12 @@ pub(crate) fn get_routes_for_prefix(
                 ) {
                     Ok(rh) => result.push(rh),
                     Err(e) => {
-                        error!(
-                            log,
-                            "route hash creation failed for {:?}: {e}", prefix
+                        dpd_log!(log,
+                            error,
+                            "route hash creation failed for {prefix} (port: {}, link: {}, tgt_ip: {}, vlan_id: {:?}): {e}",
+                            r.port_id.clone(), r.link_id, r.tgt_ip, r.vlan_id;
+                            "error" => format!("{e}"),
+                            "prefix" => format!("r:?")
                         );
                         continue;
                     }
