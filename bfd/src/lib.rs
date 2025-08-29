@@ -15,9 +15,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub mod bidi;
+pub mod log;
 pub mod packet;
 mod sm;
 mod util;
+
+pub const COMPONENT_BFD: &str = "bfd";
+pub const MOD_DAEMON: &str = "daemon";
+pub const MOD_SM: &str = "state_machine";
+
+pub const UNIT_PEER: &str = "peer";
 
 /// A `Daemon` is a collection of BFD sessions.
 pub struct Daemon {
@@ -49,7 +56,10 @@ impl Daemon {
     ) {
         if self.sessions.contains_key(&peer) {
             warn!(self.log, "attempt to add peer that already exists";
-                "peer" => format!("{:#?}", peer)
+                "component" => COMPONENT_BFD,
+                "module" => MOD_DAEMON,
+                "unit" => UNIT_PEER,
+                "peer" => format!("{peer}")
             );
             return;
         }
