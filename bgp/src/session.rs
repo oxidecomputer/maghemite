@@ -796,13 +796,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 {
                     let ihl = lock!(self.clock.timers.idle_hold_timer);
-                    session_log!(self, debug,
-                        "IdleHoldTimer: [enabled={} expired={} interval={} \
-                         remaining={}]",
-                        ihl.enabled(),
-                        ihl.expired(),
-                        ihl.interval.as_secs(),
-                        ihl.remaining().as_secs();
+                    session_log!(self, debug, "idle hold timer expired: {:?}", ihl;
                         "fsm_state" => format!("{}", self.state()).as_str()
                     );
                     ihl.disable();
@@ -825,7 +819,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .unexpected_keepalive_message
                     .fetch_add(1, Ordering::Relaxed);
                 session_log!(self, warn, "unexpected message";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
+                    "fsm_state" => format!("{}", self.state()),
                     "message" => "keepalive"
                 );
                 FsmState::Idle

@@ -8,6 +8,7 @@ macro_rules! session_log {
             "peer_name" => lock!($self.neighbor.name).as_str(),
             "peer_sockaddr" => $self.neighbor.host,
             "source" => format!("{:?}", $self.bind_addr),
+            "clock" => format!("{:#?}", $self.clock),
             $($key => $value),*
         )
     };
@@ -20,6 +21,7 @@ macro_rules! session_log {
             "peer_name" => lock!($self.neighbor.name).as_str(),
             "peer_sockaddr" => $self.neighbor.host,
             "source" => format!("{:?}", $self.bind_addr),
+            "clock" => format!("{:#?}", $self.clock),
             $($key => $value),*
         )
     };
@@ -32,6 +34,7 @@ macro_rules! session_log {
             "peer_name" => lock!($self.neighbor.name).as_str(),
             "peer_sockaddr" => $self.neighbor.host,
             "source" => format!("{:?}", $self.bind_addr),
+            "clock" => format!("{:#?}", $self.clock),
         )
     };
     ($self:expr, $level:ident, $msg:expr, $($args:expr),*) => {
@@ -43,6 +46,7 @@ macro_rules! session_log {
             "peer_name" => lock!($self.neighbor.name).as_str(),
             "peer_sockaddr" => $self.neighbor.host,
             "source" => format!("{:?}", $self.bind_addr),
+            "clock" => format!("{:#?}", $self.clock),
         )
     };
 }

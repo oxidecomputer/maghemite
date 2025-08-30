@@ -14,7 +14,7 @@ use std::time::Duration;
 
 const UNIT_TIMER: &str = "timer";
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Clock {
     pub resolution: Duration,
     pub timers: Arc<ClockTimers>,
@@ -23,6 +23,8 @@ pub struct Clock {
     shutdown: Arc<AtomicBool>,
 }
 
+// XXX: Do I need to lock each time individually to log this?
+#[derive(Debug)]
 pub struct ClockTimers {
     /// How long to wait between connection attempts.
     pub connect_retry_timer: Mutex<Timer>,
@@ -173,12 +175,7 @@ impl Drop for Clock {
     }
 }
 
-pub struct TimerValue {
-    enabled: bool,
-    remaining: Duration,
-}
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Timer {
     /// How long a timer runs until it fires.
     pub interval: Duration,
@@ -241,4 +238,10 @@ impl Timer {
     pub fn reset(&self) {
         lock!(self.value).remaining = self.interval;
     }
+}
+
+#[derive(Debug)]
+pub struct TimerValue {
+    enabled: bool,
+    remaining: Duration,
 }
