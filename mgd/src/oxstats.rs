@@ -5,6 +5,7 @@
 use crate::admin::HandlerContext;
 use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
+use crate::log::olog;
 use chrono::{DateTime, Utc};
 use mg_common::lock;
 use mg_common::nexus::{local_underlay_address, run_oximeter};
@@ -14,7 +15,7 @@ use oximeter::types::{Cumulative, ProducerRegistry};
 use oximeter::{MetricsError, Producer, Sample};
 use oximeter_producer::{ConfigLogging, ConfigLoggingLevel, LogConfig};
 use rdb::Db;
-use slog::{warn, Logger};
+use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
@@ -78,6 +79,8 @@ use self::mg_lower::RoutesBlockedByLinkState;
 oximeter::use_timeseries!("switch-rib.toml");
 use switch_rib::ActiveRoutes;
 use switch_rib::SwitchRib;
+
+const UNIT_OXSTATS: &str = "oxstats";
 
 #[derive(Clone)]
 pub(crate) struct Stats {
@@ -228,35 +231,43 @@ impl Producer for Stats {
         match self.bgp_stats() {
             Ok(bgp) => samples.extend(bgp),
             Err(e) => {
-                warn!(self.log, "failed to produce bgp samples: {e}");
+                olog!(self.log, warn, "failed to produce bgp samples: {e}");
             }
         }
 
         match self.bfd_stats() {
             Ok(bfd) => samples.extend(bfd),
             Err(e) => {
-                warn!(self.log, "failed to produce bfd samples: {e}");
+                olog!(self.log, warn, "failed to produce bfd samples: {e}");
             }
         }
 
         match self.static_stats() {
             Ok(statics) => samples.extend(statics),
             Err(e) => {
-                warn!(self.log, "failed to produce static route samples: {e}");
+                olog!(
+                    self.log,
+                    warn,
+                    "failed to produce static route samples: {e}"
+                );
             }
         }
 
         match self.rib_stats() {
             Ok(rib) => samples.extend(rib),
             Err(e) => {
-                warn!(self.log, "failed to produce rib samples: {e}");
+                olog!(self.log, warn, "failed to produce rib samples: {e}");
             }
         }
 
         match self.mg_lower_stats() {
             Ok(mgl) => samples.extend(mgl),
             Err(e) => {
-                warn!(self.log, "failed to produce mg lower samples: {e}");
+                olog!(
+                    self.log,
+                    warn,
+                    "failed to produce mg-lower samples: {e}"
+                );
             }
         }
 
@@ -683,7 +694,7 @@ impl Stats {
                 ));
             }
             Err(e) => {
-                warn!(self.log, "stats: failed to get static4 count: {e}");
+                olog!(self.log, warn, "failed to produce static4 count: {e}");
             }
         }
         match self.db.get_static_nexthop4_count() {
@@ -698,7 +709,11 @@ impl Stats {
                 ));
             }
             Err(e) => {
-                warn!(self.log, "stats: failed to get static4 count: {e}");
+                olog!(
+                    self.log,
+                    warn,
+                    "failed to produce static_nexthop4 count: {e}"
+                );
             }
         }
 
@@ -740,7 +755,7 @@ impl Stats {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_server(
     context: Arc<HandlerContext>,
-    hostname: String,
+    hostname: &str,
     rack_id: Uuid,
     sled_id: Uuid,
     log: Logger,
@@ -752,7 +767,7 @@ pub(crate) fn start_server(
     });
     let registry = ProducerRegistry::new();
     let stats_producer = Stats {
-        hostname,
+        hostname: String::from(hostname),
         rack_id,
         sled_id,
         start_time: chrono::offset::Utc::now(),

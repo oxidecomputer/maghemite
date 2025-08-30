@@ -3,11 +3,14 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
+use crate::log::sig_log;
 use crate::smf::smf_refresh;
-use slog::{error, info, Logger};
+use slog::Logger;
 use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc::Receiver;
+
+const UNIT_SIG: &str = "signal";
 
 pub(crate) async fn handle_signals(
     mut ch: Receiver<Arc<HandlerContext>>,
@@ -15,19 +18,21 @@ pub(crate) async fn handle_signals(
 ) -> anyhow::Result<()> {
     let mut sigusr1 = signal(SignalKind::user_defined1())?;
     tokio::spawn(async move {
-        info!(log, "signal handler waiting for context");
+        sig_log!(log, info, "signal handler waiting for context");
         let ctx = loop {
             match ch.recv().await {
                 Some(ctx) => break ctx,
                 None => continue,
             }
         };
-        info!(log, "signal handler waiting got context");
+        sig_log!(log, info, "signal handler got context");
 
         loop {
             sigusr1.recv().await;
             if let Err(e) = smf_refresh(ctx.clone(), log.clone()).await {
-                error!(log, "smf update on sigusr1 failed: {e}");
+                sig_log!(log, error, "smf update on sigusr1 failed: {e}";
+                    "error" => format!("{e}")
+                );
             }
         }
     });

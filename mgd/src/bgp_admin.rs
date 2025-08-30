@@ -4,7 +4,9 @@
 
 #![allow(clippy::type_complexity)]
 use crate::bgp_param as resource;
-use crate::{admin::HandlerContext, bgp_param::*, error::Error, register};
+use crate::{
+    admin::HandlerContext, bgp_param::*, error::Error, log::bgp_log, register,
+};
 use bgp::router::LoadPolicyError;
 use bgp::session::FsmStateKind;
 use bgp::{
@@ -23,7 +25,6 @@ use dropshot::{
 };
 use mg_common::lock;
 use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
-use slog::info;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -31,6 +32,8 @@ use std::sync::{
     mpsc::{channel, Sender},
     Arc, Mutex,
 };
+
+const UNIT_BGP: &str = "bgp";
 
 const DEFAULT_BGP_LISTEN: SocketAddr =
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, BGP_PORT, 0, 0));
@@ -556,7 +559,9 @@ async fn do_bgp_apply(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let log = ctx.log.clone();
 
-    info!(log, "apply: {rq:#?}");
+    bgp_log!(log, info, "bgp apply: {rq:#?}";
+        "params" => format!("{rq:?}")
+    );
 
     #[derive(Debug, Eq)]
     struct Nbr {
@@ -623,9 +628,9 @@ async fn do_bgp_apply(
         let to_add = specified_nbr_addrs.difference(&current_nbr_addrs);
         let to_modify = current_nbr_addrs.intersection(&specified_nbr_addrs);
 
-        info!(log, "nbr: current {current:#?}");
-        info!(log, "nbr: adding {to_add:#?}");
-        info!(log, "nbr: removing {to_delete:#?}");
+        bgp_log!(log, info, "nbr: current {current:#?}");
+        bgp_log!(log, info, "nbr: adding {to_add:#?}");
+        bgp_log!(log, info, "nbr: removing {to_delete:#?}");
 
         let mut nbr_config = Vec::new();
         for nbr in to_add {
@@ -891,7 +896,7 @@ pub(crate) mod helpers {
         asn: u32,
         addr: IpAddr,
     ) -> Result<HttpResponseDeleted, Error> {
-        info!(ctx.log, "remove neighbor: {}", addr);
+        bgp_log!(ctx.log, info, "remove neighbor (addr {addr}, asn {asn})");
 
         ctx.db.remove_bgp_prefixes_from_peer(&addr);
         ctx.db.remove_bgp_neighbor(addr)?;
@@ -906,7 +911,9 @@ pub(crate) mod helpers {
         ensure: bool,
     ) -> Result<(), Error> {
         let log = &ctx.log;
-        info!(log, "add neighbor: {:#?}", rq);
+        bgp_log!(log, info, "add neighbor {}", rq.host.ip();
+            "params" => format!("{rq:#?}")
+        );
 
         let (event_tx, event_rx) = channel();
 
@@ -984,7 +991,9 @@ pub(crate) mod helpers {
         addr: IpAddr,
         op: resource::NeighborResetOp,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
-        info!(ctx.log, "clear neighbor: {}", addr);
+        bgp_log!(ctx.log, info, "clear neighbor {addr}, asn {asn}";
+            "op" => format!("{op:?}")
+        );
 
         let session = get_router!(ctx, asn)?
             .get_session(addr)

@@ -4,6 +4,7 @@
 
 use crate::BfdPeerState;
 use anyhow::{anyhow, Result};
+use std::fmt::{Display, Formatter};
 
 // Control packet flags.
 const POLL: u8 = 1 << 5;
@@ -173,6 +174,33 @@ impl Default for Control {
     }
 }
 
+impl Display for Control {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let auth_str = match self.auth {
+            Some(ref auth) => format!(
+                "auth_type: {}, auth_length: {}",
+                auth.auth_type, auth.auth_len
+            ),
+            None => "N/A".to_string(),
+        };
+
+        write!(
+            f,
+            "vers_diag: {}, flags: {:x}, detect_mult: {}, length: {}, \
+            my_discriminator: {}, your_discriminator: {}, desired_min_tx: {}, \
+            required_min_rx: {}, required_min_echo_rx: {}, auth: {auth_str}",
+            self.vers_diag,
+            self.flags,
+            self.detect_mult,
+            self.length,
+            self.my_discriminator,
+            self.your_discriminator,
+            self.desired_min_tx,
+            self.required_min_rx,
+            self.required_min_echo_rx
+        )
+    }
+}
 impl Control {
     /// Deserialize an array of bytes as a `Control`.
     pub fn from_bytes(d: &[u8]) -> Result<Self> {

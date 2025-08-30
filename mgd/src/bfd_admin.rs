@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{admin::HandlerContext, register};
+use crate::{admin::HandlerContext, log::bfd_log, register};
 use anyhow::Result;
 use bfd::{bidi, packet, BfdPeerState, Daemon};
 use dropshot::endpoint;
@@ -18,7 +18,7 @@ use rdb::BfdPeerConfig;
 use rdb::SessionMode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use slog::{debug, error, warn, Logger};
+use slog::Logger;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::UdpSocket;
@@ -31,6 +31,8 @@ use std::sync::RwLock;
 use std::thread::spawn;
 use std::thread::JoinHandle;
 use std::time::Duration;
+
+const UNIT_BFD: &str = "bfd";
 
 /// Context for Dropshot requests.
 #[derive(Clone)]
@@ -134,6 +136,8 @@ pub(crate) fn add_peer(
         SessionMode::MultiHop => (0, BFD_MULTIHOP_PORT),
     };
 
+    let log = ctx.log.clone();
+
     let ch = channel(
         dispatcher,
         rq.listen,
@@ -143,7 +147,13 @@ pub(crate) fn add_peer(
         ctx.log.clone(),
     )
     .map_err(|e| {
-        error!(ctx.log, "udp channel: {e}");
+        bfd_log!(log, error, "udp channel error: {e}";
+            "params" => format!("{rq:?}"),
+            "peer" => format!("rq.peer"),
+            "src_port" => src_port,
+            "dst_port" => dst_port,
+            "error" => format!("{e}")
+        );
         HttpError::for_internal_error(e.to_string())
     })?;
 
@@ -175,6 +185,8 @@ pub(crate) async fn remove_bfd_peer(
         .unwrap()
         .remove_peer(rq.addr);
 
+    let log = ctx.log.clone();
+
     ctx.context()
         .bfd
         .dispatcher
@@ -182,7 +194,10 @@ pub(crate) async fn remove_bfd_peer(
         .unwrap()
         .remove(rq.addr)
         .map_err(|e| {
-            error!(ctx.log, "failed to remove listener for {}: {e}", rq.addr);
+            bfd_log!(log, error, "failed to remove listener for {}: {e}", rq.addr;
+                "peer" => format!("{}", rq.addr),
+                "error" => format!("{e}")
+            );
             HttpError::for_internal_error(e.to_string())
         })?;
 
@@ -232,14 +247,24 @@ fn egress(
         let (addr, pkt) = match rx.recv() {
             Ok(result) => result,
             Err(e) => {
-                warn!(log, "udp egress channel closed: {e}");
+                bfd_log!(log, warn, "udp egress channel closed: {e}";
+                    "local" => format!("{local}"),
+                    "src_port" => format!("{src_port}"),
+                    "dst_port" => format!("{dst_port}"),
+                    "error" => format!("{e}")
+                );
                 break;
             }
         };
 
         let sk = match UdpSocket::bind(SocketAddr::new(local, src_port)) {
             Err(e) => {
-                error!(log, "failed to create tx socket: {e}");
+                bfd_log!(log, error, "failed to create tx socket: {e}";
+                    "local" => format!("{local}"),
+                    "src_port" => format!("{src_port}"),
+                    "dst_port" => format!("{dst_port}"),
+                    "error" => format!("{e}")
+                );
                 continue;
             }
             Ok(sk) => sk,
@@ -247,7 +272,14 @@ fn egress(
 
         let sa = SocketAddr::new(addr, dst_port);
         if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
-            error!(log, "udp send: {e}");
+            bfd_log!(log, error, "udp send error: {e}";
+                "local" => format!("{local}"),
+                "src_port" => format!("{src_port}"),
+                "dst_port" => format!("{dst_port}"),
+                "message" => "control",
+                "message_contents" => format!("{pkt}"),
+                "error" => format!("{e}")
+            );
         }
     });
 }
@@ -288,7 +320,7 @@ impl Dispatcher {
                 }
             }
         }
-        debug!(self.log, "listeners: {:#?}", self.listeners);
+        bfd_log!(self.log, debug, "listeners: {:#?}", self.listeners);
         None
     }
 
@@ -357,8 +389,9 @@ impl Dispatcher {
     ) {
         loop {
             if kill_switch.load(std::sync::atomic::Ordering::Relaxed) {
-                warn!(
+                bfd_log!(
                     log,
+                    warn,
                     "kill switch activated for listener on {:?}",
                     sk.local_addr()
                 );
@@ -371,7 +404,14 @@ impl Dispatcher {
             let (n, sa) = match sk.recv_from(&mut buf) {
                 Err(e) => {
                     if e.kind() != std::io::ErrorKind::WouldBlock {
-                        error!(log, "udp recv: {e}");
+                        bfd_log!(
+                            log,
+                            error,
+                            "udp recv error: {e}";
+                            "local" => format!("{:?}", sk.local_addr()),
+                            "peer" => format!("{:?}", sk.peer_addr()),
+                            "error" => format!("{e}")
+                        );
                     }
                     continue;
                 }
@@ -382,8 +422,12 @@ impl Dispatcher {
             let tx = match guard.get(&sa.ip()) {
                 Some(tx) => tx,
                 None => {
-                    warn!(log, "unknown peer, dropping";
-                        "peer" => sa.ip().to_string(),
+                    bfd_log!(
+                        log,
+                        warn,
+                        "unknown peer {}, dropping", sa.ip();
+                        "local" => format!("{:?}", sk.local_addr()),
+                        "peer" => sa.ip().to_string()
                     );
                     continue;
                 }
@@ -392,16 +436,26 @@ impl Dispatcher {
             let pkt = match packet::Control::from_bytes(&buf[..n]) {
                 Ok(pkt) => pkt,
                 Err(e) => {
-                    error!(log, "parse control packet: {e}";
+                    bfd_log!(
+                        log,
+                        warn,
+                        "error parsing control packet from {}: {e}", sa.ip();
+                        "local" => format!("{:?}", sk.local_addr()),
                         "peer" => sa.ip().to_string(),
+                        "error" => format!("{e}")
                     );
                     continue;
                 }
             };
 
             if let Err(e) = tx.send((sa.ip(), pkt)) {
-                warn!(log, "udp ingress channel closed: {e}";
+                bfd_log!(
+                    log,
+                    warn,
+                    "udp ingress channel closed: {e}";
+                    "local" => format!("{:?}", sk.local_addr()),
                     "peer" => sa.ip().to_string(),
+                    "error" => format!("{e}")
                 );
                 // This channel serves multiple peers, carry on as
                 // the session associated with the closed channel

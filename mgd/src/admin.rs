@@ -9,12 +9,13 @@ use dropshot::{ApiDescription, ConfigDropshot, HttpServerStarter};
 use mg_common::stats::MgLowerStats;
 use rdb::Db;
 use semver::{BuildMetadata, Prerelease, Version};
-use slog::o;
-use slog::{error, info, warn, Logger};
+use slog::{error, info, o, warn, Logger};
 use std::fs::File;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
+
+const UNIT_API_SERVER: &str = "api_server";
 
 pub struct HandlerContext {
     pub tep: Ipv6Addr, // tunnel endpoint address
@@ -41,19 +42,26 @@ pub fn start_server(
         ..Default::default()
     };
 
-    let ds_log = log.new(o!("unit" => "api-server"));
+    let ds_log = log.new(o!(
+        "component" => crate::COMPONENT_MGD,
+        "module" => crate::MOD_ADMIN,
+        "unit" => UNIT_API_SERVER
+    ));
 
     let api = api_description();
 
     let server = HttpServerStarter::new(&ds_config, api, context, &ds_log)
         .map_err(|e| format!("new admin dropshot: {}", e))?;
 
-    info!(log, "admin: listening on {}", sa);
+    info!(log, "listening on {sa}");
 
     Ok(tokio::spawn(async move {
         match server.start().await {
-            Ok(_) => warn!(log, "admin: unexpected server exit"),
-            Err(e) => error!(log, "admin: server start error {:?}", e),
+            Ok(_) => warn!(log, "unexpected server exit"),
+            Err(e) => error!(log,
+                "server start error: {e}";
+                "error" => format!("{e}")
+            ),
         }
     }))
 }
