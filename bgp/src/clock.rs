@@ -173,6 +173,11 @@ impl Drop for Clock {
     }
 }
 
+pub struct TimerValue {
+    enabled: bool,
+    remaining: Duration,
+}
+
 #[derive(Clone)]
 pub struct Timer {
     /// How long a timer runs until it fires.
@@ -180,7 +185,7 @@ pub struct Timer {
 
     /// Timer state. The first value indicates if the timer is enabled. The
     /// second value indicates how much time is left.
-    value: Arc<Mutex<(bool, Duration)>>,
+    value: Arc<Mutex<TimerValue>>,
 }
 
 impl Timer {
@@ -188,7 +193,10 @@ impl Timer {
     pub fn new(interval: Duration) -> Self {
         Self {
             interval,
-            value: Arc::new(Mutex::new((false, interval))),
+            value: Arc::new(Mutex::new(TimerValue {
+                enabled: false,
+                remaining: interval,
+            })),
         }
     }
 
@@ -197,40 +205,40 @@ impl Timer {
     /// reached zero is a no-op. Use `expired` to check for expiration.
     pub fn tick(&self, resolution: Duration) {
         let mut value = lock!(self.value);
-        if value.0 {
-            value.1 = value.1.saturating_sub(resolution);
+        if value.enabled {
+            value.remaining = value.remaining.saturating_sub(resolution);
         }
     }
 
     /// Returns true if the timer is enabled.
     pub fn enabled(&self) -> bool {
-        lock!(self.value).0
+        lock!(self.value).enabled
     }
 
     /// Enable the timer. Only enabled timers can expire.
     pub fn enable(&self) {
-        lock!(self.value).0 = true
+        lock!(self.value).enabled = true
     }
 
     /// Disable the timer. Only enabled timers can expire.
     pub fn disable(&self) {
-        lock!(self.value).0 = false
+        lock!(self.value).enabled = false
     }
 
     /// Check if the timer has expired. Returns true if the timer is enabled and
     /// has ticked down to zero.
     pub fn expired(&self) -> bool {
         let v = lock!(self.value);
-        v.0 && v.1.is_zero()
+        v.enabled && v.remaining.is_zero()
     }
 
     /// Display time remaining on this timer
     pub fn remaining(&self) -> Duration {
-        lock!(self.value).1
+        lock!(self.value).remaining
     }
 
     /// Reset the value of a timer to the timers interval.
     pub fn reset(&self) {
-        lock!(self.value).1 = self.interval;
+        lock!(self.value).remaining = self.interval;
     }
 }
