@@ -642,7 +642,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.initialize_capabilities();
 
         // Run the BGP peer state machine.
-        session_log!(self, debug, "starting peer state machine");
+        session_log!(self, info, "starting peer state machine";
+            "params" => format!("{:?}", lock!(self.session))
+        );
         let mut current = FsmState::<Cnx>::Idle;
 
         loop {
@@ -774,6 +776,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.bind_addr,
                         self.neighbor.host,
                         self.log.clone(),
+                        UNIT_SESSION_RUNNER,
                     );
                     FsmState::Active(conn)
                 } else {
@@ -810,6 +813,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.bind_addr,
                         self.neighbor.host,
                         self.log.clone(),
+                        UNIT_SESSION_RUNNER,
                     );
                     FsmState::Active(conn)
                 } else {
@@ -872,8 +876,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let md5_auth_key = lock!(self.session).md5_auth_key.clone();
 
         // Start with an initial connection attempt
-        let conn =
-            Cnx::new(self.bind_addr, self.neighbor.host, self.log.clone());
+        let conn = Cnx::new(
+            self.bind_addr,
+            self.neighbor.host,
+            self.log.clone(),
+            UNIT_SESSION_RUNNER,
+        );
         session_log!(self, debug,
             "connecting: bind_addr={:?} peer={}",
             self.bind_addr,

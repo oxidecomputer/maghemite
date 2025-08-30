@@ -85,6 +85,7 @@ pub struct BgpConnectionTcp {
     sa_keepalive_running: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
     log: Logger,
+    creator: String, // who created this connection, i.e. SessionRunner or Dispatcher
 }
 
 impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
@@ -106,6 +107,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn accept(
         &self,
         log: Logger,
+        creator: &str,
         addr_to_session: Arc<
             Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionTcp>>>>,
         >,
@@ -123,6 +125,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                 conn,
                 event_tx.clone(),
                 log,
+                creator,
             )?),
             None => Err(Error::UnknownPeer(ip)),
         }
@@ -130,7 +133,12 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
 }
 
 impl BgpConnection for BgpConnectionTcp {
-    fn new(_source: Option<SocketAddr>, peer: SocketAddr, log: Logger) -> Self {
+    fn new(
+        _source: Option<SocketAddr>,
+        peer: SocketAddr,
+        log: Logger,
+        creator: &str,
+    ) -> Self {
         let conn = Arc::new(Mutex::new(None));
         Self {
             peer,
@@ -143,6 +151,7 @@ impl BgpConnection for BgpConnectionTcp {
             sa_keepalive_running: Arc::new(AtomicBool::new(false)),
             #[cfg(target_os = "illumos")]
             sas: Arc::new(Mutex::new(None)),
+            creator: String::from(creator),
         }
     }
 
@@ -272,6 +281,7 @@ impl BgpConnection for BgpConnectionTcp {
                     timeout,
                     self.dropped.clone(),
                     self.log.clone(),
+                    &self.creator,
                 )?;
                 event_tx.send(FsmEvent::TcpConnectionConfirmed).map_err(
                     |e| {
@@ -298,7 +308,9 @@ impl BgpConnection for BgpConnectionTcp {
     fn send(&self, msg: Message) -> Result<(), Error> {
         let mut guard = lock!(self.conn);
         match *guard {
-            Some(ref mut stream) => Self::send_msg(stream, &self.log, msg),
+            Some(ref mut stream) => {
+                Self::send_msg(stream, &self.log, &self.creator, msg)
+            }
             None => Err(Error::NotConnected),
         }
     }
@@ -452,6 +464,7 @@ impl BgpConnectionTcp {
         conn: TcpStream,
         event_tx: Sender<FsmEvent<Self>>,
         log: Logger,
+        creator: &str,
     ) -> Result<Self, Error> {
         let dropped = Arc::new(AtomicBool::new(false));
         //TODO timeout as param
@@ -462,6 +475,7 @@ impl BgpConnectionTcp {
             Duration::from_millis(100),
             dropped.clone(),
             log.clone(),
+            creator,
         )?;
         Ok(Self {
             peer,
@@ -474,6 +488,7 @@ impl BgpConnectionTcp {
             sa_keepalive_running: Arc::new(AtomicBool::new(false)),
             #[cfg(target_os = "illumos")]
             sas: Arc::new(Mutex::new(None)),
+            creator: String::from(creator),
         })
     }
 
@@ -484,6 +499,7 @@ impl BgpConnectionTcp {
         timeout: Duration,
         dropped: Arc<AtomicBool>,
         log: Logger,
+        creator: &str,
     ) -> Result<(), Error> {
         if !timeout.is_zero() {
             conn.set_read_timeout(Some(timeout))?;
@@ -492,18 +508,24 @@ impl BgpConnectionTcp {
         connection_log_lite!(log,
             info,
             "spawning recv loop for {peer}";
+            "creator" => creator,
+            "connection" => format!("{conn:?}"),
             "peer" => format!("{peer}")
         );
+
+        let creator = String::from(creator);
 
         spawn(move || loop {
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            match Self::recv_msg(&mut conn, dropped.clone(), &log) {
+            match Self::recv_msg(&mut conn, dropped.clone(), &log, &creator) {
                 Ok(msg) => {
                     connection_log_lite!(log,
                         trace,
                         "recv {} msg from {peer}", msg.title();
+                        "creator" => &creator,
+                        "connection" => format!("{conn:?}"),
                         "peer" => format!("{peer}"),
                         "message" => msg.title(),
                         "message_contents" => format!("{msg}")
@@ -512,6 +534,8 @@ impl BgpConnectionTcp {
                         connection_log_lite!(log,
                             warn,
                             "error sending event to {peer}: {e}";
+                            "creator" => &creator,
+                            "connection" => format!("{conn:?}"),
                             "peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );
@@ -570,6 +594,7 @@ impl BgpConnectionTcp {
         stream: &mut TcpStream,
         dropped: Arc<AtomicBool>,
         log: &Logger,
+        creator: &str,
     ) -> std::io::Result<Message> {
         use crate::messages::OpenErrorSubcode;
         let hdr = Self::recv_header(stream, dropped.clone())?;
@@ -584,7 +609,8 @@ impl BgpConnectionTcp {
                     connection_log_lite!(log,
                         error,
                         "open message error: {e}";
-                        "stream" => format!("{stream:?}"),
+                        "creator" => creator,
+                        "connection" => format!("{stream:?}"),
                         "error" => format!("{e}")
                     );
 
@@ -598,6 +624,7 @@ impl BgpConnectionTcp {
                     if let Err(e) = Self::send_notification(
                         stream,
                         log,
+                        UNIT_CONNECTION,
                         ErrorCode::Open,
                         ErrorSubcode::Open(subcode),
                         Vec::new(),
@@ -605,7 +632,8 @@ impl BgpConnectionTcp {
                         connection_log_lite!(log,
                             error,
                             "error sending notification: {e}";
-                            "stream" => format!("{stream:?}"),
+                            "creator" => creator,
+                            "connection" => format!("{stream:?}"),
                             "error" => format!("{e}")
                         );
                     }
@@ -655,14 +683,16 @@ impl BgpConnectionTcp {
     fn send_msg(
         stream: &mut TcpStream,
         log: &Logger,
+        creator: &str,
         msg: Message,
     ) -> Result<(), Error> {
         connection_log_lite!(log,
             trace,
             "sending {} msg", msg.title();
+            "creator" => creator,
+            "connection" => format!("{stream:?}"),
             "message" => msg.title(),
-            "message_contents" => format!("{msg}"),
-            "stream" => format!("{stream:?}")
+            "message_contents" => format!("{msg}")
         );
         let msg_buf = msg.to_wire()?;
         let header = Header {
@@ -680,9 +710,9 @@ impl BgpConnectionTcp {
         connection_log_lite!(log,
             trace,
             "sending {} msg with header", msg.title();
+            "connection" => format!("{stream:?}"),
             "message" => msg.title(),
-            "message_contents" => format!("{buf:x?}"),
-            "stream" => format!("{stream:?}")
+            "message_contents" => format!("{buf:x?}")
         );
         stream.write_all(&buf)?;
         Ok(())
@@ -691,6 +721,7 @@ impl BgpConnectionTcp {
     fn send_notification(
         stream: &mut TcpStream,
         log: &Logger,
+        creator: &str,
         error_code: ErrorCode,
         error_subcode: ErrorSubcode,
         data: Vec<u8>,
@@ -698,6 +729,7 @@ impl BgpConnectionTcp {
         Self::send_msg(
             stream,
             log,
+            creator,
             Message::Notification(NotificationMessage {
                 error_code,
                 error_subcode,

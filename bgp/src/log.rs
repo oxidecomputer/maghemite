@@ -6,7 +6,8 @@ macro_rules! session_log {
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
             "peer_name" => lock!($self.neighbor.name).as_str(),
-            "remote" => $self.neighbor.host,
+            "peer_sockaddr" => $self.neighbor.host,
+            "source" => format!("{:?}", $self.bind_addr),
             $($key => $value),*
         )
     };
@@ -17,7 +18,8 @@ macro_rules! session_log {
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
             "peer_name" => lock!($self.neighbor.name).as_str(),
-            "remote" => $self.neighbor.host,
+            "peer_sockaddr" => $self.neighbor.host,
+            "source" => format!("{:?}", $self.bind_addr),
             $($key => $value),*
         )
     };
@@ -28,7 +30,8 @@ macro_rules! session_log {
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
             "peer_name" => lock!($self.neighbor.name).as_str(),
-            "remote" => $self.neighbor.host,
+            "peer_sockaddr" => $self.neighbor.host,
+            "source" => format!("{:?}", $self.bind_addr),
         )
     };
     ($self:expr, $level:ident, $msg:expr, $($args:expr),*) => {
@@ -38,7 +41,8 @@ macro_rules! session_log {
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
             "peer_name" => lock!($self.neighbor.name).as_str(),
-            "remote" => $self.neighbor.host,
+            "peer_sockaddr" => $self.neighbor.host,
+            "source" => format!("{:?}", $self.bind_addr),
         )
     };
 }
@@ -87,6 +91,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
+            "creator" => &$self.creator,
             "peer" => $self.peer(),
             "source" => $self.local(),
             $($key => $value),*
@@ -98,6 +103,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
+            "creator" => &$self.creator,
             "peer" => $self.peer(),
             "source" => $self.local(),
             $($key => $value),*
@@ -109,6 +115,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
+            "creator" => &$self.creator,
             "peer" => $self.peer(),
             "source" => $self.local(),
         )
@@ -119,6 +126,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
+            "creator" => &$self.creator,
             "peer" => $self.peer(),
             "source" => $self.local(),
         )

@@ -128,6 +128,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     fn accept(
         &self,
         log: Logger,
+        creator: &str,
         addr_to_session: Arc<
             Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionChannel>>>>,
         >,
@@ -141,6 +142,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
                 endpoint,
                 event_tx.clone(),
                 log,
+                creator,
             )),
             None => Err(Error::UnknownPeer(peer.ip())),
         }
@@ -154,16 +156,23 @@ pub struct BgpConnectionChannel {
     peer: SocketAddr,
     conn_tx: Arc<Mutex<Option<Sender<Message>>>>,
     log: Logger,
+    creator: String, // creator of this connection, i.e. Dispatcher or SessionRunner
 }
 
 impl BgpConnection for BgpConnectionChannel {
-    fn new(addr: Option<SocketAddr>, peer: SocketAddr, log: Logger) -> Self {
+    fn new(
+        addr: Option<SocketAddr>,
+        peer: SocketAddr,
+        log: Logger,
+        creator: &str,
+    ) -> Self {
         Self {
             addr: addr
                 .expect("source address required for channel-based connection"),
             peer,
             conn_tx: Arc::new(Mutex::new(None)),
             log,
+            creator: String::from(creator),
         }
     }
 
@@ -189,6 +198,7 @@ impl BgpConnection for BgpConnectionChannel {
                     event_tx.clone(),
                     timeout,
                     self.log.clone(),
+                    &self.creator,
                 );
                 event_tx.send(FsmEvent::TcpConnectionConfirmed).map_err(
                     |e| {
@@ -268,6 +278,7 @@ impl BgpConnectionChannel {
         conn: Endpoint<Message>,
         event_tx: Sender<FsmEvent<Self>>,
         log: Logger,
+        creator: &str,
     ) -> Self {
         //TODO timeout as param
         Self::recv(
@@ -276,12 +287,14 @@ impl BgpConnectionChannel {
             event_tx,
             Duration::from_millis(100),
             log.clone(),
+            creator,
         );
         Self {
             addr,
             peer,
             conn_tx: Arc::new(Mutex::new(Some(conn.tx))),
             log,
+            creator: String::from(creator),
         }
     }
 
@@ -291,18 +304,24 @@ impl BgpConnectionChannel {
         event_tx: Sender<FsmEvent<Self>>,
         _timeout: Duration, //TODO shutdown detection
         log: Logger,
+        creator: &str,
     ) {
         connection_log_lite!(log,
             info,
             "spawning recv loop for {peer}";
+            "creator" => creator,
             "peer" => format!("{peer}")
         );
+
+        let creator = String::from(creator);
+
         spawn(move || loop {
             match rx.recv() {
                 Ok(msg) => {
                     connection_log_lite!(log,
                         debug,
                         "recv {} msg from {peer}", msg.title();
+                        "creator" => &creator,
                         "peer" => format!("{peer}"),
                         "message" => msg.title(),
                         "message_contents" => format!("{msg}")
@@ -311,6 +330,7 @@ impl BgpConnectionChannel {
                         connection_log_lite!(log,
                             error,
                             "error sending event to {peer}: {e}";
+                            "creator" => &creator,
                             "peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );

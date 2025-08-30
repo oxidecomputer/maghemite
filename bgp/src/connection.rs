@@ -34,6 +34,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
     fn accept(
         &self,
         log: Logger,
+        creator: &str,
         addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
         timeout: Duration,
     ) -> Result<Cnx, Error>;
@@ -47,7 +48,12 @@ pub trait BgpConnection: Send + Clone {
     /// Create a new BGP connection to the specified peer. If a source address
     /// is provided, that address will be used. Otherwise, the underlying
     /// platform is free to choose a source address.
-    fn new(source: Option<SocketAddr>, peer: SocketAddr, log: Logger) -> Self
+    fn new(
+        source: Option<SocketAddr>,
+        peer: SocketAddr,
+        log: Logger,
+        creator: &str,
+    ) -> Self
     where
         Self: Sized;
 
