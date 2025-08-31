@@ -29,12 +29,12 @@ dladm
 ipadm
 
 banner "collect"
-get_artifact softnpu image 64beaff129b7f63a04a53dd5ed0ec09f012f5756 softnpu
-get_artifact sidecar-lite release d815d8e2b310de8a7461241d9f9f1b5c762e1e65 libsidecar_lite.so
-get_artifact sidecar-lite release d815d8e2b310de8a7461241d9f9f1b5c762e1e65 scadm
-get_artifact dendrite image 270dc8eb421b8514bf1ed00ab956025dc326b9df dendrite-softnpu.tar.gz
-get_artifact maghemite release 2bfd39000c878c45675651a7588c015c486e7f43 ddmd
-get_artifact maghemite release 2bfd39000c878c45675651a7588c015c486e7f43 ddmadm
+get_artifact softnpu image 591c64bf9765b6ed7cd8615ceb8cf6f8d117bd28 softnpu
+get_artifact sidecar-lite release b3b8de99df89000b224333ead6f9d853eeb82ee6 libsidecar_lite.so
+get_artifact sidecar-lite release b3b8de99df89000b224333ead6f9d853eeb82ee6 scadm
+get_artifact dendrite image 8314881e372d7bbb4a4ee2da051ecdc34f66c534 dendrite-softnpu.tar.gz
+get_artifact maghemite release 8b73770081463fa368199f2d4863f99a6e7b3782 ddmd
+get_artifact maghemite release 8b73770081463fa368199f2d4863f99a6e7b3782 ddmadm
 
 pushd download
 chmod +x softnpu
