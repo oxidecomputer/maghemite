@@ -877,6 +877,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "ddm-api",
+ "ddm-types",
  "dpd-client",
  "dropshot",
  "hostname 0.3.1",
@@ -898,7 +900,6 @@ dependencies = [
  "semver 1.0.26",
  "serde",
  "serde_json",
- "serde_repr",
  "sled",
  "slog",
  "socket2",
@@ -919,6 +920,30 @@ dependencies = [
  "serde_json",
  "slog",
  "uuid",
+]
+
+[[package]]
+name = "ddm-api"
+version = "0.1.0"
+dependencies = [
+ "ddm-types",
+ "dropshot",
+ "mg-common",
+ "oxnet",
+ "schemars",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "ddm-types"
+version = "0.1.0"
+dependencies = [
+ "mg-common",
+ "oxnet",
+ "schemars",
+ "serde",
+ "serde_repr",
 ]
 
 [[package]]
@@ -950,6 +975,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ddm",
+ "ddm-types",
  "dpd-client",
  "hostname 0.3.1",
  "libnet",

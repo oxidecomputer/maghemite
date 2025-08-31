@@ -8,6 +8,7 @@ ddm = { path = "../ddm" }
 mg-common = { path = "../mg-common" }
 anyhow.workspace = true
 clap.workspace = true
+ddm-types.workspace = true
 libnet.workspace = true
 oxide-tokio-rt.workspace = true
 slog.workspace = true

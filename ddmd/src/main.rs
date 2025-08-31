@@ -4,9 +4,10 @@
 
 use clap::Parser;
 use ddm::admin::{HandlerContext, RouterStats};
-use ddm::db::{Db, RouterKind};
+use ddm::db::Db;
 use ddm::sm::{DpdConfig, SmContext, StateMachine};
 use ddm::sys::Route;
+use ddm_types::db::RouterKind;
 use signal::handle_signals;
 use slog::{error, Drain, Logger};
 use std::net::{IpAddr, Ipv6Addr};
