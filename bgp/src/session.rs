@@ -9,8 +9,8 @@ use crate::error::{Error, ExpectationMismatch};
 use crate::fanout::Fanout;
 use crate::log::session_log;
 use crate::messages::{
-    AddPathElement, Afi, Capability, Community, ErrorCode, ErrorSubcode,
-    Message, NotificationMessage, OpenMessage, OptionalParameter,
+    AddPathElement, Afi, Capability, CeaseErrorSubcode, Community, ErrorCode,
+    ErrorSubcode, Message, NotificationMessage, OpenMessage, OptionalParameter,
     PathAttributeValue, RouteRefreshMessage, Safi, UpdateMessage,
 };
 use crate::policy::{CheckerResult, ShaperResult};
@@ -748,7 +748,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// allocated to peer.
     fn idle(&self) -> FsmState<Cnx> {
         let event = match self.event_rx.recv() {
-            Ok(event) => event,
+            Ok(event) => {
+                session_log!(self, debug, "received fsm event";
+                    "fsm_state" => format!("{}", self.state()).as_str(),
+                    "event" => event.title()
+                );
+                event
+            }
             Err(e) => {
                 session_log!(self, error, "event rx error: {e}";
                     "fsm_state" => format!("{}", self.state()).as_str(),
@@ -757,10 +763,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
         };
-        session_log!(self, debug, "received fsm event";
-            "fsm_state" => format!("{}", self.state()).as_str(),
-            "event" => event.title()
-        );
 
         match event {
             FsmEvent::ManualStart => {
@@ -900,7 +902,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             let event = match self.event_rx.recv() {
                 Ok(event) => {
-                    session_log!(self, debug, "event rx";
+                    session_log!(self, debug, "received fsm event";
                         "fsm_state" => format!("{}", self.state()).as_str(),
                         "event" => event.title()
                     );
@@ -1087,7 +1089,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Trying to acquire peer by listening for and accepting a TCP connection.
     fn on_active(&self, conn: Cnx) -> FsmState<Cnx> {
         let event = match self.event_rx.recv() {
-            Ok(event) => event,
+            Ok(event) => {
+                session_log!(self, debug, "received fsm event";
+                    "fsm_state" => format!("{}", self.state()).as_str(),
+                    "event" => event.title()
+                );
+                event
+            }
             Err(e) => {
                 session_log!(self, error,
                     "event rx error: {e}";
@@ -1228,7 +1236,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Waiting for open message from peer.
     fn on_open_sent(&self, conn: Cnx) -> FsmState<Cnx> {
         let event = match self.event_rx.recv() {
-            Ok(event) => event,
+            Ok(event) => {
+                session_log!(self, debug, "received fsm event";
+                    "fsm_state" => format!("{}", self.state()).as_str(),
+                    "event" => event.title()
+                );
+                event
+            }
             Err(e) => {
                 session_log!(self, error,
                     "event rx error: {e}";
@@ -1293,6 +1307,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             FsmEvent::Connected(accepted) => {
                 // collision detection RFC 4271 6.8
+                session_log!(self, info,
+                    "collision detected {}", accepted.peer();
+                    "fsm_state" => format!("{}", self.state()).as_str()
+                );
                 if lock!(self.session).remote_id.unwrap_or(0) > self.id {
                     lock!(self.session).connect_retry_counter = 0;
                     lock!(self.clock.timers.connect_retry_timer).disable();
@@ -1324,8 +1342,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.counters
                         .passive_connections_accepted
                         .fetch_add(1, Ordering::Relaxed);
+                    session_log!(self, info,
+                        "collision resolution: inbound connection from {} wins, fsm transition to open sent",
+                        accepted.peer();
+                        "fsm_state" => format!("{}", self.state()).as_str()
+                    );
+                    self.send_collision_resolution_notification(&conn);
+                    session_log!(self, info,
+                        "fsm transition to open sent";
+                        "fsm_state" => format!("{}", self.state()).as_str()
+                    );
                     return FsmState::OpenSent(accepted);
                 } else {
+                    session_log!(self, info,
+                        "collision resolution: outbound connection to {} wins, fsm transition to active",
+                        self.neighbor.host;
+                        "fsm_state" => format!("{}", self.state()).as_str()
+                    );
+                    self.send_collision_resolution_notification(&accepted);
+                    session_log!(self, info,
+                        "fsm transition to active";
+                        "fsm_state" => format!("{}", self.state()).as_str()
+                    );
                     return FsmState::Active(conn);
                 }
             }
@@ -1383,7 +1421,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Waiting for keepaliave or notification from peer.
     fn on_open_confirm(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         let event = match self.event_rx.recv() {
-            Ok(event) => event,
+            Ok(event) => {
+                session_log!(self, debug, "received fsm event";
+                    "fsm_state" => format!("{}", self.state()).as_str(),
+                    "event" => event.title()
+                );
+                event
+            }
             Err(e) => {
                 session_log!(self, error, "event rx error: {e}";
 
@@ -1484,6 +1528,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             FsmEvent::Connected(accepted) => {
                 // collision detection RFC 4271 6.8
+                session_log!(self, info,
+                    "collision detected {}", accepted.peer();
+                    "fsm_state" => format!("{}", self.state()).as_str()
+                );
+                // XXX: move this into a single method
                 if lock!(self.session).remote_id.unwrap_or(0) > self.id {
                     lock!(self.session).connect_retry_counter = 0;
                     lock!(self.clock.timers.connect_retry_timer).disable();
@@ -1515,8 +1564,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.counters
                         .passive_connections_accepted
                         .fetch_add(1, Ordering::Relaxed);
+                    session_log!(self, info,
+                        "collision resolution: inbound connection from {} wins, closing outbound connection to {}",
+                        accepted.peer(), self.neighbor.host;
+                        "fsm_state" => format!("{}", self.state()).as_str()
+                    );
+                    self.send_collision_resolution_notification(&pc.conn);
+                    session_log!(self, info,
+                        "fsm transition to open sent";
+                        "fsm_state" => format!("{}", self.state()).as_str()
+                    );
                     FsmState::OpenSent(accepted)
                 } else {
+                    session_log!(self, info,
+                        "collision resolution: outbound connection to {} wins, closing inbound connection from {}",
+                        self.neighbor.host, accepted.peer();
+                        "fsm_state" => format!("{}", self.state()).as_str()
+                    );
+                    self.send_collision_resolution_notification(&accepted);
+                    session_log!(self, info,
+                        "fsm transition to open confirm";
+                        "fsm_state" => format!("{}", self.state()).as_str()
+                    );
                     FsmState::OpenConfirm(pc)
                 }
             }
@@ -1629,7 +1698,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Able to exchange update, notification and keepliave messages with peers.
     fn on_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         let event = match self.event_rx.recv() {
-            Ok(event) => event,
+            Ok(event) => {
+                session_log!(self, debug, "received fsm event";
+                    "fsm_state" => format!("{}", self.state()).as_str(),
+                    "event" => event.title()
+                );
+                event
+            }
             Err(e) => {
                 //TODO possible death loop. Should we just panic here? Is it
                 // even possible to recover from an error here as it likely
@@ -2107,6 +2182,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             conn,
             ErrorCode::HoldTimerExpired,
             ErrorSubcode::HoldTime(0),
+        )
+    }
+
+    fn send_collision_resolution_notification(&self, conn: &Cnx) {
+        self.send_notification(
+            conn,
+            ErrorCode::Cease,
+            ErrorSubcode::Cease(
+                CeaseErrorSubcode::ConnectionCollisionResolution,
+            ),
         )
     }
 
