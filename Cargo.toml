@@ -104,5 +104,5 @@ rev = "3d1263ced8177893d46da54a914e4c510dc2bfc8"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "main"
+branch = "ecmp"
 package = "dpd-client"
