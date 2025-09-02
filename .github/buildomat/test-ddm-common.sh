@@ -27,10 +27,6 @@ function get_artifact {
 
 set -o xtrace
 
-cargo --version
-rustc --version
-pfexec pkg install clang-15
-
 dladm
 ipadm
 
@@ -60,12 +56,15 @@ sed -i  "s#<service_fmri value='svc:/oxide/.*setup:default' />##g" \
 popd
 
 banner "install"
-pkg info brand/sparse | grep -qi installed
-if [[ $? != 0 ]]; then
-    set -o errexit
-    pfexec pkg install brand/sparse
-fi
-
+for p in clang-15 pkg-config brand/sparse ; do
+    set +o errexit
+    pkg info $p | grep -qi installed
+    if [[ $? != 0 ]]; then
+        set -o errexit
+        pfexec pkg install $p
+    fi
+done
+    
 set -o errexit
 set -o pipefail
 
