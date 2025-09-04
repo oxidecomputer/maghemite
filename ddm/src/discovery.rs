@@ -85,10 +85,11 @@
 //! and 1 for a transit routers. The fourth byte is a hostname length followed
 //! directly by a hostname of up to 255 bytes in length.
 
-use crate::db::{Db, PeerInfo, PeerStatus, RouterKind};
+use crate::db::Db;
 use crate::sm::{Config, Event, NeighborEvent, SessionStats};
 use crate::util::u8_slice_assume_init_ref;
 use crate::{dbg, err, inf, trc, wrn};
+use ddm_types::db::{PeerInfo, PeerStatus, RouterKind};
 use mg_common::lock;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
