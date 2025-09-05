@@ -174,6 +174,7 @@ fn sync_prefix(
         .block_on(async { ddm.get_originated_tunnel_endpoints().await })?
         .into_inner()
         .into_iter()
+        .filter(|x| x.overlay_prefix == prefix)
         .collect::<HashSet<_>>();
 
     // The best routes in the RIB

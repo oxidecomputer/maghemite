@@ -4340,6 +4340,7 @@ dependencies = [
  "ciborium",
  "itertools 0.13.0",
  "mg-common",
+ "oxnet",
  "schemars",
  "serde",
  "serde_json",
