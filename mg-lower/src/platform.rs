@@ -612,6 +612,7 @@ pub(crate) mod test {
                         && x.port_id == *port_id)
                 });
             }
+            routes.retain(|_, v| !v.is_empty());
             Ok(dpd_response_ok!(()))
         }
 
@@ -701,8 +702,9 @@ pub(crate) mod test {
 
     /// A mock swtich zone implementation.
     pub(crate) struct TestSwitchZone {
-        pub(crate) ifname: Option<String>,
-        pub(crate) gw: IpAddr,
+        pub(crate) routes: HashMap<IpNet, (Option<String>, IpAddr)>,
+        pub(crate) default_ifname: Option<String>,
+        pub(crate) default_gw: IpAddr,
     }
     impl SwitchZone for TestSwitchZone {
         fn get_route(
@@ -710,12 +712,15 @@ pub(crate) mod test {
             dst: IpNet,
             _timeout: Option<Duration>,
         ) -> Result<libnet::route::Route, libnet::route::Error> {
+            let rt = self.routes.get(&dst);
             Ok(libnet::route::Route {
                 dest: dst.addr(),
                 mask: dst.width().into(),
-                gw: self.gw,
+                gw: rt.map(|x| x.1).unwrap_or(self.default_gw),
                 delay: 0,
-                ifx: self.ifname.clone(),
+                ifx: rt
+                    .map(|x| x.0.clone())
+                    .unwrap_or(self.default_ifname.clone()),
             })
         }
     }
