@@ -3,6 +3,9 @@ name = "mg-lower"
 version = "0.1.0"
 edition = "2021"
 
+[dev-dependencies]
+util  = { path = "../util" }
+
 [dependencies]
 ddm-admin-client = { path = "../ddm-admin-client" }
 rdb = { path = "../rdb" }
@@ -16,3 +19,4 @@ http.workspace = true
 mg-common.workspace = true
 oxnet.workspace = true
 reqwest.workspace = true
+progenitor-client.workspace = true

@@ -2,12 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::platform::Dpd;
+use crate::platform::SwitchZone;
 use crate::Error;
 use crate::MG_LOWER_TAG;
 use dpd_client::types;
 use dpd_client::types::LinkState;
 use dpd_client::Client as DpdClient;
-use libnet::get_route;
 use oxnet::IpNet;
 use oxnet::Ipv4Net;
 use oxnet::Ipv6Net;
@@ -55,10 +56,11 @@ impl RouteHash {
     }
 
     pub fn for_prefix_path(
+        sw: &impl SwitchZone,
         prefix: Prefix,
         path: Path,
     ) -> Result<RouteHash, Error> {
-        let (port_id, link_id) = get_port_and_link(path.nexthop)?;
+        let (port_id, link_id) = get_port_and_link(sw, path.nexthop)?;
 
         let rh = RouteHash {
             cidr: match prefix {
@@ -77,7 +79,7 @@ impl RouteHash {
 
 pub(crate) fn ensure_tep_addr(
     tep: Ipv6Addr,
-    dpd: &DpdClient,
+    dpd: &impl Dpd,
     rt: Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) {
@@ -95,7 +97,7 @@ pub(crate) fn ensure_tep_addr(
 }
 
 pub(crate) fn link_is_up(
-    dpd: &DpdClient,
+    dpd: &impl Dpd,
     port_id: &types::PortId,
     link_id: &types::LinkId,
     rt: &Arc<tokio::runtime::Handle>,
@@ -107,7 +109,7 @@ pub(crate) fn link_is_up(
 }
 
 fn get_local_addrs(
-    dpd: &DpdClient,
+    dpd: &impl Dpd,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<(BTreeSet<Ipv4Addr>, BTreeSet<Ipv6Addr>), Error> {
     let links = rt
@@ -144,7 +146,7 @@ fn get_local_addrs(
 pub(crate) fn update_dendrite<'a, I>(
     to_add: I,
     to_del: I,
-    dpd: &DpdClient,
+    dpd: &impl Dpd,
     rt: Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) -> Result<(), Error>
@@ -154,7 +156,7 @@ where
     let (local_v4_addrs, local_v6_addrs) = get_local_addrs(dpd, &rt)?;
 
     for r in to_add {
-        let tag = dpd.inner().tag.clone();
+        let tag = dpd.tag();
         let port_id = r.port_id.clone();
         let link_id = r.link_id;
         let vlan_id = r.vlan_id;
@@ -333,10 +335,11 @@ fn test_tfport_parser() {
 }
 
 fn get_port_and_link(
+    sw: &impl SwitchZone,
     nexthop: IpAddr,
 ) -> Result<(types::PortId, types::LinkId), Error> {
     let prefix = IpNet::host_net(nexthop);
-    let sys_route = get_route(prefix, Some(Duration::from_secs(1)))?;
+    let sys_route = sw.get_route(prefix, Some(Duration::from_secs(1)))?;
 
     let ifname = match sys_route.ifx {
         Some(name) => name,
@@ -364,7 +367,7 @@ fn get_port_and_link(
 }
 
 pub(crate) fn get_routes_for_prefix(
-    dpd: &DpdClient,
+    dpd: &impl Dpd,
     prefix: &Prefix,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,
