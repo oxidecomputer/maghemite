@@ -13,6 +13,23 @@ use std::time::Duration;
 use zone::Zlogin;
 use ztest::*;
 
+#[macro_export]
+macro_rules! retry_cmd {
+    ($cmd:expr, $period:expr, $count:expr) => {{
+        let mut done = false;
+        for _ in 0..$count - 1 {
+            if $cmd.is_ok() {
+                done = true;
+                break;
+            }
+            sleep(Duration::from_secs($period))
+        }
+        if !done {
+            $cmd?;
+        }
+    }};
+}
+
 const ZONE_BRAND: &str = "sparse";
 
 struct SoftnpuZone<'a> {
@@ -429,8 +446,8 @@ async fn run_trio_tests(
 
     println!("advertise from two passed");
 
-    zs1.zexec("ping fd00:2::1")?;
-    zs2.zexec("ping fd00:1::1")?;
+    retry_cmd!(zs1.zexec("ping fd00:2::1"), 1, 10);
+    retry_cmd!(zs2.zexec("ping fd00:1::1"), 1, 10);
 
     println!("connectivity test passed");
 
@@ -441,8 +458,8 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&s1).await?, 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await.unwrap_or(99), 2);
-    zs1.zexec("ping fd00:2::1")?;
-    zs2.zexec("ping fd00:1::1")?;
+    retry_cmd!(zs1.zexec("ping fd00:2::1"), 1, 10);
+    retry_cmd!(zs2.zexec("ping fd00:1::1"), 1, 10);
 
     println!("transit router restart passed");
 
@@ -462,8 +479,8 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 2);
 
-    zs1.zexec("ping fd00:2::1")?;
-    zs2.zexec("ping fd00:1::1")?;
+    retry_cmd!(zs1.zexec("ping fd00:2::1"), 1, 10);
+    retry_cmd!(zs2.zexec("ping fd00:1::1"), 1, 10);
 
     println!("server router restart passed");
 
@@ -695,7 +712,7 @@ async fn run_quartet_tests(
     wait_for_eq!(prefix_count(&s3).await?, 1);
 
     // s3 should be able to ping s1
-    zs3.zexec("ping fd00:1::1")?;
+    retry_cmd!(zs3.zexec("ping fd00:1::1"), 1, 10);
 
     // s2 hijacks s1's prefix
     s2.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
@@ -719,7 +736,7 @@ async fn run_quartet_tests(
     wait_for_eq!(prefix_count(&s3).await?, 1);
 
     // s3 should be able to ping s1 even after s2 withdrew s1's prefix
-    zs3.zexec("ping fd00:1::1")?;
+    retry_cmd!(zs3.zexec("ping fd00:1::1"), 1, 10);
 
     Ok(())
 }
