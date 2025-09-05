@@ -2,11 +2,13 @@
 //! platform. This is useful for testing mg-lower while not having to
 //! have a running dpd, ddmd, or switch zone.
 //!
-//! TODO: maybe there can be lest boilerplate with Dropshot API traits?
+//! TODO: maybe there can be less boilerplate with Dropshot API traits?
 
 use std::time::Duration;
 
+use ddm_admin_client::types::{Error as DdmError, *};
 use ddm_admin_client::Client as DdmClient;
+use dpd_client::types::{Error as DpdError, *};
 use dpd_client::Client as DpdClient;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 
@@ -16,96 +18,78 @@ pub(crate) trait Dpd {
         &self,
         cidr: &Ipv4Net,
     ) -> Result<
-        dpd_client::ResponseValue<
-            ::std::vec::Vec<dpd_client::types::Ipv4Route>,
-        >,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Vec<Ipv4Route>>,
+        progenitor_client::Error<DpdError>,
     >;
     async fn route_ipv6_get(
         &self,
         cidr: &Ipv6Net,
     ) -> Result<
-        dpd_client::ResponseValue<
-            ::std::vec::Vec<dpd_client::types::Ipv6Route>,
-        >,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Vec<Ipv6Route>>,
+        progenitor_client::Error<DpdError>,
     >;
-
     async fn link_get(
         &self,
-        port_id: &dpd_client::types::PortId,
-        link_id: &dpd_client::types::LinkId,
+        port_id: &PortId,
+        link_id: &LinkId,
     ) -> Result<
-        dpd_client::ResponseValue<dpd_client::types::Link>,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Link>,
+        progenitor_client::Error<DpdError>,
     >;
-
     async fn loopback_ipv6_create(
         &self,
-        addr: &dpd_client::types::Ipv6Entry,
-    ) -> Result<
-        dpd_client::ResponseValue<()>,
-        progenitor_client::Error<dpd_client::types::Error>,
-    >;
+        addr: &Ipv6Entry,
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>;
 
     async fn link_list_all<'a>(
         &'a self,
         filter: Option<&'a str>,
     ) -> Result<
-        dpd_client::ResponseValue<::std::vec::Vec<dpd_client::types::Link>>,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Vec<Link>>,
+        progenitor_client::Error<DpdError>,
     >;
 
     async fn link_ipv4_list<'a>(
         &'a self,
-        port_id: &'a dpd_client::types::PortId,
-        link_id: &'a dpd_client::types::LinkId,
+        port_id: &'a PortId,
+        link_id: &'a LinkId,
         limit: Option<std::num::NonZeroU32>,
         page_token: Option<&'a str>,
     ) -> Result<
-        dpd_client::ResponseValue<dpd_client::types::Ipv4EntryResultsPage>,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Ipv4EntryResultsPage>,
+        progenitor_client::Error<DpdError>,
     >;
 
     async fn link_ipv6_list<'a>(
         &'a self,
-        port_id: &'a dpd_client::types::PortId,
-        link_id: &'a dpd_client::types::LinkId,
+        port_id: &'a PortId,
+        link_id: &'a LinkId,
         limit: Option<std::num::NonZeroU32>,
         page_token: Option<&'a str>,
     ) -> Result<
-        dpd_client::ResponseValue<dpd_client::types::Ipv6EntryResultsPage>,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Ipv6EntryResultsPage>,
+        progenitor_client::Error<DpdError>,
     >;
 
     fn tag(&self) -> String;
 
     async fn route_ipv4_add<'a>(
         &'a self,
-        body: &'a dpd_client::types::Ipv4RouteUpdate,
-    ) -> Result<
-        dpd_client::ResponseValue<()>,
-        progenitor_client::Error<dpd_client::types::Error>,
-    >;
+        body: &'a Ipv4RouteUpdate,
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>;
 
     async fn route_ipv6_add<'a>(
         &'a self,
-        body: &'a dpd_client::types::Ipv6RouteUpdate,
-    ) -> Result<
-        dpd_client::ResponseValue<()>,
-        progenitor_client::Error<dpd_client::types::Error>,
-    >;
+        body: &'a Ipv6RouteUpdate,
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>;
 
     async fn route_ipv4_delete_target<'a>(
         &'a self,
         cidr: &'a oxnet::Ipv4Net,
-        port_id: &'a dpd_client::types::PortId,
-        link_id: &'a dpd_client::types::LinkId,
+        port_id: &'a PortId,
+        link_id: &'a LinkId,
         tgt_ip: &'a std::net::Ipv4Addr,
-    ) -> Result<
-        dpd_client::ResponseValue<()>,
-        progenitor_client::Error<dpd_client::types::Error>,
-    >;
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>;
 }
 
 /// This trait wraps the ddmd methods mg-lower uses.
@@ -113,17 +97,15 @@ pub(crate) trait Ddm {
     async fn get_originated_tunnel_endpoints(
         &self,
     ) -> Result<
-        ddm_admin_client::ResponseValue<
-            Vec<ddm_admin_client::types::TunnelOrigin>,
-        >,
-        progenitor_client::Error<ddm_admin_client::types::Error>,
+        ddm_admin_client::ResponseValue<Vec<TunnelOrigin>>,
+        progenitor_client::Error<DdmError>,
     >;
 
     async fn get_originated(
         &self,
     ) -> Result<
         ddm_admin_client::ResponseValue<Vec<oxnet::Ipv6Net>>,
-        progenitor_client::Error<ddm_admin_client::types::Error>,
+        progenitor_client::Error<DdmError>,
     >;
 
     #[allow(clippy::ptr_arg)]
@@ -132,25 +114,25 @@ pub(crate) trait Ddm {
         body: &'a Vec<oxnet::Ipv6Net>,
     ) -> Result<
         ddm_admin_client::ResponseValue<()>,
-        progenitor_client::Error<ddm_admin_client::types::Error>,
+        progenitor_client::Error<DdmError>,
     >;
 
     #[allow(clippy::ptr_arg)]
     async fn advertise_tunnel_endpoints<'a>(
         &'a self,
-        body: &'a Vec<ddm_admin_client::types::TunnelOrigin>,
+        body: &'a Vec<TunnelOrigin>,
     ) -> Result<
         ddm_admin_client::ResponseValue<()>,
-        progenitor_client::Error<ddm_admin_client::types::Error>,
+        progenitor_client::Error<DdmError>,
     >;
 
     #[allow(clippy::ptr_arg)]
     async fn withdraw_tunnel_endpoints<'a>(
         &'a self,
-        body: &'a Vec<ddm_admin_client::types::TunnelOrigin>,
+        body: &'a Vec<TunnelOrigin>,
     ) -> Result<
         ddm_admin_client::ResponseValue<()>,
-        progenitor_client::Error<ddm_admin_client::types::Error>,
+        progenitor_client::Error<DdmError>,
     >;
 }
 
@@ -174,10 +156,8 @@ impl Dpd for ProductionDpd {
         &self,
         cidr: &Ipv4Net,
     ) -> Result<
-        dpd_client::ResponseValue<
-            ::std::vec::Vec<dpd_client::types::Ipv4Route>,
-        >,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Vec<Ipv4Route>>,
+        progenitor_client::Error<DpdError>,
     > {
         self.client.route_ipv4_get(cidr).await
     }
@@ -186,32 +166,28 @@ impl Dpd for ProductionDpd {
         &self,
         cidr: &Ipv6Net,
     ) -> Result<
-        dpd_client::ResponseValue<
-            ::std::vec::Vec<dpd_client::types::Ipv6Route>,
-        >,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Vec<Ipv6Route>>,
+        progenitor_client::Error<DpdError>,
     > {
         self.client.route_ipv6_get(cidr).await
     }
 
     async fn link_get(
         &self,
-        port_id: &dpd_client::types::PortId,
-        link_id: &dpd_client::types::LinkId,
+        port_id: &PortId,
+        link_id: &LinkId,
     ) -> Result<
-        dpd_client::ResponseValue<dpd_client::types::Link>,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Link>,
+        progenitor_client::Error<DpdError>,
     > {
         self.client.link_get(port_id, link_id).await
     }
 
     async fn loopback_ipv6_create(
         &self,
-        addr: &dpd_client::types::Ipv6Entry,
-    ) -> Result<
-        dpd_client::ResponseValue<()>,
-        progenitor_client::Error<dpd_client::types::Error>,
-    > {
+        addr: &Ipv6Entry,
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>
+    {
         self.client.loopback_ipv6_create(addr).await
     }
 
@@ -219,21 +195,21 @@ impl Dpd for ProductionDpd {
         &'a self,
         filter: Option<&'a str>,
     ) -> Result<
-        dpd_client::ResponseValue<::std::vec::Vec<dpd_client::types::Link>>,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Vec<Link>>,
+        progenitor_client::Error<DpdError>,
     > {
         self.client.link_list_all(filter).await
     }
 
     async fn link_ipv4_list<'a>(
         &'a self,
-        port_id: &'a dpd_client::types::PortId,
-        link_id: &'a dpd_client::types::LinkId,
+        port_id: &'a PortId,
+        link_id: &'a LinkId,
         limit: Option<std::num::NonZeroU32>,
         page_token: Option<&'a str>,
     ) -> Result<
-        dpd_client::ResponseValue<dpd_client::types::Ipv4EntryResultsPage>,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Ipv4EntryResultsPage>,
+        progenitor_client::Error<DpdError>,
     > {
         self.client
             .link_ipv4_list(port_id, link_id, limit, page_token)
@@ -242,13 +218,13 @@ impl Dpd for ProductionDpd {
 
     async fn link_ipv6_list<'a>(
         &'a self,
-        port_id: &'a dpd_client::types::PortId,
-        link_id: &'a dpd_client::types::LinkId,
+        port_id: &'a PortId,
+        link_id: &'a LinkId,
         limit: Option<std::num::NonZeroU32>,
         page_token: Option<&'a str>,
     ) -> Result<
-        dpd_client::ResponseValue<dpd_client::types::Ipv6EntryResultsPage>,
-        progenitor_client::Error<dpd_client::types::Error>,
+        dpd_client::ResponseValue<Ipv6EntryResultsPage>,
+        progenitor_client::Error<DpdError>,
     > {
         self.client
             .link_ipv6_list(port_id, link_id, limit, page_token)
@@ -257,34 +233,28 @@ impl Dpd for ProductionDpd {
 
     async fn route_ipv4_add<'a>(
         &'a self,
-        body: &'a dpd_client::types::Ipv4RouteUpdate,
-    ) -> Result<
-        dpd_client::ResponseValue<()>,
-        progenitor_client::Error<dpd_client::types::Error>,
-    > {
+        body: &'a Ipv4RouteUpdate,
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>
+    {
         self.client.route_ipv4_add(body).await
     }
 
     async fn route_ipv6_add<'a>(
         &'a self,
-        body: &'a dpd_client::types::Ipv6RouteUpdate,
-    ) -> Result<
-        dpd_client::ResponseValue<()>,
-        progenitor_client::Error<dpd_client::types::Error>,
-    > {
+        body: &'a Ipv6RouteUpdate,
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>
+    {
         self.client.route_ipv6_add(body).await
     }
 
     async fn route_ipv4_delete_target<'a>(
         &'a self,
         cidr: &'a oxnet::Ipv4Net,
-        port_id: &'a dpd_client::types::PortId,
-        link_id: &'a dpd_client::types::LinkId,
+        port_id: &'a PortId,
+        link_id: &'a LinkId,
         tgt_ip: &'a std::net::Ipv4Addr,
-    ) -> Result<
-        dpd_client::ResponseValue<()>,
-        progenitor_client::Error<dpd_client::types::Error>,
-    > {
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>
+    {
         self.client
             .route_ipv4_delete_target(cidr, port_id, link_id, tgt_ip)
             .await
@@ -304,10 +274,8 @@ impl Ddm for ProductionDdm {
     async fn get_originated_tunnel_endpoints(
         &self,
     ) -> Result<
-        ddm_admin_client::ResponseValue<
-            Vec<ddm_admin_client::types::TunnelOrigin>,
-        >,
-        progenitor_client::Error<ddm_admin_client::types::Error>,
+        ddm_admin_client::ResponseValue<Vec<TunnelOrigin>>,
+        progenitor_client::Error<DdmError>,
     > {
         self.client.get_originated_tunnel_endpoints().await
     }
@@ -316,7 +284,7 @@ impl Ddm for ProductionDdm {
         &self,
     ) -> Result<
         ddm_admin_client::ResponseValue<Vec<oxnet::Ipv6Net>>,
-        progenitor_client::Error<ddm_admin_client::types::Error>,
+        progenitor_client::Error<DdmError>,
     > {
         self.client.get_originated().await
     }
@@ -326,27 +294,27 @@ impl Ddm for ProductionDdm {
         body: &'a Vec<oxnet::Ipv6Net>,
     ) -> Result<
         ddm_admin_client::ResponseValue<()>,
-        progenitor_client::Error<ddm_admin_client::types::Error>,
+        progenitor_client::Error<DdmError>,
     > {
         self.client.advertise_prefixes(body).await
     }
 
     async fn advertise_tunnel_endpoints<'a>(
         &'a self,
-        body: &'a Vec<ddm_admin_client::types::TunnelOrigin>,
+        body: &'a Vec<TunnelOrigin>,
     ) -> Result<
         ddm_admin_client::ResponseValue<()>,
-        progenitor_client::Error<ddm_admin_client::types::Error>,
+        progenitor_client::Error<DdmError>,
     > {
         self.client.advertise_tunnel_endpoints(body).await
     }
 
     async fn withdraw_tunnel_endpoints<'a>(
         &'a self,
-        body: &'a Vec<ddm_admin_client::types::TunnelOrigin>,
+        body: &'a Vec<TunnelOrigin>,
     ) -> Result<
         ddm_admin_client::ResponseValue<()>,
-        progenitor_client::Error<ddm_admin_client::types::Error>,
+        progenitor_client::Error<DdmError>,
     > {
         self.client.withdraw_tunnel_endpoints(body).await
     }
@@ -369,12 +337,9 @@ impl SwitchZone for ProductionSwitchZone {
 /// This module contains platform trait implementations for testing.
 #[cfg(test)]
 pub(crate) mod test {
-    use std::{collections::HashMap, net::IpAddr};
-
-    use dpd_client::types::Ipv6Entry;
-    use std::sync::Mutex;
-
     use super::*;
+    use std::sync::Mutex;
+    use std::{collections::HashMap, net::IpAddr};
 
     // helper macros for forming dropshot responses
     macro_rules! dpd_response_ok {
@@ -399,13 +364,11 @@ pub(crate) mod test {
     /// A stateful mock dpd implementation. Carries just enough state to be
     /// useful for tests.
     pub(crate) struct TestDpd {
-        pub(crate) links: Mutex<Vec<dpd_client::types::Link>>,
-        pub(crate) v4_routes:
-            Mutex<HashMap<Ipv4Net, Vec<dpd_client::types::Ipv4Route>>>,
-        pub(crate) v6_routes:
-            Mutex<HashMap<Ipv6Net, Vec<dpd_client::types::Ipv6Route>>>,
-        pub(crate) v4_addrs: HashMap<String, Vec<dpd_client::types::Ipv4Entry>>,
-        pub(crate) v6_addrs: HashMap<String, Vec<dpd_client::types::Ipv6Entry>>,
+        pub(crate) links: Mutex<Vec<Link>>,
+        pub(crate) v4_routes: Mutex<HashMap<Ipv4Net, Vec<Ipv4Route>>>,
+        pub(crate) v6_routes: Mutex<HashMap<Ipv6Net, Vec<Ipv6Route>>>,
+        pub(crate) v4_addrs: HashMap<String, Vec<Ipv4Entry>>,
+        pub(crate) v6_addrs: HashMap<String, Vec<Ipv6Entry>>,
         pub(crate) loopback: Mutex<Option<Ipv6Entry>>,
     }
 
@@ -425,11 +388,11 @@ pub(crate) mod test {
     impl Dpd for TestDpd {
         async fn link_get(
             &self,
-            port_id: &dpd_client::types::PortId,
-            link_id: &dpd_client::types::LinkId,
+            port_id: &PortId,
+            link_id: &LinkId,
         ) -> Result<
-            dpd_client::ResponseValue<dpd_client::types::Link>,
-            progenitor_client::Error<dpd_client::types::Error>,
+            dpd_client::ResponseValue<Link>,
+            progenitor_client::Error<DpdError>,
         > {
             let links = self.links.lock().unwrap();
             let link = links
@@ -446,10 +409,8 @@ pub(crate) mod test {
             &self,
             cidr: &Ipv4Net,
         ) -> Result<
-            dpd_client::ResponseValue<
-                ::std::vec::Vec<dpd_client::types::Ipv4Route>,
-            >,
-            progenitor_client::Error<dpd_client::types::Error>,
+            dpd_client::ResponseValue<Vec<Ipv4Route>>,
+            progenitor_client::Error<DpdError>,
         > {
             let result = self
                 .v4_routes
@@ -465,10 +426,8 @@ pub(crate) mod test {
             &self,
             cidr: &Ipv6Net,
         ) -> Result<
-            dpd_client::ResponseValue<
-                ::std::vec::Vec<dpd_client::types::Ipv6Route>,
-            >,
-            progenitor_client::Error<dpd_client::types::Error>,
+            dpd_client::ResponseValue<Vec<Ipv6Route>>,
+            progenitor_client::Error<DpdError>,
         > {
             let result = self
                 .v6_routes
@@ -482,10 +441,10 @@ pub(crate) mod test {
 
         async fn loopback_ipv6_create(
             &self,
-            addr: &dpd_client::types::Ipv6Entry,
+            addr: &Ipv6Entry,
         ) -> Result<
             dpd_client::ResponseValue<()>,
-            progenitor_client::Error<dpd_client::types::Error>,
+            progenitor_client::Error<DpdError>,
         > {
             self.loopback.lock().unwrap().replace(addr.clone());
             Ok(dpd_response_ok!(()))
@@ -495,8 +454,8 @@ pub(crate) mod test {
             &'a self,
             filter: Option<&'a str>,
         ) -> Result<
-            dpd_client::ResponseValue<::std::vec::Vec<dpd_client::types::Link>>,
-            progenitor_client::Error<dpd_client::types::Error>,
+            dpd_client::ResponseValue<Vec<Link>>,
+            progenitor_client::Error<DpdError>,
         > {
             let links = self.links.lock().unwrap();
             let result = links
@@ -512,13 +471,13 @@ pub(crate) mod test {
 
         async fn link_ipv4_list<'a>(
             &'a self,
-            port_id: &'a dpd_client::types::PortId,
-            link_id: &'a dpd_client::types::LinkId,
+            port_id: &'a PortId,
+            link_id: &'a LinkId,
             _limit: Option<std::num::NonZeroU32>,
             _page_token: Option<&'a str>,
         ) -> Result<
-            dpd_client::ResponseValue<dpd_client::types::Ipv4EntryResultsPage>,
-            progenitor_client::Error<dpd_client::types::Error>,
+            dpd_client::ResponseValue<Ipv4EntryResultsPage>,
+            progenitor_client::Error<DpdError>,
         > {
             let lnk = self.link_get(port_id, link_id).await?.into_inner();
             let addrs = self
@@ -527,7 +486,7 @@ pub(crate) mod test {
                 .cloned()
                 .unwrap_or_default();
 
-            Ok(dpd_response_ok!(dpd_client::types::Ipv4EntryResultsPage {
+            Ok(dpd_response_ok!(Ipv4EntryResultsPage {
                 items: addrs,
                 next_page: None,
             }))
@@ -535,13 +494,13 @@ pub(crate) mod test {
 
         async fn link_ipv6_list<'a>(
             &'a self,
-            port_id: &'a dpd_client::types::PortId,
-            link_id: &'a dpd_client::types::LinkId,
+            port_id: &'a PortId,
+            link_id: &'a LinkId,
             _limit: Option<std::num::NonZeroU32>,
             _page_token: Option<&'a str>,
         ) -> Result<
-            dpd_client::ResponseValue<dpd_client::types::Ipv6EntryResultsPage>,
-            progenitor_client::Error<dpd_client::types::Error>,
+            dpd_client::ResponseValue<Ipv6EntryResultsPage>,
+            progenitor_client::Error<DpdError>,
         > {
             let lnk = self.link_get(port_id, link_id).await?.into_inner();
             let addrs = self
@@ -550,7 +509,7 @@ pub(crate) mod test {
                 .cloned()
                 .unwrap_or_default();
 
-            Ok(dpd_response_ok!(dpd_client::types::Ipv6EntryResultsPage {
+            Ok(dpd_response_ok!(Ipv6EntryResultsPage {
                 items: addrs,
                 next_page: None,
             }))
@@ -558,10 +517,10 @@ pub(crate) mod test {
 
         async fn route_ipv4_add<'a>(
             &'a self,
-            body: &'a dpd_client::types::Ipv4RouteUpdate,
+            body: &'a Ipv4RouteUpdate,
         ) -> Result<
             dpd_client::ResponseValue<()>,
-            progenitor_client::Error<dpd_client::types::Error>,
+            progenitor_client::Error<DpdError>,
         > {
             let mut routes = self.v4_routes.lock().unwrap();
             match routes.get_mut(&body.cidr) {
@@ -577,10 +536,10 @@ pub(crate) mod test {
 
         async fn route_ipv6_add<'a>(
             &'a self,
-            body: &'a dpd_client::types::Ipv6RouteUpdate,
+            body: &'a Ipv6RouteUpdate,
         ) -> Result<
             dpd_client::ResponseValue<()>,
-            progenitor_client::Error<dpd_client::types::Error>,
+            progenitor_client::Error<DpdError>,
         > {
             let mut routes = self.v6_routes.lock().unwrap();
             match routes.get_mut(&body.cidr) {
@@ -597,12 +556,12 @@ pub(crate) mod test {
         async fn route_ipv4_delete_target<'a>(
             &'a self,
             cidr: &'a oxnet::Ipv4Net,
-            port_id: &'a dpd_client::types::PortId,
-            link_id: &'a dpd_client::types::LinkId,
+            port_id: &'a PortId,
+            link_id: &'a LinkId,
             tgt_ip: &'a std::net::Ipv4Addr,
         ) -> Result<
             dpd_client::ResponseValue<()>,
-            progenitor_client::Error<dpd_client::types::Error>,
+            progenitor_client::Error<DpdError>,
         > {
             let mut routes = self.v4_routes.lock().unwrap();
             if let Some(targets) = routes.get_mut(cidr) {
@@ -624,8 +583,7 @@ pub(crate) mod test {
     /// A stateful mock ddm implementation. Carries just enough state to be
     /// useful for tests.
     pub(crate) struct TestDdm {
-        pub(crate) tunnel_originated:
-            Mutex<Vec<ddm_admin_client::types::TunnelOrigin>>,
+        pub(crate) tunnel_originated: Mutex<Vec<TunnelOrigin>>,
         pub(crate) originated: Mutex<Vec<oxnet::Ipv6Net>>,
     }
 
@@ -642,10 +600,8 @@ pub(crate) mod test {
         async fn get_originated_tunnel_endpoints(
             &self,
         ) -> Result<
-            ddm_admin_client::ResponseValue<
-                Vec<ddm_admin_client::types::TunnelOrigin>,
-            >,
-            progenitor_client::Error<ddm_admin_client::types::Error>,
+            ddm_admin_client::ResponseValue<Vec<TunnelOrigin>>,
+            progenitor_client::Error<DdmError>,
         > {
             Ok(ddm_response_ok!(self
                 .tunnel_originated
@@ -658,7 +614,7 @@ pub(crate) mod test {
             &self,
         ) -> Result<
             ddm_admin_client::ResponseValue<Vec<oxnet::Ipv6Net>>,
-            progenitor_client::Error<ddm_admin_client::types::Error>,
+            progenitor_client::Error<DdmError>,
         > {
             Ok(ddm_response_ok!(self.originated.lock().unwrap().clone()))
         }
@@ -668,7 +624,7 @@ pub(crate) mod test {
             body: &'a Vec<oxnet::Ipv6Net>,
         ) -> Result<
             ddm_admin_client::ResponseValue<()>,
-            progenitor_client::Error<ddm_admin_client::types::Error>,
+            progenitor_client::Error<DdmError>,
         > {
             self.originated.lock().unwrap().extend(body);
             Ok(ddm_response_ok!(()))
@@ -676,10 +632,10 @@ pub(crate) mod test {
 
         async fn advertise_tunnel_endpoints<'a>(
             &'a self,
-            body: &'a Vec<ddm_admin_client::types::TunnelOrigin>,
+            body: &'a Vec<TunnelOrigin>,
         ) -> Result<
             ddm_admin_client::ResponseValue<()>,
-            progenitor_client::Error<ddm_admin_client::types::Error>,
+            progenitor_client::Error<DdmError>,
         > {
             self.tunnel_originated.lock().unwrap().extend(body.clone());
             Ok(ddm_response_ok!(()))
@@ -687,10 +643,10 @@ pub(crate) mod test {
 
         async fn withdraw_tunnel_endpoints<'a>(
             &'a self,
-            body: &'a Vec<ddm_admin_client::types::TunnelOrigin>,
+            body: &'a Vec<TunnelOrigin>,
         ) -> Result<
             ddm_admin_client::ResponseValue<()>,
-            progenitor_client::Error<ddm_admin_client::types::Error>,
+            progenitor_client::Error<DdmError>,
         > {
             self.tunnel_originated
                 .lock()
@@ -700,7 +656,7 @@ pub(crate) mod test {
         }
     }
 
-    /// A mock swtich zone implementation.
+    /// A mock switch zone implementation.
     pub(crate) struct TestSwitchZone {
         pub(crate) routes: HashMap<IpNet, (Option<String>, IpAddr)>,
         pub(crate) default_ifname: Option<String>,

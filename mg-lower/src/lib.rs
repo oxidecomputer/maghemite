@@ -146,8 +146,9 @@ fn full_sync(
 
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
+    let loc_rib = db.loc_rib();
     for (prefix, _paths) in rib.iter() {
-        sync_prefix(tep, &db.loc_rib(), prefix, dpd, ddm, sw, log, &rt)?;
+        sync_prefix(tep, &loc_rib, prefix, dpd, ddm, sw, log, &rt)?;
     }
 
     Ok(())
@@ -165,8 +166,9 @@ fn handle_change(
     sw: &impl SwitchZone,
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
+    let loc_rib = db.loc_rib();
     for prefix in notification.changed.iter() {
-        sync_prefix(tep, &db.loc_rib(), prefix, dpd, ddm, sw, log, &rt)?;
+        sync_prefix(tep, &loc_rib, prefix, dpd, ddm, sw, log, &rt)?;
     }
 
     Ok(())

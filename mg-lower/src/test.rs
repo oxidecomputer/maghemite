@@ -11,7 +11,7 @@ use crate::platform::test::{TestDdm, TestDpd, TestSwitchZone};
 #[tokio::test]
 async fn sync_prefix_test() {
     let rt = Arc::new(tokio::runtime::Handle::current());
-    let (tx, rx) = std::sync::mpsc::channel::<usize>();
+    let (tx, done) = std::sync::mpsc::channel::<()>();
 
     std::thread::spawn(move || {
         let dpd = TestDpd::default();
@@ -55,18 +55,20 @@ async fn sync_prefix_test() {
         )
         .expect("sync prefix run");
 
-        tx.send(ddm.tunnel_originated.lock().unwrap().len())
-            .unwrap();
+        // There are four lights!
+        assert_eq!(ddm.tunnel_originated.lock().unwrap().len(), 4);
+        assert_eq!(dpd.v4_routes.lock().unwrap().len(), 4);
+
+        tx.send(()).unwrap();
     });
 
-    // There are four lights!
-    assert_eq!(rx.recv().unwrap(), 4);
+    done.recv().unwrap();
 }
 
 #[tokio::test]
 async fn sync_link_down_test() {
     let rt = Arc::new(tokio::runtime::Handle::current());
-    let (tx, rx) = std::sync::mpsc::channel::<(usize, usize)>();
+    let (tx, done) = std::sync::mpsc::channel::<()>();
 
     std::thread::spawn(move || {
         let dpd = TestDpd::default();
@@ -86,37 +88,51 @@ async fn sync_link_down_test() {
         };
         let tep: Ipv6Addr = "fd00:a:b:c::d".parse().unwrap();
 
+        let log = util::test::logger();
         let mut rib = Rib::default();
 
         test_setup(tep, &dpd, &ddm, &mut rib);
 
-        // Take down a link
+        let do_sync = || {
+            crate::sync_prefix(
+                tep,
+                &rib,
+                &"3.0.0.0/24".parse::<Prefix4>().unwrap().into(),
+                &dpd,
+                &ddm,
+                &sw,
+                &log,
+                &rt,
+            )
+            .expect("sync prefix run");
+        };
+
+        // Should be 3 routes with all links up
+        do_sync();
+        assert_eq!(ddm.tunnel_originated.lock().unwrap().len(), 3);
+        assert_eq!(dpd.v4_routes.lock().unwrap().len(), 3);
+
+        // Take down a link and sync
+        // One route should be gone with a link down
         dpd.links.lock().unwrap().get_mut(1).unwrap().link_state =
             LinkState::Down;
+        do_sync();
+        assert_eq!(ddm.tunnel_originated.lock().unwrap().len(), 2);
+        assert_eq!(dpd.v4_routes.lock().unwrap().len(), 2);
 
-        let log = util::test::logger();
+        // Bring link back up and sync
+        // One route should be back to 3 routes
+        dpd.links.lock().unwrap().get_mut(1).unwrap().link_state =
+            LinkState::Up;
+        do_sync();
+        assert_eq!(ddm.tunnel_originated.lock().unwrap().len(), 3);
+        assert_eq!(dpd.v4_routes.lock().unwrap().len(), 3);
 
-        crate::sync_prefix(
-            tep,
-            &rib,
-            &"3.0.0.0/24".parse::<Prefix4>().unwrap().into(),
-            &dpd,
-            &ddm,
-            &sw,
-            &log,
-            &rt,
-        )
-        .expect("sync prefix run");
-
-        tx.send((
-            ddm.tunnel_originated.lock().unwrap().len(),
-            dpd.v4_routes.lock().unwrap().len(),
-        ))
-        .unwrap();
+        tx.send(()).unwrap();
     });
 
     // There are two lights?
-    assert_eq!(rx.recv().unwrap(), (2, 2));
+    done.recv().unwrap();
 }
 
 fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
