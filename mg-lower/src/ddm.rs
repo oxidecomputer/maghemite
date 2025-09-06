@@ -8,10 +8,12 @@ use oxnet::Ipv6Net;
 use slog::{error, info, Logger};
 use std::{net::Ipv6Addr, sync::Arc};
 
+use crate::platform::Ddm;
+
 pub(crate) const BOUNDARY_SERVICES_VNI: u32 = 99;
 
 fn ensure_tep_underlay_origin(
-    client: &Client,
+    client: &impl Ddm,
     tep: Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
@@ -44,7 +46,7 @@ fn ensure_tep_underlay_origin(
 
 pub(crate) fn add_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     tep: Ipv6Addr, // tunnel endpoint address
-    client: &Client,
+    client: &impl Ddm,
     routes: I,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
@@ -62,7 +64,7 @@ pub(crate) fn add_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
 }
 
 pub(crate) fn remove_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
-    client: &Client,
+    client: &impl Ddm,
     routes: I,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,

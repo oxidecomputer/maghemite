@@ -3140,11 +3140,13 @@ dependencies = [
  "libnet",
  "mg-common",
  "oxnet",
+ "progenitor-client 0.9.1",
  "rdb",
  "reqwest",
  "slog",
  "thiserror 1.0.69",
  "tokio",
+ "util",
 ]
 
 [[package]]
@@ -4884,6 +4886,7 @@ dependencies = [
  "ciborium",
  "itertools 0.13.0",
  "mg-common",
+ "oxnet",
  "schemars",
  "serde",
  "serde_json",
