@@ -91,7 +91,7 @@ omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "m
 uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
 libc = "0.2"
-itertools = "0.13"
+itertools = "0.14"
 rhai = { version = "1", features = ["metadata", "sync"] }
 semver = "1.0"
 
