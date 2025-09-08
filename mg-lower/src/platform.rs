@@ -10,6 +10,7 @@ use ddm_admin_client::types::{Error as DdmError, *};
 use ddm_admin_client::Client as DdmClient;
 use dpd_client::types::{Error as DpdError, *};
 use dpd_client::Client as DpdClient;
+use dpd_client::ClientInfo;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 
 /// This trait wraps the dpd methods mg-lower uses.
