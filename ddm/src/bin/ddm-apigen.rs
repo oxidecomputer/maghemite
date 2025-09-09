@@ -4,12 +4,12 @@
 
 use anyhow::anyhow;
 use anyhow::Result;
-use ddm::admin::api_description;
 use semver::{BuildMetadata, Prerelease, Version};
 use std::fs::File;
 
 fn main() -> Result<()> {
-    let api = api_description().map_err(|e| anyhow!("{}", e))?;
+    let api = ddm_api::ddm_admin_api_mod::stub_api_description()
+        .map_err(|e| anyhow!("{}", e))?;
     let openapi = api.openapi(
         "DDM Admin",
         Version {

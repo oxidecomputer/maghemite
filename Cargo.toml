@@ -6,6 +6,8 @@ default-members = [
     "ddmadm",
     "ddmd",
     "ddm-admin-client",
+    "ddm-api",
+    "ddm-types",
     "bfd",
     "util",
     "mg-ddm-verify",
@@ -25,6 +27,8 @@ members = [
     "ddmadm",
     "ddmd",
     "ddm-admin-client",
+    "ddm-api",
+    "ddm-types",
     "bfd",
     "package",
     "util",
@@ -94,6 +98,8 @@ libc = "0.2"
 itertools = "0.14"
 rhai = { version = "1", features = ["metadata", "sync"] }
 semver = "1.0"
+ddm-api = { path = "ddm-api" }
+ddm-types = { path = "ddm-types" }
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"

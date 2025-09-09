@@ -1,0 +1,11 @@
+[package]
+name = "ddm-types"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mg-common.workspace = true
+oxnet.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_repr.workspace = true

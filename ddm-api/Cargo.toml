@@ -1,0 +1,13 @@
+[package]
+name = "ddm-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ddm-types.workspace = true
+dropshot.workspace = true
+mg-common.workspace = true
+oxnet.workspace = true
+schemars.workspace = true
+serde.workspace = true
+uuid.workspace = true
