@@ -762,12 +762,11 @@ impl State for Exchange {
                         );
                     }
                 }
-                // TODO tunnel
                 Event::Peer(PeerEvent::Push(update)) => {
                     inf!(
                         self.log,
                         self.ctx.config.if_name,
-                        "push from {}: {:#?}",
+                        "push to {}: {:#?}",
                         self.peer,
                         update,
                     );
