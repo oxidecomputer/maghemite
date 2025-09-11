@@ -481,6 +481,8 @@ async fn run_trio_tests(
 
     retry_cmd!(zs2.zexec("netstat -nr -f inet6"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm route list"), 1, 10);
+    retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm arp list"), 1, 10);
+    retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm addr list"), 1, 10);
     retry_cmd!(zs1.zexec("netstat -nr -f inet6; ping fd00:2::1"), 1, 10);
     retry_cmd!(zs2.zexec("ping fd00:1::1"), 1, 10);
 
