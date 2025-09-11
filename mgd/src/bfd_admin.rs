@@ -2,22 +2,20 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{admin::HandlerContext, register};
+use crate::admin::HandlerContext;
 use anyhow::Result;
-use bfd::{bidi, packet, BfdPeerState, Daemon};
-use dropshot::endpoint;
-use dropshot::ApiDescription;
+use bfd::{bidi, packet, Daemon};
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
+use mg_api::BfdPeerInfo;
+use mg_api::DeleteBfdPeerPathParams;
 use mg_common::lock;
 use rdb::BfdPeerConfig;
 use rdb::SessionMode;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use slog::{debug, error, warn, Logger};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -49,21 +47,8 @@ impl BfdContext {
     }
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct BfdPeerInfo {
-    config: BfdPeerConfig,
-    state: BfdPeerState,
-}
-
-pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
-    register!(api, get_bfd_peers);
-    register!(api, add_bfd_peer);
-    register!(api, remove_bfd_peer);
-}
-
 /// Get all the peers and their associated BFD state. Peers are identified by IP
 /// address.
-#[endpoint { method = GET, path = "/bfd/peers" }]
 pub(crate) async fn get_bfd_peers(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<Vec<BfdPeerInfo>>, HttpError> {
@@ -104,7 +89,6 @@ pub(crate) async fn get_bfd_peers(
 
 /// Add a new peer to the daemon. A session for the specified peer will start
 /// immediately.
-#[endpoint { method = PUT, path = "/bfd/peers" }]
 pub(crate) async fn add_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<BfdPeerConfig>,
@@ -153,16 +137,8 @@ pub(crate) fn add_peer(
     Ok(())
 }
 
-/// Request to remove a peer from the daemon.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-struct DeleteBfdPeerPathParams {
-    /// Address of the peer to remove.
-    pub addr: IpAddr,
-}
-
 /// Remove the specified peer from the daemon. The associated peer session will
 /// be stopped immediately.
-#[endpoint { method = DELETE, path = "/bfd/peers/{addr}" }]
 pub(crate) async fn remove_bfd_peer(
     ctx: RequestContext<Arc<HandlerContext>>,
     params: Path<DeleteBfdPeerPathParams>,

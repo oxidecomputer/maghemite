@@ -1,0 +1,12 @@
+[package]
+name = "mg-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bfd = { path = "../bfd" }
+bgp = { path = "../bgp" }
+dropshot.workspace = true
+rdb = { path = "../rdb" }
+schemars.workspace = true
+serde.workspace = true

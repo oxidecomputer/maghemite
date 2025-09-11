@@ -3111,6 +3111,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mg-api"
+version = "0.1.0"
+dependencies = [
+ "bfd",
+ "bgp",
+ "dropshot",
+ "rdb",
+ "schemars",
+ "serde",
+]
+
+[[package]]
 name = "mg-common"
 version = "0.1.0"
 dependencies = [
@@ -3230,6 +3242,7 @@ dependencies = [
  "dropshot",
  "hostname 0.3.1",
  "http",
+ "mg-api",
  "mg-common",
  "mg-lower",
  "omicron-common",

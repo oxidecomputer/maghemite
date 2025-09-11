@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+mg-api.workspace = true
 mg-lower = { path = "../mg-lower", optional = true }
 mg-common = { path = "../mg-common", default-features = false}
 bfd = { path = "../bfd" }
