@@ -24,7 +24,6 @@ use uuid::Uuid;
 mod admin;
 mod bfd_admin;
 mod bgp_admin;
-mod bgp_param;
 mod error;
 mod oxstats;
 mod signal;
@@ -113,7 +112,6 @@ async fn run(args: RunArgs) {
         log: log.clone(),
         bgp,
         bfd,
-        data_dir: args.data_dir.clone(),
         mg_lower_stats: Arc::new(MgLowerStats::default()),
         db: db.clone(),
         stats_server_running: Mutex::new(false),
@@ -212,7 +210,7 @@ fn start_bgp_routers(
     for (asn, info) in routers {
         bgp_admin::helpers::add_router(
             context.clone(),
-            bgp_param::Router {
+            bgp::params::Router {
                 asn,
                 id: info.id,
                 listen: info.listen.clone(),
@@ -227,7 +225,7 @@ fn start_bgp_routers(
     for nbr in neighbors {
         bgp_admin::helpers::add_neighbor(
             context.clone(),
-            bgp_param::Neighbor {
+            bgp::params::Neighbor {
                 asn: nbr.asn,
                 remote_asn: nbr.remote_asn,
                 min_ttl: nbr.min_ttl,
