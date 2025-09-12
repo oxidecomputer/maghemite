@@ -485,7 +485,7 @@ async fn run_trio_tests(
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm arp list"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm addr list"), 1, 10);
     retry_cmd!(
-        zs1.zexec("ndp -na; netstat -nr -f inet6; ping fd00:2::1"),
+        zs1.zexec("ndp -na; netstat -nr -f inet6; ping -ns fd00:2::1 60 2"),
         1,
         10
     );
