@@ -480,13 +480,14 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&t1).await?, 2);
 
     retry_cmd!(zs2.zexec("netstat -nr -f inet6"), 1, 10);
+    retry_cmd!(zs2.zexec("ipadm"), 1, 10);
     retry_cmd!(zs2.zexec("route -nv get -inet6 fd00:1::1"), 1, 10);
     retry_cmd!(zs2.zexec("ndp -na"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm route list"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm arp list"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm addr list"), 1, 10);
     retry_cmd!(
-        zs1.zexec("route -nv get -inet6 fd00:2::1; ndp -na; netstat -nr -f inet6; ping -ns fd00:2::1 60 2"),
+        zs1.zexec("ipadm; route -nv get -inet6 fd00:2::1; ndp -na; netstat -nr -f inet6; ping -ns fd00:2::1 60 2"),
         1,
         10
     );
