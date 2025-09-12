@@ -480,10 +480,15 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&t1).await?, 2);
 
     retry_cmd!(zs2.zexec("netstat -nr -f inet6"), 1, 10);
+    retry_cmd!(zs2.zexec("ndp -na"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm route list"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm arp list"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm addr list"), 1, 10);
-    retry_cmd!(zs1.zexec("netstat -nr -f inet6; ping fd00:2::1"), 1, 10);
+    retry_cmd!(
+        zs1.zexec("ndp -na; netstat -nr -f inet6; ping fd00:2::1"),
+        1,
+        10
+    );
     retry_cmd!(zs2.zexec("ping fd00:1::1"), 1, 10);
 
     println!("server router restart passed");
