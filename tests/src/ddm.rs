@@ -487,11 +487,11 @@ async fn run_trio_tests(
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm arp list"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm addr list"), 1, 10);
     retry_cmd!(
-        zs1.zexec("ipadm; route -nv get -inet6 fd00:2::1; ndp -na; netstat -nr -f inet6; ping -i fd00:1::1 -ns fd00:2::1 60 2"),
+        zs1.zexec("ipadm; route -nv get -inet6 fd00:2::1; ndp -na; netstat -nr -f inet6; ping -i lo0 -ns fd00:2::1 60 2"),
         1,
         10
     );
-    retry_cmd!(zs2.zexec("ping -i fd00:2::1 fd00:1::1"), 1, 10);
+    retry_cmd!(zs2.zexec("ping -i lo0 fd00:1::1"), 1, 10);
 
     println!("server router restart passed");
 
