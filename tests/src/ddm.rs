@@ -89,6 +89,10 @@ impl<'a> SoftnpuZone<'a> {
         ))?;
         Ok(())
     }
+
+    pub fn zexec(&self, cmd: &str) -> Result<String> {
+        self.zone.zexec(cmd)
+    }
 }
 
 impl Drop for SoftnpuZone<'_> {
@@ -330,8 +334,12 @@ macro_rules! run_topo {
         if env::var("TEST_INTERACTIVE").is_err() {
             $fn
         } else {
+            println!("running interactive test");
             let mut line = String::new();
+            let result = $fn;
+            println!("test result {:?}", result);
             std::io::stdin().read_line(&mut line).unwrap();
+            result
         }
     };
 }
@@ -406,7 +414,7 @@ async fn test_trio() -> Result<()> {
     s2.setup(2)?;
     t1.setup(3)?;
 
-    run_topo!(run_trio_tests(&s1, &s2, &t1).await?);
+    run_topo!(run_trio_tests(&s1, &s2, &t1, &sidecar).await)?;
 
     Ok(())
 }
@@ -415,6 +423,7 @@ async fn run_trio_tests(
     zs1: &RouterZone<'_>,
     zs2: &RouterZone<'_>,
     zt1: &RouterZone<'_>,
+    softnpu: &SoftnpuZone<'_>,
 ) -> Result<()> {
     let log = init_logger();
     let s1 = Client::new("http://10.0.0.1:8000", log.clone());
@@ -483,6 +492,15 @@ async fn run_trio_tests(
     retry_cmd!(zs2.zexec("ipadm"), 1, 10);
     retry_cmd!(zs2.zexec("route -nv get -inet6 fd00:1::1"), 1, 10);
     retry_cmd!(zs2.zexec("ndp -na"), 1, 10);
+    retry_cmd!(
+        softnpu.zexec(
+            "/opt/scadm standalone \
+        --client /opt/mnt/client \
+        --server /opt/mnt/server dump-state"
+        ),
+        1,
+        10
+    );
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm route list"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm arp list"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm addr list"), 1, 10);
@@ -687,7 +705,7 @@ async fn test_quartet() -> Result<()> {
     s3.setup(3)?;
     t1.setup(4)?;
 
-    run_topo!(run_quartet_tests(&s1, &s2, &s3, &t1).await?);
+    run_topo!(run_quartet_tests(&s1, &s2, &s3, &t1).await)?;
 
     Ok(())
 }
