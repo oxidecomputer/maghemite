@@ -56,7 +56,7 @@ ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.219", features = ["derive"] }
 hostname = "0.3"
 thiserror = "1.0"
-dropshot = { version = "0.16.2", features = [ "usdt-probes" ] }
+dropshot = { version = "0.16.4", features = [ "usdt-probes" ] }
 schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.37", features = ["full"] }
 serde_repr = "0.1"
