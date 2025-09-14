@@ -472,14 +472,42 @@ async fn run_trio_tests(
 
     println!("transit router restart passed");
 
+    retry_cmd!(
+        softnpu.zexec(
+            "/opt/scadm standalone \
+        --client /opt/mnt/client \
+        --server /opt/mnt/server dump-state"
+        ),
+        1,
+        10
+    );
+
     zs1.stop_router()?;
     wait_for_eq!(prefix_count(&s2).await?, 0);
     wait_for_eq!(prefix_count(&t1).await?, 1);
+    retry_cmd!(
+        softnpu.zexec(
+            "/opt/scadm standalone \
+        --client /opt/mnt/client \
+        --server /opt/mnt/server dump-state"
+        ),
+        1,
+        10
+    );
     zs1.start_router()?;
 
     wait_for_eq!(prefix_count(&s1).await.unwrap_or(99), 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 2);
+    retry_cmd!(
+        softnpu.zexec(
+            "/opt/scadm standalone \
+        --client /opt/mnt/client \
+        --server /opt/mnt/server dump-state"
+        ),
+        1,
+        10
+    );
 
     s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
         .await?;
