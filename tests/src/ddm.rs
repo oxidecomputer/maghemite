@@ -30,7 +30,7 @@ macro_rules! retry_cmd {
     }};
 }
 
-const ZONE_BRAND: &str = "sparse";
+const ZONE_BRAND: &str = "omicron1";
 
 struct SoftnpuZone<'a> {
     zfs: &'a Zfs,
@@ -281,6 +281,14 @@ impl<'a> RouterZone<'a> {
             // copy is not complete.
             println!("waiting 3s for copy of files to zone to complete ...");
             sleep(Duration::from_secs(3));
+            self.zone.zcmd(
+                &z,
+                "svccfg import /var/svc/manifest/site/dendrite/manifest.xml",
+            )?;
+            self.zone.zcmd(
+                &z,
+                "svccfg import /var/svc/manifest/site/tfport/manifest.xml",
+            )?;
         }
 
         self.zfs.copy_bin_to_zone(&self.zone.name, "ddmd")?;
@@ -338,6 +346,7 @@ macro_rules! run_topo {
             let mut line = String::new();
             let result = $fn;
             println!("test result {:?}", result);
+            println!("press enter to continue");
             std::io::stdin().read_line(&mut line).unwrap();
             result
         }
@@ -414,9 +423,7 @@ async fn test_trio() -> Result<()> {
     s2.setup(2)?;
     t1.setup(3)?;
 
-    run_topo!(run_trio_tests(&s1, &s2, &t1, &sidecar).await)?;
-
-    Ok(())
+    run_topo!(run_trio_tests(&s1, &s2, &t1, &sidecar).await)
 }
 
 async fn run_trio_tests(

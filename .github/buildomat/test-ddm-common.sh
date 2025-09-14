@@ -3,7 +3,7 @@
 export MAGHEMITE_VERSION=`git rev-parse HEAD`
 export SOFTNPU_VERSION=591c64bf9765b6ed7cd8615ceb8cf6f8d117bd28
 export SIDECAR_LITE_VERSION=a95b7a9f78c08125f4e34106f5c885c7e9f2e8d5
-export DENDRITE_VERSION=72461d3a6e4724fd33454836d3c9d93c393fd4e4
+export DENDRITE_VERSION=eba6b80d7855e0d9a8b17b2d993931d92476b7d5
 
 function cleanup {
     pfexec chown -R `id -un`:`id -gn` .
@@ -56,7 +56,7 @@ sed -i  "s#<service_fmri value='svc:/oxide/.*setup:default' />##g" \
 popd
 
 banner "install"
-for p in clang-15 pkg-config brand/sparse ; do
+for p in clang-15 pkg-config brand/omicron1 brand/omicron1/tools ; do
     set +o errexit
     pkg info $p | grep -qi installed
     if [[ $? != 0 ]]; then
@@ -64,6 +64,9 @@ for p in clang-15 pkg-config brand/sparse ; do
         pfexec pkg install $p
     fi
 done
+
+pfexec svcadm enable baseline
+sleep 30
     
 set -o errexit
 set -o pipefail
