@@ -68,7 +68,7 @@ done
 pfexec svcadm enable baseline
 retry=0
 while [[ $(svcs -Hostate baseline || true) != online ]]; do
-    if [[ $retry -gt 30 ]]; then
+    if [[ $retry -gt 300 ]]; then
         echo "baseline service did not come online";
         exit 1;
     fi
