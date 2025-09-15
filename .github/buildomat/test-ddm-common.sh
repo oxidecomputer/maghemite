@@ -66,7 +66,15 @@ for p in clang-15 pkg-config brand/omicron1 brand/omicron1/tools ; do
 done
 
 pfexec svcadm enable baseline
-sleep 30
+retry=0
+while [[ $(svcs -Hostate baseline || true) != online ]]; do
+    if [[ $retry -gt 30 ]]; then
+        echo "baseline service did not come online";
+        exit 1;
+    fi
+    sleep 1;
+    retry=$((retry + 1))
+done
     
 set -o errexit
 set -o pipefail
