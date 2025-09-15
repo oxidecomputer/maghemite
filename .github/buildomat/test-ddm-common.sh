@@ -56,13 +56,24 @@ sed -i  "s#<service_fmri value='svc:/oxide/.*setup:default' />##g" \
 popd
 
 banner "install"
-for p in clang-15 pkg-config brand/sparse ; do
+for p in clang-15 pkg-config brand/omicron1 brand/omicron1/tools ; do
     set +o errexit
     pkg info $p | grep -qi installed
     if [[ $? != 0 ]]; then
         set -o errexit
         pfexec pkg install $p
     fi
+done
+
+pfexec svcadm enable baseline
+retry=0
+while [[ $(svcs -Hostate baseline || true) != online ]]; do
+    if [[ $retry -gt 300 ]]; then
+        echo "baseline service did not come online";
+        exit 1;
+    fi
+    sleep 1;
+    retry=$((retry + 1))
 done
     
 set -o errexit

@@ -30,7 +30,21 @@ macro_rules! retry_cmd {
     }};
 }
 
-const ZONE_BRAND: &str = "sparse";
+macro_rules! softnpu_dump {
+    ($softnpu:expr) => {{
+        retry_cmd!(
+            $softnpu.zexec(
+                "/opt/scadm standalone \
+                --client /opt/mnt/client \
+                --server /opt/mnt/server dump-state"
+            ),
+            1,
+            10
+        );
+    }};
+}
+
+const ZONE_BRAND: &str = "omicron1";
 
 struct SoftnpuZone<'a> {
     zfs: &'a Zfs,
@@ -88,6 +102,10 @@ impl<'a> SoftnpuZone<'a> {
             "/opt/softnpu.log",
         ))?;
         Ok(())
+    }
+
+    pub fn zexec(&self, cmd: &str) -> Result<String> {
+        self.zone.zexec(cmd)
     }
 }
 
@@ -170,7 +188,7 @@ impl<'a> RouterZone<'a> {
         self.zone.zexec("pkill ddmd")
     }
 
-    fn start_router(&self) -> Result<()> {
+    fn start_router(&self, restart_dpd: bool) -> Result<()> {
         let addrs = self.ifx[1..]
             .iter()
             .map(|x| format!("-a {}/v6", x))
@@ -185,33 +203,37 @@ impl<'a> RouterZone<'a> {
         );
 
         if self.transit {
-            self.zone.zexec("svcadm disable dendrite")?;
-            self.zone.zexec("svcadm disable tfport")?;
-            self.zone.zexec(
-                "svccfg -s dendrite setprop config/address = [::1]:12224",
-            )?;
-            self.zone
-                .zexec("svccfg -s dendrite setprop config/mgmt = uds")?;
-            self.zone.zexec(
-                "svccfg -s dendrite setprop config/uds_path = /opt/mnt",
-            )?;
-            self.zone.zexec(
+            if restart_dpd {
+                self.zone.zexec("svcadm disable dendrite")?;
+                self.zone.zexec("svcadm disable tfport")?;
+                self.zone.zexec(
+                    "svccfg -s dendrite setprop config/address = [::1]:12224",
+                )?;
+                self.zone
+                    .zexec("svccfg -s dendrite setprop config/mgmt = uds")?;
+                self.zone.zexec(
+                    "svccfg -s dendrite setprop config/uds_path = /opt/mnt",
+                )?;
+                self.zone.zexec(
                 "svccfg -s dendrite setprop config/port_config = /opt/dpd-ports.toml")?;
-            self.zone.zexec(&format!(
-                "svccfg -s dendrite setprop config/rear_ports = {}",
-                self.ifx.len() - 1
-            ))?;
-            self.zone.zexec("svcadm refresh dendrite:default")?;
-            self.zone.zexec("svcadm enable dendrite:default")?;
-            // wait for dendrite to come up
-            println!("wait 10s for dendrite to come up ...");
-            sleep(Duration::from_secs(10));
-            self.zone
-                .zexec("svccfg -s tfport setprop config/pkt_source = none")?;
-            self.zone
-                .zexec("svccfg -s tfport setprop config/flags = --sync-only")?;
-            self.zone.zexec("svcadm refresh tfport:default")?;
-            self.zone.zexec("svcadm enable tfport")?;
+                self.zone.zexec(&format!(
+                    "svccfg -s dendrite setprop config/rear_ports = {}",
+                    self.ifx.len() - 1
+                ))?;
+                self.zone.zexec("svcadm refresh dendrite:default")?;
+                self.zone.zexec("svcadm enable dendrite:default")?;
+                // wait for dendrite to come up
+                println!("wait 10s for dendrite to come up ...");
+                sleep(Duration::from_secs(10));
+                self.zone.zexec(
+                    "svccfg -s tfport setprop config/pkt_source = none",
+                )?;
+                self.zone.zexec(
+                    "svccfg -s tfport setprop config/flags = --sync-only",
+                )?;
+                self.zone.zexec("svcadm refresh tfport:default")?;
+                self.zone.zexec("svcadm enable tfport")?;
+            }
             self.zone.zexec(&format!(
                 "{} {ddm} --kind transit --dendrite {} {} &> /opt/ddmd.log &",
                 "RUST_LOG=trace RUST_BACKTRACE=1", extra_args, addrs
@@ -277,12 +299,20 @@ impl<'a> RouterZone<'a> {
             // copy is not complete.
             println!("waiting 3s for copy of files to zone to complete ...");
             sleep(Duration::from_secs(3));
+            self.zone.zcmd(
+                &z,
+                "svccfg import /var/svc/manifest/site/dendrite/manifest.xml",
+            )?;
+            self.zone.zcmd(
+                &z,
+                "svccfg import /var/svc/manifest/site/tfport/manifest.xml",
+            )?;
         }
 
         self.zfs.copy_bin_to_zone(&self.zone.name, "ddmd")?;
         self.zfs.copy_bin_to_zone(&self.zone.name, "ddmadm")?;
 
-        self.start_router()?;
+        self.start_router(true)?;
 
         Ok(())
     }
@@ -313,7 +343,7 @@ impl Drop for RouterZone<'_> {
         if self.transit {
             if let Err(e) = self.zfs.copy_from_zone(
                 &self.zone.name,
-                "var/svc/log/system-illumos-dendrite:default.log",
+                "/var/svc/log/oxide-dendrite:default.log",
                 &format!("/work/{}-dpd.log", self.zone.name),
             ) {
                 eprintln!(
@@ -330,8 +360,13 @@ macro_rules! run_topo {
         if env::var("TEST_INTERACTIVE").is_err() {
             $fn
         } else {
+            println!("running interactive test");
             let mut line = String::new();
+            let result = $fn;
+            println!("test result {:?}", result);
+            println!("press enter to continue");
             std::io::stdin().read_line(&mut line).unwrap();
+            result
         }
     };
 }
@@ -406,15 +441,14 @@ async fn test_trio() -> Result<()> {
     s2.setup(2)?;
     t1.setup(3)?;
 
-    run_topo!(run_trio_tests(&s1, &s2, &t1).await?);
-
-    Ok(())
+    run_topo!(run_trio_tests(&s1, &s2, &t1, &sidecar).await)
 }
 
 async fn run_trio_tests(
     zs1: &RouterZone<'_>,
     zs2: &RouterZone<'_>,
     zt1: &RouterZone<'_>,
+    softnpu: &SoftnpuZone<'_>,
 ) -> Result<()> {
     let log = init_logger();
     let s1 = Client::new("http://10.0.0.1:8000", log.clone());
@@ -454,7 +488,7 @@ async fn run_trio_tests(
     zt1.stop_router()?;
     wait_for_eq!(prefix_count(&s1).await?, 0);
     wait_for_eq!(prefix_count(&s2).await?, 0);
-    zt1.start_router()?;
+    zt1.start_router(false)?;
     wait_for_eq!(prefix_count(&s1).await?, 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await.unwrap_or(99), 2);
@@ -463,14 +497,17 @@ async fn run_trio_tests(
 
     println!("transit router restart passed");
 
+    softnpu_dump!(softnpu);
     zs1.stop_router()?;
     wait_for_eq!(prefix_count(&s2).await?, 0);
     wait_for_eq!(prefix_count(&t1).await?, 1);
-    zs1.start_router()?;
+    softnpu_dump!(softnpu);
+    zs1.start_router(false)?;
 
     wait_for_eq!(prefix_count(&s1).await.unwrap_or(99), 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 2);
+    softnpu_dump!(softnpu);
 
     s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
         .await?;
@@ -479,7 +516,25 @@ async fn run_trio_tests(
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 2);
 
-    retry_cmd!(zs1.zexec("ping fd00:2::1"), 1, 10);
+    retry_cmd!(zs2.zexec("netstat -nr -f inet6"), 1, 10);
+    retry_cmd!(zs2.zexec("ipadm"), 1, 10);
+    retry_cmd!(zs2.zexec("route -nv get -inet6 fd00:1::1"), 1, 10);
+    retry_cmd!(zs2.zexec("ndp -na"), 1, 10);
+    softnpu_dump!(softnpu);
+    retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm route list"), 1, 10);
+    retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm arp list"), 1, 10);
+    retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm addr list"), 1, 10);
+    retry_cmd!(
+        zs1.zexec(
+            "ipadm;\
+            route -nv get -inet6 fd00:2::1;\
+            ndp -na;\
+            netstat -nr -f inet6;\
+            ping -ns fd00:2::1 60 2"
+        ),
+        1,
+        10
+    );
     retry_cmd!(zs2.zexec("ping fd00:1::1"), 1, 10);
 
     println!("server router restart passed");
@@ -565,7 +620,7 @@ async fn run_trio_tests(
 
     zs1.stop_router()?;
     sleep(Duration::from_secs(5));
-    zs1.start_router()?;
+    zs1.start_router(false)?;
     sleep(Duration::from_secs(5));
     let s1 = Client::new("http://10.0.0.1:8000", log.clone());
     wait_for_eq!(tunnel_endpoint_count(&s1).await?, 1);
@@ -676,7 +731,7 @@ async fn test_quartet() -> Result<()> {
     s3.setup(3)?;
     t1.setup(4)?;
 
-    run_topo!(run_quartet_tests(&s1, &s2, &s3, &t1).await?);
+    run_topo!(run_quartet_tests(&s1, &s2, &s3, &t1).await)?;
 
     Ok(())
 }
