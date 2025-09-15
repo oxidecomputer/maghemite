@@ -30,6 +30,20 @@ macro_rules! retry_cmd {
     }};
 }
 
+macro_rules! softnpu_dump {
+    ($softnpu:expr) => {{
+        retry_cmd!(
+            $softnpu.zexec(
+                "/opt/scadm standalone \
+                --client /opt/mnt/client \
+                --server /opt/mnt/server dump-state"
+            ),
+            1,
+            10
+        );
+    }};
+}
+
 const ZONE_BRAND: &str = "omicron1";
 
 struct SoftnpuZone<'a> {
@@ -483,42 +497,17 @@ async fn run_trio_tests(
 
     println!("transit router restart passed");
 
-    retry_cmd!(
-        softnpu.zexec(
-            "/opt/scadm standalone \
-        --client /opt/mnt/client \
-        --server /opt/mnt/server dump-state"
-        ),
-        1,
-        10
-    );
-
+    softnpu_dump!(softnpu);
     zs1.stop_router()?;
     wait_for_eq!(prefix_count(&s2).await?, 0);
     wait_for_eq!(prefix_count(&t1).await?, 1);
-    retry_cmd!(
-        softnpu.zexec(
-            "/opt/scadm standalone \
-        --client /opt/mnt/client \
-        --server /opt/mnt/server dump-state"
-        ),
-        1,
-        10
-    );
+    softnpu_dump!(softnpu);
     zs1.start_router(false)?;
 
     wait_for_eq!(prefix_count(&s1).await.unwrap_or(99), 1);
     wait_for_eq!(prefix_count(&s2).await?, 1);
     wait_for_eq!(prefix_count(&t1).await?, 2);
-    retry_cmd!(
-        softnpu.zexec(
-            "/opt/scadm standalone \
-        --client /opt/mnt/client \
-        --server /opt/mnt/server dump-state"
-        ),
-        1,
-        10
-    );
+    softnpu_dump!(softnpu);
 
     s1.advertise_prefixes(&vec!["fd00:1::/64".parse().unwrap()])
         .await?;
@@ -531,20 +520,18 @@ async fn run_trio_tests(
     retry_cmd!(zs2.zexec("ipadm"), 1, 10);
     retry_cmd!(zs2.zexec("route -nv get -inet6 fd00:1::1"), 1, 10);
     retry_cmd!(zs2.zexec("ndp -na"), 1, 10);
-    retry_cmd!(
-        softnpu.zexec(
-            "/opt/scadm standalone \
-        --client /opt/mnt/client \
-        --server /opt/mnt/server dump-state"
-        ),
-        1,
-        10
-    );
+    softnpu_dump!(softnpu);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm route list"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm arp list"), 1, 10);
     retry_cmd!(zt1.zexec("/opt/oxide/dendrite/bin/swadm addr list"), 1, 10);
     retry_cmd!(
-        zs1.zexec("ipadm; route -nv get -inet6 fd00:2::1; ndp -na; netstat -nr -f inet6; ping -ns fd00:2::1 60 2"),
+        zs1.zexec(
+            "ipadm;\
+            route -nv get -inet6 fd00:2::1;\
+            ndp -na;\
+            netstat -nr -f inet6;\
+            ping -ns fd00:2::1 60 2"
+        ),
         1,
         10
     );
