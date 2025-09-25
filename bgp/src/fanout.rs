@@ -4,12 +4,12 @@
 
 use crate::connection::BgpConnection;
 use crate::messages::UpdateMessage;
-use crate::session::FsmEvent;
+use crate::session::{AdminEvent, FsmEvent};
 use crate::{COMPONENT_BGP, MOD_NEIGHBOR};
+use crossbeam_channel::Sender;
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::sync::mpsc::Sender;
 
 const UNIT_FANOUT: &str = "fanout";
 
@@ -64,7 +64,9 @@ impl<Cnx: BgpConnection> Fanout<Cnx> {
 impl<Cnx: BgpConnection> Egress<Cnx> {
     fn send(&self, update: &UpdateMessage) {
         if let Some(tx) = self.event_tx.as_ref() {
-            if let Err(e) = tx.send(FsmEvent::Announce(update.clone())) {
+            if let Err(e) =
+                tx.send(FsmEvent::Admin(AdminEvent::Announce(update.clone())))
+            {
                 slog::error!(self.log,
                     "failed to send update to egress fanout: {e}";
                     "component" => COMPONENT_BGP,

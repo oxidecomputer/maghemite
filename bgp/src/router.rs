@@ -14,7 +14,11 @@ use crate::messages::{
 };
 use crate::policy::load_checker;
 use crate::policy::load_shaper;
-use crate::session::{FsmEvent, NeighborInfo, SessionInfo, SessionRunner};
+use crate::session::{
+    AdminEvent, FsmEvent, NeighborInfo, SessionEndpoint, SessionInfo,
+    SessionRunner,
+};
+use crossbeam_channel::{Receiver, Sender};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db};
 use rdb::{Prefix4, Prefix6};
@@ -25,8 +29,6 @@ use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::Sender;
 use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::spawn;
@@ -61,7 +63,7 @@ pub struct Router<Cnx: BgpConnection> {
 
     /// A set of event channels indexed by peer IP address. These channels
     /// are used for cross-peer session communications.
-    addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
+    addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
 
     /// A fanout is used to distribute originated prefixes to all peer
     /// sessions. In the event that redistribution becomes supported this
@@ -79,7 +81,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         config: RouterConfig,
         log: Logger,
         db: Db,
-        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
+        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
     ) -> Router<Cnx> {
         Self {
             config,
@@ -181,14 +183,33 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
     pub fn new_session_locked(
         self: &Arc<Self>,
-        mut a2s: MutexGuard<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>,
+        mut a2s: MutexGuard<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>,
         peer: PeerConfig,
         bind_addr: SocketAddr,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        a2s.insert(peer.host.ip(), event_tx.clone());
+        // Update the SessionInfo with timer values from peer config
+        let mut session_info = info.clone();
+        session_info.connect_retry_time =
+            Duration::from_secs(peer.connect_retry);
+        session_info.keepalive_time = Duration::from_secs(peer.keepalive);
+        session_info.hold_time = Duration::from_secs(peer.hold_time);
+        session_info.idle_hold_time = Duration::from_secs(peer.idle_hold_time);
+        session_info.delay_open_time = Duration::from_secs(peer.delay_open);
+        session_info.resolution = Duration::from_millis(peer.resolution);
+        session_info.bind_addr = Some(bind_addr);
+
+        let session = Arc::new(Mutex::new(session_info));
+
+        a2s.insert(
+            peer.host.ip(),
+            SessionEndpoint {
+                event_tx: event_tx.clone(),
+                config: session.clone(),
+            },
+        );
         drop(a2s);
 
         let neighbor = NeighborInfo {
@@ -197,19 +218,12 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         };
 
         let runner = Arc::new(SessionRunner::new(
-            Duration::from_secs(peer.connect_retry),
-            Duration::from_secs(peer.keepalive),
-            Duration::from_secs(peer.hold_time),
-            Duration::from_secs(peer.idle_hold_time),
-            Duration::from_secs(peer.delay_open),
-            Arc::new(Mutex::new(info.clone())),
+            session,
             event_rx,
             event_tx.clone(),
             neighbor.clone(),
             self.config.asn,
             self.config.id,
-            Duration::from_millis(peer.resolution),
-            Some(bind_addr),
             self.db.clone(),
             self.fanout.clone(),
             //TODO remove all the other self properties in favor just passing
@@ -262,9 +276,19 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
     }
 
-    pub fn send_event(&self, e: FsmEvent<Cnx>) -> Result<(), Error> {
+    pub fn replace_session_event_tx(
+        self: &Arc<Self>,
+        peer: IpAddr,
+        tx: Sender<FsmEvent<Cnx>>,
+    ) {
+        if let Some(endpoint) = lock!(self.addr_to_session).get_mut(&peer) {
+            endpoint.event_tx = tx;
+        }
+    }
+
+    pub fn send_admin_event(&self, e: AdminEvent) -> Result<(), Error> {
         for s in lock!(self.sessions).values() {
-            s.send_event(e.clone())?;
+            s.send_event(FsmEvent::Admin(e.clone()))?;
         }
         Ok(())
     }

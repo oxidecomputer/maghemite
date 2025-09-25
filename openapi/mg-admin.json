@@ -2437,6 +2437,13 @@
             ]
           },
           {
+            "description": "Handler for Connection Collisions (RFC 4271 6.8)",
+            "type": "string",
+            "enum": [
+              "CollisionDetection"
+            ]
+          },
+          {
             "description": "Sync up with peers.",
             "type": "string",
             "enum": [

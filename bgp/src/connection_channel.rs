@@ -7,16 +7,19 @@
 /// code in this file is to implement BgpListener and BgpConnection such that
 /// the core functionality of the BGP upper-half in `session.rs` may be tested
 /// rapidly using a simulated network.
-use crate::connection::{BgpConnection, BgpListener, MAX_MD5SIG_KEYLEN};
+use crate::clock::ConnectionClock;
+use crate::connection::{
+    BgpConnection, BgpConnector, BgpListener, ConnectionCreator, ConnectionId,
+};
 use crate::error::Error;
 use crate::log::{connection_log, connection_log_lite};
 use crate::messages::Message;
-use crate::session::FsmEvent;
+use crate::session::{ConnectionEvent, FsmEvent, SessionEndpoint, SessionInfo};
+use crossbeam_channel::{unbounded, RecvTimeoutError};
 use mg_common::lock;
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 use std::time::Duration;
@@ -76,7 +79,7 @@ impl Network {
 
     /// Bind to the specified address and return a listener.
     fn bind(&self, sa: SocketAddr) -> Listener {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = unbounded();
         lock!(self.endpoints).insert(sa, tx);
         Listener { rx }
     }
@@ -128,24 +131,37 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     fn accept(
         &self,
         log: Logger,
-        creator: &str,
         addr_to_session: Arc<
-            Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionChannel>>>>,
+            Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionChannel>>>,
         >,
         timeout: Duration,
     ) -> Result<BgpConnectionChannel, Error> {
         let (peer, endpoint) = self.listener.accept(timeout)?;
         match lock!(addr_to_session).get(&peer.ip()) {
-            Some(event_tx) => Ok(BgpConnectionChannel::with_conn(
-                self.addr,
-                peer,
-                endpoint,
-                event_tx.clone(),
-                log,
-                creator,
-            )),
+            Some(session_endpoint) => {
+                let config = lock!(session_endpoint.config);
+                Ok(BgpConnectionChannel::with_conn(
+                    self.addr,
+                    peer,
+                    endpoint,
+                    session_endpoint.event_tx.clone(),
+                    timeout,
+                    log,
+                    ConnectionCreator::Dispatcher,
+                    &config,
+                ))
+            }
             None => Err(Error::UnknownPeer(peer.ip())),
         }
+    }
+
+    fn apply_policy(
+        _conn: &BgpConnectionChannel,
+        _min_ttl: Option<u8>,
+        _md5_key: Option<String>,
+    ) -> Result<(), Error> {
+        // Policy application is ignored for test connections
+        Ok(())
     }
 }
 
@@ -154,98 +170,37 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
 pub struct BgpConnectionChannel {
     addr: SocketAddr,
     peer: SocketAddr,
-    conn_tx: Arc<Mutex<Option<Sender<Message>>>>,
+    conn_tx: Arc<Mutex<Sender<Message>>>,
     log: Logger,
-    creator: String, // creator of this connection, i.e. Dispatcher or SessionRunner
+    // creator of this connection, i.e. BgpListener or BgpConnector
+    creator: ConnectionCreator,
+    conn_id: ConnectionId,
+    // Connection-level timers for keepalive, hold, and delay open
+    connection_clock: ConnectionClock,
 }
 
 impl BgpConnection for BgpConnectionChannel {
-    fn new(
-        addr: Option<SocketAddr>,
-        peer: SocketAddr,
-        log: Logger,
-        creator: &str,
-    ) -> Self {
-        Self {
-            addr: addr
-                .expect("source address required for channel-based connection"),
-            peer,
-            conn_tx: Arc::new(Mutex::new(None)),
-            log,
-            creator: String::from(creator),
-        }
-    }
-
-    fn connect(
-        &self,
-        event_tx: Sender<FsmEvent<Self>>,
-        timeout: Duration,
-        _ttl_sec: Option<u8>,
-        _md5_key: Option<String>,
-    ) -> Result<(), Error> {
-        connection_log!(self,
-            debug,
-            "connecting to {}", self.peer();
-            "timeout" => timeout.as_millis()
-        );
-        let (local, remote) = channel();
-        match NET.connect(self.addr, self.peer, remote) {
-            Ok(()) => {
-                lock!(self.conn_tx).replace(local.tx);
-                Self::recv(
-                    self.peer,
-                    local.rx,
-                    event_tx.clone(),
-                    timeout,
-                    self.log.clone(),
-                    &self.creator,
-                );
-                event_tx.send(FsmEvent::TcpConnectionConfirmed).map_err(
-                    |e| {
-                        Error::InternalCommunication(format!(
-                            "fsm-send: tcp connection confirmed: {e}"
-                        ))
-                    },
-                )?;
-                Ok(())
-            }
-            Err(e) => {
-                connection_log!(self,
-                    error,
-                    "connect error: {e:?}";
-                    "timeout" => timeout.as_millis(),
-                    "error" => format!("{e}")
-                );
-                Err(e)
-            }
-        }
-    }
+    type Connector = BgpConnectorChannel;
 
     fn send(&self, msg: Message) -> Result<(), Error> {
         let guard = lock!(self.conn_tx);
-        match *guard {
-            Some(ref ch) => {
-                connection_log!(self,
-                    trace,
-                    "send {} message via channel to {}", msg.title(), self.peer();
-                    "message" => msg.title(),
-                    "message_contents" => format!("{msg}")
-                );
-                if let Err(e) =
-                    ch.send(msg).map_err(|e| Error::ChannelSend(e.to_string()))
-                {
-                    connection_log!(self,
-                        error,
-                        "error sending message via channel to {}: {e}", self.peer();
-                        "error" => format!("{e}"),
-                        "network_state" => format!("{}", *NET)
-                    );
-                    return Err(e);
-                }
-            }
-            None => {
-                return Err(Error::NotConnected);
-            }
+        connection_log!(self,
+            trace,
+            "send {} message via channel to {}", msg.title(), self.peer();
+            "message" => msg.title(),
+            "message_contents" => format!("{msg}")
+        );
+        if let Err(e) = guard
+            .send(msg)
+            .map_err(|e| Error::ChannelSend(e.to_string()))
+        {
+            connection_log!(self,
+                error,
+                "error sending message via channel to {}: {e}", self.peer();
+                "error" => format!("{e}"),
+                "network_state" => format!("{}", *NET)
+            );
+            return Err(e);
         }
         Ok(())
     }
@@ -254,47 +209,69 @@ impl BgpConnection for BgpConnectionChannel {
         self.peer
     }
 
-    fn local(&self) -> Option<SocketAddr> {
-        Some(self.addr)
+    fn local(&self) -> SocketAddr {
+        self.addr
     }
 
-    fn set_min_ttl(&self, _ttl: u8) -> Result<(), Error> {
-        Ok(())
+    fn conn(&self) -> (SocketAddr, SocketAddr) {
+        (self.local(), self.peer())
     }
 
-    fn set_md5_sig(
-        &self,
-        _keylen: u16,
-        _key: [u8; MAX_MD5SIG_KEYLEN],
-    ) -> Result<(), Error> {
-        Ok(())
+    fn creator(&self) -> ConnectionCreator {
+        self.creator
+    }
+
+    fn id(&self) -> &ConnectionId {
+        &self.conn_id
+    }
+
+    fn clock(&self) -> &ConnectionClock {
+        &self.connection_clock
     }
 }
 
 impl BgpConnectionChannel {
+    /// Create a new BgpConnectionChannel with an established endpoint.
+    /// This is a private constructor used by BgpConnectorChannel and BgpListenerChannel.
+    #[allow(clippy::too_many_arguments)]
     fn with_conn(
         addr: SocketAddr,
         peer: SocketAddr,
         conn: Endpoint<Message>,
         event_tx: Sender<FsmEvent<Self>>,
+        timeout: Duration,
         log: Logger,
-        creator: &str,
+        creator: ConnectionCreator,
+        config: &SessionInfo,
     ) -> Self {
-        //TODO timeout as param
+        let conn_id = ConnectionId::new(addr, peer);
         Self::recv(
             peer,
             conn.rx,
-            event_tx,
-            Duration::from_millis(100),
+            event_tx.clone(),
+            timeout,
             log.clone(),
             creator,
+            conn_id.clone(),
         );
+        let connection_clock = ConnectionClock::new(
+            config.resolution,
+            config.keepalive_time,
+            config.hold_time,
+            config.delay_open_time,
+            conn_id.clone(),
+            event_tx.clone(),
+            log.clone(),
+        );
+
         Self {
             addr,
             peer,
-            conn_tx: Arc::new(Mutex::new(Some(conn.tx))),
+            conn_tx: Arc::new(Mutex::new(conn.tx)),
             log,
-            creator: String::from(creator),
+            creator,
+            conn_id,
+            connection_clock,
         }
     }
 
@@ -304,16 +281,15 @@ impl BgpConnectionChannel {
         event_tx: Sender<FsmEvent<Self>>,
         _timeout: Duration, //TODO shutdown detection
         log: Logger,
-        creator: &str,
+        creator: ConnectionCreator,
+        conn_id: ConnectionId,
     ) {
         connection_log_lite!(log,
             info,
             "spawning recv loop for {peer}";
-            "creator" => creator,
+            "creator" => creator.as_str(),
             "peer" => format!("{peer}")
         );
-
-        let creator = String::from(creator);
 
         spawn(move || loop {
             match rx.recv() {
@@ -321,16 +297,21 @@ impl BgpConnectionChannel {
                     connection_log_lite!(log,
                         debug,
                         "recv {} msg from {peer}", msg.title();
-                        "creator" => &creator,
+                        "creator" => creator.as_str(),
                         "peer" => format!("{peer}"),
                         "message" => msg.title(),
                         "message_contents" => format!("{msg}")
                     );
-                    if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
+                    if let Err(e) = event_tx.send(FsmEvent::Connection(
+                        ConnectionEvent::Message {
+                            msg,
+                            conn_id: conn_id.clone(),
+                        },
+                    )) {
                         connection_log_lite!(log,
                             error,
                             "error sending event to {peer}: {e}";
-                            "creator" => &creator,
+                            "creator" => creator.as_str(),
                             "peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );
@@ -345,9 +326,53 @@ impl BgpConnectionChannel {
     }
 }
 
+pub struct BgpConnectorChannel;
+
+impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
+    #[allow(clippy::too_many_arguments)]
+    fn connect(
+        peer: SocketAddr,
+        timeout: Duration,
+        _min_ttl: Option<u8>, // Ignored for test connections
+        _md5_key: Option<String>, // Ignored for test connections
+        log: Logger,
+        event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
+        config: &SessionInfo,
+    ) -> Result<BgpConnectionChannel, Error> {
+        let creator = ConnectionCreator::Connector;
+        let addr = config
+            .bind_addr
+            .expect("source address required for channel-based connection");
+
+        connection_log_lite!(log,
+            debug,
+            "connecting to {peer}";
+            "creator" => creator.as_str(),
+            "timeout" => timeout.as_millis()
+        );
+
+        let (local, remote) = channel();
+        match NET.connect(addr, peer, remote) {
+            Ok(()) => Ok(BgpConnectionChannel::with_conn(
+                addr, peer, local, event_tx, timeout, log, creator, config,
+            )),
+            Err(e) => {
+                connection_log_lite!(log,
+                    error,
+                    "connect error: {e:?}";
+                    "creator" => creator.as_str(),
+                    "timeout" => timeout.as_millis(),
+                    "error" => format!("{e}")
+                );
+                Err(e)
+            }
+        }
+    }
+}
+
 // BIDI
 
-use std::sync::mpsc::{self, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender};
 
 /// A combined (duplex) mpsc sender/receiver.
 pub struct Endpoint<T> {
@@ -361,10 +386,10 @@ impl<T> Endpoint<T> {
     }
 }
 
-/// Analagous to std::sync::mpsc::channel for bidirectional endpoints.
+/// Analagous to crossbeam_channel::unbounded for bidirectional endpoints.
 #[allow(dead_code)]
 pub fn channel<T>() -> (Endpoint<T>, Endpoint<T>) {
-    let (tx_a, rx_b) = mpsc::channel();
-    let (tx_b, rx_a) = mpsc::channel();
+    let (tx_a, rx_b) = unbounded();
+    let (tx_b, rx_a) = unbounded();
     (Endpoint::new(rx_a, tx_a), Endpoint::new(rx_b, tx_b))
 }

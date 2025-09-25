@@ -9,8 +9,11 @@ use crate::{
     connection_tcp::{BgpConnectionTcp, BgpListenerTcp},
     dispatcher::Dispatcher,
     router::Router,
-    session::{FsmStateKind, SessionInfo},
+    session::{
+        AdminEvent, FsmEvent, FsmStateKind, SessionEndpoint, SessionInfo,
+    },
 };
+use crossbeam_channel::unbounded;
 use lazy_static::lazy_static;
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
@@ -19,7 +22,7 @@ use rdb::{Asn, Prefix};
 use std::{
     collections::BTreeMap,
     net::{IpAddr, SocketAddr},
-    sync::{mpsc::channel, Arc, Mutex},
+    sync::{Arc, Mutex},
     thread::spawn,
 };
 
@@ -125,7 +128,9 @@ where
         let db = rdb::Db::new(&db_path, log.clone()).expect("create db");
 
         // Create dispatcher
-        let addr_to_session = Arc::new(Mutex::new(BTreeMap::new()));
+        let addr_to_session: Arc<
+            Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>,
+        > = Arc::new(Mutex::new(BTreeMap::new()));
         let dispatcher = Arc::new(Dispatcher::new(
             addr_to_session.clone(),
             logical_router.listen_addr.to_string(),
@@ -153,7 +158,7 @@ where
         // Set up all peer sessions for this router
         for neighbor in &logical_router.neighbors {
             // Each session gets its own channel pair for FsmEvents
-            let (event_tx, event_rx) = channel();
+            let (event_tx, event_rx) = unbounded();
             let peer_config = neighbor.peer_config.clone();
 
             router
@@ -182,7 +187,7 @@ where
     // Start all sessions
     for session_tx in session_senders {
         session_tx
-            .send(crate::session::FsmEvent::ManualStart)
+            .send(FsmEvent::Admin(AdminEvent::ManualStart))
             .expect("send manual start event");
     }
 
@@ -310,7 +315,7 @@ fn basic_peering_helper<
 
     r2.run::<Listener>();
     r2.router
-        .send_event(crate::session::FsmEvent::ManualStart)
+        .send_admin_event(AdminEvent::ManualStart)
         .expect("manual start session two");
 
     wait_for_eq!(

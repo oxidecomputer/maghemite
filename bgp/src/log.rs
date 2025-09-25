@@ -1,14 +1,75 @@
 macro_rules! session_log {
+    ($self:expr, $level:ident, $conn:expr, $msg:expr; $($key:expr => $value:expr),*) => {
+        slog::$level!($self.log,
+            $msg;
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
+            "conn" => format!("{:?}", $conn.conn()),
+            "connection_clock" => format!("{}", $conn.clock()),
+            "creator" => format!("{}", $conn.creator()),
+            $($key => $value),*
+        )
+    };
+    ($self:expr, $level:ident, $conn:expr, $msg:expr, $($args:expr),*; $($key:expr => $value:expr),*) => {
+        slog::$level!($self.log,
+            $msg, $($args),*;
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
+            "conn" => format!("{:?}", $conn.conn()),
+            "connection_clock" => format!("{}", $conn.clock()),
+            "creator" => format!("{}", $conn.creator()),
+            $($key => $value),*
+        )
+    };
+    ($self:expr, $level:ident, $conn:expr, $msg:expr) => {
+        slog::$level!($self.log,
+            $msg;
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
+            "conn" => format!("{:?}", $conn.conn()),
+            "connection_clock" => format!("{}", $conn.clock()),
+            "creator" => format!("{}", $conn.creator()),
+        )
+    };
+    ($self:expr, $level:ident, $conn:expr, $msg:expr, $($args:expr),*) => {
+        slog::$level!($self.log,
+            $msg, $($args),*;
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
+            "conn" => format!("{:?}", $conn.conn()),
+            "connection_clock" => format!("{}", $conn.clock()),
+            "creator" => format!("{}", $conn.creator()),
+        )
+    };
+}
+
+// session_log variant used in functions that don't have a BgpConnection
+macro_rules! session_log_lite {
     ($self:expr, $level:ident, $msg:expr; $($key:expr => $value:expr),*) => {
         slog::$level!($self.log,
             $msg;
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
-            "peer_name" => lock!($self.neighbor.name).as_str(),
-            "peer_sockaddr" => $self.neighbor.host,
-            "source" => format!("{:?}", $self.bind_addr),
-            "clock" => format!("{:#?}", $self.clock),
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
             $($key => $value),*
         )
     };
@@ -18,10 +79,9 @@ macro_rules! session_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
-            "peer_name" => lock!($self.neighbor.name).as_str(),
-            "peer_sockaddr" => $self.neighbor.host,
-            "source" => format!("{:?}", $self.bind_addr),
-            "clock" => format!("{:#?}", $self.clock),
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
             $($key => $value),*
         )
     };
@@ -31,10 +91,9 @@ macro_rules! session_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
-            "peer_name" => lock!($self.neighbor.name).as_str(),
-            "peer_sockaddr" => $self.neighbor.host,
-            "source" => format!("{:?}", $self.bind_addr),
-            "clock" => format!("{:#?}", $self.clock),
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
         )
     };
     ($self:expr, $level:ident, $msg:expr, $($args:expr),*) => {
@@ -43,10 +102,86 @@ macro_rules! session_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
-            "peer_name" => lock!($self.neighbor.name).as_str(),
-            "peer_sockaddr" => $self.neighbor.host,
-            "source" => format!("{:?}", $self.bind_addr),
-            "clock" => format!("{:#?}", $self.clock),
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
+        )
+    };
+}
+
+macro_rules! collision_log {
+    ($self:expr, $level:ident, $new:expr, $exist:expr, $msg:expr; $($key:expr => $value:expr),*) => {
+        slog::$level!($self.log,
+            $msg;
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
+            "fsm_state" => format!("{}", $self.state()).as_str(),
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
+            "new_conn" => format!("{:?}", $new.conn()),
+            "new_connection_clock" => format!("{}", $new.clock()),
+            "new_creator" => format!("{}", $new.creator()),
+            "exist_conn" => format!("{:?}", $exist.conn()),
+            "exist_connection_clock" => format!("{}", $exist.clock()),
+            "exist_creator" => format!("{}", $exist.creator()),
+            $($key => $value),*
+        )
+    };
+    ($self:expr, $level:ident, $new:expr, $exist:expr, $msg:expr, $($args:expr),*; $($key:expr => $value:expr),*) => {
+        slog::$level!($self.log,
+            $msg, $($args),*;
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
+            "fsm_state" => format!("{}", $self.state()).as_str(),
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
+            "new_conn" => format!("{:?}", $new.conn()),
+            "new_connection_clock" => format!("{}", $new.clock()),
+            "new_creator" => format!("{}", $new.creator()),
+            "exist_conn" => format!("{:?}", $exist.conn()),
+            "exist_connection_clock" => format!("{}", $exist.clock()),
+            "exist_creator" => format!("{}", $exist.creator()),
+            $($key => $value),*
+        )
+    };
+    ($self:expr, $level:ident, $new:expr, $exist:expr, $msg:expr) => {
+        slog::$level!($self.log,
+            $msg;
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
+            "fsm_state" => format!("{}", $self.state()).as_str(),
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
+            "new_conn" => format!("{:?}", $new.conn()),
+            "new_connection_clock" => format!("{}", $new.clock()),
+            "new_creator" => format!("{}", $new.creator()),
+            "exist_conn" => format!("{:?}", $exist.conn()),
+            "exist_connection_clock" => format!("{}", $exist.clock()),
+            "exist_creator" => format!("{}", $exist.creator()),
+        )
+    };
+    ($self:expr, $level:ident, $new:expr, $exist:expr, $msg:expr, $($args:expr),*) => {
+        slog::$level!($self.log,
+            $msg, $($args),*;
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_NEIGHBOR,
+            "unit" => UNIT_SESSION_RUNNER,
+            "fsm_state" => format!("{}", $self.state()).as_str(),
+            "neighbor_name" => lock!($self.neighbor.name).as_str(),
+            "neighbor" => format!("{}", $self.neighbor.host.ip()),
+            "session_clock" => format!("{}", $self.clock),
+            "new_conn" => format!("{:?}", $new.conn()),
+            "new_connection_clock" => format!("{}", $new.clock()),
+            "new_creator" => format!("{}", $new.creator()),
+            "exist_conn" => format!("{:?}", $exist.conn()),
+            "exist_connection_clock" => format!("{}", $exist.clock()),
+            "exist_creator" => format!("{}", $exist.creator()),
         )
     };
 }
@@ -88,6 +223,7 @@ macro_rules! dispatcher_log {
     };
 }
 
+#[allow(unused_macros)]
 macro_rules! connection_log {
     ($self:expr, $level:ident, $msg:expr; $($key:expr => $value:expr),*) => {
         slog::$level!($self.log,
@@ -95,9 +231,9 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => &$self.creator,
-            "peer" => $self.peer(),
-            "source" => $self.local(),
+            "creator" => format!("{}", $self.creator()),
+            "connection_peer" => $self.peer(),
+            "connection_local" => $self.local(),
             $($key => $value),*
         )
     };
@@ -107,9 +243,9 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => &$self.creator,
-            "peer" => $self.peer(),
-            "source" => $self.local(),
+            "creator" => format!("{}", $self.creator()),
+            "connection_peer" => $self.peer(),
+            "connection_local" => $self.local(),
             $($key => $value),*
         )
     };
@@ -119,9 +255,9 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => &$self.creator,
-            "peer" => $self.peer(),
-            "source" => $self.local(),
+            "creator" => format!("{}", $self.creator()),
+            "connection_peer" => $self.peer(),
+            "connection_local" => $self.local(),
         )
     };
     ($self:expr, $level:ident, $msg:expr, $($args:expr),*) => {
@@ -130,9 +266,9 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => &$self.creator,
-            "peer" => $self.peer(),
-            "source" => $self.local(),
+            "creator" => format!("{}", $self.creator()),
+            "connection_peer" => $self.peer(),
+            "connection_local" => $self.local(),
         )
     };
 }
@@ -175,6 +311,8 @@ macro_rules! connection_log_lite {
     };
 }
 
+#[allow(unused_imports)]
 pub(crate) use {
-    connection_log, connection_log_lite, dispatcher_log, session_log,
+    collision_log, connection_log, connection_log_lite, dispatcher_log,
+    session_log, session_log_lite,
 };

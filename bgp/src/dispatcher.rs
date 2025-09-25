@@ -4,13 +4,12 @@
 
 use crate::connection::{BgpConnection, BgpListener};
 use crate::log::dispatcher_log;
-use crate::session::FsmEvent;
+use crate::session::{FsmEvent, SessionEndpoint, SessionEvent};
 use mg_common::lock;
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::Duration;
@@ -18,15 +17,15 @@ use std::time::Duration;
 const UNIT_DISPATCHER: &str = "dispatcher";
 
 pub struct Dispatcher<Cnx: BgpConnection> {
-    pub addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
+    pub addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
     shutdown: AtomicBool,
     listen: String,
     log: Logger,
 }
 
-impl<Cnx: BgpConnection> Dispatcher<Cnx> {
+impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
     pub fn new(
-        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
+        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
         listen: String,
         log: Logger,
     ) -> Self {
@@ -69,7 +68,6 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
             'accept: loop {
                 let accepted = match listener.accept(
                     self.log.clone(),
-                    UNIT_DISPATCHER,
                     self.addr_to_session.clone(),
                     Duration::from_millis(100),
                 ) {
@@ -95,9 +93,30 @@ impl<Cnx: BgpConnection> Dispatcher<Cnx> {
                     }
                 };
                 let addr = accepted.peer().ip();
-                match lock!(self.addr_to_session).get(&addr) {
-                    Some(tx) => {
-                        if let Err(e) = tx.send(FsmEvent::Connected(accepted)) {
+                match lock!(self.addr_to_session).get(&addr).cloned() {
+                    Some(session_endpoint) => {
+                        // Apply connection policy from the session configuration
+                        let min_ttl = session_endpoint.config.min_ttl;
+                        let md5_key =
+                            session_endpoint.config.md5_auth_key.clone();
+
+                        if let Err(e) =
+                            Listener::apply_policy(&accepted, min_ttl, md5_key)
+                        {
+                            dispatcher_log!(self,
+                                warn,
+                                "failed to apply policy for connection from {addr}: {e}";
+                                "listen_address" => &self.listen,
+                                "address" => format!("{addr}"),
+                                "error" => format!("{e}")
+                            );
+                        }
+
+                        if let Err(e) =
+                            session_endpoint.event_tx.send(FsmEvent::Session(
+                                SessionEvent::Connected(accepted),
+                            ))
+                        {
                             dispatcher_log!(self,
                                 error,
                                 "failed to send connected event to session for {addr}: {e}";

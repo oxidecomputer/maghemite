@@ -450,10 +450,13 @@ impl OpenMessage {
 
 impl Display for OpenMessage {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        // XXX: add format support for capabilities (self.parameters)
+        let mut param_string = String::new();
+        for param in self.parameters.iter() {
+            param_string.push_str(&format!("{param}, "));
+        }
         write!(
             f,
-            "Open [ version: {}, asn: {}, hold_time: {}, id: {} ]",
+            "Open [ version: {}, asn: {}, hold_time: {}, id: {}, parameters: [ {param_string}] ]",
             self.version, self.asn, self.hold_time, self.id
         )
     }
@@ -1593,14 +1596,14 @@ impl Display for ErrorCode {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let val = *self as u8;
         match self {
-            ErrorCode::Header => write!(f, "{val}(Header)"),
-            ErrorCode::Open => write!(f, "{val}(Open)"),
-            ErrorCode::Update => write!(f, "{val}(Update)"),
+            ErrorCode::Header => write!(f, "{val} (Header)"),
+            ErrorCode::Open => write!(f, "{val} (Open)"),
+            ErrorCode::Update => write!(f, "{val} (Update)"),
             ErrorCode::HoldTimerExpired => {
-                write!(f, "{val}(HoldTimerExpired)")
+                write!(f, "{val} (HoldTimerExpired)")
             }
-            ErrorCode::Fsm => write!(f, "{val}(FSM)"),
-            ErrorCode::Cease => write!(f, "{val}(Cease)"),
+            ErrorCode::Fsm => write!(f, "{val} (FSM)"),
+            ErrorCode::Cease => write!(f, "{val} (Cease)"),
         }
     }
 }
@@ -1660,18 +1663,18 @@ impl Display for ErrorSubcode {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             ErrorSubcode::Header(header_error_subcode) => {
-                write!(f, "{header_error_subcode}(Header)")
+                write!(f, "{header_error_subcode}")
             }
             ErrorSubcode::Open(open_error_subcode) => {
-                write!(f, "{open_error_subcode}(Open)")
+                write!(f, "{open_error_subcode}")
             }
             ErrorSubcode::Update(update_error_subcode) => {
-                write!(f, "{update_error_subcode}(Update)")
+                write!(f, "{update_error_subcode}")
             }
-            ErrorSubcode::HoldTime(i) => write!(f, "{i}(HoldTime)"),
-            ErrorSubcode::Fsm(i) => write!(f, "{i}(FSM)"),
+            ErrorSubcode::HoldTime(i) => write!(f, "{i}"),
+            ErrorSubcode::Fsm(i) => write!(f, "{i}"),
             ErrorSubcode::Cease(cease_error_subcode) => {
-                write!(f, "{cease_error_subcode}(Cease)")
+                write!(f, "{cease_error_subcode}")
             }
         }
     }
@@ -1745,23 +1748,23 @@ impl Display for OpenErrorSubcode {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let val = *self as u8;
         match self {
-            OpenErrorSubcode::Unspecific => write!(f, "{val}(Unspecific)"),
+            OpenErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
             OpenErrorSubcode::UnsupportedVersionNumber => {
-                write!(f, "{val}(UnsupportedVersionNumber)")
+                write!(f, "{val} (UnsupportedVersionNumber)")
             }
-            OpenErrorSubcode::BadPeerAS => write!(f, "{val}(Bad Peer AS)"),
+            OpenErrorSubcode::BadPeerAS => write!(f, "{val} (Bad Peer AS)"),
             OpenErrorSubcode::BadBgpIdentifier => {
-                write!(f, "{val}(Bad BGP Identifier)")
+                write!(f, "{val} (Bad BGP Identifier)")
             }
             OpenErrorSubcode::UnsupportedOptionalParameter => {
-                write!(f, "{val}(Unsupported Optional Parameter)")
+                write!(f, "{val} (Unsupported Optional Parameter)")
             }
-            OpenErrorSubcode::Deprecated => write!(f, "{val}(Deprecated)"),
+            OpenErrorSubcode::Deprecated => write!(f, "{val} (Deprecated)"),
             OpenErrorSubcode::UnacceptableHoldTime => {
-                write!(f, "{val}(Unacceptable Hold Time)")
+                write!(f, "{val} (Unacceptable Hold Time)")
             }
             OpenErrorSubcode::UnsupportedCapability => {
-                write!(f, "{val}(Unsupported Capability)")
+                write!(f, "{val} (Unsupported Capability)")
             }
         }
     }
@@ -1800,37 +1803,37 @@ impl Display for UpdateErrorSubcode {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let val = *self as u8;
         match self {
-            UpdateErrorSubcode::Unspecific => write!(f, "{val}(Unspecific)"),
+            UpdateErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
             UpdateErrorSubcode::MalformedAttributeList => {
-                write!(f, "{val}(Malformed Attribute List)")
+                write!(f, "{val} (Malformed Attribute List)")
             }
             UpdateErrorSubcode::UnrecognizedWellKnownAttribute => {
-                write!(f, "{val}(Unrecognized Well-Known Attribute)")
+                write!(f, "{val} (Unrecognized Well-Known Attribute)")
             }
             UpdateErrorSubcode::MissingWellKnownAttribute => {
-                write!(f, "{val}(Missing Well-Known Attribute)")
+                write!(f, "{val} (Missing Well-Known Attribute)")
             }
             UpdateErrorSubcode::AttributeFlags => {
-                write!(f, "{val}(Attribute Flags)")
+                write!(f, "{val} (Attribute Flags)")
             }
             UpdateErrorSubcode::AttributeLength => {
-                write!(f, "{val}(Attribute Length)")
+                write!(f, "{val} (Attribute Length)")
             }
             UpdateErrorSubcode::InvalidOriginAttribute => {
-                write!(f, "{val}(Invalid Origin Attribute)")
+                write!(f, "{val} (Invalid Origin Attribute)")
             }
-            UpdateErrorSubcode::Deprecated => write!(f, "{val}(Deprecated)"),
+            UpdateErrorSubcode::Deprecated => write!(f, "{val} (Deprecated)"),
             UpdateErrorSubcode::InvalidNexthopAttribute => {
-                write!(f, "{val}(Invalid Nexthop Attribute)")
+                write!(f, "{val} (Invalid Nexthop Attribute)")
             }
             UpdateErrorSubcode::OptionalAttribute => {
-                write!(f, "{val}(Optional Attribute)")
+                write!(f, "{val} (Optional Attribute)")
             }
             UpdateErrorSubcode::InvalidNetworkField => {
-                write!(f, "{val}(Invalid Network Field)")
+                write!(f, "{val} (Invalid Network Field)")
             }
             UpdateErrorSubcode::MalformedAsPath => {
-                write!(f, "{val}(Malformed AS Path)")
+                write!(f, "{val} (Malformed AS Path)")
             }
         }
     }
@@ -1866,30 +1869,30 @@ impl Display for CeaseErrorSubcode {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let val = *self as u8;
         match self {
-            CeaseErrorSubcode::Unspecific => write!(f, "{val}(Unspecific)"),
+            CeaseErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
             CeaseErrorSubcode::MaximumNumberofPrefixesReached => {
-                write!(f, "{val}(Maximum Number of Prefixes Reached)")
+                write!(f, "{val} (Maximum Number of Prefixes Reached)")
             }
             CeaseErrorSubcode::AdministrativeShutdown => {
-                write!(f, "{val}(Administrative Shutdown)")
+                write!(f, "{val} (Administrative Shutdown)")
             }
             CeaseErrorSubcode::PeerDeconfigured => {
-                write!(f, "{val}(Peer Deconfigured)")
+                write!(f, "{val} (Peer Deconfigured)")
             }
             CeaseErrorSubcode::AdministrativeReset => {
-                write!(f, "{val}(Administratively Reset)")
+                write!(f, "{val} (Administratively Reset)")
             }
             CeaseErrorSubcode::ConnectionRejected => {
-                write!(f, "{val}(Connection Rejected)")
+                write!(f, "{val} (Connection Rejected)")
             }
             CeaseErrorSubcode::OtherConfigurationChange => {
-                write!(f, "{val}(Other Configuration Rejected)")
+                write!(f, "{val} (Other Configuration Rejected)")
             }
             CeaseErrorSubcode::ConnectionCollisionResolution => {
-                write!(f, "{val}(Connection Collition Resolution)")
+                write!(f, "{val} (Connection Collition Resolution)")
             }
             CeaseErrorSubcode::OutOfResources => {
-                write!(f, "{val}(Out of Resources)")
+                write!(f, "{val} (Out of Resources)")
             }
         }
     }
@@ -1913,6 +1916,28 @@ pub enum OptionalParameter {
 
     /// Code 255: RFC 9072
     ExtendedLength, //TODO
+}
+
+impl Display for OptionalParameter {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            OptionalParameter::Reserved => write!(f, "Reserved (0)"),
+            OptionalParameter::Authentication => {
+                write!(f, "Authentication (1)")
+            }
+            OptionalParameter::Capabilities(caps) => {
+                let mut cap_string = String::new();
+                for cap in caps {
+                    cap_string.push_str(&format!("{cap}, "));
+                }
+                write!(f, "Capabilities [ {cap_string}]")
+            }
+            OptionalParameter::Unassigned => write!(f, "Unassigned"),
+            OptionalParameter::ExtendedLength => {
+                write!(f, "Extended Length (255)")
+            }
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
@@ -1994,6 +2019,16 @@ pub struct AddPathElement {
     /// paths from its peer (value 1), (b) able to send multiple paths to its
     /// peer (value 2), or (c) both (value 3) for the <AFI, SAFI>.
     pub send_receive: u8,
+}
+
+impl Display for AddPathElement {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "AddPathElement {{ afi: {}, safi: {}, send_receive: {} }}",
+            self.afi, self.safi, self.send_receive
+        )
+    }
 }
 
 // An issue tracking the TODOs below is here
@@ -2146,6 +2181,98 @@ pub enum Capability {
     Reserved {
         code: u8,
     },
+}
+
+impl Display for Capability {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            Capability::MultiprotocolExtensions { afi, safi } => {
+                write!(f, "MP-Extensions {afi}/{safi}")
+            }
+            Capability::RouteRefresh {} => {
+                write!(f, "Route Refresh")
+            }
+            Capability::OutboundRouteFiltering {} => {
+                write!(f, "ORF")
+            }
+            Capability::MultipleRoutesToDestination {} => {
+                write!(f, "Multiple Routes to Destination")
+            }
+            Capability::ExtendedNextHopEncoding {} => {
+                write!(f, "Extended Next Hop Encoding")
+            }
+            Capability::BGPExtendedMessage {} => {
+                write!(f, "BGP Extended Message")
+            }
+            Capability::BgpSec {} => {
+                write!(f, "BGP Sec")
+            }
+            Capability::MultipleLabels {} => {
+                write!(f, "Multiple Labels")
+            }
+            Capability::BgpRole {} => {
+                write!(f, "BGP Role")
+            }
+            Capability::GracefulRestart {} => {
+                write!(f, "Graceful Restart")
+            }
+            Capability::FourOctetAs { asn } => {
+                write!(f, "Four Octet ASN {asn}")
+            }
+            Capability::DynamicCapability {} => {
+                write!(f, "Dynamic Capability")
+            }
+            Capability::MultisessionBgp {} => {
+                write!(f, "Multi-session BGP")
+            }
+            Capability::AddPath { elements } => {
+                let mut elements_string = String::new();
+                for e in elements {
+                    elements_string.push_str(&format!("{e}, "));
+                }
+                write!(f, "AddPath [ {elements_string}]")
+            }
+            Capability::EnhancedRouteRefresh {} => {
+                write!(f, "Enhanced Route Refresh")
+            }
+            Capability::LongLivedGracefulRestart {} => {
+                write!(f, "Long-Lived Graceful Restart")
+            }
+            Capability::RoutingPolicyDistribution {} => {
+                write!(f, "Routing Policy Distribution")
+            }
+            Capability::Fqdn {} => {
+                write!(f, "FQDN")
+            }
+            Capability::PrestandardRouteRefresh {} => {
+                write!(f, "Route Refresh (Prestandard)")
+            }
+            Capability::PrestandardOrfAndPd {} => {
+                write!(f, "ORF / Policy Distribution (Prestandard)")
+            }
+            Capability::PrestandardOutboundRouteFiltering {} => {
+                write!(f, "ORF (Prestandard)")
+            }
+            Capability::PrestandardMultisession {} => {
+                write!(f, "Multi-session BGP (Prestandard)")
+            }
+            Capability::PrestandardFqdn {} => {
+                write!(f, "FQDN (Prestandard)")
+            }
+            Capability::PrestandardOperationalMessage {} => {
+                write!(f, "Operational Message (Prestandard)")
+            }
+            Capability::Experimental { code } => {
+                write!(f, "Experimental ({code})")
+            }
+            Capability::Unassigned { code } => {
+                write!(f, "Unassigned ({code})")
+            }
+            Capability::Reserved { code } => {
+                write!(f, "Reserved ({code})")
+            }
+        }
+    }
 }
 
 impl Capability {

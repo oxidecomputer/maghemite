@@ -2,15 +2,19 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::connection::{BgpConnection, BgpListener, MAX_MD5SIG_KEYLEN};
+use crate::clock::ConnectionClock;
+use crate::connection::{
+    BgpConnection, BgpConnector, BgpListener, ConnectionCreator, ConnectionId,
+    MAX_MD5SIG_KEYLEN,
+};
 use crate::error::Error;
-use crate::log::{connection_log, connection_log_lite};
+use crate::log::connection_log_lite;
 use crate::messages::{
     ErrorCode, ErrorSubcode, Header, Message, MessageType, NotificationMessage,
     OpenMessage, RouteRefreshMessage, UpdateMessage,
 };
-use crate::session::FsmEvent;
-use crate::to_canonical;
+use crate::session::{ConnectionEvent, FsmEvent, SessionEndpoint, SessionInfo};
+use crossbeam_channel::Sender;
 use libc::{c_int, sockaddr_storage};
 use mg_common::lock;
 use slog::Logger;
@@ -18,12 +22,12 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::os::fd::AsRawFd;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 use std::time::Duration;
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use {crate::log::connection_log, std::os::fd::AsRawFd};
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
@@ -73,21 +77,6 @@ impl Md5Sas {
     }
 }
 
-#[derive(Clone)]
-pub struct BgpConnectionTcp {
-    peer: SocketAddr,
-    #[cfg(test)]
-    source: Option<SocketAddr>,
-    conn: Arc<Mutex<Option<TcpStream>>>, //TODO split into tx/rx?
-    #[cfg(target_os = "illumos")]
-    sas: Arc<Mutex<Option<Md5Sas>>>,
-    #[cfg(target_os = "illumos")]
-    sa_keepalive_running: Arc<AtomicBool>,
-    dropped: Arc<AtomicBool>,
-    log: Logger,
-    creator: String, // who created this connection, i.e. SessionRunner or Dispatcher
-}
-
 impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn bind<A: ToSocketAddrs>(addr: A) -> Result<Self, Error>
     where
@@ -107,63 +96,104 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn accept(
         &self,
         log: Logger,
-        creator: &str,
         addr_to_session: Arc<
-            Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionTcp>>>>,
+            Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionTcp>>>,
         >,
-        _timeout: Duration, //TODO implement
+        timeout: Duration,
     ) -> Result<BgpConnectionTcp, Error> {
         let (conn, mut peer) = self.listener.accept()?;
 
-        let ip = to_canonical(peer.ip());
+        let ip = peer.ip().to_canonical();
         peer.set_ip(ip);
 
+        // Check if we have a session for this peer
         match lock!(addr_to_session).get(&ip) {
-            Some(event_tx) => Ok(BgpConnectionTcp::with_conn(
-                self.addr,
-                peer,
-                conn,
-                event_tx.clone(),
-                log,
-                creator,
-            )?),
+            Some(session_endpoint) => {
+                let config = lock!(session_endpoint.config);
+                BgpConnectionTcp::with_conn(
+                    self.addr,
+                    peer,
+                    conn,
+                    timeout,
+                    session_endpoint.event_tx.clone(),
+                    log,
+                    ConnectionCreator::Dispatcher,
+                    &config,
+                )
+            }
             None => Err(Error::UnknownPeer(ip)),
         }
     }
-}
 
-impl BgpConnection for BgpConnectionTcp {
-    fn new(
-        _source: Option<SocketAddr>,
-        peer: SocketAddr,
-        log: Logger,
-        creator: &str,
-    ) -> Self {
-        let conn = Arc::new(Mutex::new(None));
-        Self {
-            peer,
-            #[cfg(test)]
-            source: _source,
-            conn,
-            log,
-            dropped: Arc::new(AtomicBool::new(false)),
-            #[cfg(target_os = "illumos")]
-            sa_keepalive_running: Arc::new(AtomicBool::new(false)),
-            #[cfg(target_os = "illumos")]
-            sas: Arc::new(Mutex::new(None)),
-            creator: String::from(creator),
-        }
-    }
-
-    #[allow(unused_variables)]
-    fn connect(
-        &self,
-        event_tx: Sender<FsmEvent<Self>>,
-        timeout: Duration,
+    fn apply_policy(
+        conn: &BgpConnectionTcp,
         min_ttl: Option<u8>,
         md5_key: Option<String>,
     ) -> Result<(), Error> {
-        let s = match self.peer {
+        let tcp_stream = lock!(conn.conn);
+
+        if let Some(ttl) = min_ttl {
+            apply_min_ttl(&tcp_stream, ttl, conn.peer)?;
+        }
+        if let Some(ref key) = md5_key {
+            // Apply MD5 authentication to the accepted connection
+            #[cfg(target_os = "linux")]
+            {
+                let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
+                let len = key.len();
+                keyval[..len].copy_from_slice(key.as_bytes());
+                set_md5_sig_fd(
+                    tcp_stream.as_raw_fd(),
+                    len as u16,
+                    keyval,
+                    conn.peer,
+                )?;
+            }
+
+            #[cfg(target_os = "illumos")]
+            {
+                let sources = match source_address_select(conn.peer.ip()) {
+                    Ok(s) => s,
+                    Err(e) => return Err(Error::InvalidAddress(e.to_string())),
+                };
+                if !sources.is_empty() {
+                    let local: Vec<SocketAddr> = sources
+                        .iter()
+                        .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
+                        .collect();
+                    set_md5_sig_fd(
+                        tcp_stream.as_raw_fd(),
+                        key,
+                        local,
+                        conn.peer,
+                    )?;
+                }
+            }
+
+            #[cfg(not(any(target_os = "linux", target_os = "illumos")))]
+            {
+                // MD5 authentication not supported on this platform
+                let _ = key; // Suppress unused variable warning
+            }
+        }
+        Ok(())
+    }
+}
+
+pub struct BgpConnectorTcp;
+
+impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
+    #[allow(clippy::too_many_arguments)]
+    fn connect(
+        peer: SocketAddr,
+        timeout: Duration,
+        min_ttl: Option<u8>,
+        _md5_key: Option<String>, // TODO: Fix MD5 implementation for macOS
+        log: Logger,
+        event_tx: Sender<FsmEvent<BgpConnectionTcp>>,
+        config: &SessionInfo,
+    ) -> Result<BgpConnectionTcp, Error> {
+        let s = match peer {
             SocketAddr::V4(_) => socket2::Socket::new(
                 socket2::Domain::IPV4,
                 socket2::Type::STREAM,
@@ -176,47 +206,26 @@ impl BgpConnection for BgpConnectionTcp {
             )?,
         };
 
+        // Apply MD5 authentication before connecting
         #[cfg(target_os = "linux")]
-        if let Some(key) = md5_key {
+        if let Some(key) = &_md5_key {
             let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
             let len = key.len();
             keyval[..len].copy_from_slice(key.as_bytes());
             if let Err(e) =
-                set_md5_sig_fd(s.as_raw_fd(), len as u16, keyval, self.peer)
+                set_md5_sig_fd(s.as_raw_fd(), len as u16, keyval, peer)
             {
-                connection_log!(self,
-                    error,
-                    "failed to set md5 key: {e}";
-                    "connection" => format!("{:?}", lock!(self.conn)),
-                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
-                    "error" => format!("{e}")
-                );
                 return Err(e);
             }
         }
 
         #[cfg(target_os = "illumos")]
-        if let Some(key) = md5_key {
-            let sources = match source_address_select(self.peer.ip()) {
+        if let Some(key) = &_md5_key {
+            let sources = match source_address_select(peer.ip()) {
                 Ok(s) => s,
-                Err(e) => {
-                    connection_log!(self,
-                        error,
-                        "error selecting source address: {e}";
-                        "connection" => format!("{:?}", lock!(self.conn)),
-                        "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
-                        "error" => format!("{e}")
-                    );
-                    return Err(Error::InvalidAddress(e.to_string()));
-                }
+                Err(e) => return Err(Error::InvalidAddress(e.to_string())),
             };
             if sources.is_empty() {
-                connection_log!(self,
-                    error,
-                    "no source address found";
-                    "connection" => format!("{:?}", lock!(self.conn)),
-                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
-                );
                 return Err(Error::InvalidAddress(String::from(
                     "no source address",
                 )));
@@ -225,226 +234,97 @@ impl BgpConnection for BgpConnectionTcp {
                 .iter()
                 .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
                 .collect();
-            if let Err(e) = self.set_md5_sig_fd(
-                s.as_raw_fd(),
-                key.as_str(),
-                local,
-                self.peer,
-            ) {
-                connection_log!(self,
-                    error,
-                    "failed to set md5 key: {e}";
-                    "connection" => format!("{:?}", lock!(self.conn)),
-                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
-                    "error" => format!("{e}")
-                );
+            if let Err(e) = set_md5_sig_fd(s.as_raw_fd(), key, local, peer) {
                 return Err(e);
             }
         }
 
-        #[cfg(test)]
-        if let Some(source) = self.source {
-            let mut src = source;
+        // Bind to source address if specified
+        if let Some(source_addr) = config.bind_addr {
+            let mut src = source_addr;
             // clear source port, we only want to set the source ip
             src.set_port(0);
             let ba: socket2::SockAddr = src.into();
-            match s.bind(&ba) {
-                Ok(()) => connection_log!(self,
-                    debug,
-                    "successful bind to source: {src}";
-                    "connection" => format!("{:?}", lock!(self.conn)),
-                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
-                ),
-
-                Err(e) => connection_log!(self,
-                    error,
-                    "failed to bind to {src}: {e}";
-                    "connection" => format!("{:?}", lock!(self.conn)),
-                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
-                    "error" => format!("{e}")
-                ),
-            }
+            s.bind(&ba)?;
         }
 
-        let sa: socket2::SockAddr = self.peer.into();
-        match s.connect_timeout(&sa, timeout) {
-            Ok(()) => {
-                let new_conn: TcpStream = s.into();
-                lock!(self.conn).replace(new_conn.try_clone()?);
-                if let Some(ttl) = min_ttl {
-                    self.set_min_ttl(ttl)?;
-                }
-                Self::recv(
-                    self.peer,
-                    event_tx.clone(),
-                    new_conn,
-                    timeout,
-                    self.dropped.clone(),
-                    self.log.clone(),
-                    &self.creator,
-                )?;
-                event_tx.send(FsmEvent::TcpConnectionConfirmed).map_err(
-                    |e| {
-                        Error::InternalCommunication(format!(
-                            "fsm-send: tcp connection confirmed: {e}"
-                        ))
-                    },
-                )?;
-                Ok(())
-            }
-            Err(e) => {
-                connection_log!(self,
-                    error,
-                    "connect error: {e}";
-                    "connection" => format!("{:?}", lock!(self.conn)),
-                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
-                    "error" => format!("{e}")
-                );
-                Err(Error::Io(e))
-            }
+        // Establish the connection
+        let sa: socket2::SockAddr = peer.into();
+        let new_conn: TcpStream = match s.connect_timeout(&sa, timeout) {
+            Ok(()) => s.into(),
+            Err(e) => return Err(Error::Io(e)),
+        };
+
+        // Apply TTL if specified
+        if let Some(ttl) = min_ttl {
+            apply_min_ttl(&new_conn, ttl, peer)?;
         }
+
+        // Determine the actual source address
+        let actual_source = new_conn.local_addr()?;
+
+        // Create the connection object with the established stream
+        BgpConnectionTcp::with_conn(
+            actual_source,
+            peer,
+            new_conn,
+            timeout,
+            event_tx,
+            log,
+            ConnectionCreator::Connector,
+            config,
+        )
     }
+}
+
+#[derive(Clone)]
+pub struct BgpConnectionTcp {
+    id: ConnectionId,
+    peer: SocketAddr,
+    source: SocketAddr,
+    conn: Arc<Mutex<TcpStream>>, //TODO split into tx/rx?
+    #[cfg(target_os = "illumos")]
+    sas: Arc<Mutex<Option<Md5Sas>>>,
+    #[cfg(target_os = "illumos")]
+    sa_keepalive_running: Arc<AtomicBool>,
+    dropped: Arc<AtomicBool>,
+    log: Logger,
+    // creator of this connection, i.e. BgpListener or BgpConnector
+    creator: ConnectionCreator,
+    // Connection-level timers for keepalive, hold, and delay open
+    connection_clock: ConnectionClock,
+}
+
+impl BgpConnection for BgpConnectionTcp {
+    type Connector = BgpConnectorTcp;
 
     fn send(&self, msg: Message) -> Result<(), Error> {
         let mut guard = lock!(self.conn);
-        match *guard {
-            Some(ref mut stream) => {
-                Self::send_msg(stream, &self.log, &self.creator, msg)
-            }
-            None => Err(Error::NotConnected),
-        }
+        Self::send_msg(&mut guard, &self.log, self.creator.as_str(), msg)
     }
 
     fn peer(&self) -> SocketAddr {
         self.peer
     }
 
-    fn local(&self) -> Option<SocketAddr> {
-        let result = match lock!(self.conn).as_ref() {
-            Some(conn) => conn.local_addr(),
-            None => return None,
-        };
-
-        let sockaddr = match result {
-            Ok(sa) => sa,
-            Err(e) => {
-                connection_log!(self,
-                    warn,
-                    "failed to get local address: {e}";
-                    "connection" => format!("{:?}", lock!(self.conn)),
-                    "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
-                    "error" => format!("{e}")
-                );
-                return None;
-            }
-        };
-        Some(sockaddr)
+    fn local(&self) -> SocketAddr {
+        self.source
     }
 
-    #[allow(unused_variables)]
-    fn set_min_ttl(&self, ttl: u8) -> Result<(), Error> {
-        let conn = lock!(self.conn);
-        match conn.as_ref() {
-            None => Err(Error::NotConnected),
-            Some(conn) => {
-                conn.set_ttl(ttl.into())?;
-                let fd = conn.as_raw_fd();
-                let min_ttl = ttl as u32;
-                #[cfg(any(target_os = "linux", target_os = "illumos"))]
-                unsafe {
-                    if self.peer().is_ipv4()
-                        && libc::setsockopt(
-                            fd,
-                            IPPROTO_IP,
-                            IP_MINTTL,
-                            &min_ttl as *const u32 as *const c_void,
-                            std::mem::size_of::<u32>() as u32,
-                        ) != 0
-                    {
-                        return Err(Error::Io(std::io::Error::last_os_error()));
-                    }
-                    if self.peer().is_ipv6()
-                        && libc::setsockopt(
-                            fd,
-                            IPPROTO_IPV6,
-                            IP_MINTTL,
-                            &min_ttl as *const u32 as *const c_void,
-                            std::mem::size_of::<u32>() as u32,
-                        ) != 0
-                    {
-                        return Err(Error::Io(std::io::Error::last_os_error()));
-                    }
-                }
-                Ok(())
-            }
-        }
+    fn conn(&self) -> (SocketAddr, SocketAddr) {
+        (self.local(), self.peer())
     }
 
-    #[cfg(target_os = "linux")]
-    fn set_md5_sig(
-        &self,
-        keylen: u16,
-        key: [u8; MAX_MD5SIG_KEYLEN],
-    ) -> Result<(), Error> {
-        connection_log!(self,
-            info,
-            "setting md5 auth for {}", self.peer;
-            "connection" => format!("{:?}", lock!(self.conn)),
-            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
-        );
-        let conn = lock!(self.conn);
-        let fd = match conn.as_ref() {
-            None => return Err(Error::NotConnected),
-            Some(c) => c.as_raw_fd(),
-        };
-
-        set_md5_sig_fd(fd, keylen, key, self.peer)
+    fn creator(&self) -> ConnectionCreator {
+        self.creator
     }
 
-    #[cfg(target_os = "illumos")]
-    fn set_md5_sig(
-        &self,
-        keylen: u16,
-        key: [u8; MAX_MD5SIG_KEYLEN],
-    ) -> Result<(), Error> {
-        connection_log!(self,
-            info,
-            "setting md5 auth for {}", self.peer;
-            "connection" => format!("{:?}", lock!(self.conn)),
-            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
-        );
-        let conn = lock!(self.conn);
-        match conn.as_ref() {
-            None => return Err(Error::NotConnected),
-            Some(c) => {
-                let local = c.local_addr()?;
-                let peer = c.peer_addr()?;
-                let s = String::from_utf8_lossy(&key[..keylen as usize])
-                    .to_string();
-                if let Err(e) =
-                    self.set_md5_sig_fd(c.as_raw_fd(), &s, vec![local], peer)
-                {
-                    connection_log!(self,
-                        error,
-                        "failed to set md5 key: {e}";
-                        "connection" => format!("{:?}", lock!(self.conn)),
-                        "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
-                        "error" => format!("{e}")
-                    );
-                    return Err(e);
-                }
-            }
-        };
-        Ok(())
+    fn id(&self) -> &ConnectionId {
+        &self.id
     }
 
-    #[cfg(target_os = "macos")]
-    fn set_md5_sig(
-        &self,
-        _keylen: u16,
-        _key: [u8; MAX_MD5SIG_KEYLEN],
-    ) -> Result<(), Error> {
-        Err(Error::FeatureNotSupported)
+    fn clock(&self) -> &ConnectionClock {
+        &self.connection_clock
     }
 }
 
@@ -458,40 +338,59 @@ impl Drop for BgpConnectionTcp {
 }
 
 impl BgpConnectionTcp {
+    /// Create a new BgpConnectionTcp with an established TcpStream.
+    /// This is a private constructor used by BgpConnectorTcp and BgpListenerTcp.
+    #[allow(clippy::too_many_arguments)]
     fn with_conn(
-        _source: SocketAddr,
+        source: SocketAddr,
         peer: SocketAddr,
         conn: TcpStream,
+        timeout: Duration,
         event_tx: Sender<FsmEvent<Self>>,
         log: Logger,
-        creator: &str,
+        creator: ConnectionCreator,
+        config: &SessionInfo,
     ) -> Result<Self, Error> {
+        let id = ConnectionId::new(source, peer);
+
         let dropped = Arc::new(AtomicBool::new(false));
-        //TODO timeout as param
         Self::recv(
             peer,
-            event_tx,
+            event_tx.clone(),
             conn.try_clone()?,
-            Duration::from_millis(100),
+            timeout,
             dropped.clone(),
             log.clone(),
             creator,
+            id.clone(),
         )?;
+        let connection_clock = ConnectionClock::new(
+            config.resolution,
+            config.keepalive_time,
+            config.hold_time,
+            config.delay_open_time,
+            id.clone(),
+            event_tx.clone(),
+            log.clone(),
+        );
+
         Ok(Self {
+            id,
             peer,
-            #[cfg(test)]
-            source: Some(_source),
-            conn: Arc::new(Mutex::new(Some(conn))),
+            source,
+            conn: Arc::new(Mutex::new(conn)),
             log,
             dropped,
             #[cfg(target_os = "illumos")]
             sa_keepalive_running: Arc::new(AtomicBool::new(false)),
             #[cfg(target_os = "illumos")]
             sas: Arc::new(Mutex::new(None)),
-            creator: String::from(creator),
+            creator,
+            connection_clock,
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn recv(
         peer: SocketAddr,
         event_tx: Sender<FsmEvent<Self>>,
@@ -499,7 +398,8 @@ impl BgpConnectionTcp {
         timeout: Duration,
         dropped: Arc<AtomicBool>,
         log: Logger,
-        creator: &str,
+        creator: ConnectionCreator,
+        conn_id: ConnectionId,
     ) -> Result<(), Error> {
         if !timeout.is_zero() {
             conn.set_read_timeout(Some(timeout))?;
@@ -508,35 +408,43 @@ impl BgpConnectionTcp {
         connection_log_lite!(log,
             info,
             "spawning recv loop for {peer}";
-            "creator" => creator,
+            "creator" => creator.as_str(),
             "connection" => format!("{conn:?}"),
-            "peer" => format!("{peer}")
+            "connection_peer" => format!("{peer}")
         );
-
-        let creator = String::from(creator);
 
         spawn(move || loop {
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            match Self::recv_msg(&mut conn, dropped.clone(), &log, &creator) {
+            match Self::recv_msg(
+                &mut conn,
+                dropped.clone(),
+                &log,
+                creator.as_str(),
+            ) {
                 Ok(msg) => {
                     connection_log_lite!(log,
                         trace,
                         "recv {} msg from {peer}", msg.title();
-                        "creator" => &creator,
+                        "creator" => creator.as_str(),
                         "connection" => format!("{conn:?}"),
-                        "peer" => format!("{peer}"),
+                        "connection_peer" => format!("{peer}"),
                         "message" => msg.title(),
                         "message_contents" => format!("{msg}")
                     );
-                    if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
+                    if let Err(e) = event_tx.send(FsmEvent::Connection(
+                        ConnectionEvent::Message {
+                            msg,
+                            conn_id: conn_id.clone(),
+                        },
+                    )) {
                         connection_log_lite!(log,
                             warn,
                             "error sending event to {peer}: {e}";
-                            "creator" => &creator,
+                            "creator" => creator.as_str(),
                             "connection" => format!("{conn:?}"),
-                            "peer" => format!("{peer}"),
+                            "connection_peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );
                         break;
@@ -682,18 +590,18 @@ impl BgpConnectionTcp {
 
     fn send_msg(
         stream: &mut TcpStream,
-        log: &Logger,
-        creator: &str,
+        _log: &Logger,
+        _creator: &str,
         msg: Message,
     ) -> Result<(), Error> {
-        connection_log_lite!(log,
-            trace,
-            "sending {} msg", msg.title();
-            "creator" => creator,
-            "connection" => format!("{stream:?}"),
-            "message" => msg.title(),
-            "message_contents" => format!("{msg}")
-        );
+        // connection_log_lite!(log,
+        //     trace,
+        //     "sending {} msg", msg.title();
+        //     "creator" => creator,
+        //     "connection" => format!("{stream:?}"),
+        //     "message" => msg.title(),
+        //     "message_contents" => format!("{msg}")
+        // );
         let msg_buf = msg.to_wire()?;
         let header = Header {
             length: (msg_buf.len() + Header::WIRE_SIZE).try_into().map_err(
@@ -707,13 +615,13 @@ impl BgpConnectionTcp {
         };
         let mut buf = header.to_wire().to_vec();
         buf.extend_from_slice(&msg_buf);
-        connection_log_lite!(log,
-            trace,
-            "sending {} msg with header", msg.title();
-            "connection" => format!("{stream:?}"),
-            "message" => msg.title(),
-            "message_contents" => format!("{buf:x?}")
-        );
+        // connection_log_lite!(log,
+        //     trace,
+        //     "sending {} msg with header", msg.title();
+        //     "connection" => format!("{stream:?}"),
+        //     "message" => msg.title(),
+        //     "message_contents" => format!("{buf:x?}")
+        // );
         stream.write_all(&buf)?;
         Ok(())
     }
@@ -1001,4 +909,87 @@ fn sa_set(src: SocketAddr, dst: SocketAddr) -> [(SocketAddr, SocketAddr); 4] {
         (any_port(dst), src),
         (dst, any_port(src)),
     ]
+}
+
+/// Apply min TTL setting to a TCP connection
+#[allow(unused_variables)]
+fn apply_min_ttl(
+    conn: &TcpStream,
+    ttl: u8,
+    peer: SocketAddr,
+) -> Result<(), Error> {
+    conn.set_ttl(ttl.into())?;
+    #[cfg(any(target_os = "linux", target_os = "illumos"))]
+    {
+        let fd = conn.as_raw_fd();
+        let min_ttl = ttl as u32;
+        unsafe {
+            if peer.is_ipv4()
+                && libc::setsockopt(
+                    fd,
+                    IPPROTO_IP,
+                    IP_MINTTL,
+                    &min_ttl as *const u32 as *const c_void,
+                    std::mem::size_of::<u32>() as u32,
+                ) != 0
+            {
+                return Err(Error::Io(std::io::Error::last_os_error()));
+            }
+            if peer.is_ipv6()
+                && libc::setsockopt(
+                    fd,
+                    IPPROTO_IPV6,
+                    IP_MINTTL,
+                    &min_ttl as *const u32 as *const c_void,
+                    std::mem::size_of::<u32>() as u32,
+                ) != 0
+            {
+                return Err(Error::Io(std::io::Error::last_os_error()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Apply MD5 signature to socket for Illumos
+#[cfg(target_os = "illumos")]
+fn set_md5_sig_fd(
+    fd: i32,
+    key: &str,
+    locals: Vec<SocketAddr>,
+    peer: SocketAddr,
+) -> Result<(), Error> {
+    // Set MD5 security associations for Illumos
+    for local in locals.iter() {
+        for (a, b) in sa_set(*local, peer) {
+            let valid_time = std::time::Instant::now().add(PFKEY_DURATION);
+            if let Err(e) = libnet::pf_key::tcp_md5_key_add(
+                a.into(),
+                b.into(),
+                key,
+                valid_time,
+            ) {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("failed to add pf_key {a} -> {b}: {e}"),
+                )));
+            }
+        }
+    }
+
+    let yes: c_int = 1;
+    unsafe {
+        if libc::setsockopt(
+            fd,
+            IPPROTO_TCP,
+            TCP_MD5SIG,
+            &yes as *const c_int as *const c_void,
+            std::mem::size_of::<c_int>() as u32,
+        ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
+
+    Ok(())
 }

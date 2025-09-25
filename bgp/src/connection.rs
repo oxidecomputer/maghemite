@@ -2,15 +2,20 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::clock::ConnectionClock;
 use crate::error::Error;
 use crate::messages::Message;
-use crate::session::FsmEvent;
+use crate::session::{FsmEvent, SessionEndpoint, SessionInfo};
+use crossbeam_channel::Sender;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use slog::Logger;
+use std::cmp::{Ord, Ordering, PartialOrd};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use uuid::Uuid;
 
 #[cfg(target_os = "linux")]
 pub const MAX_MD5SIG_KEYLEN: usize = libc::TCP_MD5SIG_MAXKEYLEN;
@@ -21,7 +26,89 @@ pub const MAX_MD5SIG_KEYLEN: usize = 80;
 #[cfg(target_os = "macos")]
 pub const MAX_MD5SIG_KEYLEN: usize = 80;
 
-/// Implementors of this trait listen to and accept BGP connections.
+/// Creator of a BGP connection
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+)]
+pub enum ConnectionCreator {
+    /// Connection was created by the dispatcher (listener)
+    Dispatcher,
+    /// Connection was created by the connector
+    Connector,
+}
+
+impl ConnectionCreator {
+    /// Get the string representation of the creator
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConnectionCreator::Dispatcher => "dispatcher",
+            ConnectionCreator::Connector => "connector",
+        }
+    }
+}
+
+impl std::fmt::Display for ConnectionCreator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Unique identifier for a BGP connection instance
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+)]
+pub struct ConnectionId {
+    /// Unique identifier for this connection instance
+    uuid: Uuid,
+    /// Local socket address for this connection
+    local: SocketAddr,
+    /// Remote socket address for this connection
+    remote: SocketAddr,
+}
+
+impl ConnectionId {
+    /// Create a new ConnectionId
+    pub fn new(local: SocketAddr, remote: SocketAddr) -> Self {
+        Self {
+            uuid: Uuid::new_v4(),
+            local,
+            remote,
+        }
+    }
+
+    /// Get a short, human-readable identifier for this connection
+    pub fn short(&self) -> String {
+        self.uuid.to_string()[0..8].to_string()
+    }
+
+    /// Get the local socket address
+    pub fn local(&self) -> SocketAddr {
+        self.local
+    }
+
+    /// Get the remote socket address
+    pub fn remote(&self) -> SocketAddr {
+        self.remote
+    }
+}
+
+impl PartialOrd for ConnectionId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ConnectionId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Order by UUID first (most unique), then by local/remote addresses
+        self.uuid
+            .cmp(&other.uuid)
+            .then_with(|| self.local.cmp(&other.local))
+            .then_with(|| self.remote.cmp(&other.remote))
+    }
+}
+
+/// Implementors of this trait listen to and accept inbound BGP connections.
 pub trait BgpListener<Cnx: BgpConnection> {
     /// Bind to an address and listen for connections.
     fn bind<A: ToSocketAddrs>(addr: A) -> Result<Self, Error>
@@ -30,60 +117,79 @@ pub trait BgpListener<Cnx: BgpConnection> {
 
     /// Accept a connection. If no connections are currently available this
     /// function will block. This function may be called multiple times,
-    /// returning a new connection each time.
+    /// returning a new connection each time. Policy application is handled
+    /// by the Dispatcher after the addr_to_session lookup.
     fn accept(
         &self,
         log: Logger,
-        creator: &str,
-        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
+        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
         timeout: Duration,
     ) -> Result<Cnx, Error>;
+
+    /// Apply policy to an established connection. This is called by the
+    /// Dispatcher after accept() returns and session lookup is completed.
+    fn apply_policy(
+        conn: &Cnx,
+        min_ttl: Option<u8>,
+        md5_key: Option<String>,
+    ) -> Result<(), Error>;
 }
 
-/// Implementors of this trait connect to BGP peers and sending/receiving
-/// messages. Messages are sent through the `send` method. Received messages
-/// are propagated to consumers via the channel sender `event_tx` as FsmEvent
-/// messages.
-pub trait BgpConnection: Send + Clone {
-    /// Create a new BGP connection to the specified peer. If a source address
-    /// is provided, that address will be used. Otherwise, the underlying
-    /// platform is free to choose a source address.
-    fn new(
-        source: Option<SocketAddr>,
-        peer: SocketAddr,
-        log: Logger,
-        creator: &str,
-    ) -> Self
-    where
-        Self: Sized;
-
-    /// Try to connect to a peer. On success messages from the peer a
-    /// propagated through `event_tx`.
+/// Implementors of this trait initiate outbound BGP connections to peers.
+/// BgpConnector is responsible for completely establishing the connection and
+/// applying all policy (TTL, MD5) before returning a valid BgpConnection.
+pub trait BgpConnector<Cnx: BgpConnection> {
+    /// Establish an outbound connection to a peer with policy applied.
+    /// On success, returns a fully established BgpConnection. The connection
+    /// will have policy (ttl, md5) applied and the receive loop started.
+    #[allow(clippy::too_many_arguments)]
     fn connect(
-        &self,
-        event_tx: Sender<FsmEvent<Self>>,
+        peer: SocketAddr,
         timeout: Duration,
         min_ttl: Option<u8>,
         md5_key: Option<String>,
-    ) -> Result<(), Error>
+        log: Logger,
+        event_tx: Sender<FsmEvent<Cnx>>,
+        config: &SessionInfo,
+    ) -> Result<Cnx, Error>
     where
         Self: Sized;
+}
 
-    /// Send a message over this connection. If the connection is not
-    /// established a `Error::NotConnected` will be returned.
+/// Implementors of this trait represent a valid, established Connection to a
+/// BGP peer. They are generalized across transport mechanisms (currently TCP
+/// or Channels), but could later allow for additional transports to be
+/// supported (e.g. QUIC). BGP Messages are sent through the `send` method.
+/// Received BGP messages are propagated to consumers via the channel sender
+/// `event_tx` as an FsmEvent::Message.
+///
+/// A BgpConnection always represents a valid, established connection.
+/// Connection establishment (including policy application) is handled by the
+/// BgpConnector and BgpListener traits for outbound and inbound connections
+/// respectively.
+pub trait BgpConnection: Send + Clone {
+    /// The type of connector used to establish outbound connections for this
+    /// connection type.
+    type Connector: BgpConnector<Self>;
+
+    /// Send a message over this established connection.
     fn send(&self, msg: Message) -> Result<(), Error>;
 
     /// Return the socket address of the peer for this connection.
     fn peer(&self) -> SocketAddr;
 
     /// Return the local socket address for this connection.
-    fn local(&self) -> Option<SocketAddr>;
+    fn local(&self) -> SocketAddr;
 
-    fn set_min_ttl(&self, ttl: u8) -> Result<(), Error>;
+    /// Return the local/remote sockaddr pair for this connection.
+    fn conn(&self) -> (SocketAddr, SocketAddr);
 
-    fn set_md5_sig(
-        &self,
-        keylen: u16,
-        key: [u8; MAX_MD5SIG_KEYLEN],
-    ) -> Result<(), Error>;
+    /// Return the ConnectionCreator indicating what component created this connection.
+    fn creator(&self) -> ConnectionCreator;
+
+    /// Return the unique identifier for this connection.
+    fn id(&self) -> &ConnectionId;
+
+    /// Return the connection-level clock for this connection.
+    fn clock(&self) -> &ConnectionClock;
 }

@@ -13,25 +13,22 @@ use bgp::{
     config::RouterConfig,
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
-    messages::{Afi, Message, RouteRefreshMessage, Safi},
     router::Router,
-    session::{FsmEvent, SessionInfo},
+    session::{AdminEvent, FsmEvent, SessionEndpoint, SessionInfo},
     BGP_PORT,
 };
+use crossbeam_channel::{unbounded, Sender};
 use dropshot::{
     endpoint, ApiDescription, ClientErrorStatusCode, HttpError,
     HttpResponseDeleted, HttpResponseOk, HttpResponseUpdatedNoContent, Query,
     RequestContext, TypedBody,
 };
-use mg_common::lock;
+use mg_common::{lock, read_lock};
 use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::sync::{
-    mpsc::{channel, Sender},
-    Arc, Mutex,
-};
+use std::sync::{Arc, Mutex};
 
 const UNIT_BGP: &str = "bgp";
 
@@ -42,13 +39,13 @@ const DEFAULT_BGP_LISTEN: SocketAddr =
 pub struct BgpContext {
     pub(crate) router: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
     addr_to_session:
-        Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionTcp>>>>>,
+        Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionTcp>>>>,
 }
 
 impl BgpContext {
     pub fn new(
         addr_to_session: Arc<
-            Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionTcp>>>>,
+            Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionTcp>>>,
         >,
     ) -> Self {
         Self {
@@ -508,34 +505,24 @@ pub async fn get_neighbors(
                 duration_millis: dur as u64,
                 timers: PeerTimers {
                     hold: DynamicTimerInfo {
-                        configured: *s
-                            .clock
-                            .timers
-                            .hold_configured_interval
-                            .lock()
-                            .unwrap(),
-                        negotiated: s
-                            .clock
-                            .timers
-                            .hold_timer
-                            .lock()
-                            .unwrap()
-                            .interval,
+                        configured: *lock!(
+                            read_lock!(s.clock).timers.hold_configured_interval
+                        ),
+                        negotiated: lock!(
+                            read_lock!(s.clock).timers.hold_timer
+                        )
+                        .interval,
                     },
                     keepalive: DynamicTimerInfo {
-                        configured: *s
-                            .clock
-                            .timers
-                            .keepalive_configured_interval
-                            .lock()
-                            .unwrap(),
-                        negotiated: s
-                            .clock
-                            .timers
-                            .keepalive_timer
-                            .lock()
-                            .unwrap()
-                            .interval,
+                        configured: *lock!(
+                            read_lock!(s.clock)
+                                .timers
+                                .keepalive_configured_interval
+                        ),
+                        negotiated: lock!(
+                            read_lock!(s.clock).timers.keepalive_timer
+                        )
+                        .interval,
                     },
                 },
             },
@@ -915,8 +902,10 @@ pub(crate) mod helpers {
             "params" => format!("{rq:#?}")
         );
 
-        let (event_tx, event_rx) = channel();
+        let (event_tx, event_rx) = unbounded();
 
+        // XXX: Do we really want both rq and info?
+        //      SessionInfo and Neighbor types could probably be merged.
         let info = SessionInfo {
             passive_tcp_establishment: rq.passive,
             remote_asn: rq.remote_asn,
@@ -935,6 +924,7 @@ pub(crate) mod helpers {
         let start_session = if ensure {
             match get_router!(&ctx, rq.asn)?.ensure_session(
                 rq.clone().into(),
+                // XXX: replace this when `update-source` is implemented
                 DEFAULT_BGP_LISTEN,
                 event_tx.clone(),
                 event_rx,
@@ -1000,34 +990,31 @@ pub(crate) mod helpers {
             .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
 
         match op {
-            resource::NeighborResetOp::Hard => {
-                session.event_tx.send(FsmEvent::Reset).map_err(|e| {
+            resource::NeighborResetOp::Hard => read_lock!(session.event_tx)
+                .send(FsmEvent::Admin(AdminEvent::Reset))
+                .map_err(|e| {
                     Error::InternalCommunication(format!(
                         "failed to reset bgp session {e}",
                     ))
-                })?
+                })?,
+            resource::NeighborResetOp::SoftInbound => {
+                read_lock!(session.event_tx)
+                    .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh))
+                    .map_err(|e| {
+                        Error::InternalCommunication(format!(
+                            "failed to generate route refresh {e}"
+                        ))
+                    })?
             }
-            resource::NeighborResetOp::SoftInbound => session
-                .event_tx
-                .send(FsmEvent::RouteRefreshNeeded)
-                .map_err(|e| {
-                    Error::InternalCommunication(format!(
-                        "failed to generate route refresh {e}"
-                    ))
-                })?,
-            resource::NeighborResetOp::SoftOutbound => session
-                .event_tx
-                .send(FsmEvent::Message(Message::RouteRefresh(
-                    RouteRefreshMessage {
-                        afi: Afi::Ipv4 as u16,
-                        safi: Safi::NlriUnicast as u8,
-                    },
-                )))
-                .map_err(|e| {
-                    Error::InternalCommunication(format!(
-                        "failed to trigger outbound update {e}"
-                    ))
-                })?,
+            resource::NeighborResetOp::SoftOutbound => {
+                read_lock!(session.event_tx)
+                    .send(FsmEvent::Admin(AdminEvent::ReAdvertise))
+                    .map_err(|e| {
+                        Error::InternalCommunication(format!(
+                            "failed to trigger outbound update {e}"
+                        ))
+                    })?
+            }
         }
 
         Ok(HttpResponseUpdatedNoContent())
@@ -1070,11 +1057,13 @@ pub(crate) mod helpers {
     fn start_bgp_session<Cnx: BgpConnection>(
         event_tx: &Sender<FsmEvent<Cnx>>,
     ) -> Result<(), Error> {
-        event_tx.send(FsmEvent::ManualStart).map_err(|e| {
-            Error::InternalCommunication(format!(
-                "failed to start bgp session {e}",
-            ))
-        })
+        event_tx
+            .send(FsmEvent::Admin(AdminEvent::ManualStart))
+            .map_err(|e| {
+                Error::InternalCommunication(format!(
+                    "failed to start bgp session {e}",
+                ))
+            })
     }
 
     pub async fn load_policy(
@@ -1116,16 +1105,20 @@ pub(crate) mod helpers {
                     }
                     Ok(previous) => match &policy {
                         PolicySource::Checker(_) => {
-                            rtr.send_event(FsmEvent::CheckerChanged(previous))
-                                .map_err(|e| {
-                                    HttpError::for_internal_error(format!(
-                                        "send event: {e}"
-                                    ))
-                                })?;
+                            rtr.send_admin_event(AdminEvent::CheckerChanged(
+                                previous,
+                            ))
+                            .map_err(|e| {
+                                HttpError::for_internal_error(format!(
+                                    "send event: {e}"
+                                ))
+                            })?;
                         }
                         PolicySource::Shaper(_) => {
-                            rtr.send_event(FsmEvent::ShaperChanged(previous))
-                                .map_err(|e| {
+                            rtr.send_admin_event(AdminEvent::ShaperChanged(
+                                previous,
+                            ))
+                            .map_err(|e| {
                                 HttpError::for_internal_error(format!(
                                     "send event: {e}"
                                 ))
@@ -1163,12 +1156,14 @@ pub(crate) mod helpers {
                         ));
                     }
                     Ok(previous) => {
-                        rtr.send_event(FsmEvent::ShaperChanged(Some(previous)))
-                            .map_err(|e| {
-                                HttpError::for_internal_error(format!(
-                                    "send event: {e}"
-                                ))
-                            })?;
+                        rtr.send_admin_event(AdminEvent::ShaperChanged(Some(
+                            previous,
+                        )))
+                        .map_err(|e| {
+                            HttpError::for_internal_error(format!(
+                                "send event: {e}"
+                            ))
+                        })?;
                     }
                 }
             }

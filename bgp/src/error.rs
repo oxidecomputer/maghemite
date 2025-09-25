@@ -49,7 +49,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
 
     #[error("channel recv: {0}")]
-    ChannelRecv(#[from] std::sync::mpsc::RecvError),
+    ChannelRecv(#[from] crossbeam_channel::RecvError),
 
     #[error("timeout")]
     Timeout,
@@ -185,6 +185,9 @@ pub enum Error {
     #[error("Policy error: {0}")]
     PolicyError(#[from] crate::policy::Error),
 
+    #[error("Unsupported operation: {0}")]
+    UnsupportedOperation(String),
+
     #[error("Message conversion: {0}")]
     MessageConversion(#[from] crate::messages::MessageConvertError),
 
@@ -202,6 +205,24 @@ pub enum Error {
 
     #[error("Tcpkey database error: {0}")]
     TcpKey(String),
+
+    #[error("FsmEvent::ManualStop received")]
+    FsmManualStop,
+
+    #[error("FsmEvent::Reset received")]
+    FsmReset,
+
+    #[error("FsmEvent::HoldTimerExpires received")]
+    FsmHoldTimerExpires,
+
+    #[error("Unexpected FsmEvent::Message {0} received")]
+    FsmUnexpectedMessage(String),
+
+    #[error("FsmEvent {0} received, but not allowed in this context")]
+    FsmEventNotAllowed(String),
+
+    #[error("FsmEvent {0} received, but not expected")]
+    FsmUnexpectedEvent(String),
 }
 
 #[derive(Debug)]
