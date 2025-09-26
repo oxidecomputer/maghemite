@@ -6,13 +6,15 @@
 //! synchronizing information in a routing information base onto an underlying
 //! routing platform. The only platform currently supported is Dendrite.
 
+#![allow(clippy::result_large_err)]
+
 use crate::dendrite::{
-    get_routes_for_prefix, new_dpd_client, update_dendrite, RouteHash,
+    RouteHash, get_routes_for_prefix, new_dpd_client, update_dendrite,
 };
 use crate::error::Error;
 use ddm::{
-    add_tunnel_routes, new_ddm_client, remove_tunnel_routes,
-    BOUNDARY_SERVICES_VNI,
+    BOUNDARY_SERVICES_VNI, add_tunnel_routes, new_ddm_client,
+    remove_tunnel_routes,
 };
 use ddm_admin_client::types::TunnelOrigin;
 use dendrite::{ensure_tep_addr, link_is_up};
@@ -21,12 +23,12 @@ use platform::{
     Ddm, Dpd, ProductionDdm, ProductionDpd, ProductionSwitchZone, SwitchZone,
 };
 use rdb::db::Rib;
-use rdb::{Db, Prefix, PrefixChangeNotification, DEFAULT_ROUTE_PRIORITY};
-use slog::{error, info, warn, Logger};
+use rdb::{DEFAULT_ROUTE_PRIORITY, Db, Prefix, PrefixChangeNotification};
+use slog::{Logger, error, info, warn};
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
-use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::sync::Arc;
+use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::thread::sleep;
 use std::time::Duration;
 

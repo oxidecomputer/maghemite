@@ -8,13 +8,13 @@ use bgp::params::*;
 use bgp::router::LoadPolicyError;
 use bgp::session::FsmStateKind;
 use bgp::{
+    BGP_PORT,
     config::RouterConfig,
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
     messages::{Afi, Message, RouteRefreshMessage, Safi},
     router::Router,
     session::{FsmEvent, SessionInfo},
-    BGP_PORT,
 };
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseDeleted, HttpResponseOk,
@@ -32,8 +32,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::{
-    mpsc::{channel, Sender},
     Arc, Mutex,
+    mpsc::{Sender, channel},
 };
 
 const DEFAULT_BGP_LISTEN: SocketAddr =
@@ -575,11 +575,9 @@ async fn do_bgp_apply(
             if let Some(r) = routers.get(&nbr.asn) {
                 remove = lock!(r.sessions).is_empty();
             }
-            if remove {
-                if let Some(r) = routers.remove(&nbr.asn) {
-                    r.shutdown()
-                };
-            }
+            if remove && let Some(r) = routers.remove(&nbr.asn) {
+                r.shutdown()
+            };
         }
     }
 

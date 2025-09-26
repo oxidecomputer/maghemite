@@ -6,11 +6,11 @@
 
 use std::time::Duration;
 
-use ddm_admin_client::types::{Error as DdmError, *};
 use ddm_admin_client::Client as DdmClient;
-use dpd_client::types::{Error as DpdError, *};
+use ddm_admin_client::types::{Error as DdmError, *};
 use dpd_client::Client as DpdClient;
 use dpd_client::ClientInfo;
+use dpd_client::types::{Error as DpdError, *};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 
 /// This trait wraps the dpd methods mg-lower uses.
@@ -604,11 +604,9 @@ pub(crate) mod test {
             ddm_admin_client::ResponseValue<Vec<TunnelOrigin>>,
             progenitor_client::Error<DdmError>,
         > {
-            Ok(ddm_response_ok!(self
-                .tunnel_originated
-                .lock()
-                .unwrap()
-                .clone()))
+            Ok(ddm_response_ok!(
+                self.tunnel_originated.lock().unwrap().clone()
+            ))
         }
 
         async fn get_originated(

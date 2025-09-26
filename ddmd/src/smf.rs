@@ -2,10 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm::admin::{HandlerContext, DDM_STATS_PORT};
+use ddm::admin::{DDM_STATS_PORT, HandlerContext};
 use mg_common::lock;
 use mg_common::smf::get_stats_server_props;
-use slog::{error, info, warn, Logger};
+use slog::{Logger, error, info, warn};
 use smf::PropertyGroup;
 use std::sync::{Arc, Mutex};
 

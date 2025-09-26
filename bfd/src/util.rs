@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{packet, PeerInfo};
+use crate::{PeerInfo, packet};
 use mg_common::lock;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

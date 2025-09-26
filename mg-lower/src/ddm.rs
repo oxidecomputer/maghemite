@@ -2,10 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client;
+use ddm_admin_client::types::TunnelOrigin;
 use oxnet::Ipv6Net;
-use slog::{error, info, Logger};
+use slog::{Logger, error, info};
 use std::{net::Ipv6Addr, sync::Arc};
 
 use crate::platform::Ddm;

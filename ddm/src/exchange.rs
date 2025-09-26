@@ -15,7 +15,7 @@
 //! of a ddm router is defined in the state machine implementation in sm.rs.
 //!
 
-use crate::db::{effective_route_set, Route};
+use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
@@ -31,7 +31,7 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
-use dropshot::{endpoint, ApiDescriptionRegisterError};
+use dropshot::{ApiDescriptionRegisterError, endpoint};
 use http_body_util::BodyExt;
 use hyper::body::Bytes;
 use hyper_util::client::legacy::Client;
@@ -42,8 +42,8 @@ use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::Mutex;

@@ -4,7 +4,7 @@
 
 use crate::admin::HandlerContext;
 use anyhow::Result;
-use bfd::{bidi, packet, Daemon};
+use bfd::{Daemon, bidi, packet};
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -16,18 +16,18 @@ use mg_api::DeleteBfdPeerPathParams;
 use mg_common::lock;
 use rdb::BfdPeerConfig;
 use rdb::SessionMode;
-use slog::{debug, error, warn, Logger};
+use slog::{Logger, debug, error, warn};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::UdpSocket;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
-use std::thread::spawn;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
+use std::thread::spawn;
 use std::time::Duration;
 
 /// Context for Dropshot requests.
@@ -204,26 +204,28 @@ fn egress(
     dst_port: u16,
     log: Logger,
 ) {
-    spawn(move || loop {
-        let (addr, pkt) = match rx.recv() {
-            Ok(result) => result,
-            Err(e) => {
-                warn!(log, "udp egress channel closed: {e}");
-                break;
-            }
-        };
+    spawn(move || {
+        loop {
+            let (addr, pkt) = match rx.recv() {
+                Ok(result) => result,
+                Err(e) => {
+                    warn!(log, "udp egress channel closed: {e}");
+                    break;
+                }
+            };
 
-        let sk = match UdpSocket::bind(SocketAddr::new(local, src_port)) {
-            Err(e) => {
-                error!(log, "failed to create tx socket: {e}");
-                continue;
-            }
-            Ok(sk) => sk,
-        };
+            let sk = match UdpSocket::bind(SocketAddr::new(local, src_port)) {
+                Err(e) => {
+                    error!(log, "failed to create tx socket: {e}");
+                    continue;
+                }
+                Ok(sk) => sk,
+            };
 
-        let sa = SocketAddr::new(addr, dst_port);
-        if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
-            error!(log, "udp send: {e}");
+            let sa = SocketAddr::new(addr, dst_port);
+            if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
+                error!(log, "udp send: {e}");
+            }
         }
     });
 }

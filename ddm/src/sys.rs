@@ -5,9 +5,9 @@
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
 use ddm_types::db::TunnelRoute;
-use dpd_client::types;
 use dpd_client::Client;
 use dpd_client::ClientState;
+use dpd_client::types;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

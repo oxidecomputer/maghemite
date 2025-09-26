@@ -4,7 +4,7 @@ use ddm_admin_client::types::TunnelOrigin;
 use dpd_client::types::{
     Ipv4Route, LinkId, LinkState, PortId, PortMedia, PortPrbsMode, PortSpeed,
 };
-use rdb::{db::Rib, Path, Prefix4};
+use rdb::{Path, Prefix4, db::Rib};
 
 use crate::platform::test::{TestDdm, TestDpd, TestSwitchZone};
 

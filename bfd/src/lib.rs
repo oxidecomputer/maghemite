@@ -6,12 +6,12 @@ use num_enum::TryFromPrimitive;
 use rdb::SessionMode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use slog::{warn, Logger};
+use slog::{Logger, warn};
 use sm::StateMachine;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 pub mod bidi;
@@ -284,18 +284,20 @@ mod test {
             ep: bidi::Endpoint<(IpAddr, packet::Control)>,
             egress: HashMap<IpAddr, Sender<(IpAddr, packet::Control)>>,
         ) {
-            spawn(move || loop {
-                match ep.rx.recv() {
-                    Ok((addr, msg)) => match egress.get(&addr) {
-                        Some(tx) => {
-                            tx.send((addr, msg)).unwrap();
+            spawn(move || {
+                loop {
+                    match ep.rx.recv() {
+                        Ok((addr, msg)) => match egress.get(&addr) {
+                            Some(tx) => {
+                                tx.send((addr, msg)).unwrap();
+                            }
+                            None => {
+                                eprintln!("no egress for {}", addr);
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("recv: {}", e);
                         }
-                        None => {
-                            eprintln!("no egress for {}", addr);
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!("recv: {}", e);
                     }
                 }
             });

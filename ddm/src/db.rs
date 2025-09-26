@@ -8,7 +8,7 @@ use mg_common::net::TunnelOrigin;
 use oxnet::{IpNet, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use slog::{error, Logger};
+use slog::{Logger, error};
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::{Arc, Mutex};

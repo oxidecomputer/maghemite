@@ -2,19 +2,19 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::platform::Dpd;
-use crate::platform::SwitchZone;
 use crate::Error;
 use crate::MG_LOWER_TAG;
+use crate::platform::Dpd;
+use crate::platform::SwitchZone;
+use dpd_client::Client as DpdClient;
 use dpd_client::types;
 use dpd_client::types::LinkState;
-use dpd_client::Client as DpdClient;
 use oxnet::IpNet;
 use oxnet::Ipv4Net;
 use oxnet::Ipv6Net;
 use rdb::Path;
 use rdb::Prefix;
-use slog::{error, warn, Logger};
+use slog::{Logger, error, warn};
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -89,10 +89,9 @@ pub(crate) fn ensure_tep_addr(
             addr: tep,
         })
         .await
-    }) {
-        if e.status() != Some(reqwest::StatusCode::CONFLICT) {
-            warn!(log, "failed to ensure TEP address {tep} on ASIC: {e}");
-        }
+    }) && e.status() != Some(reqwest::StatusCode::CONFLICT)
+    {
+        warn!(log, "failed to ensure TEP address {tep} on ASIC: {e}");
     }
 }
 

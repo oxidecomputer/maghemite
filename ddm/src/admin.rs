@@ -21,13 +21,13 @@ use dropshot::{ApiDescription, ApiDescriptionBuildErrors};
 use mg_common::lock;
 use mg_common::net::TunnelOrigin;
 use oxnet::Ipv6Net;
-use slog::{error, info, warn, Logger};
+use slog::{Logger, error, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::Sender;
 use tokio::spawn;
 use tokio::task::JoinHandle;
 
@@ -382,8 +382,8 @@ impl DdmAdminApi for DdmAdminApiImpl {
     }
 }
 
-pub fn api_description(
-) -> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, ApiDescriptionBuildErrors>
+pub fn api_description()
+-> Result<ApiDescription<Arc<Mutex<HandlerContext>>>, ApiDescriptionBuildErrors>
 {
     ddm_admin_api_mod::api_description::<DdmAdminApiImpl>()
 }

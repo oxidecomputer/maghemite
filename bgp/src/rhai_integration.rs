@@ -11,7 +11,7 @@ use crate::{
     },
     policy::{CheckerResult, ShaperResult},
 };
-use rhai::{export_module, plugin::*, Module};
+use rhai::{Module, export_module, plugin::*};
 
 macro_rules! create_enum_module {
     ($module:ident : $typ:ty => $($variant:ident),+) => {

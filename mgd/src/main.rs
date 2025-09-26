@@ -14,7 +14,7 @@ use mg_common::stats::MgLowerStats;
 use rand::Fill;
 use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use signal::handle_signals;
-use slog::{error, Logger};
+use slog::{Logger, error};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex};
@@ -155,22 +155,21 @@ async fn run(args: RunArgs) {
         .to_string_lossy()
         .to_string();
 
-    if args.with_stats {
-        if let (Some(rack_uuid), Some(sled_uuid)) =
+    if args.with_stats
+        && let (Some(rack_uuid), Some(sled_uuid)) =
             (args.rack_uuid, args.sled_uuid)
-        {
-            let mut is_running = lock!(context.stats_server_running);
-            if !*is_running {
-                match oxstats::start_server(
-                    context.clone(),
-                    hostname,
-                    rack_uuid,
-                    sled_uuid,
-                    log.clone(),
-                ) {
-                    Ok(_) => *is_running = true,
-                    Err(e) => error!(log, "failed to start stats server: {e}"),
-                }
+    {
+        let mut is_running = lock!(context.stats_server_running);
+        if !*is_running {
+            match oxstats::start_server(
+                context.clone(),
+                hostname,
+                rack_uuid,
+                sled_uuid,
+                log.clone(),
+            ) {
+                Ok(_) => *is_running = true,
+                Err(e) => error!(log, "failed to start stats server: {e}"),
             }
         }
     }
