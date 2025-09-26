@@ -6,6 +6,8 @@
 //! synchronizing information in a routing information base onto an underlying
 //! routing platform. The only platform currently supported is Dendrite.
 
+#![allow(clippy::result_large_err)]
+
 use crate::dendrite::{
     RouteHash, get_routes_for_prefix, new_dpd_client, update_dendrite,
 };

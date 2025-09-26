@@ -89,11 +89,10 @@ pub(crate) fn ensure_tep_addr(
             addr: tep,
         })
         .await
-    }) {
-        if e.status() != Some(reqwest::StatusCode::CONFLICT) {
+    })
+        && e.status() != Some(reqwest::StatusCode::CONFLICT) {
             warn!(log, "failed to ensure TEP address {tep} on ASIC: {e}");
         }
-    }
 }
 
 pub(crate) fn link_is_up(

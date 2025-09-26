@@ -449,8 +449,7 @@ impl BgpConnectionTcp {
         let mut i = 0;
         loop {
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(std::io::Error::other(
                     "shutting down",
                 ));
             }
@@ -513,8 +512,7 @@ impl BgpConnectionTcp {
                     ) {
                         warn!(log, "send notification: {e}");
                     }
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Err(std::io::Error::other(
                         "open message error",
                     ));
                 }
@@ -522,8 +520,7 @@ impl BgpConnectionTcp {
             MessageType::Update => match UpdateMessage::from_wire(&msgbuf) {
                 Ok(m) => m.into(),
                 Err(_) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Err(std::io::Error::other(
                         "update message error",
                     ));
                 }
@@ -532,8 +529,7 @@ impl BgpConnectionTcp {
                 match NotificationMessage::from_wire(&msgbuf) {
                     Ok(m) => m.into(),
                     Err(_) => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
+                        return Err(std::io::Error::other(
                             "notification message error",
                         ));
                     }
@@ -544,8 +540,7 @@ impl BgpConnectionTcp {
                 match RouteRefreshMessage::from_wire(&msgbuf) {
                     Ok(m) => m.into(),
                     Err(_) => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
+                        return Err(std::io::Error::other(
                             "route refresh message error",
                         ));
                     }

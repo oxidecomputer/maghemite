@@ -682,13 +682,12 @@ impl Db {
             let targets: Vec<Path> = path
                 .iter()
                 .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref() {
-                        if bgp.peer == peer {
+                    if let Some(bgp) = p.bgp.as_ref()
+                        && bgp.peer == peer {
                             let mut marked = p.clone();
                             marked.bgp = Some(bgp.as_stale());
                             return Some(marked);
                         }
-                    }
                     None
                 })
                 .collect();

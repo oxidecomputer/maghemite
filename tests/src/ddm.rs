@@ -340,8 +340,8 @@ impl Drop for RouterZone<'_> {
                 self.zone.name, e,
             );
         }
-        if self.transit {
-            if let Err(e) = self.zfs.copy_from_zone(
+        if self.transit
+            && let Err(e) = self.zfs.copy_from_zone(
                 &self.zone.name,
                 "/var/svc/log/oxide-dendrite:default.log",
                 &format!("/work/{}-dpd.log", self.zone.name),
@@ -351,7 +351,6 @@ impl Drop for RouterZone<'_> {
                     self.zone.name, e,
                 );
             }
-        }
     }
 }
 

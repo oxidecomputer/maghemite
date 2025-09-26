@@ -771,8 +771,8 @@ impl State for Exchange {
                         update,
                     );
                     if let Some(push) = update.underlay {
-                        if !push.announce.is_empty() {
-                            if let Err(e) = crate::exchange::announce_underlay(
+                        if !push.announce.is_empty()
+                            && let Err(e) = crate::exchange::announce_underlay(
                                 &self.ctx,
                                 self.ctx.config.clone(),
                                 push.announce,
@@ -802,9 +802,8 @@ impl State for Exchange {
                                     event,
                                 );
                             }
-                        }
-                        if !push.withdraw.is_empty() {
-                            if let Err(e) = crate::exchange::withdraw_underlay(
+                        if !push.withdraw.is_empty()
+                            && let Err(e) = crate::exchange::withdraw_underlay(
                                 &self.ctx,
                                 self.ctx.config.clone(),
                                 push.withdraw,
@@ -834,7 +833,6 @@ impl State for Exchange {
                                     event,
                                 );
                             }
-                        }
                     }
                 }
                 Event::Neighbor(NeighborEvent::Expire) => {

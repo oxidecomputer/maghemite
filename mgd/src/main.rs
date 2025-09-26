@@ -155,8 +155,8 @@ async fn run(args: RunArgs) {
         .to_string_lossy()
         .to_string();
 
-    if args.with_stats {
-        if let (Some(rack_uuid), Some(sled_uuid)) =
+    if args.with_stats
+        && let (Some(rack_uuid), Some(sled_uuid)) =
             (args.rack_uuid, args.sled_uuid)
         {
             let mut is_running = lock!(context.stats_server_running);
@@ -173,7 +173,6 @@ async fn run(args: RunArgs) {
                 }
             }
         }
-    }
 
     let j = admin::start_server(
         log.clone(),
