@@ -1556,19 +1556,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
         if let Some(expected_remote_asn) = lock!(self.session).remote_asn
-            && remote_asn != expected_remote_asn {
-                self.send_notification(
-                    conn,
-                    ErrorCode::Open,
-                    ErrorSubcode::Open(
-                        crate::messages::OpenErrorSubcode::BadPeerAS,
-                    ),
-                );
-                return Err(Error::UnexpectedAsn(ExpectationMismatch {
-                    expected: expected_remote_asn,
-                    got: remote_asn,
-                }));
-            }
+            && remote_asn != expected_remote_asn
+        {
+            self.send_notification(
+                conn,
+                ErrorCode::Open,
+                ErrorSubcode::Open(
+                    crate::messages::OpenErrorSubcode::BadPeerAS,
+                ),
+            );
+            return Err(Error::UnexpectedAsn(ExpectationMismatch {
+                expected: expected_remote_asn,
+                got: remote_asn,
+            }));
+        }
         if let Some(checker) =
             self.router.policy.checker.read().unwrap().as_ref()
         {
@@ -1763,9 +1764,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     fn is_ebgp(&self) -> bool {
         if let Some(remote) = lock!(self.session).remote_asn
-            && remote != self.asn.as_u32() {
-                return true;
-            }
+            && remote != self.asn.as_u32()
+        {
+            return true;
+        }
         false
     }
 
@@ -2138,9 +2140,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.check_nexthop_self(update)?;
         let info = lock!(self.session);
         if info.enforce_first_as
-            && let Some(peer_as) = info.remote_asn {
-                self.enforce_first_as(update, peer_as)?;
-            }
+            && let Some(peer_as) = info.remote_asn
+        {
+            self.enforce_first_as(update, peer_as)?;
+        }
         Ok(())
     }
 
@@ -2276,9 +2279,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
         if let Some(ttl) = lock!(self.session).min_ttl
-            && let Err(e) = conn.set_min_ttl(ttl) {
-                return Err(anyhow::anyhow!("failed to set min ttl: {e}"));
-            }
+            && let Err(e) = conn.set_min_ttl(ttl)
+        {
+            return Err(anyhow::anyhow!("failed to set min ttl: {e}"));
+        }
 
         Ok(())
     }

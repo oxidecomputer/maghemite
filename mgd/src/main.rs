@@ -158,21 +158,21 @@ async fn run(args: RunArgs) {
     if args.with_stats
         && let (Some(rack_uuid), Some(sled_uuid)) =
             (args.rack_uuid, args.sled_uuid)
-        {
-            let mut is_running = lock!(context.stats_server_running);
-            if !*is_running {
-                match oxstats::start_server(
-                    context.clone(),
-                    hostname,
-                    rack_uuid,
-                    sled_uuid,
-                    log.clone(),
-                ) {
-                    Ok(_) => *is_running = true,
-                    Err(e) => error!(log, "failed to start stats server: {e}"),
-                }
+    {
+        let mut is_running = lock!(context.stats_server_running);
+        if !*is_running {
+            match oxstats::start_server(
+                context.clone(),
+                hostname,
+                rack_uuid,
+                sled_uuid,
+                log.clone(),
+            ) {
+                Ok(_) => *is_running = true,
+                Err(e) => error!(log, "failed to start stats server: {e}"),
             }
         }
+    }
 
     let j = admin::start_server(
         log.clone(),

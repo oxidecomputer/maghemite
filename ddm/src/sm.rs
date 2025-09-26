@@ -780,28 +780,29 @@ impl State for Exchange {
                                 self.version,
                                 self.ctx.rt.clone(),
                                 self.log.clone(),
-                            ) {
-                                err!(
-                                    self.log,
-                                    self.ctx.config.if_name,
-                                    "announce: {}",
-                                    e,
-                                );
-                                wrn!(
-                                    self.log,
-                                    self.ctx.config.if_name,
-                                    "expiring peer {} due to failed announce",
-                                    self.peer,
-                                );
-                                self.expire_peer(&exchange_thread, &pull_stop);
-                                return (
-                                    Box::new(Solicit::new(
-                                        self.ctx.clone(),
-                                        self.log.clone(),
-                                    )),
-                                    event,
-                                );
-                            }
+                            )
+                        {
+                            err!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "announce: {}",
+                                e,
+                            );
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "expiring peer {} due to failed announce",
+                                self.peer,
+                            );
+                            self.expire_peer(&exchange_thread, &pull_stop);
+                            return (
+                                Box::new(Solicit::new(
+                                    self.ctx.clone(),
+                                    self.log.clone(),
+                                )),
+                                event,
+                            );
+                        }
                         if !push.withdraw.is_empty()
                             && let Err(e) = crate::exchange::withdraw_underlay(
                                 &self.ctx,
@@ -811,28 +812,29 @@ impl State for Exchange {
                                 self.version,
                                 self.ctx.rt.clone(),
                                 self.log.clone(),
-                            ) {
-                                err!(
-                                    self.log,
-                                    self.ctx.config.if_name,
-                                    "withdraw: {}",
-                                    e,
-                                );
-                                wrn!(
-                                    self.log,
-                                    self.ctx.config.if_name,
-                                    "expiring peer {} due to failed withdraw",
-                                    self.peer,
-                                );
-                                self.expire_peer(&exchange_thread, &pull_stop);
-                                return (
-                                    Box::new(Solicit::new(
-                                        self.ctx.clone(),
-                                        self.log.clone(),
-                                    )),
-                                    event,
-                                );
-                            }
+                            )
+                        {
+                            err!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "withdraw: {}",
+                                e,
+                            );
+                            wrn!(
+                                self.log,
+                                self.ctx.config.if_name,
+                                "expiring peer {} due to failed withdraw",
+                                self.peer,
+                            );
+                            self.expire_peer(&exchange_thread, &pull_stop);
+                            return (
+                                Box::new(Solicit::new(
+                                    self.ctx.clone(),
+                                    self.log.clone(),
+                                )),
+                                event,
+                            );
+                        }
                     }
                 }
                 Event::Neighbor(NeighborEvent::Expire) => {

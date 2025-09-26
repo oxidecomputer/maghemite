@@ -449,9 +449,7 @@ impl BgpConnectionTcp {
         let mut i = 0;
         loop {
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(std::io::Error::other(
-                    "shutting down",
-                ));
+                return Err(std::io::Error::other("shutting down"));
             }
             let n = match stream.read(&mut buf[i..]) {
                 Ok(n) => Ok(n),
@@ -512,17 +510,13 @@ impl BgpConnectionTcp {
                     ) {
                         warn!(log, "send notification: {e}");
                     }
-                    return Err(std::io::Error::other(
-                        "open message error",
-                    ));
+                    return Err(std::io::Error::other("open message error"));
                 }
             },
             MessageType::Update => match UpdateMessage::from_wire(&msgbuf) {
                 Ok(m) => m.into(),
                 Err(_) => {
-                    return Err(std::io::Error::other(
-                        "update message error",
-                    ));
+                    return Err(std::io::Error::other("update message error"));
                 }
             },
             MessageType::Notification => {

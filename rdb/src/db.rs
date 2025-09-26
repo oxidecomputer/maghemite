@@ -683,11 +683,12 @@ impl Db {
                 .iter()
                 .filter_map(|p| {
                     if let Some(bgp) = p.bgp.as_ref()
-                        && bgp.peer == peer {
-                            let mut marked = p.clone();
-                            marked.bgp = Some(bgp.as_stale());
-                            return Some(marked);
-                        }
+                        && bgp.peer == peer
+                    {
+                        let mut marked = p.clone();
+                        marked.bgp = Some(bgp.as_stale());
+                        return Some(marked);
+                    }
                     None
                 })
                 .collect();

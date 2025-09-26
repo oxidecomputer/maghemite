@@ -61,8 +61,9 @@ impl<Cnx: BgpConnection> Fanout<Cnx> {
 impl<Cnx: BgpConnection> Egress<Cnx> {
     fn send(&self, update: &UpdateMessage) {
         if let Some(tx) = self.event_tx.as_ref()
-            && let Err(e) = tx.send(FsmEvent::Announce(update.clone())) {
-                slog::error!(self.log, "egress fanout failed: {e}");
-            }
+            && let Err(e) = tx.send(FsmEvent::Announce(update.clone()))
+        {
+            slog::error!(self.log, "egress fanout failed: {e}");
+        }
     }
 }

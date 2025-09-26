@@ -575,10 +575,9 @@ async fn do_bgp_apply(
             if let Some(r) = routers.get(&nbr.asn) {
                 remove = lock!(r.sessions).is_empty();
             }
-            if remove
-                && let Some(r) = routers.remove(&nbr.asn) {
-                    r.shutdown()
-                };
+            if remove && let Some(r) = routers.remove(&nbr.asn) {
+                r.shutdown()
+            };
         }
     }
 

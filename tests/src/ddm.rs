@@ -345,12 +345,13 @@ impl Drop for RouterZone<'_> {
                 &self.zone.name,
                 "/var/svc/log/oxide-dendrite:default.log",
                 &format!("/work/{}-dpd.log", self.zone.name),
-            ) {
-                eprintln!(
-                    "failed to copy zone dpd log file for {}: {}",
-                    self.zone.name, e,
-                );
-            }
+            )
+        {
+            eprintln!(
+                "failed to copy zone dpd log file for {}: {}",
+                self.zone.name, e,
+            );
+        }
     }
 }
 
