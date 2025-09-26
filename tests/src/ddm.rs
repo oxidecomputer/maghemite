@@ -2,9 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use anyhow::{anyhow, Result};
-use ddm_admin_client::types::TunnelOrigin;
+use anyhow::{Result, anyhow};
 use ddm_admin_client::Client;
+use ddm_admin_client::types::TunnelOrigin;
 use slog::{Drain, Logger};
 use std::env;
 use std::net::Ipv6Addr;

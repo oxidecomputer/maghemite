@@ -14,7 +14,7 @@ use crate::error::Error;
 use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
-use slog::{error, Logger};
+use slog::{Logger, error};
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
@@ -718,9 +718,11 @@ impl Reaper {
 
     fn run(self: &Arc<Self>) {
         let s = self.clone();
-        spawn(move || loop {
-            s.reap();
-            sleep(*lock!(s.interval));
+        spawn(move || {
+            loop {
+                s.reap();
+                sleep(*lock!(s.interval));
+            }
         });
     }
 
@@ -749,7 +751,7 @@ impl Reaper {
 
 #[cfg(test)]
 mod test {
-    use crate::{db::Db, Path, Prefix};
+    use crate::{Path, Prefix, db::Db};
     use mg_common::log::*;
     use std::net::IpAddr;
     use std::str::FromStr;
@@ -780,8 +782,8 @@ mod test {
     fn test_rib() {
         use crate::StaticRouteKey;
         use crate::{
-            db::Db, BgpPathProperties, Path, Prefix, Prefix4,
-            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
+            DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4, db::Db,
         };
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());

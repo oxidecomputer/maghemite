@@ -14,7 +14,7 @@ use mg_common::stats::MgLowerStats;
 use rand::Fill;
 use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use signal::handle_signals;
-use slog::{error, Logger};
+use slog::{Logger, error};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex};

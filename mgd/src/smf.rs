@@ -5,7 +5,7 @@
 use crate::admin::HandlerContext;
 use mg_common::lock;
 use mg_common::smf::get_stats_server_props;
-use slog::{error, info, warn, Logger};
+use slog::{Logger, error, info, warn};
 use smf::PropertyGroup;
 use std::sync::Arc;
 

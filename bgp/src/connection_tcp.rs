@@ -14,7 +14,7 @@ use libc::c_int;
 #[cfg(target_os = "linux")]
 use libc::sockaddr_storage;
 use mg_common::lock;
-use slog::{error, info, trace, warn, Logger};
+use slog::{Logger, error, info, trace, warn};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
@@ -28,10 +28,10 @@ use std::time::Duration;
 
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;
-#[cfg(any(target_os = "linux", target_os = "illumos"))]
-use libc::{c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP};
 #[cfg(target_os = "linux")]
 use libc::{IP_MINTTL, TCP_MD5SIG};
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_void};
 #[cfg(target_os = "illumos")]
 use slog::debug;
 #[cfg(target_os = "illumos")]
@@ -415,23 +415,25 @@ impl BgpConnectionTcp {
 
         info!(log, "spawning recv loop");
 
-        spawn(move || loop {
-            if dropped.load(std::sync::atomic::Ordering::Relaxed) {
-                break;
-            }
-            match Self::recv_msg(&mut conn, dropped.clone(), &log) {
-                Ok(msg) => {
-                    trace!(log, "[{peer}] recv: {msg:#?}");
-                    if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
-                        warn!(
-                            log,
-                            "[{peer}] connection: error sending event {e}"
-                        );
-                        break;
-                    }
+        spawn(move || {
+            loop {
+                if dropped.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
                 }
-                Err(_e) => {
-                    //TODO log?
+                match Self::recv_msg(&mut conn, dropped.clone(), &log) {
+                    Ok(msg) => {
+                        trace!(log, "[{peer}] recv: {msg:#?}");
+                        if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
+                            warn!(
+                                log,
+                                "[{peer}] connection: error sending event {e}"
+                            );
+                            break;
+                        }
+                    }
+                    Err(_e) => {
+                        //TODO log?
+                    }
                 }
             }
         });
@@ -523,7 +525,7 @@ impl BgpConnectionTcp {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         "update message error",
-                    ))
+                    ));
                 }
             },
             MessageType::Notification => {
@@ -533,7 +535,7 @@ impl BgpConnectionTcp {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::Other,
                             "notification message error",
-                        ))
+                        ));
                     }
                 }
             }
@@ -545,7 +547,7 @@ impl BgpConnectionTcp {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::Other,
                             "route refresh message error",
-                        ))
+                        ));
                     }
                 }
             }
@@ -690,12 +692,14 @@ impl BgpConnectionTcp {
         let dropped = self.dropped.clone();
         let log = self.log.clone();
         let sas = self.sas.clone();
-        spawn(move || loop {
-            sleep(PFKEY_KEEPALIVE);
-            if dropped.load(std::sync::atomic::Ordering::Relaxed) {
-                break;
+        spawn(move || {
+            loop {
+                sleep(PFKEY_KEEPALIVE);
+                if dropped.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                Self::do_sa_keepalive(&sas, &log);
             }
-            Self::do_sa_keepalive(&sas, &log);
         });
     }
 

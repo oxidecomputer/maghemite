@@ -255,14 +255,16 @@ fn send_solicitations(
     stop: Arc<AtomicBool>,
     stats: Arc<SessionStats>,
 ) {
-    spawn(move || loop {
-        if let Err(e) = solicit(&ctx) {
-            err!(ctx.log, ctx.config.if_name, "solicit failed: {}", e);
-            stop.store(true, Ordering::Relaxed);
-            break;
+    spawn(move || {
+        loop {
+            if let Err(e) = solicit(&ctx) {
+                err!(ctx.log, ctx.config.if_name, "solicit failed: {}", e);
+                stop.store(true, Ordering::Relaxed);
+                break;
+            }
+            stats.solicitations_sent.fetch_add(1, Ordering::Relaxed);
+            sleep(Duration::from_millis(ctx.config.solicit_interval));
         }
-        stats.solicitations_sent.fetch_add(1, Ordering::Relaxed);
-        sleep(Duration::from_millis(ctx.config.solicit_interval));
     });
 }
 
@@ -271,58 +273,67 @@ fn expire(
     stop: Arc<AtomicBool>,
     stats: Arc<SessionStats>,
 ) -> Result<(), DiscoveryError> {
-    spawn(move || loop {
-        let mut guard = match ctx.nbr.write() {
-            Ok(nbr) => nbr,
-            Err(e) => {
-                err!(ctx.log, ctx.config.if_name, "lock nbr on expire: {}", e);
-                return;
+    spawn(move || {
+        loop {
+            let mut guard = match ctx.nbr.write() {
+                Ok(nbr) => nbr,
+                Err(e) => {
+                    err!(
+                        ctx.log,
+                        ctx.config.if_name,
+                        "lock nbr on expire: {}",
+                        e
+                    );
+                    return;
+                }
+            };
+            if let Some(nbr) = &*guard {
+                let dt = Instant::now().duration_since(nbr.last_seen);
+                if dt.as_millis() > u128::from(ctx.config.expire_threshold) {
+                    wrn!(
+                        &ctx.log,
+                        ctx.config.if_name,
+                        "neighbor {}@{} expire",
+                        &nbr.hostname,
+                        nbr.addr
+                    );
+                    *guard = None;
+                    stats.peer_expirations.fetch_add(1, Ordering::Relaxed);
+                    emit_nbr_expire(
+                        ctx.event.clone(),
+                        ctx.log.clone(),
+                        &ctx.config.if_name,
+                    );
+                } else if dt.as_millis()
+                    > u128::from(ctx.config.solicit_interval)
+                {
+                    wrn!(
+                        &ctx.log,
+                        ctx.config.if_name,
+                        "neighbor {}@{} missed solicit interval",
+                        &nbr.hostname,
+                        nbr.addr
+                    );
+                }
             }
-        };
-        if let Some(nbr) = &*guard {
-            let dt = Instant::now().duration_since(nbr.last_seen);
-            if dt.as_millis() > u128::from(ctx.config.expire_threshold) {
-                wrn!(
-                    &ctx.log,
-                    ctx.config.if_name,
-                    "neighbor {}@{} expire",
-                    &nbr.hostname,
-                    nbr.addr
-                );
-                *guard = None;
-                stats.peer_expirations.fetch_add(1, Ordering::Relaxed);
-                emit_nbr_expire(
-                    ctx.event.clone(),
-                    ctx.log.clone(),
-                    &ctx.config.if_name,
-                );
-            } else if dt.as_millis() > u128::from(ctx.config.solicit_interval) {
-                wrn!(
-                    &ctx.log,
-                    ctx.config.if_name,
-                    "neighbor {}@{} missed solicit interval",
-                    &nbr.hostname,
-                    nbr.addr
-                );
+            drop(guard);
+            // We don't want to emit a solicit failure event until we drop the
+            // handler context. Otherwise we could create a race on the discovery
+            // sockets by trying to listen on a unicast address that a socket
+            // waiting to be dropped is already listening on.
+            if stop.load(Ordering::Relaxed) {
+                let event = ctx.event.clone();
+                let log = ctx.log.clone();
+                let if_name = ctx.config.if_name.clone();
+                let wait = ctx.config.discovery_read_timeout;
+                drop(ctx);
+                // Ensure read handlers have registered the stop event.
+                sleep(Duration::from_millis(wait));
+                emit_solicit_fail(event, log, &if_name);
+                break;
             }
+            sleep(Duration::from_millis(ctx.config.solicit_interval));
         }
-        drop(guard);
-        // We don't want to emit a solicit failure event until we drop the
-        // handler context. Otherwise we could create a race on the discovery
-        // sockets by trying to listen on a unicast address that a socket
-        // waiting to be dropped is already listening on.
-        if stop.load(Ordering::Relaxed) {
-            let event = ctx.event.clone();
-            let log = ctx.log.clone();
-            let if_name = ctx.config.if_name.clone();
-            let wait = ctx.config.discovery_read_timeout;
-            drop(ctx);
-            // Ensure read handlers have registered the stop event.
-            sleep(Duration::from_millis(wait));
-            emit_solicit_fail(event, log, &if_name);
-            break;
-        }
-        sleep(Duration::from_millis(ctx.config.solicit_interval));
     });
     Ok(())
 }
@@ -333,12 +344,14 @@ fn listen(
     stop: Arc<AtomicBool>,
     stats: Arc<SessionStats>,
 ) -> Result<(), DiscoveryError> {
-    spawn(move || loop {
-        if let Some((addr, msg)) = recv(&ctx, &s) {
-            handle_msg(&ctx, msg, &addr, &stats);
-        };
-        if stop.load(Ordering::Relaxed) {
-            break;
+    spawn(move || {
+        loop {
+            if let Some((addr, msg)) = recv(&ctx, &s) {
+                handle_msg(&ctx, msg, &addr, &stats);
+            };
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
         }
     });
     Ok(())

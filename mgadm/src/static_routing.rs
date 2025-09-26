@@ -4,8 +4,8 @@
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use mg_admin_client::types;
 use mg_admin_client::Client;
+use mg_admin_client::types;
 use rdb::DEFAULT_RIB_PRIORITY_STATIC;
 use std::net::{AddrParseError, Ipv4Addr};
 use std::num::ParseIntError;

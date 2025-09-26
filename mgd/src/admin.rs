@@ -16,7 +16,7 @@ use mg_common::stats::MgLowerStats;
 use rdb::{BfdPeerConfig, Db, Prefix};
 use semver::{BuildMetadata, Prerelease, Version};
 use slog::o;
-use slog::{error, info, warn, Logger};
+use slog::{Logger, error, info, warn};
 use std::collections::HashMap;
 use std::fs::File;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};

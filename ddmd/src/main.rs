@@ -9,7 +9,7 @@ use ddm::sm::{DpdConfig, SmContext, StateMachine};
 use ddm::sys::Route;
 use ddm_types::db::RouterKind;
 use signal::handle_signals;
-use slog::{error, Drain, Logger};
+use slog::{Drain, Logger, error};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};

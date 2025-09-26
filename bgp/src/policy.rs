@@ -31,10 +31,10 @@ use crate::messages::{
 };
 use crate::rhai_integration::*;
 use rhai::{
-    Dynamic, Engine, EvalAltResult, FnPtr, NativeCallContext, ParseError,
-    Scope, AST,
+    AST, Dynamic, Engine, EvalAltResult, FnPtr, NativeCallContext, ParseError,
+    Scope,
 };
-use slog::{debug, info, Logger};
+use slog::{Logger, debug, info};
 use std::collections::HashSet;
 use std::net::IpAddr;
 

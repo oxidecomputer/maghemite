@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use slog::{warn, Logger};
+use slog::{Logger, warn};
 use std::net::IpAddr;
 
 pub async fn run_oximeter(

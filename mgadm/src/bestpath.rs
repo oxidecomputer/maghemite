@@ -6,8 +6,8 @@ use std::num::NonZeroU8;
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use mg_admin_client::types;
 use mg_admin_client::Client;
+use mg_admin_client::types;
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {

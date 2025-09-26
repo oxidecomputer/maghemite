@@ -1583,7 +1583,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Ok(result) => match result {
                     CheckerResult::Accept => {}
                     CheckerResult::Drop => {
-                        return Err(Error::PolicyCheckFailed)
+                        return Err(Error::PolicyCheckFailed);
                     }
                 },
                 Err(e) => {

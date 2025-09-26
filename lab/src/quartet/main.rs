@@ -4,11 +4,11 @@
 
 // Copyright 2021 Oxide Computer Company
 
-use libfalcon::cli::run;
+use libfalcon::Runner;
 use libfalcon::cli::RunMode;
+use libfalcon::cli::run;
 use libfalcon::error::Error;
 use libfalcon::unit::gb;
-use libfalcon::Runner;
 
 fn main() -> Result<(), Error> {
     oxide_tokio_rt::run(main_impl())
