@@ -262,7 +262,7 @@ fn set_engine_logger(
     });
 }
 
-fn new_rhai_scope(ctx: &PolicyContext) -> Scope {
+fn new_rhai_scope(ctx: &PolicyContext) -> Scope<'_> {
     let mut scope = Scope::new();
     scope.push("direction", ctx.direction);
     scope.push("message", ctx.message.clone());

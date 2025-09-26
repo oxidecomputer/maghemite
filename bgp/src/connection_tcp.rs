@@ -10,7 +10,9 @@ use crate::messages::{
 };
 use crate::session::FsmEvent;
 use crate::to_canonical;
-use libc::{c_int, sockaddr_storage};
+use libc::c_int;
+#[cfg(target_os = "linux")]
+use libc::sockaddr_storage;
 use mg_common::lock;
 use slog::{error, info, trace, warn, Logger};
 use std::collections::BTreeMap;
@@ -769,6 +771,7 @@ fn set_md5_sig_fd(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 #[repr(C)]
 struct TcpMd5Sig {
     tcpm_addr: sockaddr_storage,
@@ -779,6 +782,7 @@ struct TcpMd5Sig {
     tcpm_key: [u8; MAX_MD5SIG_KEYLEN],
 }
 
+#[cfg(target_os = "linux")]
 impl Default for TcpMd5Sig {
     fn default() -> Self {
         unsafe { std::mem::zeroed() }
