@@ -1,6 +1,9 @@
 [net]
 git-fetch-with-cli = true
 
+[alias]
+xtask = "run --package xtask --"
+
 [build]
 rustflags = ["--cfg", "tokio_unstable"]
 

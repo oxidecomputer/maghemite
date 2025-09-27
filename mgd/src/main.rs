@@ -41,8 +41,6 @@ struct Cli {
 enum Commands {
     /// Run the mgd routing daemon.
     Run(RunArgs),
-    /// Generate the OpenAPI spec for this router.
-    Apigen,
 }
 
 #[derive(Parser, Debug)]
@@ -88,7 +86,6 @@ fn main() {
     let args = Cli::parse();
     match args.command {
         Commands::Run(run_args) => oxide_tokio_rt::run(run(run_args)),
-        Commands::Apigen => admin::apigen(),
     }
 }
 
