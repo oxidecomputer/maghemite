@@ -7,18 +7,18 @@ use std::collections::BTreeSet;
 use crate::{Prefix, db::Rib, types::Path};
 use itertools::Itertools;
 
-/// The bestpath algorithms chooses the best set of up to `max` paths for a
+/// The bestpath algorithm chooses the best set of up to `max` paths for a
 /// particular prefix from the RIB. The set of paths chosen will all have
 /// equal RIB priority, MED, local_pref, AS path length and shutdown status.
 /// The bestpath algorithm performs path filtering in the following ordered
-/// sequece of operations.
+/// sequence of operations.
 ///
 /// - partition candidate paths into active and shutdown groups.
 /// - if only shutdown routes exist, select from that group, otherwise
 ///   select from the active group.
 /// - filter the selection group to the set of paths with the smallest
 ///   rib priority
-/// - filter the selection group to the set of paths with the smallest
+/// - filter the selection group to the set of paths with the largest
 ///   local preference
 /// - filter the selection group to the set of paths with the smallest
 ///   AS path length
@@ -36,16 +36,23 @@ pub fn bestpaths(
 ) -> Option<BTreeSet<Path>> {
     let candidates = rib.get(&prefix)?;
 
+    // Short-circuit: if there's only 1 candidate, then it is the best
+    if candidates.len() == 1 {
+        return Some(candidates.clone());
+    }
+
     // Partition the choice space on whether routes are shutdown or not. If we
     // only have shutdown routes then use those. Otherwise use active routes
     let (active, shutdown): (BTreeSet<&Path>, BTreeSet<&Path>) =
-        candidates.iter().partition(|x| x.shutdown);
+        candidates.iter().partition(|path| path.shutdown);
     let candidates = if active.is_empty() { shutdown } else { active };
 
     // Filter down to paths with the best (lowest) RIB priority. This is a
     // coarse filter to roughly separate RIB paths by protocol (e.g. BGP vs Static),
     // similar to Administrative Distance on Cisco-like platforms.
-    let candidates = candidates.into_iter().min_set_by_key(|x| x.rib_priority);
+    let candidates = candidates
+        .into_iter()
+        .min_set_by_key(|path| path.rib_priority);
 
     // In the case where paths come from multiple protocols but have the same
     // RIB priority, follow the principle of least surprise. e.g. If a user has
@@ -53,37 +60,56 @@ pub fn bestpaths(
     // prefer the Static route.
     // TODO: update this if new upper layer protocols are added
     let (b, s): (BTreeSet<&Path>, BTreeSet<&Path>) =
-        candidates.into_iter().partition(|x| x.bgp.is_some());
+        candidates.into_iter().partition(|path| path.bgp.is_some());
 
+    // Some paths are static, return up to `max` paths from static routes
     if !s.is_empty() {
-        // Some paths are static, return up to max paths from static routes
         return Some(s.into_iter().take(max).cloned().collect());
     }
 
-    // Begin comparison of BGP Path Attributes
+    // None of the remaining paths are static.
+    // Begin comparison of BGP Path Attributes.
+    Some(bgp_bestpaths(b, max))
+}
 
-    // Filter down to paths that are not stale. The `min_set_by_key` method
-    // allows us to assign "not stale" paths to the `0` set, and "stale" paths
-    // to the `1` set. The method will then return the `0` set.
-    let candidates = b.into_iter().min_set_by_key(|x| match x.bgp {
-        Some(ref bgp) => match bgp.stale {
-            Some(_) => 1,
-            None => 0,
-        },
-        None => 0,
-    });
+/// The BGP-specific portion of the bestpath algorithm. This evaluates BGP path
+/// attributes in order to determine up to `max` suitable paths.
+pub fn bgp_bestpaths(
+    candidates: BTreeSet<&Path>,
+    max: usize,
+) -> BTreeSet<Path> {
+    // Filter down to paths that are not stale (Graceful Restart).
+    // The `min_set_by_key` method allows us to assign "not stale" paths to the
+    // `0` set, and "stale" paths to the `1` set. The method will then return
+    // the `0` set if any "not stale" paths exist.
+    let candidates =
+        candidates
+            .into_iter()
+            .min_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => match bgp.stale {
+                    Some(_) => 1,
+                    None => 0,
+                },
+                None => 0,
+            });
 
     // Filter down to paths with the highest local preference
-    let candidates = candidates.into_iter().max_set_by_key(|x| match x.bgp {
-        Some(ref bgp) => bgp.local_pref.unwrap_or(0),
-        None => 0,
-    });
+    let candidates =
+        candidates
+            .into_iter()
+            .max_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => bgp.local_pref.unwrap_or(0),
+                None => 0,
+            });
 
-    // Filter down to paths with the shortest length
-    let candidates = candidates.into_iter().min_set_by_key(|x| match x.bgp {
-        Some(ref bgp) => bgp.as_path.len(),
-        None => 0,
-    });
+    // Filter down to paths with the shortest AS-Path length
+    let candidates =
+        candidates
+            .into_iter()
+            .min_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => bgp.as_path.len(),
+                None => 0,
+            });
 
     // Group candidates by AS for MED selection
     let as_groups = candidates.into_iter().chunk_by(|path| match path.bgp {
@@ -93,14 +119,14 @@ pub fn bestpaths(
 
     // Filter AS groups to paths with lowest MED
     let candidates = as_groups.into_iter().flat_map(|(_asn, paths)| {
-        paths.min_set_by_key(|x| match x.bgp {
+        paths.min_set_by_key(|path| match path.bgp {
             Some(ref bgp) => bgp.med.unwrap_or(0),
             None => 0,
         })
     });
 
     // Return up to max elements
-    Some(candidates.take(max).cloned().collect())
+    candidates.take(max).cloned().collect()
 }
 
 #[cfg(test)]
