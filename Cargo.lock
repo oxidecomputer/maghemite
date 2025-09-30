@@ -1355,6 +1355,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "drift"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43eb40edecda6106744f5e4f3d4dc78b3adf19d3cfb2d81cc4faa007da91e527"
+dependencies = [
+ "anyhow",
+ "indexmap",
+ "openapiv3",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dropshot"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1407,15 +1421,16 @@ dependencies = [
 
 [[package]]
 name = "dropshot-api-manager"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d474d07200f53202c71a43f124d00417b06ed9a230ffaadbb4eec4fb50f032a"
+checksum = "2f448e29400392b55ed2c0133c79841e1bc1bc771e6e20841cb1a5c70a77ef65"
 dependencies = [
  "anyhow",
  "atomicwrites",
  "camino",
  "clap",
  "debug-ignore",
+ "drift",
  "dropshot",
  "dropshot-api-manager-types",
  "fs-err",
@@ -1436,9 +1451,9 @@ dependencies = [
 
 [[package]]
 name = "dropshot-api-manager-types"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3c52409870cf11bd9e96b86213502ad7412e50017c9e7bd14eaf1f4791517d5"
+checksum = "1b913840b90fcccce6afbdb146acf39aa3243b8510e255a70572e53a964fc96a"
 dependencies = [
  "anyhow",
  "camino",
@@ -2542,13 +2557,14 @@ checksum = "0cfe9645a18782869361d9c8732246be7b410ad4e919d3609ebabdac00ba12c3"
 
 [[package]]
 name = "indexmap"
-version = "2.11.0"
+version = "2.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2481980430f9f78649238835720ddccc57e52df14ffce1c6f37391d61b563e9"
+checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
 dependencies = [
  "equivalent",
  "hashbrown",
  "serde",
+ "serde_core",
 ]
 
 [[package]]
