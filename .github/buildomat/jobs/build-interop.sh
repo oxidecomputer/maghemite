@@ -36,7 +36,7 @@ rustc --version
 
 banner 'clone'
 mkdir -p "$WORK/ci"
-git clone https://github.com/oxidecomputer/testbed "$WORK/ci/testbed"
+git clone -b ry/bump-interop-helios-image  https://github.com/oxidecomputer/testbed "$WORK/ci/testbed"
 
 banner 'build'
 cd "$WORK/ci/testbed"
