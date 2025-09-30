@@ -11,6 +11,7 @@ macro_rules! session_log {
             "conn" => format!("{:?}", $conn.conn()),
             "connection_clock" => format!("{}", $conn.clock()),
             "creator" => format!("{}", $conn.creator()),
+            "fsm_state" => $self.state().as_str(),
             $($key => $value),*
         )
     };
@@ -26,6 +27,7 @@ macro_rules! session_log {
             "conn" => format!("{:?}", $conn.conn()),
             "connection_clock" => format!("{}", $conn.clock()),
             "creator" => format!("{}", $conn.creator()),
+            "fsm_state" => $self.state().as_str(),
             $($key => $value),*
         )
     };
@@ -41,6 +43,7 @@ macro_rules! session_log {
             "conn" => format!("{:?}", $conn.conn()),
             "connection_clock" => format!("{}", $conn.clock()),
             "creator" => format!("{}", $conn.creator()),
+            "fsm_state" => $self.state().as_str(),
         )
     };
     ($self:expr, $level:ident, $conn:expr, $msg:expr, $($args:expr),*) => {
@@ -55,6 +58,7 @@ macro_rules! session_log {
             "conn" => format!("{:?}", $conn.conn()),
             "connection_clock" => format!("{}", $conn.clock()),
             "creator" => format!("{}", $conn.creator()),
+            "fsm_state" => $self.state().as_str(),
         )
     };
 }
@@ -70,6 +74,7 @@ macro_rules! session_log_lite {
             "neighbor_name" => lock!($self.neighbor.name).as_str(),
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
+            "fsm_state" => $self.state().as_str(),
             $($key => $value),*
         )
     };
@@ -82,6 +87,7 @@ macro_rules! session_log_lite {
             "neighbor_name" => lock!($self.neighbor.name).as_str(),
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
+            "fsm_state" => $self.state().as_str(),
             $($key => $value),*
         )
     };
@@ -94,6 +100,7 @@ macro_rules! session_log_lite {
             "neighbor_name" => lock!($self.neighbor.name).as_str(),
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
+            "fsm_state" => $self.state().as_str(),
         )
     };
     ($self:expr, $level:ident, $msg:expr, $($args:expr),*) => {
@@ -105,6 +112,7 @@ macro_rules! session_log_lite {
             "neighbor_name" => lock!($self.neighbor.name).as_str(),
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
+            "fsm_state" => $self.state().as_str(),
         )
     };
 }
@@ -116,7 +124,7 @@ macro_rules! collision_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
-            "fsm_state" => format!("{}", $self.state()).as_str(),
+            "fsm_state" => $self.state().as_str(),
             "neighbor_name" => lock!($self.neighbor.name).as_str(),
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
@@ -135,7 +143,7 @@ macro_rules! collision_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
-            "fsm_state" => format!("{}", $self.state()).as_str(),
+            "fsm_state" => $self.state().as_str(),
             "neighbor_name" => lock!($self.neighbor.name).as_str(),
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
@@ -154,7 +162,7 @@ macro_rules! collision_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
-            "fsm_state" => format!("{}", $self.state()).as_str(),
+            "fsm_state" => $self.state().as_str(),
             "neighbor_name" => lock!($self.neighbor.name).as_str(),
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
@@ -172,7 +180,7 @@ macro_rules! collision_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_SESSION_RUNNER,
-            "fsm_state" => format!("{}", $self.state()).as_str(),
+            "fsm_state" => $self.state().as_str(),
             "neighbor_name" => lock!($self.neighbor.name).as_str(),
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),

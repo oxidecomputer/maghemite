@@ -252,14 +252,14 @@ impl BgpConnectionChannel {
             timeout,
             log.clone(),
             creator,
-            conn_id.clone(),
+            conn_id,
         );
         let connection_clock = ConnectionClock::new(
             config.resolution,
             config.keepalive_time,
             config.hold_time,
             config.delay_open_time,
-            conn_id.clone(),
+            conn_id,
             event_tx.clone(),
             log.clone(),
         );
@@ -303,10 +303,7 @@ impl BgpConnectionChannel {
                         "message_contents" => format!("{msg}")
                     );
                     if let Err(e) = event_tx.send(FsmEvent::Connection(
-                        ConnectionEvent::Message {
-                            msg,
-                            conn_id: conn_id.clone(),
-                        },
+                        ConnectionEvent::Message { msg, conn_id },
                     )) {
                         connection_log_lite!(log,
                             error,

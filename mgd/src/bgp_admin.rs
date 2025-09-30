@@ -23,7 +23,7 @@ use dropshot::{
     HttpResponseDeleted, HttpResponseOk, HttpResponseUpdatedNoContent, Query,
     RequestContext, TypedBody,
 };
-use mg_common::{lock, read_lock};
+use mg_common::lock;
 use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -497,6 +497,29 @@ pub async fn get_neighbors(
 
     for s in lock!(r.sessions).values() {
         let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
+
+        let conf_holdtime;
+        let neg_holdtime;
+        let conf_keepalive;
+        let neg_keepalive;
+
+        // If the session runner has a primary connection, pull the config and
+        // runtime state from it. If not, just use the config owned by the
+        // session runner as both the config and runtime state.
+        if let Some(conn) = s.get_primary_conn() {
+            let clock = conn.clock();
+            conf_holdtime = clock.timers.config_hold_time;
+            neg_holdtime = lock!(clock.timers.hold_timer).interval;
+            conf_keepalive = clock.timers.config_keepalive_time;
+            neg_keepalive = lock!(clock.timers.keepalive_timer).interval;
+        } else {
+            let session_info = lock!(s.session);
+            conf_holdtime = session_info.hold_time;
+            neg_holdtime = session_info.hold_time;
+            conf_keepalive = session_info.keepalive_time;
+            neg_keepalive = session_info.keepalive_time;
+        }
+
         peers.insert(
             s.neighbor.host.ip(),
             PeerInfo {
@@ -505,24 +528,12 @@ pub async fn get_neighbors(
                 duration_millis: dur as u64,
                 timers: PeerTimers {
                     hold: DynamicTimerInfo {
-                        configured: *lock!(
-                            read_lock!(s.clock).timers.hold_configured_interval
-                        ),
-                        negotiated: lock!(
-                            read_lock!(s.clock).timers.hold_timer
-                        )
-                        .interval,
+                        configured: conf_holdtime,
+                        negotiated: neg_holdtime,
                     },
                     keepalive: DynamicTimerInfo {
-                        configured: *lock!(
-                            read_lock!(s.clock)
-                                .timers
-                                .keepalive_configured_interval
-                        ),
-                        negotiated: lock!(
-                            read_lock!(s.clock).timers.keepalive_timer
-                        )
-                        .interval,
+                        configured: conf_keepalive,
+                        negotiated: neg_keepalive,
                     },
                 },
             },
@@ -990,7 +1001,8 @@ pub(crate) mod helpers {
             .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
 
         match op {
-            resource::NeighborResetOp::Hard => read_lock!(session.event_tx)
+            resource::NeighborResetOp::Hard => session
+                .event_tx
                 .send(FsmEvent::Admin(AdminEvent::Reset))
                 .map_err(|e| {
                     Error::InternalCommunication(format!(
@@ -998,7 +1010,9 @@ pub(crate) mod helpers {
                     ))
                 })?,
             resource::NeighborResetOp::SoftInbound => {
-                read_lock!(session.event_tx)
+                // XXX: check if neighbor has negotiated route refresh cap
+                session
+                    .event_tx
                     .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh))
                     .map_err(|e| {
                         Error::InternalCommunication(format!(
@@ -1006,15 +1020,14 @@ pub(crate) mod helpers {
                         ))
                     })?
             }
-            resource::NeighborResetOp::SoftOutbound => {
-                read_lock!(session.event_tx)
-                    .send(FsmEvent::Admin(AdminEvent::ReAdvertise))
-                    .map_err(|e| {
-                        Error::InternalCommunication(format!(
-                            "failed to trigger outbound update {e}"
-                        ))
-                    })?
-            }
+            resource::NeighborResetOp::SoftOutbound => session
+                .event_tx
+                .send(FsmEvent::Admin(AdminEvent::ReAdvertiseRoutes))
+                .map_err(|e| {
+                    Error::InternalCommunication(format!(
+                        "failed to trigger outbound update {e}"
+                    ))
+                })?,
         }
 
         Ok(HttpResponseUpdatedNoContent())

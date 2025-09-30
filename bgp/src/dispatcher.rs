@@ -96,9 +96,9 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                 match lock!(self.addr_to_session).get(&addr).cloned() {
                     Some(session_endpoint) => {
                         // Apply connection policy from the session configuration
-                        let min_ttl = session_endpoint.config.min_ttl;
+                        let min_ttl = lock!(session_endpoint.config).min_ttl;
                         let md5_key =
-                            session_endpoint.config.md5_auth_key.clone();
+                            lock!(session_endpoint.config).md5_auth_key.clone();
 
                         if let Err(e) =
                             Listener::apply_policy(&accepted, min_ttl, md5_key)

@@ -305,7 +305,7 @@ impl ConnectionClock {
         let join_handle = Arc::new(Self::run(
             resolution,
             timers.clone(),
-            conn_id.clone(),
+            conn_id,
             event_tx,
             shutdown.clone(),
             log,
@@ -337,7 +337,7 @@ impl ConnectionClock {
                 resolution,
                 &lock!(timers.keepalive_timer),
                 FsmEvent::Connection(ConnectionEvent::KeepaliveTimerExpires(
-                    conn_id.clone(),
+                    conn_id,
                 )),
                 event_tx.clone(),
                 &log,
@@ -347,7 +347,7 @@ impl ConnectionClock {
                 resolution,
                 &lock!(timers.hold_timer),
                 FsmEvent::Connection(ConnectionEvent::HoldTimerExpires(
-                    conn_id.clone(),
+                    conn_id,
                 )),
                 event_tx.clone(),
                 &log,
@@ -357,7 +357,7 @@ impl ConnectionClock {
                 resolution,
                 &lock!(timers.delay_open_timer),
                 FsmEvent::Connection(ConnectionEvent::DelayOpenTimerExpires(
-                    conn_id.clone(),
+                    conn_id,
                 )),
                 event_tx.clone(),
                 &log,

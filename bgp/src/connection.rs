@@ -55,7 +55,7 @@ impl std::fmt::Display for ConnectionCreator {
 
 /// Unique identifier for a BGP connection instance
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct ConnectionId {
     /// Unique identifier for this connection instance

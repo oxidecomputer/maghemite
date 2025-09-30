@@ -98,6 +98,16 @@ impl Message {
             Message::RouteRefresh(_) => "route refresh",
         }
     }
+
+    pub fn kind(&self) -> MessageKind {
+        match self {
+            Message::Open(_) => MessageKind::Open,
+            Message::Update(_) => MessageKind::Update,
+            Message::Notification(_) => MessageKind::Notification,
+            Message::KeepAlive => MessageKind::KeepAlive,
+            Message::RouteRefresh(_) => MessageKind::RouteRefresh,
+        }
+    }
 }
 
 impl Display for Message {
@@ -133,6 +143,38 @@ impl From<NotificationMessage> for Message {
 impl From<RouteRefreshMessage> for Message {
     fn from(m: RouteRefreshMessage) -> Message {
         Message::RouteRefresh(m)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum MessageKind {
+    Open,
+    Update,
+    Notification,
+    KeepAlive,
+    RouteRefresh,
+}
+
+impl Display for MessageKind {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            MessageKind::Open => write!(f, "open"),
+            MessageKind::Update => write!(f, "update"),
+            MessageKind::Notification => write!(f, "notification"),
+            MessageKind::KeepAlive => write!(f, "keepalive"),
+            MessageKind::RouteRefresh => write!(f, "route_refresh"),
+        }
+    }
+}
+
+impl slog::Value for MessageKind {
+    fn serialize(
+        &self,
+        _record: &slog::Record,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_str(key, &self.to_string())
     }
 }
 
@@ -368,6 +410,20 @@ impl OpenMessage {
         self.get_capabilities()
             .into_iter()
             .any(|x| CapabilityCode::from(x) == code)
+    }
+
+    pub fn asn(&self) -> u32 {
+        let mut remote_asn = self.asn as u32;
+        for p in &self.parameters {
+            if let OptionalParameter::Capabilities(caps) = p {
+                for c in caps {
+                    if let Capability::FourOctetAs { asn } = c {
+                        remote_asn = *asn;
+                    }
+                }
+            }
+        }
+        remote_asn
     }
 
     /// Serialize an open message to wire format.

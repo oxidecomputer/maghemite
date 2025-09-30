@@ -29,6 +29,14 @@ use std::{
 // Use non-standard port outside the privileged range to avoid needing privs
 const TEST_BGP_PORT: u16 = 10179;
 
+// XXX: Add test impl of BgpConnection for FSM tests.
+//      The DUT will still have a SessionRunner & timers, but the test peer will
+//      be simulated by test code + will inject different events into the DUT's
+//      FSM event queue so we can test all events in each state. We should have
+//      explicit expectations for how every possible event is handled in every
+//      FSM state. Test each state like there's a `match` for events.
+//      We also need to add tests for IdleHoldTimer and DampPeerOscillations.
+
 lazy_static! {
     static ref LOOPBACK_MANAGER: Arc<Mutex<LoopbackIpManager>> = {
         let ifname = if cfg!(target_os = "macos") || cfg!(target_os = "illumos")

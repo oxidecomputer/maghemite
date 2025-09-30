@@ -12,12 +12,12 @@ use crate::fanout::Fanout;
 use crate::log::{collision_log, session_log, session_log_lite};
 use crate::messages::{
     AddPathElement, Afi, Capability, CeaseErrorSubcode, Community, ErrorCode,
-    ErrorSubcode, Message, NotificationMessage, OpenMessage, OptionalParameter,
+    ErrorSubcode, Message, MessageKind, NotificationMessage, OpenMessage,
     PathAttributeValue, RouteRefreshMessage, Safi, UpdateMessage,
 };
 use crate::policy::{CheckerResult, ShaperResult};
 use crate::router::Router;
-use crossbeam_channel::{Receiver, Select, Sender};
+use crossbeam_channel::{Receiver, Sender};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
@@ -36,12 +36,23 @@ const UNIT_SESSION_RUNNER: &str = "session_runner";
 #[derive(Debug)]
 pub struct PeerConnection<Cnx: BgpConnection> {
     conn: Cnx,
+    /// The actual Router-ID learned from the remote peer (runtime state)
     id: u32,
+    /// The actual ASN learned from the remote peer (runtime state)
+    asn: u32,
 }
 
 pub enum CollisionPair<Cnx: BgpConnection> {
     OpenConfirm(PeerConnection<Cnx>, Cnx),
     OpenSent(Cnx, Cnx),
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum CollisionConnectionKind<Cnx: BgpConnection> {
+    New,
+    Exist,
+    Unexpected(Cnx),
+    Missing,
 }
 
 /// The states a BGP finite state machine may be at any given time. Many
@@ -78,7 +89,7 @@ pub enum FsmState<Cnx: BgpConnection> {
     OpenConfirm(PeerConnection<Cnx>),
 
     /// Waiting for Open from incoming connection to perform Collision Resolution.
-    CollisionDetection(CollisionPair<Cnx>),
+    ConnectionCollision(CollisionPair<Cnx>),
 
     /// Sync up with peers.
     SessionSetup(PeerConnection<Cnx>),
@@ -122,7 +133,7 @@ pub enum FsmStateKind {
     OpenConfirm,
 
     /// Handler for Connection Collisions (RFC 4271 6.8)
-    CollisionDetection,
+    ConnectionCollision,
 
     /// Sync up with peers.
     SessionSetup,
@@ -131,20 +142,24 @@ pub enum FsmStateKind {
     Established,
 }
 
+impl FsmStateKind {
+    fn as_str(&self) -> &str {
+        match self {
+            FsmStateKind::Idle => "idle",
+            FsmStateKind::Connect => "connect",
+            FsmStateKind::Active => "active",
+            FsmStateKind::OpenSent => "open sent",
+            FsmStateKind::OpenConfirm => "open confirm",
+            FsmStateKind::ConnectionCollision => "connection collision",
+            FsmStateKind::SessionSetup => "session setup",
+            FsmStateKind::Established => "established",
+        }
+    }
+}
+
 impl Display for FsmStateKind {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            FsmStateKind::Idle => write!(f, "idle"),
-            FsmStateKind::Connect => write!(f, "connect"),
-            FsmStateKind::Active => write!(f, "active"),
-            FsmStateKind::OpenSent => write!(f, "open sent"),
-            FsmStateKind::OpenConfirm => write!(f, "open confirm"),
-            FsmStateKind::CollisionDetection => {
-                write!(f, "collision detection")
-            }
-            FsmStateKind::SessionSetup => write!(f, "session setup"),
-            FsmStateKind::Established => write!(f, "established"),
-        }
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -156,7 +171,9 @@ impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKind {
             FsmState::Active => FsmStateKind::Active,
             FsmState::OpenSent(_) => FsmStateKind::OpenSent,
             FsmState::OpenConfirm(_) => FsmStateKind::OpenConfirm,
-            FsmState::CollisionDetection(_) => FsmStateKind::CollisionDetection,
+            FsmState::ConnectionCollision(_) => {
+                FsmStateKind::ConnectionCollision
+            }
             FsmState::SessionSetup(_) => FsmStateKind::SessionSetup,
             FsmState::Established(_) => FsmStateKind::Established,
         }
@@ -242,6 +259,13 @@ impl AdminEvent {
             AdminEvent::PathAttributesChanged => "path attributes changed",
         }
     }
+}
+
+pub enum StopReason {
+    Reset,
+    Shutdown,
+    FsmError,
+    HoldTimeExpired,
 }
 
 /// FsmEvents pertaining to a specific Connection
@@ -463,7 +487,7 @@ pub enum UnusedEvent {
     TcpConnectionFails,
 
     /// Fires when a connection has been detected while processing an open
-    /// message. We implement Collision handling in FsmState::CollisionDetection
+    /// message. We implement Collision handling in FsmState::ConnectionCollision
     OpenCollisionDump,
 }
 
@@ -682,13 +706,15 @@ pub struct SessionCounters {
     pub connect_retry_counter: AtomicU64, // increments/zeroes with FSM per RFC
     pub connection_retries: AtomicU64,    // total number of retries
     pub active_connections_accepted: AtomicU64,
+    pub active_connections_declined: AtomicU64,
     pub passive_connections_accepted: AtomicU64,
+    pub passive_connections_declined: AtomicU64,
     pub transitions_to_idle: AtomicU64,
     pub transitions_to_connect: AtomicU64,
     pub transitions_to_active: AtomicU64,
     pub transitions_to_open_sent: AtomicU64,
     pub transitions_to_open_confirm: AtomicU64,
-    pub transitions_to_collision_detection: AtomicU64,
+    pub transitions_to_connection_collision: AtomicU64,
     pub transitions_to_session_setup: AtomicU64,
     pub transitions_to_established: AtomicU64,
     pub hold_timer_expirations: AtomicU64,
@@ -742,7 +768,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     /// new connection is established, a copy of this sender is sent to the
     /// underlying BGP connection manager to send messages to the session
     /// runner as they are received.
-    pub event_tx: RwLock<Sender<FsmEvent<Cnx>>>,
+    pub event_tx: Sender<FsmEvent<Cnx>>,
 
     /// Information about the neighbor this session is to peer with.
     pub neighbor: NeighborInfo,
@@ -763,7 +789,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     /// Track how many times a connection has been attempted.
     pub connect_retry_counter: AtomicU64,
 
-    event_rx: RwLock<Receiver<FsmEvent<Cnx>>>,
+    event_rx: Receiver<FsmEvent<Cnx>>,
     state: Arc<Mutex<FsmStateKind>>,
     last_state_change: Mutex<Instant>,
     asn: Asn,
@@ -772,6 +798,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     /// The actual ASN learned from the remote peer (runtime state)
     remote_asn: Arc<Mutex<Option<u32>>>,
 
+    // XXX: stop duplicating this in PeerConnection
     /// The actual Router-ID learned from the remote peer (runtime state)
     remote_id: Arc<Mutex<Option<u32>>>,
 
@@ -820,8 +847,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let runner = SessionRunner {
             session: session.clone(),
             connect_retry_counter: AtomicU64::new(0),
-            event_rx: RwLock::new(event_rx),
-            event_tx: RwLock::new(event_tx.clone()),
+            event_rx,
+            event_tx: event_tx.clone(),
             asn,
             id,
             neighbor,
@@ -872,15 +899,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Get the primary connection
     pub fn get_primary_conn(&self) -> Option<Cnx> {
-        let primary_id = lock!(self.primary_connection).clone()?;
+        let primary_id = (*lock!(self.primary_connection))?;
         lock!(self.connections).get(&primary_id).cloned()
     }
 
     /// Add a connection to the registry. Newly registered connection is
     /// promoted to primary only if there isn't already a primary.
     pub fn register_conn(&self, conn: Cnx) {
-        let conn_id = conn.id().clone();
-        lock!(self.connections).insert(conn_id.clone(), conn);
+        let conn_id = *conn.id();
+        lock!(self.connections).insert(conn_id, conn);
 
         if self.get_primary_conn().is_none() {
             self.set_primary_conn(Some(conn_id));
@@ -947,8 +974,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmState::Active => self.on_active(),
                 FsmState::OpenSent(conn) => self.on_open_sent(conn),
                 FsmState::OpenConfirm(conn) => self.on_open_confirm(conn),
-                FsmState::CollisionDetection(cpair) => {
-                    self.collision_detection(cpair)
+                FsmState::ConnectionCollision(cpair) => {
+                    self.connection_collision(cpair)
                 }
                 FsmState::SessionSetup(conn) => self.session_setup(conn),
                 FsmState::Established(conn) => self.on_established(conn),
@@ -990,9 +1017,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             .transitions_to_open_confirm
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKind::CollisionDetection => {
+                    FsmStateKind::ConnectionCollision => {
                         self.counters
-                            .transitions_to_collision_detection
+                            .transitions_to_connection_collision
                             .fetch_add(1, Ordering::Relaxed);
                     }
                     FsmStateKind::SessionSetup => {
@@ -1014,7 +1041,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     fn initialize_capabilities(&self) {
         *lock!(self.capabilities_sent) = BTreeSet::from([
-            //Capability::RouteRefresh{},
             //Capability::EnhancedRouteRefresh{},
             Capability::MultiprotocolExtensions {
                 afi: 1,  //IP
@@ -1035,9 +1061,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Initial state. Refuse all incoming BGP connections. No resources
     /// allocated to peer.
     fn idle(&self) -> FsmState<Cnx> {
+        // IdleHoldTimer is the mechanism by which maghemite implements
+        // DampPeerOscillation. This holds the peer in Idle until the timer has
+        // popped, preventing the connection from flapping. The interval is
+        // supplied via PeerConfig as an unsigned int, and is always set to
+        // something valid. DampPeerOscillation is disabled if interval == 0.
         {
             let ihl = lock!(self.clock.timers.idle_hold_timer);
-            if !ihl.interval.is_zero() {
+            if ihl.interval.is_zero() {
+                // If IdleHoldTimer is not configured, send IdleHoldTimerExpires
+                // so we immediately move into the next state.
+                if let Err(e) = self
+                    .event_tx
+                    .send(FsmEvent::Session(SessionEvent::IdleHoldTimerExpires))
+                {
+                    session_log_lite!(self,
+                        error,
+                        "failed to send IdleHoldTimerExpires event: {e}";
+                        "error" => format!("{e}")
+                    );
+                }
+            } else {
+                // If IdleHoldTimer is configured (non-zero), start the timer.
+                // No events will be handled until this timer pops, except for
+                // explicit adminstrative start/restart events.
                 ihl.restart();
             }
         }
@@ -1045,127 +1092,141 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // Clean up connection registry
         self.cleanup_connections();
 
-        let event = match read_lock!(self.event_rx).recv() {
-            Ok(event) => {
-                session_log_lite!(self, debug, "received fsm event {}",
-                    event.title();
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "event" => event.title()
-                );
-                event
-            }
-            Err(e) => {
-                session_log_lite!(self, error, "event rx error: {e}";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "error" => format!("{e}")
-                );
-                return FsmState::Idle;
-            }
-        };
-
-        match event {
-            FsmEvent::Admin(admin_event) => match admin_event {
-                AdminEvent::ManualStart => {
-                    lock!(self.clock.timers.idle_hold_timer).disable();
-
-                    // RFC 4271:
-                    // ```
-                    // Each BGP peer paired in a potential connection will
-                    // attempt to connect to the other, unless configured to
-                    // remain in the idle state, or configured to remain passive.
-                    // ```
-                    // While the RFC does state that we should start the
-                    // ConnectRetryTimer upon a manual/automatic start with
-                    // passive tcp establishment, that is directly contradictory
-                    // to the premise of passive connections not attempting to
-                    // connect to peers. So instead we stop ConnectRetryTimer.
-                    if lock!(self.session).passive_tcp_establishment {
-                        lock!(self.clock.timers.connect_retry_timer).stop();
-                        return FsmState::Active;
-                    }
-
-                    lock!(self.clock.timers.connect_retry_timer).restart();
-                    FsmState::Connect
-                }
-                other => {
-                    session_log_lite!(self, warn,
-                        "unexpected admin fsm event, ignoring";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
-                        "event" => other.title()
+        loop {
+            let event = match self.event_rx.recv() {
+                Ok(event) => {
+                    session_log_lite!(self, debug, "received fsm event {}",
+                        event.title();
+                        "event" => event.title()
                     );
-                    FsmState::Idle
+                    event
                 }
-            },
-
-            // IdleHoldTimer is the mechanism by which maghemite implements
-            // DampPeerOscillation. This holds the peer in Idle until the timer
-            // has popped, preventing the connection from flapping. The interval
-            // is supplied via PeerConfig as an unsigned int, and is always set
-            // to something valid. DampPeerOscillation is disabled if the
-            // interval is 0.
-            FsmEvent::Session(SessionEvent::IdleHoldTimerExpires) => {
-                self.counters
-                    .idle_hold_timer_expirations
-                    .fetch_add(1, Ordering::Relaxed);
-                lock!(self.clock.timers.idle_hold_timer).disable();
-
-                if lock!(self.session).passive_tcp_establishment {
-                    return FsmState::Active;
+                Err(e) => {
+                    session_log_lite!(self, error, "event rx error: {e}";
+                        "error" => format!("{e}")
+                    );
+                    continue;
                 }
-                FsmState::Connect
-            }
+            };
 
-            // Any other event (Events 9-12, 15-28) received in the Idle state
-            // does not cause change in the state of the local system.
+            // The only events we react to are ManualStart, Reset and
+            // IdleHoldTimerExpires. ManualStart and Reset are explicit requests
+            // to start the FSM, so we skip/disable DampPeerOscillation (by
+            // ignoring/stopping the IdleHoldTimer) and move into the next FSM
+            // state. Without an explicit Administrative command to start the
+            // FSM, we will wait for the IdleHoldTimer to pop.
+            match event {
+                FsmEvent::Admin(admin_event) => match admin_event {
+                    AdminEvent::ManualStart | AdminEvent::Reset => {
+                        lock!(self.clock.timers.idle_hold_timer).disable();
 
-            // The only reason we handle messages separately is for counters
-            FsmEvent::Connection(ConnectionEvent::Message { msg, conn_id }) => {
-                session_log_lite!(self, warn, "unexpected message";
-                    "fsm_state" => format!("{}", self.state()),
-                    "message" => msg.title()
-                );
+                        self.restart_connect_retry();
 
-                match msg {
-                    // Event 19
-                    Message::Open(_) => {
-                        self.counters
-                            .unexpected_open_message
-                            .fetch_add(1, Ordering::Relaxed);
+                        if lock!(self.session).passive_tcp_establishment {
+                            return FsmState::Active;
+                        } else {
+                            return FsmState::Connect;
+                        }
                     }
-                    // Event 25
-                    Message::Notification(_) => {
-                        self.counters
-                            .notifications_received
-                            .fetch_add(1, Ordering::Relaxed);
+
+                    // We are already in Idle, so ManualStop is a no-op.
+                    // The rest of the admin events are only relevant in Established
+                    AdminEvent::ManualStop
+                    | AdminEvent::Announce(_)
+                    | AdminEvent::ShaperChanged(_)
+                    | AdminEvent::ExportPolicyChanged(_)
+                    | AdminEvent::CheckerChanged(_)
+                    | AdminEvent::SendRouteRefresh
+                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::PathAttributesChanged => {
+                        let title = admin_event.title();
+                        session_log_lite!(self, warn,
+                            "unexpected admin fsm event {title}, ignoring";
+                            "event" => title
+                        );
+                        continue;
                     }
-                    // Event 26
-                    Message::KeepAlive => {
+                },
+
+                FsmEvent::Session(session_event) => match session_event {
+                    // DampPeerOscillations period has ended.
+                    // Move into the next FSM State.
+                    SessionEvent::IdleHoldTimerExpires => {
                         self.counters
-                            .unexpected_keepalive_message
+                            .idle_hold_timer_expirations
                             .fetch_add(1, Ordering::Relaxed);
+                        lock!(self.clock.timers.idle_hold_timer).disable();
+
+                        if lock!(self.session).passive_tcp_establishment {
+                            return FsmState::Active;
+                        }
+                        return FsmState::Connect;
                     }
-                    // Event 27
-                    Message::Update(_) => {
-                        self.counters
-                            .unexpected_update_message
-                            .fetch_add(1, Ordering::Relaxed);
+
+                    SessionEvent::Connected(new)
+                    | SessionEvent::TcpConnectionConfirmed(new) => {
+                        match new.creator() {
+                            ConnectionCreator::Dispatcher => {
+                                session_log!(self, info, new,
+                                    "inbound connection not allowed in idle (peer: {}, conn_id: {})",
+                                    new.peer(), new.id().short();
+                                );
+                                self.counters
+                                    .passive_connections_declined
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                            ConnectionCreator::Connector => {
+                                session_log!(self, info, new,
+                                    "outbound connection completed but not allowed in idle (peer: {}, conn_id: {})",
+                                    new.peer(), new.id().short();
+                                );
+                                self.counters
+                                    .active_connections_declined
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        continue;
                     }
-                    Message::RouteRefresh(_) => {
-                        self.counters
-                            .unexpected_route_refresh_message
-                            .fetch_add(1, Ordering::Relaxed);
+
+                    // Event 9
+                    SessionEvent::ConnectRetryTimerExpires => {
+                        session_log_lite!(self, warn,
+                            "unexpected session fsm event {} not allowed in this state", session_event.title();
+                        );
+                        continue;
+                    }
+                },
+
+                /*
+                 * Any other event (Events 9-12, 15-28) received in the Idle state
+                 * does not cause change in the state of the local system.
+                 */
+                FsmEvent::Connection(connection_event) => {
+                    match connection_event {
+                        // Events 10-12
+                        ConnectionEvent::HoldTimerExpires(conn_id)
+                        | ConnectionEvent::KeepaliveTimerExpires(conn_id)
+                        | ConnectionEvent::DelayOpenTimerExpires(conn_id) => {
+                            session_log_lite!(self, warn,
+                                "unexpected connection fsm event {} (conn_id: {}) not allowed in this state",
+                                connection_event.title(), conn_id.short();
+                            );
+                            continue;
+                        }
+
+                        ConnectionEvent::Message { msg, conn_id } => {
+                            session_log_lite!(self, warn, "unexpected {} message (conn_id: {})",
+                                msg.title(), conn_id.short();
+                                "message" => msg.title(),
+                                "message_contents" => format!("{msg}")
+                            );
+
+                            self.bump_msg_counter(msg.kind(), true);
+
+                            continue;
+                        }
                     }
                 }
-
-                FsmState::Idle
-            }
-
-            _ => {
-                session_log_lite!(self, warn,
-                    "{} event not allowed in this state", event.title();
-                    "fsm_state" => format!("{}", self.state()).as_str()
-                );
-                FsmState::Idle
             }
         }
     }
@@ -1179,11 +1240,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let md5_auth_key = lock!(self.session).md5_auth_key.clone();
 
         // Start with an initial connection attempt using BgpConnector
-        session_log_lite!(self,
-            debug,
-            "starting initial connect attempt";
-            "fsm_state" => format!("{}", self.state()).as_str()
-        );
+        session_log_lite!(self, debug, "starting initial connect attempt";);
         let session_info = lock!(self.session);
         match Cnx::Connector::connect(
             self.neighbor.host,
@@ -1191,31 +1248,25 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             min_ttl,
             md5_auth_key.clone(),
             self.log.clone(),
-            read_lock!(self.event_tx).clone(),
+            self.event_tx.clone(),
             &session_info,
         ) {
             Err(e) => {
-                session_log_lite!(self,
-                    warn,
-                    "initial connect attempt failed";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
+                session_log_lite!(self, warn, "initial connect attempt failed";
                     "error" => format!("{e}")
                 )
             }
             Ok(conn) => {
                 session_log!(self, debug, conn,
-                    "initial connect attempt succeeded";
-                    "fsm_state" => format!("{}", self.state()).as_str()
+                    "initial connect attempt succeeded (peer: {}, conn_id: {})",
+                    conn.peer(), conn.id().short();
                 );
-                if let Err(e) =
-                    read_lock!(self.event_tx).send(FsmEvent::Session(
-                        SessionEvent::TcpConnectionConfirmed(conn),
-                    ))
-                {
+                if let Err(e) = self.event_tx.send(FsmEvent::Session(
+                    SessionEvent::TcpConnectionConfirmed(conn),
+                )) {
                     session_log_lite!(self,
                         error,
                         "failed to send TcpConnectionConfirmed event: {e}";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
                         "error" => format!("{e}")
                     );
                 }
@@ -1228,12 +1279,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 break FsmState::Idle;
             }
 
-            let event = match read_lock!(self.event_rx).recv() {
+            let event = match self.event_rx.recv() {
                 Ok(event) => {
                     session_log_lite!(self,
                         debug,
                         "received fsm event {}", event.title();
-                        "fsm_state" => format!("{}", self.state()).as_str(),
                         "event" => event.title()
                     );
                     event
@@ -1242,7 +1292,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     session_log_lite!(self,
                         error,
                         "event rx error: {e}";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
                         "error" => format!("{e}")
                     );
                     continue;
@@ -1251,42 +1300,61 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
-                    AdminEvent::ManualStop | AdminEvent::Reset => {
+                    AdminEvent::ManualStop => {
                         session_log_lite!(self,
                             info,
                             "rx {}, fsm transition to idle", admin_event.title();
-                            "fsm_state" => format!("{}", self.state()).as_str()
                         );
-                        self.connect_retry_counter.store(0, Ordering::Relaxed);
-                        lock!(self.clock.timers.connect_retry_timer).stop();
+                        self.stop(None, None, StopReason::Shutdown);
                         return FsmState::Idle;
                     }
-                    other => {
-                        session_log_lite!(self, warn,
-                            "unexpected admin fsm event, ignoring";
-                            "fsm_state" => format!("{}", self.state()).as_str(),
-                            "event" => other.title()
+
+                    AdminEvent::Reset => {
+                        session_log_lite!(self,
+                            info,
+                            "rx {}, fsm transition to idle", admin_event.title();
                         );
+                        self.stop(None, None, StopReason::Reset);
                         return FsmState::Idle;
+                    }
+
+                    // We are already running, so ManualStart is a no-op.
+                    // The rest of the admin events are only relevant in Established
+                    AdminEvent::ManualStart
+                    | AdminEvent::Announce(_)
+                    | AdminEvent::ShaperChanged(_)
+                    | AdminEvent::ExportPolicyChanged(_)
+                    | AdminEvent::CheckerChanged(_)
+                    | AdminEvent::SendRouteRefresh
+                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::PathAttributesChanged => {
+                        let title = admin_event.title();
+                        session_log_lite!(self, warn,
+                            "unexpected admin fsm event {title}, ignoring";
+                            "event" => title
+                        );
+                        continue;
                     }
                 },
 
                 FsmEvent::Session(session_event) => match session_event {
-                    // In response to the ConnectRetryTimer_Expires event (Event 9), the
-                    // local system:
-                    //
-                    //   - drops the TCP connection,
-                    //
-                    //   - restarts the ConnectRetryTimer,
-                    //
-                    //   - stops the DelayOpenTimer and resets the timer to zero,
-                    //
-                    //   - initiates a TCP connection to the other BGP peer,
-                    //
-                    //   - continues to listen for a connection that may be initiated by
-                    //     the remote BGP peer, and
-                    //
-                    //   - stays in the Connect state.
+                    /*
+                     * In response to the ConnectRetryTimer_Expires event (Event 9), the
+                     * local system:
+                     *
+                     *   - drops the TCP connection,
+                     *
+                     *   - restarts the ConnectRetryTimer,
+                     *
+                     *   - stops the DelayOpenTimer and resets the timer to zero,
+                     *
+                     *   - initiates a TCP connection to the other BGP peer,
+                     *
+                     *   - continues to listen for a connection that may be initiated by
+                     *     the remote BGP peer, and
+                     *
+                     *   - stays in the Connect state.
+                     */
                     SessionEvent::ConnectRetryTimerExpires => {
                         self.counters
                             .connection_retries
@@ -1300,77 +1368,78 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             min_ttl,
                             md5_auth_key.clone(),
                             self.log.clone(),
-                            read_lock!(self.event_tx).clone(),
+                            self.event_tx.clone(),
                             &session_info,
                         ) {
                             Err(e) => {
-                                session_log_lite!(self,
-                                    warn,
-                                    "connect attempt failed";
-                                    "fsm_state" => format!("{}", self.state()).as_str(),
+                                session_log_lite!(self, warn,
+                                    "subsequent connect attempt failed";
                                     "error" => format!("{e}")
                                 );
                             }
                             Ok(conn) => {
                                 if let Err(e) =
-                                    read_lock!(self.event_tx)
-                                        .send(FsmEvent::Session(
+                                    self.event_tx.send(FsmEvent::Session(
                                         SessionEvent::TcpConnectionConfirmed(
                                             conn,
                                         ),
                                     ))
                                 {
-                                    session_log_lite!(self,
-                                        error,
+                                    session_log_lite!(self, error,
                                         "failed to send TcpConnectionConfirmed event: {e}";
-                                        "fsm_state" => format!("{}", self.state()).as_str(),
                                         "error" => format!("{e}")
                                     );
                                 }
                             }
                         }
-                        lock!(self.clock.timers.connect_retry_timer).restart();
+                        self.restart_connect_retry();
                     }
 
-                    // If the TCP connection succeeds (Event 16 or Event 17), the local
-                    // system checks the DelayOpen attribute prior to processing.  If the
-                    // DelayOpen attribute is set to TRUE, the local system:
-                    //
-                    //   - stops the ConnectRetryTimer (if running) and sets the
-                    //     ConnectRetryTimer to zero,
-                    //
-                    //   - sets the DelayOpenTimer to the initial value, and
-                    //
-                    //   - stays in the Connect state.
-                    //
-                    // If the DelayOpen attribute is set to FALSE, the local system:
-                    //
-                    //   - stops the ConnectRetryTimer (if running) and sets the
-                    //     ConnectRetryTimer to zero,
-                    //
-                    //   - completes BGP initialization
-                    //
-                    //   - sends an OPEN message to its peer,
-                    //
-                    //   - sets the HoldTimer to a large value, and
-                    //
-                    //   - changes its state to OpenSent.
-                    //
-                    // A HoldTimer value of 4 minutes is suggested.
+                    /*
+                     * If the TCP connection succeeds (Event 16 or Event 17), the local
+                     * system checks the DelayOpen attribute prior to processing.  If the
+                     * DelayOpen attribute is set to TRUE, the local system:
+                     *
+                     *   - stops the ConnectRetryTimer (if running) and sets the
+                     *     ConnectRetryTimer to zero,
+                     *
+                     *   - sets the DelayOpenTimer to the initial value, and
+                     *
+                     *   - stays in the Connect state.
+                     *
+                     * If the DelayOpen attribute is set to FALSE, the local system:
+                     *
+                     *   - stops the ConnectRetryTimer (if running) and sets the
+                     *     ConnectRetryTimer to zero,
+                     *
+                     *   - completes BGP initialization
+                     *
+                     *   - sends an OPEN message to its peer,
+                     *
+                     *   - sets the HoldTimer to a large value, and
+                     *
+                     *   - changes its state to OpenSent.
+                     *
+                     * A HoldTimer value of 4 minutes is suggested.
+                     */
                     SessionEvent::Connected(accepted)
                     | SessionEvent::TcpConnectionConfirmed(accepted) => {
                         match accepted.creator() {
                             ConnectionCreator::Dispatcher => {
                                 session_log!(self, info, accepted,
                                     "accepted inbound connection from {}", accepted.peer();
-                                    "fsm_state" => format!("{}", self.state()).as_str()
-                                )
+                                );
+                                self.counters
+                                    .passive_connections_accepted
+                                    .fetch_add(1, Ordering::Relaxed);
                             }
                             ConnectionCreator::Connector => {
                                 session_log!(self, info, accepted,
                                     "outbound connection to {} accepted", accepted.peer();
-                                    "fsm_state" => format!("{}", self.state()).as_str()
-                                )
+                                );
+                                self.counters
+                                    .active_connections_accepted
+                                    .fetch_add(1, Ordering::Relaxed);
                             }
                         }
 
@@ -1385,16 +1454,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         if let Err(e) = self.send_open(&accepted) {
                             session_log!(self, error, accepted,
                                 "failed to send open, fsm transition to idle";
-                                "fsm_state" => format!("{}", self.state()).as_str(),
                                 "error" => format!("{e}")
                             );
                             return FsmState::Idle;
                         }
 
                         lock!(accepted.clock().timers.hold_timer).restart();
-                        self.counters
-                            .passive_connections_accepted
-                            .fetch_add(1, Ordering::Relaxed);
 
                         return FsmState::OpenSent(accepted);
                     }
@@ -1409,32 +1474,33 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             warn,
                             "{} event not allowed in this state, fsm transition to idle",
                             session_event.title();
-                            "fsm_state" => format!("{}", self.state()).as_str()
                         );
 
                         return FsmState::Idle;
                     }
                 },
 
-                // In response to any other events (Events 8, 10-11, 13, 19, 23,
-                // 25-28), the local system:
-                //
-                //   - if the ConnectRetryTimer is running, stops and resets the
-                //     ConnectRetryTimer (sets to zero),
-                //
-                //   - if the DelayOpenTimer is running, stops and resets the
-                //     DelayOpenTimer (sets to zero),
-                //
-                //   - releases all BGP resources,
-                //
-                //   - drops the TCP connection,
-                //
-                //   - increments the ConnectRetryCounter by 1,
-                //
-                //   - performs peer oscillation damping if the DampPeerOscillations
-                //     attribute is set to True, and
-                //
-                //   - changes its state to Idle.
+                /*
+                 * In response to any other events (Events 8, 10-11, 13, 19, 23,
+                 * 25-28), the local system:
+                 *
+                 *   - if the ConnectRetryTimer is running, stops and resets the
+                 *     ConnectRetryTimer (sets to zero),
+                 *
+                 *   - if the DelayOpenTimer is running, stops and resets the
+                 *     DelayOpenTimer (sets to zero),
+                 *
+                 *   - releases all BGP resources,
+                 *
+                 *   - drops the TCP connection,
+                 *
+                 *   - increments the ConnectRetryCounter by 1,
+                 *
+                 *   - performs peer oscillation damping if the DampPeerOscillations
+                 *     attribute is set to True, and
+                 *
+                 *   - changes its state to Idle.
+                 */
                 FsmEvent::Connection(connection_event) => {
                     let title = connection_event.title();
                     match connection_event {
@@ -1443,46 +1509,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 warn,
                                 "rx unexpected {} message (conn_id {}), fsm transition to idle",
                                 msg.title(), conn_id.short();
-                                "fsm_state" => format!("{}", self.state()).as_str(),
                                 "message" => msg.title(),
                                 "message_contents" => format!("{msg}")
                             );
 
                             lock!(self.clock.timers.connect_retry_timer).stop();
+                            // DelayOpenTimer is stored in the Connection, which
+                            // will be dropped in Idle. Skip touching its timer.
                             self.connect_retry_counter
                                 .fetch_add(1, Ordering::Relaxed);
 
-                            match msg {
-                                // Event 19
-                                Message::Open(_) => {
-                                    self.counters
-                                        .unexpected_open_message
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
-                                // Event 27
-                                Message::Update(_) => {
-                                    self.counters
-                                        .unexpected_update_message
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
-                                // Event 25
-                                Message::Notification(_) => {
-                                    self.counters
-                                        .notifications_received
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
-                                // Event 26
-                                Message::KeepAlive => {
-                                    self.counters
-                                        .unexpected_keepalive_message
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
-                                Message::RouteRefresh(_) => {
-                                    self.counters
-                                        .unexpected_route_refresh_message
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
+                            self.bump_msg_counter(msg.kind(), true);
 
                             return FsmState::Idle;
                         }
@@ -1492,13 +1529,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         | ConnectionEvent::KeepaliveTimerExpires(conn_id)
                         | ConnectionEvent::DelayOpenTimerExpires(conn_id) => {
                             lock!(self.clock.timers.connect_retry_timer).stop();
+                            // DelayOpenTimer is stored in the Connection, which
+                            // will be dropped in Idle. Skip touching its timer.
                             self.connect_retry_counter
                                 .fetch_add(1, Ordering::Relaxed);
 
                             session_log_lite!(self, warn,
                                 "connection fsm event {title} (conn_id {}) not allowed in this state, fsm transition to idle",
                                 conn_id.short();
-                                "fsm_state" => format!("{}", self.state()).as_str()
                             );
 
                             return FsmState::Idle;
@@ -1515,21 +1553,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// complete; they should never transition to Connect.
     fn on_active(&self) -> FsmState<Cnx> {
         loop {
-            let event = match read_lock!(self.event_rx).recv() {
+            let event = match self.event_rx.recv() {
                 Ok(event) => {
-                    session_log_lite!(self, debug, "received fsm event";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
+                    session_log_lite!(self, debug, "received fsm event {}",
+                        self.state();
                         "event" => event.title()
                     );
                     event
                 }
                 Err(e) => {
                     session_log_lite!(self, error, "event rx error: {e}";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
                         "error" => format!("{e}")
                     );
                     // TODO: Possible death loop. Should we just panic here?
-                    return FsmState::Active;
+                    continue;
                 }
             };
 
@@ -1538,40 +1575,55 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // we need to do is sit and wait for that event or for timers to pop
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
-                    // In response to a ManualStop event (Event 2), the local system:
-                    //
-                    //   - If the DelayOpenTimer is running and the
-                    //     SendNOTIFICATIONwithoutOPEN session attribute is set, the
-                    //     local system sends a NOTIFICATION with a Cease,
-                    //
-                    //   - releases all BGP resources including stopping the
-                    //     DelayOpenTimer
-                    //
-                    //   - drops the TCP connection,
-                    //
-                    //   - sets ConnectRetryCounter to zero,
-                    //
-                    //   - stops the ConnectRetryTimer and sets the ConnectRetryTimer to
-                    //     zero, and
-                    //
-                    //   - changes its state to Idle.
-                    AdminEvent::ManualStop | AdminEvent::Reset => {
+                    /*
+                     * In response to a ManualStop event (Event 2), the local system:
+                     *
+                     *   - If the DelayOpenTimer is running and the
+                     *     SendNOTIFICATIONwithoutOPEN session attribute is set, the
+                     *     local system sends a NOTIFICATION with a Cease,
+                     *
+                     *   - releases all BGP resources including stopping the
+                     *     DelayOpenTimer
+                     *
+                     *   - drops the TCP connection,
+                     *
+                     *   - sets ConnectRetryCounter to zero,
+                     *
+                     *   - stops the ConnectRetryTimer and sets the ConnectRetryTimer to
+                     *     zero, and
+                     *
+                     *   - changes its state to Idle.
+                     */
+                    AdminEvent::ManualStop => {
                         session_log_lite!(self, info,
                             "rx {}, fsm transition to idle", admin_event.title();
-                            "fsm_state" => format!("{}", self.state()).as_str()
                         );
-
-                        self.connect_retry_counter.store(0, Ordering::Relaxed);
-                        lock!(self.clock.timers.connect_retry_timer).stop();
-
+                        self.stop(None, None, StopReason::Shutdown);
                         return FsmState::Idle;
                     }
 
-                    other => {
+                    AdminEvent::Reset => {
+                        session_log_lite!(self, info,
+                            "rx {}, fsm transition to idle", admin_event.title();
+                        );
+                        self.stop(None, None, StopReason::Reset);
+                        return FsmState::Idle;
+                    }
+
+                    // We are already running, so ManualStart is a no-op.
+                    // The rest of the admin events are only relevant in Established
+                    AdminEvent::ManualStart
+                    | AdminEvent::Announce(_)
+                    | AdminEvent::ShaperChanged(_)
+                    | AdminEvent::ExportPolicyChanged(_)
+                    | AdminEvent::CheckerChanged(_)
+                    | AdminEvent::SendRouteRefresh
+                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::PathAttributesChanged => {
+                        let title = admin_event.title();
                         session_log_lite!(self, warn,
-                            "unexpected admin fsm event, ignoring";
-                            "fsm_state" => format!("{}", self.state()).as_str(),
-                            "event" => other.title()
+                            "unexpected admin fsm event {title}, ignoring";
+                            "event" => title
                         );
                         continue;
                     }
@@ -1579,27 +1631,29 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 FsmEvent::Connection(connection_event) => {
                     match connection_event {
-                        // In response to any other event (Events 8, 10-11, 13, 19, 23,
-                        // 25-28), the local system:
-                        //
-                        //   - sets the ConnectRetryTimer to zero,
-                        //
-                        //   - releases all BGP resources,
-                        //
-                        //   - drops the TCP connection,
-                        //
-                        //   - increments the ConnectRetryCounter by one,
-                        //
-                        //   - (optionally) performs peer oscillation damping if the
-                        //     DampPeerOscillations attribute is set to TRUE, and
-                        //
-                        //   - changes its state to Idle.
+                        /*
+                         * In response to any other event (Events 8, 10-11, 13, 19, 23,
+                         * 25-28), the local system:
+                         *
+                         *   - sets the ConnectRetryTimer to zero,
+                         *
+                         *   - releases all BGP resources,
+                         *
+                         *   - drops the TCP connection,
+                         *
+                         *   - increments the ConnectRetryCounter by one,
+                         *
+                         *   - (optionally) performs peer oscillation damping if the
+                         *     DampPeerOscillations attribute is set to TRUE, and
+                         *
+                         *   - changes its state to Idle.
+                         */
                         ConnectionEvent::Message { msg, conn_id } => {
                             session_log_lite!(self, warn,
                                 "rx unexpected {} message (conn_id: {}), fsm transition to idle",
                                 msg.title(), conn_id.short();
-                                "fsm_state" => format!("{}", self.state()).as_str(),
-                                "message" => msg.title()
+                                "message" => msg.title(),
+                                "message_contents" => format!("{msg}")
                             );
 
                             lock!(self.clock.timers.connect_retry_timer).stop();
@@ -1613,28 +1667,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         .opens_received
                                         .fetch_add(1, Ordering::Relaxed);
 
-                                    // If BGP message header checking (Event 21) or OPEN message checking
-                                    // detects an error (Event 22) (see Section 6.2), the local system:
-                                    //
-                                    //   - (optionally) sends a NOTIFICATION message with the appropriate
-                                    //     error code if the SendNOTIFICATIONwithoutOPEN attribute is set
-                                    //     to TRUE,
-                                    //
-                                    //   - sets the ConnectRetryTimer to zero,
-                                    //
-                                    //   - releases all BGP resources,
-                                    //
-                                    //   - drops the TCP connection,
-                                    //
-                                    //   - increments the ConnectRetryCounter by 1,
-                                    //
-                                    //   - (optionally) performs peer oscillation damping if the
-                                    //     DampPeerOscillations attribute is set to TRUE, and
-                                    //
-                                    //   - changes its state to Idle.
+                                    /*
+                                     * If BGP message header checking (Event 21) or OPEN message checking
+                                     * detects an error (Event 22) (see Section 6.2), the local system:
+                                     *
+                                     *   - (optionally) sends a NOTIFICATION message with the appropriate
+                                     *     error code if the SendNOTIFICATIONwithoutOPEN attribute is set
+                                     *     to TRUE,
+                                     *
+                                     *   - sets the ConnectRetryTimer to zero,
+                                     *
+                                     *   - releases all BGP resources,
+                                     *
+                                     *   - drops the TCP connection,
+                                     *
+                                     *   - increments the ConnectRetryCounter by 1,
+                                     *
+                                     *   - (optionally) performs peer oscillation damping if the
+                                     *     DampPeerOscillations attribute is set to TRUE, and
+                                     *
+                                     *   - changes its state to Idle.
+                                     */
                                     lock!(self.message_history).receive(
                                         om.clone().into(),
-                                        Some(conn_id.clone()),
+                                        Some(conn_id),
                                     );
 
                                     // check if connection is registered/known
@@ -1644,7 +1700,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             session_log_lite!(self, warn,
                                                 "rx open message from peer {} for unknown connection (conn_id: {}), ignoring",
                                                 conn_id.remote().ip(), conn_id.short();
-                                                "fsm_state" => format!("{}", self.state()).as_str()
                                             );
                                             continue;
                                         }
@@ -1654,13 +1709,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     {
                                         session_log!(self, warn, conn,
                                             "failed to handle open message, fsm transition to idle";
-                                            "fsm_state" => format!("{}", self.state()).as_str(),
                                             "error" => format!("{e}")
                                         );
                                         // notification sent by handle_open(), nothing to do here
                                         self.connect_retry_counter
                                             .fetch_add(1, Ordering::Relaxed);
-                                        self.connect_retry_counter
+                                        self.counters
+                                            .connection_retries
                                             .fetch_add(1, Ordering::Relaxed);
                                         // peer oscillation damping happens in idle, nothing to do here
                                         return FsmState::Idle;
@@ -1671,9 +1726,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     if let Err(e) = self.send_open(&conn) {
                                         session_log!(self, error, conn,
                                             "failed to send open, fsm transition to idle";
-                                            "fsm_state" => format!("{}", self.state()).as_str(),
                                             "error" => format!("{e}")
                                         );
+                                        self.connect_retry_counter
+                                            .fetch_add(1, Ordering::Relaxed);
+                                        self.counters
+                                            .connection_retries
+                                            .fetch_add(1, Ordering::Relaxed);
                                         return FsmState::Idle;
                                     }
 
@@ -1682,32 +1741,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         .restart();
 
                                     return FsmState::OpenConfirm(
-                                        PeerConnection { conn, id: om.id },
+                                        PeerConnection {
+                                            conn,
+                                            id: om.id,
+                                            asn: om.asn(),
+                                        },
                                     );
                                 }
                                 // Event 27
-                                Message::Update(_) => {
-                                    self.counters
-                                        .unexpected_update_message
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
+                                Message::Update(_)
                                 // Event 25
-                                Message::Notification(_) => {
-                                    self.counters
-                                        .notifications_received
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
+                                | Message::Notification(_)
                                 // Event 26
-                                Message::KeepAlive => {
-                                    self.counters
-                                        .unexpected_keepalive_message
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
-                                Message::RouteRefresh(_) => {
-                                    self.counters
-                                        .unexpected_route_refresh_message
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
+                                | Message::KeepAlive
+                                | Message::RouteRefresh(_) => self.bump_msg_counter(msg.kind(), true),
                             }
 
                             return FsmState::Idle;
@@ -1722,19 +1769,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 .fetch_add(1, Ordering::Relaxed);
 
                             session_log_lite!(self, warn,
-                                "connection fsm event {} not allowed in this state, fsm transition to idle",
-                                connection_event.title();
-                                "fsm_state" => format!("{}", self.state()).as_str()
+                                "rx connection fsm event {} (conn_id: {}), but not allowed in this state. fsm transition to idle",
+                                connection_event.title(), conn_id.short();
                             );
 
                             return FsmState::Idle;
                         }
 
-                        ConnectionEvent::DelayOpenTimerExpires(_) => {
+                        ConnectionEvent::DelayOpenTimerExpires(conn_id) => {
                             session_log_lite!(self, warn,
-                                "connection fsm event {} not allowed in this state, ignoring",
-                                connection_event.title();
-                                "fsm_state" => format!("{}", self.state()).as_str()
+                                "rx connection fsm event {} (conn_id: {}), but not allowed in this state. ignoring..",
+                                connection_event.title(), conn_id.short();
                             );
 
                             continue;
@@ -1743,17 +1788,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 FsmEvent::Session(session_event) => match session_event {
-                    // In response to a ConnectRetryTimer_Expires event (Event 9), the
-                    // local system:
-                    //
-                    //   - restarts the ConnectRetryTimer (with initial value),
-                    //
-                    //   - initiates a TCP connection to the other BGP peer,
-                    //
-                    //   - continues to listen for a TCP connection that may be initiated
-                    //     by a remote BGP peer, and
-                    //
-                    //   - changes its state to Connect.
+                    /*
+                     * In response to a ConnectRetryTimer_Expires event (Event 9), the
+                     * local system:
+                     *
+                     *   - restarts the ConnectRetryTimer (with initial value),
+                     *
+                     *   - initiates a TCP connection to the other BGP peer,
+                     *
+                     *   - continues to listen for a TCP connection that may be initiated
+                     *     by a remote BGP peer, and
+                     *
+                     *   - changes its state to Connect.
+                     */
                     SessionEvent::ConnectRetryTimerExpires => {
                         // RFC 4271 says that in Idle the FSM should restart the
                         // ConnectRetryTimer "In response to a
@@ -1769,7 +1816,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             session_log_lite!(self, info,
                                 "rx {} but peer is configured as passive, ignoring",
                                 session_event.title();
-                                "fsm_state" => format!("{}", self.state()).as_str()
                             );
                             continue;
                         }
@@ -1777,7 +1823,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         session_log_lite!(self, info,
                             "rx {}, fsm transition to connect",
                             session_event.title();
-                            "fsm_state" => format!("{}", self.state()).as_str()
                         );
 
                         lock!(self.clock.timers.connect_retry_timer).restart();
@@ -1788,20 +1833,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Connect;
                     }
 
-                    // The underlying connection has accepted a TCP connection
-                    // initiated by the peer.
+                    // The Dispatcher has accepted a TCP connection initiated by
+                    // the peer.
                     SessionEvent::Connected(accepted) => {
                         session_log!(self, info, accepted,
                             "accepted inbound connection from {}", accepted.peer();
-                            "fsm_state" => format!("{}", self.state()).as_str()
                         );
+
+                        self.counters
+                            .passive_connections_accepted
+                            .fetch_add(1, Ordering::Relaxed);
 
                         self.register_conn(accepted.clone());
 
                         if let Err(e) = self.send_open(&accepted) {
                             session_log!(self, error, accepted,
                                 "failed to send open, fsm transition to idle";
-                                "fsm_state" => format!("{}", self.state()).as_str(),
                                 "error" => format!("{e}")
                             );
                             lock!(self.clock.timers.connect_retry_timer)
@@ -1810,18 +1857,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
 
                         lock!(accepted.clock().timers.hold_timer).restart();
-                        lock!(self.clock.timers.connect_retry_timer).zero();
-                        self.counters
-                            .passive_connections_accepted
-                            .fetch_add(1, Ordering::Relaxed);
-
-                        // XXX: DelayOpenTimer
-                        /*
-                        // Stay in Active, transmit Open when DelayOpenTimerExpires pops
-                        if lock!(accepted.connection_clock().timers.delay_open_timer).expired() {
-                            continue;
-                        }
-                        */
+                        self.zero_connect_retry();
 
                         return FsmState::OpenSent(accepted);
                     }
@@ -1833,9 +1869,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     // Connector handling (not dropping the TcpStream).
                     SessionEvent::TcpConnectionConfirmed(confirmed) => {
                         session_log!(self, info, confirmed,
-                            "outbound connection to peer {} (conn_id: {}) accepted, but not allowed. ignoring",
-                            confirmed.peer(), confirmed.id().short();
-                            "fsm_state" => format!("{}", self.state()).as_str()
+                            "outbound connection to peer {} (conn_id: {}) accepted, but not allowed in {}",
+                            confirmed.peer(), confirmed.id().short(), self.state();
+                        );
+
+                        self.counters
+                            .active_connections_declined
+                            .fetch_add(1, Ordering::Relaxed);
+
+                        self.send_notification(
+                            &confirmed,
+                            ErrorCode::Cease,
+                            ErrorSubcode::Cease(
+                                CeaseErrorSubcode::ConnectionRejected,
+                            ),
                         );
 
                         continue;
@@ -1843,11 +1890,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     SessionEvent::IdleHoldTimerExpires => {
                         session_log_lite!(self, warn,
-                            "{} event not allowed in this state, ignoring",
-                            session_event.title();
-                            "fsm_state" => format!("{}", self.state()).as_str()
+                            "rx session fsm event {}, but not allowed in {}. ignoring..",
+                            session_event.title(), self.state();
                         );
-
                         continue;
                     }
                 },
@@ -1858,278 +1903,312 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Waiting for open message from peer.
     fn on_open_sent(&self, conn: Cnx) -> FsmState<Cnx> {
         let om = loop {
-            let event = match read_lock!(self.event_rx).recv() {
+            let event = match self.event_rx.recv() {
                 Ok(event) => {
-                    session_log!(self, debug, conn, "received fsm event";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
-                        "event" => event.title()
+                    session_log!(self, debug, conn, "received fsm event {}",
+                        event.title(); "event" => event.title()
                     );
                     event
                 }
                 Err(e) => {
-                    session_log!(self, error, conn,
-                        "event rx error: {e}";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
+                    session_log!(self, error, conn, "event rx error: {e}";
                         "error" => format!("{e}")
                     );
-                    return FsmState::OpenSent(conn);
+                    continue;
                 }
             };
 
             // The main thing we really care about in the open sent state is
             // receiving a reciprocal open message from the peer.
             match event {
-                // XXX: continue breaking this down hierarchically
-                FsmEvent::Connection(ConnectionEvent::Message { msg: Message::Open(om), conn_id }) => {
-                    lock!(self.message_history).receive(om.clone().into(), Some(conn_id.clone()));
-                    if let Some(_conn) = self.get_conn(&conn_id) {
-                        self.counters.opens_received.fetch_add(1, Ordering::Relaxed);
+                FsmEvent::Admin(admin_event) => match admin_event {
+                    /*
+                     * If a ManualStop event (Event 2) is issued in the OpenSent state,
+                     * the local system:
+                     *
+                     *   - sends the NOTIFICATION with a Cease,
+                     *
+                     *   - sets the ConnectRetryTimer to zero,
+                     *
+                     *   - releases all BGP resources,
+                     *
+                     *   - drops the TCP connection,
+                     *
+                     *   - sets the ConnectRetryCounter to zero, and
+                     *
+                     *   - changes its state to Idle.
+                     */
+                    AdminEvent::ManualStop => {
+                        session_log!(self, info, conn, "rx {}, fsm transition to idle",
+                            admin_event.title();
+                        );
+                        self.stop(Some(&conn), None, StopReason::Shutdown);
+                        return FsmState::Idle;
                     }
-                    break om;
-                }
 
-                // If a ManualStop event (Event 2) is issued in the OpenSent state,
-                // the local system:
-                //
-                //   - sends the NOTIFICATION with a Cease,
-                //
-                //   - sets the ConnectRetryTimer to zero,
-                //
-                //   - releases all BGP resources,
-                //
-                //   - drops the TCP connection,
-                //
-                //   - sets the ConnectRetryCounter to zero, and
-                //
-                //   - changes its state to Idle.
-                FsmEvent::Admin(AdminEvent::ManualStop) => {
-                    session_log!(self, info, conn,
-                        "rx {}, fsm transition to idle", event.title();
-                        "fsm_state" => format!("{}", self.state()).as_str()
-                    );
+                    // Follow ManualStop logic, but with the appropriate ErrorSubcode
+                    AdminEvent::Reset => {
+                        session_log!(self, info, conn,
+                            "rx {}, fsm transition to idle",
+                            admin_event.title();
+                        );
+                        self.stop(Some(&conn), None, StopReason::Reset);
+                        return FsmState::Idle;
+                    }
 
-                    self.send_notification(
-                        &conn,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeShutdown,
-                        ),
-                    );
+                    // We are already running, so ManualStart is a no-op.
+                    // The rest of the admin events are only relevant in Established
+                    AdminEvent::ManualStart
+                    | AdminEvent::Announce(_)
+                    | AdminEvent::ShaperChanged(_)
+                    | AdminEvent::ExportPolicyChanged(_)
+                    | AdminEvent::CheckerChanged(_)
+                    | AdminEvent::SendRouteRefresh
+                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::PathAttributesChanged => {
+                        let title = admin_event.title();
+                        session_log_lite!(self, warn,
+                            "unexpected admin fsm event {title}, ignoring";
+                            "event" => title
+                        );
+                        continue;
+                    }
+                },
 
-                    self.connect_retry_counter.store(0, Ordering::Relaxed);
-                    lock!(self.clock.timers.connect_retry_timer).restart();
+                /*
+                 * In response to any other event (Events 9, 11-13, 20, 25-28), the
+                 * local system:
+                 *
+                 *   - sends the NOTIFICATION with the Error Code Finite State
+                 *     Machine Error,
+                 *
+                 *   - sets the ConnectRetryTimer to zero,
+                 *
+                 *   - releases all BGP resources,
+                 *
+                 *   - drops the TCP connection,
+                 *
+                 *   - increments the ConnectRetryCounter by 1,
+                 *
+                 *   - (optionally) performs peer oscillation damping if the
+                 *     DampPeerOscillations attribute is set to TRUE, and
+                 *
+                 *   - changes its state to Idle.
+                 */
+                FsmEvent::Session(session_event) => match session_event {
+                    // Event 9
+                    SessionEvent::ConnectRetryTimerExpires
+                    // Event 13
+                    | SessionEvent::IdleHoldTimerExpires => {
+                        let title = session_event.title();
+                        session_log!(self, warn, conn,
+                            "{title} event not allowed in this state, fsm transition to idle";
+                            "event" => title
+                        );
+                        self.stop(Some(&conn), None, StopReason::FsmError);
+                        return FsmState::Idle;
+                    }
 
-                    return FsmState::Idle;
-                }
+                    /*
+                     * If a TcpConnection_Valid (Event 14), Tcp_CR_Acked (Event 16), or a
+                     * TcpConnectionConfirmed event (Event 17) is received, a second TCP
+                     * connection may be in progress.  This second TCP connection is
+                     * tracked per Connection Collision processing (Section 6.8) until an
+                     * OPEN message is received.
+                     */
+                    SessionEvent::Connected(new)
+                    | SessionEvent::TcpConnectionConfirmed(new) => {
+                        match new.creator() {
+                            ConnectionCreator::Dispatcher => {
+                                session_log!(self, info, new,
+                                    "new inbound connection from {} (conn_id: {})",
+                                    new.peer(), new.id().short();
+                                );
+                                self.counters
+                                    .passive_connections_accepted
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                            ConnectionCreator::Connector => {
+                                session_log!(self, info, new,
+                                    "outbound connection to {} (conn_id: {}) completed",
+                                    new.peer(), new.id().short();
+                                );
+                                self.counters
+                                    .active_connections_accepted
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
 
-                // Follow ManualStop logic, but with the appropriate ErrorSubcode
-                FsmEvent::Admin(AdminEvent::Reset) => {
-                    session_log!(self, info, conn,
-                        "rx {}, fsm transition to idle", event.title();
-                        "fsm_state" => format!("{}", self.state()).as_str()
-                    );
+                        if let Err(e) = self.send_open(&new) {
+                            collision_log!(self, error, new, conn,
+                                "error sending open to new conn, continue with open conn";
+                                "error" => format!("{e}")
+                            );
+                            continue;
+                        }
 
-                    self.send_notification(
-                        &conn,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(CeaseErrorSubcode::AdministrativeReset),
-                    );
+                        self.register_conn(new.clone());
 
-                    self.connect_retry_counter.store(0, Ordering::Relaxed);
-                    lock!(self.clock.timers.connect_retry_timer).restart();
+                        lock!(new.clock().timers.hold_timer).restart();
 
-                    return FsmState::Idle;
-                }
+                        return FsmState::ConnectionCollision(
+                            CollisionPair::OpenSent(conn, new),
+                        );
+                    }
+                },
 
-                // If the HoldTimer_Expires (Event 10), the local system:
-                //
-                //   - sends a NOTIFICATION message with the error code Hold Timer
-                //     Expired,
-                //
-                //   - sets the ConnectRetryTimer to zero,
-                //
-                //   - releases all BGP resources,
-                //
-                //   - drops the TCP connection,
-                //
-                //   - increments the ConnectRetryCounter,
-                //
-                //   - (optionally) performs peer oscillation damping if the
-                //     DampPeerOscillations attribute is set to TRUE, and
-                //
-                //   - changes its state to Idle.
-                FsmEvent::Connection(ConnectionEvent::HoldTimerExpires(conn_id)) => {
-                    session_log!(self, warn, conn,
-                        "hold timer expired, fsm transition to idle";
-                        "fsm_state" => format!("{}", self.state()).as_str()
-                    );
+                FsmEvent::Connection(connection_event) => {
+                    match connection_event {
+                        ConnectionEvent::Message { msg, ref conn_id } => {
+                            match self.get_conn(conn_id) {
+                                Some(connection) => {
+                                    if connection.id() != conn.id() {
+                                        // XXX: Collision?
+                                        session_log_lite!(self, warn,
+                                            "rx open message from peer {} for known connection (conn_id: {}) that's unexpected in this state? closing conn",
+                                            conn_id.remote().ip(), conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&connection),
+                                            None,
+                                            StopReason::FsmError,
+                                        );
+                                        continue;
+                                    }
+                                    connection
+                                },
+                                None => {
+                                    session_log_lite!(self, warn,
+                                        "rx open message from peer {} for unknown connection (conn_id: {}), ignoring",
+                                        conn_id.remote().ip(), conn_id.short();
+                                    );
+                                    continue;
+                                }
+                            };
 
-                    self.counters
-                        .hold_timer_expirations
-                        .fetch_add(1, Ordering::Relaxed);
+                            // Event 19 (BgpOpen)
+                            if let Message::Open(om) = msg {
+                                // Event 20 (BGPOpen with DelayOpenTimer running)
+                                // XXX: DelayOpen error handling
+                                lock!(self.message_history).receive(
+                                    om.clone().into(),
+                                    Some(*conn_id),
+                                );
+                                self.counters
+                                    .opens_received
+                                    .fetch_add(1, Ordering::Relaxed);
+                                break om;
+                            }
 
-                    self.send_hold_timer_expired_notification(&conn);
-                    lock!(self.clock.timers.connect_retry_timer)
-                        .zero();
-                    self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
-
-                    return FsmState::Idle;
-                }
-
-                // Inbound connection has been accepted by the dispatcher.
-                // No messages have been exchanged on this connection yet.
-                FsmEvent::Session(SessionEvent::Connected(accepted)) => {
-                    return FsmState::CollisionDetection(
-                        CollisionPair::OpenSent(conn, accepted)
-                    );
-                }
-
-                // Outbound connection has been accepted by the peer.
-                // No messages have been exchanged on this connection yet.
-                FsmEvent::Session(SessionEvent::TcpConnectionConfirmed(confirmed)) => {
-                    return FsmState::CollisionDetection(
-                        CollisionPair::OpenSent(conn, confirmed)
-                    );
-                }
-
-                // In response to any other event (Events 9, 11-13, 20, 25-28), the
-                // local system:
-                //
-                //   - sends the NOTIFICATION with the Error Code Finite State
-                //     Machine Error,
-                //
-                //   - sets the ConnectRetryTimer to zero,
-                //
-                //   - releases all BGP resources,
-                //
-                //   - drops the TCP connection,
-                //
-                //   - increments the ConnectRetryCounter by 1,
-                //
-                //   - (optionally) performs peer oscillation damping if the
-                //     DampPeerOscillations attribute is set to TRUE, and
-                //
-                //   - changes its state to Idle.
-
-                // Events 9, 11-13
-                FsmEvent::Session(SessionEvent::ConnectRetryTimerExpires)
-                | FsmEvent::Connection(ConnectionEvent::KeepaliveTimerExpires(ref conn_id))
-                // | FsmEvent::DelayOpenTimerExpires // Event 12
-                | FsmEvent::Session(SessionEvent::IdleHoldTimerExpires) => {
-                    session_log!(self, warn, conn,
-                        "{} event not allowed in this state, fsm transition to idle",
-                        event.title();
-                        "fsm_state" => format!("{}", self.state()).as_str()
-                    );
-
-                    self.send_fsm_notification(&conn);
-
-                    lock!(self.clock.timers.connect_retry_timer).stop();
-                    self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
-
-                    return FsmState::Idle;
-                }
-
-                // Events 20, 25-28
-                FsmEvent::Connection(ConnectionEvent::Message { msg, conn_id }) => {
-                    session_log!(self, warn, conn,
-                        "rx unexpected {} message, fsm transition to idle",
-                        msg.title();
-                        "fsm_state" => format!("{}", self.state()).as_str(),
-                        "message" => msg.title()
-                    );
-
-                    self.send_fsm_notification(&conn);
-
-                    lock!(self.clock.timers.connect_retry_timer).stop();
-                    self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
-
-                    match msg {
-                        // Event 19, 20
-                        Message::Open(_) => {
-                            // XXX: this invariant of Message is handled earlier,
-                            //      so this should be unreachable
                             session_log!(self, warn, conn,
-                                "fsm error: {} should have been handled already",
-                                msg.title();
-                                "fsm_state" => format!("{}", self.state()).as_str(),
-                                "message" => msg.title()
+                                "rx unexpected {} message (conn_id: {}), fsm transition to idle",
+                                msg.title(), conn_id.short();
+                                "message" => msg.title(),
+                                "message_contents" => format!("{msg}")
+                            );
+
+                            self.send_fsm_notification(&conn);
+
+                            lock!(self.clock.timers.connect_retry_timer).stop();
+                            self.connect_retry_counter
+                                .fetch_add(1, Ordering::Relaxed);
+
+                            match msg {
+                                // Events 25-28 + Route Refresh
+                                Message::Open(_) => {}
+                                Message::Update(_)
+                                | Message::Notification(_)
+                                | Message::KeepAlive
+                                | Message::RouteRefresh(_) => self.bump_msg_counter(msg.kind(), true),
+                            }
+
+                            return FsmState::Idle;
+                        }
+
+                        /*
+                         * If the HoldTimer_Expires (Event 10), the local system:
+                         *
+                         *   - sends a NOTIFICATION message with the error code Hold Timer
+                         *     Expired,
+                         *
+                         *   - sets the ConnectRetryTimer to zero,
+                         *
+                         *   - releases all BGP resources,
+                         *
+                         *   - drops the TCP connection,
+                         *
+                         *   - increments the ConnectRetryCounter,
+                         *
+                         *   - (optionally) performs peer oscillation damping if the
+                         *     DampPeerOscillations attribute is set to TRUE, and
+                         *
+                         *   - changes its state to Idle.
+                         */
+                        ConnectionEvent::HoldTimerExpires(ref _conn_id) => {
+                            let title = connection_event.title();
+                            session_log!(self, warn, conn,
+                                "rx {title}, fsm transition to idle";
+                                "event" => title
                             );
                             self.counters
-                                .unexpected_open_message
+                                .hold_timer_expirations
                                 .fetch_add(1, Ordering::Relaxed);
+                            self.stop(Some(&conn), None, StopReason::HoldTimeExpired);
+                            return FsmState::Idle;
                         }
-                        // Event 27, 28
-                        Message::Update(_) => {
-                            self.counters
-                                .unexpected_update_message
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                        // Event 25
-                        Message::Notification(_) => {
-                            self.counters
-                                .notifications_received
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                        // Event 26
-                        Message::KeepAlive => {
-                            self.counters
-                                .unexpected_keepalive_message
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                        Message::RouteRefresh(_) => {
-                            self.counters
-                                .unexpected_route_refresh_message
-                                .fetch_add(1, Ordering::Relaxed);
+
+                        // Event 11
+                        ConnectionEvent::KeepaliveTimerExpires(
+                            ref _conn_id,
+                        )
+                        // Event 12
+                        | ConnectionEvent::DelayOpenTimerExpires(
+                            ref _conn_id,
+                        ) => {
+                            let title = connection_event.title();
+                            session_log!(self, warn, conn,
+                                "{title} event not allowed in this state, fsm transition to idle";
+                                "event" => title
+                            );
+                            self.stop(Some(&conn), None, StopReason::FsmError);
+                            return FsmState::Idle;
                         }
                     }
-
-                    return FsmState::Idle;
-                }
-
-                // We need to ignore other events here. Something like a change
-                // to policy config shouldn't cause us to change states.
-                other => {
-                    session_log!(self, warn, conn,
-                        "unexpected fsm event, ignoring";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
-                        "event" => other.title()
-                    );
                 }
             }
         };
 
-        // If the BGP message header checking (Event 21) or OPEN message
-        // checking detects an error (Event 22)(see Section 6.2), the local
-        // system:
-        //
-        // - sends a NOTIFICATION message with the appropriate error code,
-        //
-        // - sets the ConnectRetryTimer to zero,
-        //
-        // - releases all BGP resources,
-        //
-        // - drops the TCP connection,
-        //
-        // - increments the ConnectRetryCounter by 1,
-        //
-        // - (optionally) performs peer oscillation damping if the
-        //   DampPeerOscillations attribute is TRUE, and
-        //
-        // - changes its state to Idle.
+        /*
+         * If the BGP message header checking (Event 21) or OPEN message
+         * checking detects an error (Event 22)(see Section 6.2), the local
+         * system:
+         *
+         * - sends a NOTIFICATION message with the appropriate error code,
+         *
+         * - sets the ConnectRetryTimer to zero,
+         *
+         * - releases all BGP resources,
+         *
+         * - drops the TCP connection,
+         *
+         * - increments the ConnectRetryCounter by 1,
+         *
+         * - (optionally) performs peer oscillation damping if the
+         *   DampPeerOscillations attribute is TRUE, and
+         *
+         * - changes its state to Idle.
+         */
         if let Err(e) = self.handle_open(&conn, &om) {
             match e {
                 Error::PolicyCheckFailed => {
                     session_log!(self, info, conn,
                         "policy check failed";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
                         "error" => format!("{e}")
                     );
                 }
                 e => {
                     session_log!(self, warn, conn,
                         "failed to handle open message, fsm transition to idle";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
                         "error" => format!("{e}")
                     );
                     self.counters
@@ -2142,41 +2221,46 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
 
-        // When an OPEN message is received, all fields are checked for
-        // correctness.  If there are no errors in the OPEN message (Event
-        // 19), the local system:
-        //
-        //   - resets the DelayOpenTimer to zero,
-        //
-        //   - sets the BGP ConnectRetryTimer to zero,
-        //
-        //   - sends a KEEPALIVE message, and
-        //
-        //   - sets a KeepaliveTimer (via the text below)
-        //
-        //   - sets the HoldTimer according to the negotiated value (see
-        //     Section 4.2),
-        //
-        //   - changes its state to OpenConfirm.
+        /*
+         * When an OPEN message is received, all fields are checked for
+         * correctness.  If there are no errors in the OPEN message (Event
+         * 19), the local system:
+         *
+         *   - resets the DelayOpenTimer to zero,
+         *
+         *   - sets the BGP ConnectRetryTimer to zero,
+         *
+         *   - sends a KEEPALIVE message, and
+         *
+         *   - sets a KeepaliveTimer (via the text below)
+         *
+         *   - sets the HoldTimer according to the negotiated value (see
+         *     Section 4.2),
+         *
+         *   - changes its state to OpenConfirm.
+         */
 
         // ACK the open with a keepalive and transition to open confirm.
         self.send_keepalive(&conn);
 
-        lock!(self.clock.timers.connect_retry_timer).zero();
+        self.zero_connect_retry();
         lock!(conn.clock().timers.keepalive_timer).restart();
         // hold_timer set in handle_open(), enable it here
         lock!(conn.clock().timers.hold_timer).enable();
 
-        FsmState::OpenConfirm(PeerConnection { conn, id: om.id })
+        FsmState::OpenConfirm(PeerConnection {
+            conn,
+            id: om.id,
+            asn: om.asn(),
+        })
     }
 
     /// Waiting for keepalive or notification from peer.
     fn on_open_confirm(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
-        let event = match read_lock!(self.event_rx).recv() {
+        let event = match self.event_rx.recv() {
             Ok(event) => {
                 session_log!(self, debug, pc.conn,
                      "received fsm event";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
                     "event" => event.title()
                 );
                 event
@@ -2184,536 +2268,1622 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             Err(e) => {
                 session_log!(self, error,  pc.conn,
                     "event rx error: {e}";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
                     "error" => format!("{e}")
                 );
+                //TODO possible death loop. Should we just panic here?
                 return FsmState::OpenConfirm(pc);
             }
         };
 
         match event {
-            // In response to a ManualStop event (Event 2) initiated by the
-            // operator, the local system:
-            //
-            //   - sends the NOTIFICATION message with a Cease,
-            //
-            //   - releases all BGP resources,
-            //
-            //   - drops the TCP connection,
-            //
-            //   - sets the ConnectRetryCounter to zero,
-            //
-            //   - sets the ConnectRetryTimer to zero, and
-            //
-            //   - changes its state to Idle.
-            FsmEvent::Admin(AdminEvent::ManualStop) => {
-                session_log!(self, info,  pc.conn,
-                    "rx {}, fsm transition to idle",
-                    event.title();
-                    "fsm_state" => format!("{}", self.state()).as_str()
-                );
+            FsmEvent::Admin(admin_event) => match admin_event {
+                /*
+                 * In response to a ManualStop event (Event 2) initiated by the
+                 * operator, the local system:
+                 *
+                 *   - sends the NOTIFICATION message with a Cease,
+                 *
+                 *   - releases all BGP resources,
+                 *
+                 *   - drops the TCP connection,
+                 *
+                 *   - sets the ConnectRetryCounter to zero,
+                 *
+                 *   - sets the ConnectRetryTimer to zero, and
+                 *
+                 *   - changes its state to Idle.
+                 */
+                AdminEvent::ManualStop => {
+                    session_log!(self, info,  pc.conn,
+                        "rx {}, fsm transition to idle",
+                        admin_event.title();
+                    );
+                    self.stop(Some(&pc.conn), None, StopReason::Shutdown);
+                    FsmState::Idle
+                }
 
-                self.send_notification(
-                    &pc.conn,
-                    ErrorCode::Cease,
-                    ErrorSubcode::Cease(
-                        CeaseErrorSubcode::AdministrativeShutdown,
-                    ),
-                );
+                // Follow ManualStop logic, but with the appropriate ErrorSubcode
+                AdminEvent::Reset => {
+                    session_log!(self, info,  pc.conn,
+                        "rx {}, fsm transition to idle",
+                        admin_event.title();
+                    );
+                    self.stop(Some(&pc.conn), None, StopReason::Reset);
+                    FsmState::Idle
+                }
 
-                self.connect_retry_counter.store(0, Ordering::Relaxed);
-                lock!(self.clock.timers.connect_retry_timer).zero();
+                AdminEvent::Announce(_)
+                | AdminEvent::ShaperChanged(_)
+                | AdminEvent::ExportPolicyChanged(_)
+                | AdminEvent::CheckerChanged(_)
+                | AdminEvent::ManualStart
+                | AdminEvent::SendRouteRefresh
+                | AdminEvent::ReAdvertiseRoutes
+                | AdminEvent::PathAttributesChanged => {
+                    let title = admin_event.title();
+                    session_log_lite!(self, warn,
+                        "unexpected admin fsm event {title}, ignoring";
+                        "event" => title
+                    );
+                    FsmState::OpenConfirm(pc)
+                }
+            },
 
-                FsmState::Idle
-            }
+            /*
+             * In response to any other event (Events 9, 12-13, 20, 27-28), the
+             * local system:
+             *
+             *   - sends a NOTIFICATION with a code of Finite State Machine
+             *     Error,
+             *   - sets the ConnectRetryTimer to zero,
+             *
+             *   - releases all BGP resources,
+             *
+             *   - drops the TCP connection,
+             *
+             *   - increments the ConnectRetryCounter by 1,
+             *
+             *   - (optionally) performs peer oscillation damping if the
+             *     DampPeerOscillations attribute is set to TRUE, and
+             *
+             *   - changes its state to Idle.
+             */
+            FsmEvent::Connection(connection_event) => match connection_event {
+                /*
+                 * If the HoldTimer_Expires event (Event 10) occurs before a
+                 * KEEPALIVE message is received, the local system:
+                 *
+                 *   - sends the NOTIFICATION message with the Error Code Hold Timer
+                 *     Expired,
+                 *
+                 *   - sets the ConnectRetryTimer to zero,
+                 *
+                 *   - releases all BGP resources,
+                 *
+                 *   - drops the TCP connection,
+                 *
+                 *   - increments the ConnectRetryCounter by 1,
+                 *
+                 *   - (optionally) performs peer oscillation damping if the
+                 *     DampPeerOscillations attribute is set to TRUE, and
+                 *
+                 *   - changes its state to Idle.
+                 */
+                ConnectionEvent::HoldTimerExpires(_conn_id) => {
+                    session_log!(self, warn, pc.conn,
+                        "hold timer expired, fsm transition to idle";
+                    );
+                    self.stop(
+                        Some(&pc.conn),
+                        None,
+                        StopReason::HoldTimeExpired,
+                    );
+                    FsmState::Idle
+                }
 
-            // Follow ManualStop logic, but with the appropriate ErrorSubcode
-            FsmEvent::Admin(AdminEvent::Reset) => {
-                session_log!(self, info,  pc.conn,
-                    "rx {}, fsm transition to idle",
-                    event.title();
-                    "fsm_state" => format!("{}", self.state()).as_str()
-                );
+                /*
+                 * If the local system receives a KeepaliveTimer_Expires event (Event
+                 * 11), the local system:
+                 *
+                 *   - sends a KEEPALIVE message,
+                 *
+                 *   - restarts the KeepaliveTimer, and
+                 *
+                 *   - remains in the OpenConfirmed state.
+                 */
+                ConnectionEvent::KeepaliveTimerExpires(_conn_id) => {
+                    session_log!(self, warn, pc.conn,
+                        "keepalive timer expired, generate keepalive";
+                    );
+                    self.send_keepalive(&pc.conn);
+                    lock!(pc.conn.clock().timers.keepalive_timer).restart();
+                    FsmState::OpenConfirm(pc)
+                }
 
-                self.send_notification(
-                    &pc.conn,
-                    ErrorCode::Cease,
-                    ErrorSubcode::Cease(CeaseErrorSubcode::AdministrativeReset),
-                );
+                // Event 12
+                ConnectionEvent::DelayOpenTimerExpires(_conn_id) => {
+                    session_log!(self, warn, pc.conn,
+                        "delay open timer expires event not allowed in this state, fsm transition to idle";
+                    );
+                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
+                    FsmState::Idle
+                }
 
-                self.connect_retry_counter.store(0, Ordering::Relaxed);
-                lock!(self.clock.timers.connect_retry_timer).zero();
+                ConnectionEvent::Message { msg, conn_id } => match msg {
+                    // The peer has ACK'd our open message with a keepalive. Start the
+                    // session timers and enter session setup.
+                    Message::KeepAlive => {
+                        lock!(pc.conn.clock().timers.hold_timer).restart();
+                        lock!(pc.conn.clock().timers.keepalive_timer).restart();
+                        self.counters
+                            .keepalives_received
+                            .fetch_add(1, Ordering::Relaxed);
+                        FsmState::SessionSetup(pc)
+                    }
 
-                FsmState::Idle
-            }
+                    /*
+                     * If the local system receives a TcpConnectionFails event (Event 18)
+                     * from the underlying TCP or a NOTIFICATION message (Event 25), the
+                     * local system:
+                     *
+                     *   - sets the ConnectRetryTimer to zero,
+                     *
+                     *   - releases all BGP resources,
+                     *
+                     *   - drops the TCP connection,
+                     *
+                     *   - increments the ConnectRetryCounter by 1,
+                     *
+                     *   - (optionally) performs peer oscillation damping if the
+                     *     DampPeerOscillations attribute is set to TRUE, and
+                     *
+                     *   - changes its state to Idle.
+                     */
+                    Message::Notification(m) => {
+                        session_log!(self, warn, pc.conn,
+                            "notification received (conn_id: {}), fsm transition to idle",
+                            conn_id.short();
+                            "message" => "notification",
+                            "message_contents" => format!("{m}")
+                        );
 
-            // If the HoldTimer_Expires event (Event 10) occurs before a
-            // KEEPALIVE message is received, the local system:
-            //
-            //   - sends the NOTIFICATION message with the Error Code Hold Timer
-            //     Expired,
-            //
-            //   - sets the ConnectRetryTimer to zero,
-            //
-            //   - releases all BGP resources,
-            //
-            //   - drops the TCP connection,
-            //
-            //   - increments the ConnectRetryCounter by 1,
-            //
-            //   - (optionally) performs peer oscillation damping if the
-            //     DampPeerOscillations attribute is set to TRUE, and
-            //
-            //   - changes its state to Idle.
-            FsmEvent::Connection(ConnectionEvent::HoldTimerExpires(
-                conn_id,
-            )) => {
-                session_log!(self, warn, pc.conn,
-                    "hold timer expired, fsm transition to idle";
-                    "fsm_state" => format!("{}", self.state()).as_str()
-                );
+                        lock!(self.message_history)
+                            .receive(m.clone().into(), None);
 
-                self.send_hold_timer_expired_notification(&pc.conn);
-                self.counters
-                    .hold_timer_expirations
-                    .fetch_add(1, Ordering::Relaxed);
+                        lock!(self.clock.timers.connect_retry_timer).restart();
+                        self.connect_retry_counter
+                            .fetch_add(1, Ordering::Relaxed);
+                        lock!(pc.conn.clock().timers.hold_timer).disable();
+                        lock!(pc.conn.clock().timers.keepalive_timer).disable();
 
-                lock!(pc.conn.clock().timers.hold_timer).disable();
+                        self.counters
+                            .notifications_received
+                            .fetch_add(1, Ordering::Relaxed);
 
-                self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
-                lock!(self.clock.timers.connect_retry_timer).restart();
+                        FsmState::Idle
+                    }
 
-                FsmState::Idle
-            }
+                    Message::Open(om) => {
+                        self.counters
+                            .unexpected_open_message
+                            .fetch_add(1, Ordering::Relaxed);
+                        self.connect_retry_counter
+                            .fetch_add(1, Ordering::Relaxed);
+                        lock!(self.clock.timers.connect_retry_timer).restart();
+                        session_log!(self, warn, pc.conn,
+                            "unexpected open message (conn_id: {}), fsm transition to idle",
+                            conn_id.short();
+                            "message" => "open",
+                            "message_contents" => format!("{om}").as_str()
+                        );
+                        FsmState::Idle
+                    }
+                    Message::Update(um) => {
+                        self.counters
+                            .unexpected_update_message
+                            .fetch_add(1, Ordering::Relaxed);
+                        session_log!(self, warn, pc.conn,
+                            "unexpected update message (conn_id: {}), fsm transition to idle",
+                            conn_id.short();
+                            "message" => "update",
+                            "message_contents" => format!("{um}").as_str()
+                        );
+                        FsmState::Idle
+                    }
+                    Message::RouteRefresh(rr) => {
+                        self.counters
+                            .unexpected_route_refresh_message
+                            .fetch_add(1, Ordering::Relaxed);
+                        session_log!(self, warn, pc.conn,
+                            "unexpected route refresh message (conn_id: {}), fsm transition to idle",
+                            conn_id.short();
+                            "message" => "route_refresh",
+                            "message_contents" => format!("{rr}").as_str()
+                        );
+                        FsmState::Idle
+                    }
+                },
+            },
 
-            // If the local system receives a KeepaliveTimer_Expires event (Event
-            // 11), the local system:
-            //
-            //   - sends a KEEPALIVE message,
-            //
-            //   - restarts the KeepaliveTimer, and
-            //
-            //   - remains in the OpenConfirmed state.
-            FsmEvent::Connection(ConnectionEvent::KeepaliveTimerExpires(
-                conn_id,
-            )) => {
-                session_log!(self, warn, pc.conn,
-                    "keepalive timer expired, generate keepalive";
-                    "fsm_state" => format!("{}", self.state()).as_str()
-                );
-                self.send_keepalive(&pc.conn);
-                lock!(pc.conn.clock().timers.keepalive_timer).restart();
-                FsmState::OpenConfirm(pc)
-            }
+            FsmEvent::Session(session_event) => match session_event {
+                // Event 9
+                SessionEvent::ConnectRetryTimerExpires
+                // Event 13
+                | SessionEvent::IdleHoldTimerExpires => {
+                    let title = session_event.title();
+                    session_log!(self, warn, pc.conn,
+                        "{title} event not allowed in this state, fsm transition to idle";
+                        "event" => title
+                    );
+                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
+                    FsmState::Idle
+                }
 
-            // The peer has ACK'd our open message with a keepalive. Start the
-            // session timers and enter session setup.
-            FsmEvent::Connection(ConnectionEvent::Message {
-                msg: Message::KeepAlive,
-                conn_id,
-            }) => {
-                lock!(pc.conn.clock().timers.hold_timer).restart();
-                lock!(pc.conn.clock().timers.keepalive_timer).restart();
-                self.counters
-                    .keepalives_received
-                    .fetch_add(1, Ordering::Relaxed);
-                FsmState::SessionSetup(pc)
-            }
+                /*
+                 * In the event of a TcpConnection_Valid event (Event 14), or the
+                 * success of a TCP connection (Event 16 or Event 17) while in
+                 * OpenConfirm, the local system needs to track the second
+                 * connection.
+                 */
+                SessionEvent::Connected(new)
+                | SessionEvent::TcpConnectionConfirmed(new) => {
+                    match new.creator() {
+                        ConnectionCreator::Dispatcher => {
+                            session_log!(self, info, new,
+                                "new inbound connection from {} (conn_id: {})",
+                                new.peer(), new.id().short();
+                            );
+                            self.counters
+                                .passive_connections_accepted
+                                .fetch_add(1, Ordering::Relaxed);
 
-            // If the local system receives a TcpConnectionFails event (Event 18)
-            // from the underlying TCP or a NOTIFICATION message (Event 25), the
-            // local system:
-            //
-            //   - sets the ConnectRetryTimer to zero,
-            //
-            //   - releases all BGP resources,
-            //
-            //   - drops the TCP connection,
-            //
-            //   - increments the ConnectRetryCounter by 1,
-            //
-            //   - (optionally) performs peer oscillation damping if the
-            //     DampPeerOscillations attribute is set to TRUE, and
-            //
-            //   - changes its state to Idle.
-            FsmEvent::Connection(ConnectionEvent::Message {
-                msg: Message::Notification(m),
-                conn_id,
-            }) => {
-                session_log!(self, warn, pc.conn,
-                    "notification received, fsm transition to idle";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "message" => "notification",
-                    "message_contents" => format!("{m}")
-                );
+                        }
+                        ConnectionCreator::Connector => {
+                            session_log!(self, info, new,
+                                "outbound connection to {} (conn_id: {}) completed",
+                                new.peer(), new.id().short();
+                            );
+                            self.counters
+                                .active_connections_accepted
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
 
-                lock!(self.message_history).receive(m.clone().into(), None);
+                    if let Err(e) = self.send_open(&new) {
+                        collision_log!(self, error, new, pc.conn,
+                            "error sending open to new conn, continue with open conn";
+                            "error" => format!("{e}")
+                        );
+                        return FsmState::OpenConfirm(pc);
+                    }
 
-                lock!(self.clock.timers.connect_retry_timer).restart();
-                self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
-                lock!(pc.conn.clock().timers.hold_timer).disable();
-                lock!(pc.conn.clock().timers.keepalive_timer).disable();
+                    self.register_conn(new.clone());
 
-                self.counters
-                    .notifications_received
-                    .fetch_add(1, Ordering::Relaxed);
+                    lock!(new.clock().timers.hold_timer).restart();
 
-                FsmState::Idle
-            }
-
-            FsmEvent::Connection(ConnectionEvent::Message {
-                msg: Message::Open(om),
-                conn_id,
-            }) => {
-                self.counters
-                    .unexpected_open_message
-                    .fetch_add(1, Ordering::Relaxed);
-                self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
-                lock!(self.clock.timers.connect_retry_timer).restart();
-                session_log!(self, warn, pc.conn,
-                    "unexpected message, fsm transition to idle";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "message" => "open",
-                    "message_contents" => format!("{om}").as_str()
-                );
-                FsmState::Idle
-            }
-
-            FsmEvent::Connection(ConnectionEvent::Message {
-                msg: Message::Update(um),
-                conn_id,
-            }) => {
-                self.counters
-                    .unexpected_update_message
-                    .fetch_add(1, Ordering::Relaxed);
-                session_log!(self, warn, pc.conn,
-                    "unexpected message, fsm transition to idle";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "message" => "update",
-                    "message_contents" => format!("{um}").as_str()
-                );
-                FsmState::Idle
-            }
-
-            // Inbound connection has been accepted by the dispatcher.
-            // No messages have been exchanged on this connection yet.
-            FsmEvent::Session(SessionEvent::Connected(accepted)) => {
-                FsmState::CollisionDetection(CollisionPair::OpenConfirm(
-                    pc, accepted,
-                ))
-            }
-
-            // Outbound connection has been accepted by the peer.
-            // No messages have been exchanged on this connection yet.
-            FsmEvent::Session(SessionEvent::TcpConnectionConfirmed(
-                confirmed,
-            )) => FsmState::CollisionDetection(CollisionPair::OpenConfirm(
-                pc, confirmed,
-            )),
-
-            FsmEvent::Session(SessionEvent::IdleHoldTimerExpires) => {
-                session_log!(self, info, pc.conn,
-                    "idle hold timer expired, ignoring";
-                    "fsm_state" => format!("{}", self.state()).as_str()
-                );
-                self.counters
-                    .idle_hold_timer_expirations
-                    .fetch_add(1, Ordering::Relaxed);
-                lock!(self.clock.timers.idle_hold_timer).disable();
-                FsmState::OpenConfirm(pc)
-            }
-
-            // An event we are not expecting, log it and re-enter this state.
-            other => {
-                session_log!(self, warn, pc.conn,
-                    "unexpected fsm event, ignoring";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "event" => other.title()
-                );
-                FsmState::OpenConfirm(pc)
-            }
+                    FsmState::ConnectionCollision(
+                        CollisionPair::OpenConfirm(pc, new),
+                    )
+                }
+            },
         }
     }
 
     /// Handler for Connection Collisions (RFC 4271 6.8)
-    /// Solicits Open from peer to learn their BGP-ID, then performs
-    /// collision resolution.
-    //
-    // ```
-    // 1) The BGP Identifier of the local system is compared to the BGP
-    //    Identifier of the remote system (as specified in the OPEN
-    //    message).  Comparing BGP Identifiers is done by converting them
-    //    to host byte order and treating them as 4-octet unsigned
-    //    integers.
-    //
-    // 2) If the value of the local BGP Identifier is less than the
-    //    remote one, the local system closes the BGP connection that
-    //    already exists (the one that is already in the OpenConfirm
-    //    state), and accepts the BGP connection initiated by the remote
-    //    system.
-    //
-    // 3) Otherwise, the local system closes the newly created BGP
-    //    connection (the one associated with the newly received OPEN
-    //    message), and continues to use the existing one (the one that
-    //    is already in the OpenConfirm state).
-    //
-    //    Unless allowed via configuration, a connection collision with an
-    //    existing BGP connection that is in the Established state causes
-    //    closing of the newly created connection.
-    //
-    //    Note that a connection collision cannot be detected with connections
-    //    that are in Idle, Connect, or Active states.
-    //
-    //    Closing the BGP connection (that results from the collision
-    //    resolution procedure) is accomplished by sending the NOTIFICATION
-    //    message with the Error Code Cease.
-    // ```
-    //
-    // The following steps are defined in the RFC for handling of a connection
-    // that will be dropped as a result of collision resolution, and are
-    // applicable for connections in either OpenSent or OpenConfirm states.
-    //
-    // ```
-    //   - sends a NOTIFICATION with a Cease,
-    //
-    //   - sets the ConnectRetryTimer to zero,
-    //
-    //   - releases all BGP resources,
-    //
-    //   - drops the TCP connection,
-    //
-    //   - increments the ConnectRetryCounter by 1,
-    //
-    //   - (optionally) performs peer oscillation damping if the
-    //     DampPeerOscillations attribute is set to TRUE, and
-    //
-    //   - changes its state to Idle.
-    // ```
-    fn collision_detection(
+    ///
+    /// Babysits an existing connection (either in OpenSent or OpenConfirm) and
+    /// a new connection (always in OpenSent) until one of the following occurs:
+    /// 1. We gain enough info to resolve the collision
+    ///    i.e.
+    ///    We receive an Open via both connections and can use the peer's BGP-ID
+    ///    to determine which connection must be closed.
+    /// 2. One of the connections becomes eligble to advance into SessionSetup
+    /// 3. An FsmEvent is processed that triggers a shutdown of both connections
+    ///    e.g.
+    ///    ManualStop / Reset
+    /// 4. An error is encountered and one or both connections must be closed
+    ///    e.g.
+    ///    A connection receives an Update before it receives an Open
+    ///
+    /// The meta conditions we manage here are effectively:
+    /// 1. Is a connection ready to advance into SessionSetup?
+    /// 2. Do we have enough information to resolve the collision?
+    ///
+    /// RFC 4271 states:
+    ///
+    ///     /*
+    ///      *  A BGP implementation will have, at most, one FSM for each configured
+    ///      *  peering, plus one FSM for each incoming TCP connection for which the
+    ///      *  peer has not yet been identified.  Each FSM corresponds to exactly
+    ///      *  one TCP connection.
+    ///      */
+    ///
+    /// Maghemite implements the neighbor FSM via the SessionRunner struct, and
+    /// SessionRunners are accessed via a map using the peer's IP address as a
+    /// key. Inbound connections (handled by the Dispatcher) are not given their
+    /// own SessionRunner. They are instead handed to the SessionRunner mapped
+    /// to the peer's IP address via FsmEvent::Connected. Therefore, we handle
+    /// collisions by emulating separate FSMs for (at most) two connections in
+    /// parallel. To facilitate dual FSM emulation, the ConnectionCollision
+    /// pseudo-FsmState was introduced. In ConnectionCollision, we track which
+    /// connection an event is tied to, and use a connection's state
+    /// (specifically, which Messages have been received) as a proxy for
+    /// identifying which real FsmState a connection is in currently. FSM Events
+    /// are handled for a connection according to the real FsmState a connection
+    /// is currently in.
+    fn connection_collision(
         self: &Arc<Self>,
         conn_pair: CollisionPair<Cnx>,
     ) -> FsmState<Cnx> {
         match conn_pair {
             CollisionPair::OpenConfirm(exist, new) => {
-                self.register_conn(new.clone());
                 collision_log!(self, info, new, exist.conn,
                     "collision detected: new connection [{:?}, conn_id: {}], existing connection [{:?}, conn_id: {}]",
                     new.conn(), new.id().short(),
                     exist.conn.conn(), exist.conn.id().short();
                 );
-                self.collision_detection_open_confirm(exist, new)
+                self.connection_collision_open_confirm(exist, new)
             }
             CollisionPair::OpenSent(exist, new) => {
-                self.register_conn(new.clone());
                 collision_log!(self, info, new, exist,
                     "collision detected: new connection [{:?}, conn_id: {}], existing connection [{:?}, conn_id: {}]",
                     new.conn(), new.id().short(),
                     exist.conn(), exist.id().short();
                 );
-                self.collision_detection_open_sent(exist, new)
+                self.connection_collision_open_sent(exist, new)
             }
         }
     }
 
-    // XXX: Fix collision_detection functions
-    // XXX: Actually use conn_id in FSM event handlers
-    // XXX: Refactor FSM event match statements to use event types
+    // XXX: consolidate the get_conn pattern in all FsmEvent handlers
+    // XXX: Fix connection_collision functions
 
-    // Handler for collisions when existing connection was in OpenConfirm state
-    fn collision_detection_open_confirm(
+    /// Handler for collisions when existing connection was in OpenConfirm state
+    /// when the new connection was encountered.
+    /// Note: `new` cannot progress into SessionSetup directly from here. This is
+    /// because `new` would need both an Open and a Keepalive to do so, and once
+    /// `new` receives an Open, we can (and must) perform Collision Resolution.
+    /// Compare this against `exist` which simply needs a Keepalive to move into
+    /// SessionSetup. A Keepalive gives us no additional information for use in
+    /// Collision Resolution.
+    /// i.e.
+    /// The next BGP Message that progresses `exist` does not change our ability
+    /// to do Collision Resolution, but the next Message that would progress
+    /// `new` does. If we can perform Collision Resolution, we need to.
+    fn connection_collision_open_confirm(
         self: &Arc<Self>,
         exist: PeerConnection<Cnx>,
         new: Cnx,
     ) -> FsmState<Cnx> {
-        if let Err(e) = self.send_open(&new) {
-            collision_log!(self, error, new, exist.conn,
-                "error sending open to new conn, fsm transition existing conn to open confirm: {e}";
-                "error" => format!("{e}")
-            );
-            return FsmState::OpenConfirm(exist);
-        }
-
-        lock!(new.clock().timers.hold_timer).restart();
-        self.counters
-            .passive_connections_accepted
-            .fetch_add(1, Ordering::Relaxed);
-
-        // We just sent an Open to `new`, so treat it like it's in OpenSent.
-
         let om = loop {
-            let event = match read_lock!(self.event_rx).recv() {
+            let event = match self.event_rx.recv() {
                 Ok(event) => {
                     collision_log!(self, debug, new, exist.conn,
-                        "new conn received fsm event {}", event.title();
+                        "received fsm event {}", event.title();
                         "event" => event.title()
                     );
                     event
                 }
                 Err(e) => {
                     collision_log!(self, error, new, exist.conn,
-                        "event rx error for new conn ({e}), fsm transition existing conn back to open confirm";
+                        "event rx error for ({e}), fsm transition to idle";
                         "error" => format!("{e}")
                     );
-                    return FsmState::OpenConfirm(exist);
+                    //TODO possible death loop. Should we just panic here?
+                    continue;
                 }
             };
 
             match event {
-                FsmEvent::Connection(ConnectionEvent::Message {
-                    msg: Message::Open(om),
-                    conn_id,
-                }) => {
-                    lock!(self.message_history)
-                        .receive(om.clone().into(), None);
-                    self.counters
-                        .opens_received
-                        .fetch_add(1, Ordering::Relaxed);
-                    // Note: session counter increment would happen in SessionRunner context
-                    break om;
-                }
+                FsmEvent::Admin(admin_event) => match admin_event {
+                    AdminEvent::ManualStop => {
+                        collision_log!(self, info, new, exist.conn,
+                            "rx manual stop, fsm transition to idle";
+                        );
+                        self.stop(
+                            Some(&new),
+                            Some(&exist.conn),
+                            StopReason::Shutdown,
+                        );
+                        return FsmState::Idle;
+                    }
 
-                FsmEvent::Admin(AdminEvent::ManualStop) => {
-                    collision_log!(self, info, new, exist.conn,
-                        "rx manual stop, fsm transition to idle";
-                    );
+                    AdminEvent::Reset => {
+                        collision_log!(self, info, new, exist.conn,
+                            "rx fsm reset, fsm transition to idle";
+                        );
+                        self.stop(
+                            Some(&new),
+                            Some(&exist.conn),
+                            StopReason::Reset,
+                        );
+                        return FsmState::Idle;
+                    }
 
-                    self.send_notification(
-                        &new,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeShutdown,
-                        ),
-                    );
+                    AdminEvent::Announce(_)
+                    | AdminEvent::ShaperChanged(_)
+                    | AdminEvent::ExportPolicyChanged(_)
+                    | AdminEvent::CheckerChanged(_)
+                    | AdminEvent::ManualStart
+                    | AdminEvent::SendRouteRefresh
+                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::PathAttributesChanged => {
+                        let title = admin_event.title();
+                        collision_log!(self, warn, new, exist.conn,
+                            "unexpected admin fsm event {title}, ignoring";
+                            "event" => title
+                        );
+                        continue;
+                    }
+                },
 
-                    self.send_notification(
-                        &exist.conn,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeShutdown,
-                        ),
-                    );
+                FsmEvent::Session(session_event) => match session_event {
+                    // Event 9
+                    SessionEvent::ConnectRetryTimerExpires
+                    // Event 13
+                    | SessionEvent::IdleHoldTimerExpires => {
+                        let title = session_event.title();
+                        collision_log!(self, warn, new, exist.conn,
+                            "{title} event not allowed in this state, fsm transition to idle";
+                            "event" => title
+                        );
+                        self.stop(Some(&new), Some(&exist.conn), StopReason::FsmError);
+                        return FsmState::Idle;
+                    }
 
-                    self.connect_retry_counter.store(0, Ordering::Relaxed);
-                    lock!(self.clock.timers.connect_retry_timer).restart();
+                    SessionEvent::Connected(extra)
+                    | SessionEvent::TcpConnectionConfirmed(extra) => {
+                        match extra.creator() {
+                            ConnectionCreator::Dispatcher => {
+                                collision_log!(self, info, new, exist.conn,
+                                    "new inbound connection (peer: {}, conn_id: {}), but we're already in a collision. rejecting..",
+                                    extra.peer(), extra.id().short();
+                                );
+                                self.counters
+                                    .passive_connections_declined
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                            ConnectionCreator::Connector => {
+                                collision_log!(self, info, new, exist.conn,
+                                    "outbound connection completed (peer: {}, conn_id: {}), but we're already in a collision. rejecting..",
+                                    extra.peer(), extra.id().short();
+                                );
+                                self.counters
+                                    .active_connections_declined
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        self.send_notification(
+                            &extra,
+                            ErrorCode::Cease,
+                            ErrorSubcode::Cease(
+                                CeaseErrorSubcode::ConnectionRejected,
+                            ),
+                        );
+                        self.unregister_conn(extra.id());
+                        continue;
+                    }
+                },
 
-                    return FsmState::Idle;
-                }
+                FsmEvent::Connection(connection_event) => {
+                    match connection_event {
+                        ConnectionEvent::HoldTimerExpires(conn_id) => {
+                            match self.get_conn(&conn_id) {
+                                Some(connection) => {
+                                    if conn_id == *new.id() {
+                                        collision_log!(self, warn, new, exist.conn,
+                                            "hold timer expired (conn_id: {}), fsm transition existing conn back to open confirm",
+                                            conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&new),
+                                            None,
+                                            StopReason::HoldTimeExpired,
+                                        );
+                                        return FsmState::OpenConfirm(exist);
+                                    } else if conn_id == *exist.conn.id() {
+                                        collision_log!(self, warn, new, exist.conn,
+                                            "hold timer expired (conn_id: {}), fsm transition new conn to open sent",
+                                            conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&exist.conn),
+                                            None,
+                                            StopReason::HoldTimeExpired,
+                                        );
+                                        return FsmState::OpenSent(new);
+                                    } else {
+                                        // If the conn_id is known but not
+                                        // involved in this collision, send an
+                                        // FsmError to that connection.  We
+                                        // shouldn't get to this point, because
+                                        // the first connection is only accepted
+                                        // (and registered) in Active or Connect,
+                                        // and the second connection is only
+                                        // accepted (and registered) in OpenSent
+                                        // or OpenConfirm. Since the FSM
+                                        // advances serially, there should be no
+                                        // other opportunity for an additional
+                                        // connection to have been registered.
+                                        // So this error is likely indicative of
+                                        // a bug in the registry handling,
+                                        // probably a missing unregister call.
+                                        collision_log!(self, warn, new, exist.conn,
+                                            "rx open message from peer {} for known connection (conn_id: {}) that isn't part of this collision? closing conn",
+                                            conn_id.remote().ip(), conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&connection),
+                                            None,
+                                            StopReason::FsmError,
+                                        );
+                                        continue;
+                                    }
+                                }
+                                None => {
+                                    collision_log!(self, warn, new, exist.conn,
+                                        "rx open message from peer {} for unknown connection (conn_id: {}), ignoring",
+                                        conn_id.remote().ip(), conn_id.short();
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
 
-                FsmEvent::Admin(AdminEvent::Reset) => {
-                    collision_log!(self, info, new, exist.conn,
-                        "rx fsm reset, fsm transition to idle";
-                    );
+                        /*
+                         * If the local system receives a KeepaliveTimer_Expires event (Event
+                         * 11), the local system:
+                         *
+                         *   - sends a KEEPALIVE message,
+                         *
+                         *   - restarts the KeepaliveTimer, and
+                         *
+                         *   - remains in the OpenConfirmed state.
+                         */
+                        ConnectionEvent::KeepaliveTimerExpires(conn_id) => {
+                            collision_log!(self, warn, new, exist.conn,
+                                "rx {} (conn_id: {})",
+                                connection_event.title(), conn_id.short();
+                            );
+                            let connection = match self.get_conn(&conn_id) {
+                                Some(c) => c,
+                                None => {
+                                    // If the conn_id is unknown, there's
+                                    // nothing to do since we don't have a
+                                    // handle for the connection to send a
+                                    // notification. All we can do is ignore it.
+                                    collision_log!(self, warn, new, exist.conn,
+                                        "rx {} for unknown connection (conn_id: {}), ignoring",
+                                        connection_event.title(), conn_id.short();
+                                    );
+                                    continue;
+                                }
+                            };
+                            if *connection.id() == *new.id()
+                                || *connection.id() == *exist.conn.id()
+                            {
+                                // If the conn_id is known and involved in this
+                                // collision, go ahead and send a keepalive.
+                                self.send_keepalive(&connection);
+                                lock!(
+                                    connection.clock().timers.keepalive_timer
+                                )
+                                .restart();
+                            } else {
+                                // If the conn_id is known but not involved in
+                                // this collision, send an FsmError to that
+                                // connection.  We shouldn't get to this point,
+                                // because the first connection is only accepted
+                                // (and registered) in Active or Connect, and a
+                                // second connection is only accepted (and
+                                // registered) in OpenSent or OpenConfirm. since
+                                // the FSM advances serially, there should be no
+                                // other opportunity for an additional
+                                // connection to have been registered. So this
+                                // error is indicative of a bug in the registry
+                                // handling, probably a missing unregister call.
+                                collision_log!(self, warn, new, exist.conn,
+                                    "rx {} for known connection (conn_id: {}) that isn't part of this collision (likely a bug). closing conn",
+                                    connection_event.title(), conn_id.short();
+                                );
+                                self.stop(
+                                    Some(&connection),
+                                    None,
+                                    StopReason::FsmError,
+                                );
+                                continue;
+                            }
+                            continue;
+                        }
 
-                    self.send_notification(
-                        &new,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeReset,
-                        ),
-                    );
+                        // Event 12
+                        ConnectionEvent::DelayOpenTimerExpires(conn_id) => {
+                            match self.get_conn(&conn_id) {
+                                Some(connection) => {
+                                    if conn_id == *new.id() {
+                                        collision_log!(self, warn, new, exist.conn,
+                                            "new conn rx {} (conn_id: {}), but event is not allowed. fsm transition existing conn back to open confirm",
+                                            connection_event.title(), conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&new),
+                                            None,
+                                            StopReason::FsmError,
+                                        );
+                                        return FsmState::OpenConfirm(exist);
+                                    } else if conn_id == *exist.conn.id() {
+                                        collision_log!(self, warn, new, exist.conn,
+                                            "exist conn rx {} (conn_id: {}), fsm transition new conn to open sent",
+                                            connection_event.title(), conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&exist.conn),
+                                            None,
+                                            StopReason::FsmError,
+                                        );
+                                        return FsmState::OpenSent(new);
+                                    } else {
+                                        // If the conn_id is known but not
+                                        // involved in this collision, send an
+                                        // FsmError to that connection.  We
+                                        // shouldn't get to this point, because
+                                        // the first connection is only accepted
+                                        // (and registered) in Active or Connect,
+                                        // and the second connection is only
+                                        // accepted (and registered) in OpenSent
+                                        // or OpenConfirm. Since the FSM
+                                        // advances serially, there should be no
+                                        // other opportunity for an additional
+                                        // connection to have been registered.
+                                        // So this error is likely indicative of
+                                        // a bug in the registry handling,
+                                        // probably a missing unregister call.
+                                        collision_log!(self, warn, new, exist.conn,
+                                            "rx {} for known connection (conn_id: {}) that isn't part of this collision? closing connection",
+                                            connection_event.title(), conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&connection),
+                                            None,
+                                            StopReason::FsmError,
+                                        );
+                                        continue;
+                                    }
+                                }
+                                None => {
+                                    collision_log!(self, warn, new, exist.conn,
+                                        "rx {} for unknown connection (conn_id: {}), ignoring",
+                                        connection_event.title(), conn_id.short();
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
 
-                    self.send_notification(
-                        &exist.conn,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeReset,
-                        ),
-                    );
+                        ConnectionEvent::Message { msg, conn_id } => {
+                            let msg_kind = msg.kind();
+                            let title = msg.title();
+                            let connection = match self.get_conn(&conn_id) {
+                                None => {
+                                    collision_log!(self, warn, new, exist.conn,
+                                        "rx unexpected {title} from peer {} for unknown connection (conn_id: {}), ignoring..",
+                                        conn_id.remote().ip(), conn_id.short();
+                                    );
+                                    self.bump_msg_counter(msg_kind, true);
+                                    continue;
+                                }
+                                Some(connection) => connection,
+                            };
 
-                    self.connect_retry_counter.store(0, Ordering::Relaxed);
-                    lock!(self.clock.timers.connect_retry_timer).restart();
+                            if let Message::KeepAlive = msg {
+                                // If we've hit this point, we know `new` hasn't
+                                // gotten an Open yet (otherwise we would have
+                                // broken out of this loop) and is still in
+                                // OpenSent. So kill `new` and transition
+                                // `exist` to SessionSetup since it's ready.
+                                //
+                                // The RFC is pretty unhelpful when it comes to
+                                // exact FSM handling for collisions, but it
+                                // does say that a new connection should be
+                                // tracked until it gets an Open.  Well if
+                                // `exist` gets a Keepalive and goes into
+                                // Established before `new` gets an Open, then
+                                // the actual collision resolution will happen
+                                // using the rules of FsmState::Established.
+                                // i.e. We aren't going to allow a non-
+                                // established connection to beat an established
+                                // one (CollisionDetectEstablishedState), so we
+                                // send a CollisionResolution notification.
+                                if *connection.id() == *exist.conn.id() {
+                                    lock!(exist.conn.clock().timers.hold_timer)
+                                        .restart();
+                                    lock!(
+                                        exist
+                                            .conn
+                                            .clock()
+                                            .timers
+                                            .keepalive_timer
+                                    )
+                                    .restart();
+                                    self.bump_msg_counter(msg_kind, false);
+                                    self.send_collision_resolution_notification(&new);
+                                    self.unregister_conn(new.id());
+                                    return FsmState::SessionSetup(exist);
+                                } else {
+                                    // Keepalive is unexpected for this conn,
+                                    // update counters, check which conn this is
+                                    // for, and tear it down.
+                                    self.bump_msg_counter(msg_kind, true);
 
-                    return FsmState::Idle;
-                }
+                                    if *connection.id() == *new.id() {
+                                        collision_log!(self, warn, new, exist.conn,
+                                            "rx unexpected keepalive via new conn (conn_id: {}), fsm transition existing conn back to open confirm",
+                                            conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&connection),
+                                            None,
+                                            StopReason::FsmError,
+                                        );
+                                        return FsmState::OpenConfirm(exist);
+                                    } else {
+                                        // If the conn_id is known but not
+                                        // involved in this collision, send an
+                                        // FsmError to that connection.  We
+                                        // shouldn't get to this point, because
+                                        // the first connection is only accepted
+                                        // (and registered) in Active or Connect,
+                                        // and the second connection is only
+                                        // accepted (and registered) in OpenSent
+                                        // or OpenConfirm. Since the FSM
+                                        // advances serially, there should be no
+                                        // other opportunity for an additional
+                                        // connection to have been registered.
+                                        // So this error is likely indicative of
+                                        // a bug in the registry handling,
+                                        // probably a missing unregister call.
+                                        collision_log!(self, warn, new, exist.conn,
+                                            "rx unexpected keepalive for known connection (conn_id: {}) that isn't part of this collision? closing conn",
+                                            conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&connection),
+                                            None,
+                                            StopReason::FsmError,
+                                        );
+                                        continue;
+                                    }
+                                }
+                            } else if let Message::Open(om) = msg {
+                                if *connection.id() == *new.id() {
+                                    lock!(self.message_history).receive(
+                                        om.clone().into(),
+                                        Some(conn_id),
+                                    );
 
-                FsmEvent::Connection(ConnectionEvent::HoldTimerExpires(
-                    conn_id,
-                )) => {
-                    collision_log!(self, warn, new, exist.conn,
-                        "hold timer expired, fsm transition existing conn back to open confirm";
-                    );
+                                    self.bump_msg_counter(msg_kind, false);
 
-                    self.send_hold_timer_expired_notification(&new);
+                                    if let Err(e) = self.handle_open(&new, &om)
+                                    {
+                                        session_log!(self, warn, new,
+                                            "new conn failed to handle open message ({e}), existing conn falls back to open confirm";
+                                            "error" => format!("{e}")
+                                        );
+                                        // notification sent by handle_open(), nothing to do here
+                                        self.connect_retry_counter
+                                            .fetch_add(1, Ordering::Relaxed);
+                                        self.counters
+                                            .connection_retries
+                                            .fetch_add(1, Ordering::Relaxed);
+                                        // peer oscillation damping happens in idle, nothing to do here
+                                        return FsmState::OpenConfirm(exist);
+                                    }
 
-                    return FsmState::OpenConfirm(exist);
-                }
-
-                FsmEvent::Connection(ConnectionEvent::Message {
-                    msg,
-                    conn_id,
-                }) => {
-                    collision_log!(self, warn, new, exist.conn,
-                        "rx unexpected {} message, drop new conn", msg.title();
-                        "message" => msg.title()
-                    );
-
-                    self.send_fsm_notification(&new);
-
-                    collision_log!(self, info, new, exist.conn,
-                        "fsm transition existing conn back to open confirm";
-                    );
-
-                    return FsmState::OpenConfirm(exist);
-                }
-
-                FsmEvent::Session(SessionEvent::ConnectRetryTimerExpires)
-                | FsmEvent::Connection(
-                    ConnectionEvent::KeepaliveTimerExpires(ref conn_id),
-                )
-                | FsmEvent::Session(SessionEvent::IdleHoldTimerExpires) => {
-                    collision_log!(self, warn, new, exist.conn,
-                        "{} event not allowed in this state, drop new conn", event.title();
-                    );
-
-                    self.send_fsm_notification(&new);
-
-                    collision_log!(self, info, new, exist.conn,
-                        "fsm transition existing conn back to open confirm";
-                    );
-
-                    return FsmState::OpenConfirm(exist);
-                }
-
-                other => {
-                    collision_log!(self, warn, new, exist.conn,
-                        "unexpected {} event received, ignoring..", other.title();
-                    );
-
-                    continue;
+                                    break om;
+                                } else {
+                                    self.bump_msg_counter(msg_kind, true);
+                                    if connection.id() == exist.conn.id() {
+                                        collision_log!(self, warn, new, exist.conn,
+                                            "rx unexpected open for existing connection (conn_id: {}), fsm transition new to open sent",
+                                            conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&exist.conn),
+                                            None,
+                                            StopReason::FsmError,
+                                        );
+                                        return FsmState::OpenSent(new);
+                                    } else {
+                                        // If the conn_id is known but not
+                                        // involved in this collision, send an
+                                        // FsmError to that connection.  We
+                                        // shouldn't get to this point, because
+                                        // the first connection is only accepted
+                                        // (and registered) in Active or Connect,
+                                        // and the second connection is only
+                                        // accepted (and registered) in OpenSent
+                                        // or OpenConfirm. Since the FSM
+                                        // advances serially, there should be no
+                                        // other opportunity for an additional
+                                        // connection to have been registered.
+                                        // So this error is likely indicative of
+                                        // a bug in the registry handling,
+                                        // probably a missing unregister call.
+                                        collision_log!(self, warn, new, exist.conn,
+                                            "rx unexpected open for known connection (conn_id: {}) that isn't part of this collision? closing conn",
+                                            conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&connection),
+                                            None,
+                                            StopReason::FsmError,
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
+                            self.zero_connect_retry();
+                            return FsmState::Idle;
+                        }
+                    }
                 }
             }
         };
 
-        let my_id = self.id;
-        let exist_id = exist.id;
-        let new_id = om.id;
-        collision_log!(self, info, new, exist.conn,
-            "collision detected: local id {my_id}, remote id {new_id}";
-        );
+        self.resolve_collision(
+            exist,
+            PeerConnection {
+                conn: new,
+                id: om.id,
+                asn: om.asn(),
+            },
+        )
+    }
 
-        if new_id != exist_id {
-            // XXX: Is this the right thing to do here?
-            //      It seems pretty unlikely that we'd organically encounter
-            //      RIDs differing across parallel connections to the same
-            //      peer IP, but what would the alternative be, just take the RID
-            //      of one connection and assume both match?
-            collision_log!(self, error, new, exist.conn,
-                "collision error: rx BGP-ID mismatch, {new_id} (new conn) != {exist_id} (existing conn)";
+    /// Handler for collisions when existing connection was in OpenSent state
+    /// when the new connection was encountered.
+    ///
+    /// Note: Either `new` or `exist` can progress into SessionSetup directly
+    /// from here.
+    ///
+    /// This could happen if one of the two connections receives both an Open and
+    /// a Keepalive before the other receives an Open. That would result in one
+    /// connection becoming ready to move into SessionSetup before we have the
+    /// required to do Collision Resolution.
+    ///
+    /// However, if we receive an Open from both connections before one of the
+    /// connections gets both an Open and a Keepalive, we then can (and must)
+    /// perform Collision Resolution.
+    ///
+    /// Implementation notes:
+    /// =====================
+    /// The existence of a received Open is used as a proxy for determining what
+    /// FsmState a connection is in.
+    ///   None => OpenSent,
+    ///   Some(_) => OpenConfirm
+    ///
+    /// Each connection's Open is stored in its own Option<OpenMessage>:
+    /// new_open & exist_open
+    ///
+    /// Example:
+    /// ========
+    /// A Keepalive is received by `exist`.
+    /// If `exist_open.is_none()` is true, there's been an FSM error (per the
+    /// rules of OpenSent).  However, if `exist_open.is_some()` is true, then
+    /// `exist` is eligible to advance into SessionSetup (per the rules of
+    /// OpenConfirm).
+    fn connection_collision_open_sent(
+        self: &Arc<Self>,
+        exist: Cnx,
+        new: Cnx,
+    ) -> FsmState<Cnx> {
+        let mut new_open: Option<OpenMessage> = None;
+        let mut exist_open: Option<OpenMessage> = None;
+        let (om_new, om_exist) = loop {
+            let event = match self.event_rx.recv() {
+                Ok(event) => {
+                    collision_log!(self, debug, new, exist,
+                        "received fsm event {}", event.title();
+                        "event" => event.title()
+                    );
+                    event
+                }
+                Err(e) => {
+                    collision_log!(self, error, new, exist,
+                        "event rx error for ({e}), fsm transition to idle";
+                        "error" => format!("{e}")
+                    );
+                    //TODO possible death loop. Should we just panic here?
+                    continue;
+                }
+            };
+
+            match event {
+                FsmEvent::Admin(admin_event) => match admin_event {
+                    AdminEvent::ManualStop => {
+                        collision_log!(self, info, new, exist,
+                            "rx manual stop, fsm transition to idle";
+                        );
+                        self.stop(
+                            Some(&new),
+                            Some(&exist),
+                            StopReason::Shutdown,
+                        );
+                        return FsmState::Idle;
+                    }
+
+                    AdminEvent::Reset => {
+                        collision_log!(self, info, new, exist,
+                            "rx fsm reset, fsm transition to idle";
+                        );
+                        self.stop(Some(&new), Some(&exist), StopReason::Reset);
+                        return FsmState::Idle;
+                    }
+
+                    AdminEvent::Announce(_)
+                    | AdminEvent::ShaperChanged(_)
+                    | AdminEvent::ExportPolicyChanged(_)
+                    | AdminEvent::CheckerChanged(_)
+                    | AdminEvent::ManualStart
+                    | AdminEvent::SendRouteRefresh
+                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::PathAttributesChanged => {
+                        let title = admin_event.title();
+                        collision_log!(self, warn, new, exist,
+                            "unexpected admin fsm event {title}, ignoring";
+                            "event" => title
+                        );
+                        continue;
+                    }
+                },
+
+                /*
+                 * In response to any other event (Events 9, 11-13, 20, 25-28), the
+                 * local system:
+                 *
+                 *   - sends the NOTIFICATION with the Error Code Finite State
+                 *     Machine Error,
+                 *
+                 *   - sets the ConnectRetryTimer to zero,
+                 *
+                 *   - releases all BGP resources,
+                 *
+                 *   - drops the TCP connection,
+                 *
+                 *   - increments the ConnectRetryCounter by 1,
+                 *
+                 *   - (optionally) performs peer oscillation damping if the
+                 *     DampPeerOscillations attribute is set to TRUE, and
+                 *
+                 *   - changes its state to Idle.
+                 */
+                FsmEvent::Session(session_event) => match session_event {
+                    // Event 9
+                    SessionEvent::ConnectRetryTimerExpires
+                    // Event 13
+                    | SessionEvent::IdleHoldTimerExpires => {
+                        let title = session_event.title();
+                        collision_log!(self, warn, new, exist,
+                            "{title} event not allowed in this state, fsm transition to idle";
+                            "event" => title
+                        );
+                        self.stop(Some(&new), Some(&exist), StopReason::FsmError);
+                        return FsmState::Idle;
+                    }
+
+                    /*
+                     * If a TcpConnection_Valid (Event 14), Tcp_CR_Acked (Event 16), or a
+                     * TcpConnectionConfirmed event (Event 17) is received, a second TCP
+                     * connection may be in progress.  This second TCP connection is
+                     * tracked per Connection Collision processing (Section 6.8) until an
+                     * OPEN message is received.
+                     */
+                    SessionEvent::Connected(extra)
+                    | SessionEvent::TcpConnectionConfirmed(extra) => {
+                        match extra.creator() {
+                            ConnectionCreator::Dispatcher => {
+                                collision_log!(self, info, new, exist,
+                                    "new inbound connection (peer: {}, conn_id: {}), but we're already in a collision. ignoring..",
+                                    extra.peer(), extra.id().short();
+                                );
+                                self.counters
+                                    .passive_connections_declined
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                            ConnectionCreator::Connector => {
+                                collision_log!(self, info, new, exist,
+                                    "outbound connection completed (peer: {}, conn_id: {}), but we're already in a collision. ignoring..",
+                                    extra.peer(), extra.id().short();
+                                );
+                                self.counters
+                                    .active_connections_declined
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        continue;
+                    }
+                },
+
+                FsmEvent::Connection(connection_event) => {
+                    match connection_event {
+                        ConnectionEvent::Message { msg, ref conn_id } => {
+                            let msg_kind = msg.kind();
+                            let conn_kind = self.collision_conn_kind(conn_id, exist.id(), new.id());
+
+                            // Event 19 (BgpOpen)
+                            if let Message::Open(om) = msg {
+                                // Event 20 (BGPOpen with DelayOpenTimer running)
+                                // XXX: DelayOpen error handling
+                                lock!(self.message_history).receive(
+                                    om.clone().into(),
+                                    Some(*conn_id),
+                                );
+
+                                if let CollisionConnectionKind::New = conn_kind {
+                                    match new_open {
+                                        // `new` is still in OpenSent
+                                        // Open moves us to OpenConfirm
+                                        None => {
+                                            self.bump_msg_counter(msg_kind, false);
+
+                                            if let Err(e) = self.handle_open(&new, &om)
+                                            {
+                                                collision_log!(self, warn, new, exist,
+                                                    "new conn failed to handle open ({e}), fallback to existing conn";
+                                                    "error" => format!("{e}")
+                                                );
+
+                                                // notification sent by handle_open(), nothing to do here
+                                                self.connect_retry_counter
+                                                    .fetch_add(1, Ordering::Relaxed);
+                                                self.counters
+                                                    .connection_retries
+                                                    .fetch_add(1, Ordering::Relaxed);
+                                                // peer oscillation damping happens in idle, nothing to do here
+
+                                                match exist_open {
+                                                    // If `exist` has received an Open, it is now in OpenConfirm
+                                                    Some(o) => {
+                                                        return FsmState::OpenConfirm(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                                    }
+                                                    // If `exist` has not received an Open, it is still in OpenSent
+                                                    None => {
+                                                        return FsmState::OpenSent(exist);
+                                                    }
+                                                }
+                                            }
+
+                                            if let Some(o_exist) = exist_open {
+                                                break(om, o_exist);
+                                            } else {
+                                                new_open = Some(om);
+                                            }
+                                        }
+                                        // `new` has moved into OpenConfirm
+                                        // Open is an FSM Error.
+                                        Some(_) => {
+                                            self.bump_msg_counter(msg_kind, true);
+                                            self.connect_retry_counter
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            self.restart_connect_retry();
+                                            collision_log!(self, warn, new, exist,
+                                                "new conn rx unexpected {msg_kind} (conn_id: {}), fallback to existing conn",
+                                                conn_id.short();
+                                                "message" => "open",
+                                                "message_contents" => format!("{om}").as_str()
+                                            );
+                                            match exist_open {
+                                                // If `exist` has received an Open, it is now in OpenConfirm
+                                                Some(o) => {
+                                                    return FsmState::OpenConfirm(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                                }
+                                                // If `exist` has not received an Open, it is still in OpenSent
+                                                None => {
+                                                    return FsmState::OpenSent(exist);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else if let CollisionConnectionKind::Exist = conn_kind {
+                                    match exist_open {
+                                        // `exist` is still in OpenSent
+                                        // Open moves us to OpenConfirm
+                                        None => {
+                                            self.bump_msg_counter(msg_kind, false);
+
+                                            if let Err(e) = self.handle_open(&exist, &om)
+                                            {
+                                                collision_log!(self, warn, new, exist,
+                                                    "existing conn failed to handle {msg_kind} ({e}), fallback to new conn";
+                                                    "error" => format!("{e}")
+                                                );
+
+                                                // notification sent by handle_open(), nothing to do here
+                                                self.connect_retry_counter
+                                                    .fetch_add(1, Ordering::Relaxed);
+                                                self.counters
+                                                    .connection_retries
+                                                    .fetch_add(1, Ordering::Relaxed);
+                                                // peer oscillation damping happens in idle, nothing to do here
+
+                                                match new_open {
+                                                    // If `new` has received an Open, it is now in OpenConfirm
+                                                    Some(o) => {
+                                                        return FsmState::OpenConfirm(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                                    }
+                                                    // If `new` has not received an Open, it is still in OpenSent
+                                                    None => {
+                                                        return FsmState::OpenSent(new);
+                                                    }
+                                                }
+                                            }
+
+                                            if let Some(o_new) = new_open {
+                                                break (o_new, om);
+                                            } else {
+                                                exist_open = Some(om);
+                                            }
+                                        }
+                                        // `exist` has moved into OpenConfirm
+                                        // Open is an FSM Error.
+                                        Some(_) => {
+                                            self.bump_msg_counter(msg_kind, true);
+                                            self.connect_retry_counter
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            self.restart_connect_retry();
+                                            collision_log!(self, warn, new, exist,
+                                                "existing conn rx unexpected {msg_kind} (conn_id: {}), fallback to new conn",
+                                                conn_id.short();
+                                                "message" => "open",
+                                                "message_contents" => format!("{om}").as_str()
+                                            );
+
+                                            // RFC 4271 says there's an FSM for
+                                            // each configured peer + each
+                                            // inbound TCP connection that
+                                            // hasn't yet been identified. So in
+                                            // theory, an FSM error would only
+                                            // affect one connection. We are
+                                            // emulating two FSMs for the
+                                            // lifetime of a collision, so an
+                                            // FSM error on one connection
+                                            // would presumably have a blast
+                                            // radius of just the errored
+                                            // connection and we can attempt
+                                            // recovery via the other connection
+                                            match new_open {
+                                                // If `new` has received an Open, it is now in OpenConfirm
+                                                Some(o) => {
+                                                    return FsmState::OpenConfirm(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                                }
+                                                // If `new` has not received an Open, it is still in OpenSent
+                                                None => {
+                                                    return FsmState::OpenSent(new);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if let Message::KeepAlive = msg {
+                                if let CollisionConnectionKind::New = conn_kind {
+                                    match new_open {
+                                        // `new` is in OpenConfirm
+                                        // keepalive means move into
+                                        // SessionSetup (Established)
+                                        Some(o) => {
+                                            self.bump_msg_counter(msg_kind, false);
+                                            lock!(new.clock().timers.hold_timer).restart();
+                                            lock!(new.clock().timers.keepalive_timer).restart();
+                                            self.counters
+                                                .keepalives_received
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            return FsmState::SessionSetup(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                        }
+                                        // `new` is in OpenSent
+                                        // keepalive means FSM Error
+                                        None => {
+                                            self.bump_msg_counter(msg_kind, true);
+                                            collision_log!(self, warn, new, exist,
+                                                "new conn rx unexpected {msg_kind} message (conn_id: {}), fallback to existing conn",
+                                                conn_id.short();
+                                                "message" => msg_kind
+                                            );
+
+                                            self.send_fsm_notification(&new);
+
+                                            lock!(self.clock.timers.connect_retry_timer).stop();
+                                            self.connect_retry_counter
+                                                .fetch_add(1, Ordering::Relaxed);
+
+                                            // RFC 4271 says there's an FSM for
+                                            // each configured peer + each
+                                            // inbound TCP connection that
+                                            // hasn't yet been identified. So in
+                                            // theory, an FSM error would only
+                                            // affect one connection. We are
+                                            // emulating two FSMs for the
+                                            // lifetime of a collision, so an
+                                            // FSM error on one connection
+                                            // would presumably have a blast
+                                            // radius of just the errored
+                                            // connection and we can attempt
+                                            // recovery via the other connection
+                                            match exist_open {
+                                                None => {
+                                                    return FsmState::OpenSent(exist);
+                                                }
+                                                Some(o) => {
+                                                    return FsmState::SessionSetup(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else if let CollisionConnectionKind::Exist = conn_kind {
+                                    match exist_open {
+                                        // `exist` is in OpenConfirm
+                                        // keepalive means move into
+                                        // SessionSetup (Established)
+                                        Some(o) => {
+                                            self.bump_msg_counter(msg_kind, false);
+                                            lock!(new.clock().timers.hold_timer).restart();
+                                            lock!(new.clock().timers.keepalive_timer).restart();
+                                            self.counters
+                                                .keepalives_received
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            return FsmState::SessionSetup(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                        }
+                                        // `exist` is in OpenSent
+                                        // keepalive means FSM Error
+                                        None => {
+                                            self.bump_msg_counter(msg_kind, true);
+                                            collision_log!(self, warn, new, exist,
+                                                "existing rx unexpected {msg_kind} message (conn_id: {}), fallback to new conn",
+                                                conn_id.short();
+                                                "message" => msg_kind
+                                            );
+
+                                            self.send_fsm_notification(&exist);
+
+                                            lock!(self.clock.timers.connect_retry_timer).stop();
+                                            self.connect_retry_counter
+                                                .fetch_add(1, Ordering::Relaxed);
+
+                                            // RFC 4271 says there's an FSM for
+                                            // each configured peer + each
+                                            // inbound TCP connection that
+                                            // hasn't yet been identified. So in
+                                            // theory, an FSM error would only
+                                            // affect one connection. We are
+                                            // emulating two FSMs for the
+                                            // lifetime of a collision, so an
+                                            // FSM error on one connection
+                                            // would presumably have a blast
+                                            // radius of just the errored
+                                            // connection and we can attempt
+                                            // recovery via the other connection
+                                            match new_open {
+                                                None => {
+                                                    return FsmState::OpenSent(new);
+                                                }
+                                                Some(o) => {
+                                                    return FsmState::SessionSetup(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                self.bump_msg_counter(msg_kind, true);
+
+                                let conn = match conn_kind {
+                                    CollisionConnectionKind::New => {
+                                        collision_log!(self, warn, new, exist,
+                                            "new conn rx unexpected {msg_kind} (conn_id: {}), fsm transition to idle",
+                                            conn_id.short();
+                                            "message" => msg_kind,
+                                            "message_contents" => format!("{msg}")
+                                        );
+                                        new
+                                    },
+
+                                    CollisionConnectionKind::Exist => {
+                                        collision_log!(self, warn, new, exist,
+                                            "existing conn rx unexpected {msg_kind} (conn_id: {}), fsm transition to idle",
+                                            conn_id.short();
+                                            "message" => msg_kind,
+                                            "message_contents" => format!("{msg}")
+                                        );
+                                        exist
+                                    },
+
+                                    CollisionConnectionKind::Unexpected(unknown) => {
+                                        // If the conn_id is known but not
+                                        // involved in this collision, send an
+                                        // FsmError to that connection.  We
+                                        // shouldn't get to this point, because
+                                        // the first connection is only accepted
+                                        // (and registered) in Active or Connect
+                                        // and a second connection is only
+                                        // accepted (and registered) in OpenSent
+                                        // or OpenConfirm. since the FSM
+                                        // advances serially, there should be no
+                                        // other opportunity for an additional
+                                        // connection to have been registered. So
+                                        // this error is indicative of a bug in
+                                        // the registry handling, probably a
+                                        // missing unregister call.
+                                        collision_log!(self, warn, new, exist,
+                                            "rx {msg_kind} for known connection (conn_id: {}) that isn't part of this collision? closing conn",
+                                            conn_id.short();
+                                        );
+                                        unknown
+                                    },
+
+                                    CollisionConnectionKind::Missing => {
+                                        collision_log!(self, warn, new, exist,
+                                            "rx unexpected {msg_kind} from peer {} for unknown connection (conn_id: {}), ignoring..",
+                                            conn_id.remote().ip(), conn_id.short();
+                                        );
+                                        continue;
+                                    },
+                                };
+
+                                self.stop(Some(&conn), None, StopReason::FsmError);
+
+                                return FsmState::Idle;
+                            }
+                        }
+
+                        /*
+                         * If the HoldTimer_Expires (Event 10), the local system:
+                         *
+                         *   - sends a NOTIFICATION message with the error code Hold Timer
+                         *     Expired,
+                         *
+                         *   - sets the ConnectRetryTimer to zero,
+                         *
+                         *   - releases all BGP resources,
+                         *
+                         *   - drops the TCP connection,
+                         *
+                         *   - increments the ConnectRetryCounter,
+                         *
+                         *   - (optionally) performs peer oscillation damping if the
+                         *     DampPeerOscillations attribute is set to TRUE, and
+                         *
+                         *   - changes its state to Idle.
+                         */
+                        ConnectionEvent::HoldTimerExpires(ref conn_id) => {
+                            let title = connection_event.title();
+
+                            match self.collision_conn_kind(conn_id, exist.id(), new.id()) {
+                                CollisionConnectionKind::New => {
+                                    collision_log!(self, warn, new, exist,
+                                        "new conn rx {title} (conn_id: {}), fallback to existing conn",
+                                        conn_id.short();
+                                        "event" => title
+                                    );
+                                    self.stop(Some(&new), None, StopReason::HoldTimeExpired);
+                                    match exist_open {
+                                        None => {
+                                            return FsmState::OpenSent(exist);
+                                        }
+                                        Some(o) => {
+                                            return FsmState::SessionSetup(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                        }
+                                    }
+                                },
+
+                                CollisionConnectionKind::Exist => {
+                                    collision_log!(self, warn, new, exist,
+                                        "existing conn rx {title} (conn_id: {}), fallback to new conn",
+                                        conn_id.short();
+                                        "event" => title
+                                    );
+                                    self.stop(Some(&exist), None, StopReason::HoldTimeExpired);
+                                    match new_open {
+                                        None => {
+                                            return FsmState::OpenSent(new);
+                                        }
+                                        Some(o) => {
+                                            return FsmState::SessionSetup(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                        }
+                                    }
+                                },
+
+                                CollisionConnectionKind::Unexpected(unknown) => {
+                                    collision_log!(self, warn, new, exist,
+                                        "rx {title} for known connection (conn_id: {}) that isn't part of this collision? closing conn",
+                                        conn_id.short();
+                                        "event" => title
+                                    );
+                                    self.stop(Some(&unknown), None, StopReason::HoldTimeExpired);
+                                    continue;
+                                },
+
+                                CollisionConnectionKind::Missing => {
+                                    collision_log!(self, warn, new, exist,
+                                        "rx {title} for unknown connection (conn_id: {}), ignoring..",
+                                        conn_id.short();
+                                        "event" => title
+                                    );
+                                    continue;
+                                },
+                            }
+
+                        }
+
+                        // Event 11
+                        ConnectionEvent::KeepaliveTimerExpires(
+                            conn_id,
+                        )
+                        // Event 12
+                        | ConnectionEvent::DelayOpenTimerExpires(
+                            conn_id,
+                        ) => {
+                            let title = connection_event.title();
+
+                            match self.collision_conn_kind(&conn_id, exist.id(), new.id()) {
+                                CollisionConnectionKind::New => {
+                                    collision_log!(self, warn, new, exist,
+                                        "new conn rx {title}, but event not allowed in this state, fallback to existing conn";
+                                        "event" => title
+                                    );
+                                    self.stop(Some(&new), None, StopReason::FsmError);
+                                    match exist_open {
+                                        None => {
+                                            return FsmState::OpenSent(exist);
+                                        }
+                                        Some(o) => {
+                                            return FsmState::SessionSetup(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                        }
+                                    }
+                                },
+
+                                CollisionConnectionKind::Exist => {
+                                    collision_log!(self, warn, new, exist,
+                                        "existing conn rx {title}, but event not allowed in this state, fallback to new conn";
+                                        "event" => title
+                                    );
+                                    self.stop(Some(&exist), None, StopReason::FsmError);
+                                    match new_open {
+                                        None => {
+                                            return FsmState::OpenSent(new);
+                                        }
+                                        Some(o) => {
+                                            return FsmState::SessionSetup(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                        }
+                                    }
+                                },
+
+                                CollisionConnectionKind::Unexpected(unknown) => {
+                                    collision_log!(self, warn, new, exist,
+                                        "rx {title} for connection that is known (conn_id: {}) but not part of this collision? closing conn",
+                                        conn_id.short();
+                                        "event" => title
+                                    );
+                                    self.stop(Some(&unknown), None, StopReason::FsmError);
+                                    continue;
+                                },
+
+                                CollisionConnectionKind::Missing => {
+                                    collision_log!(self, warn, new, exist,
+                                        "rx {title} for unknown connection (conn_id: {}), ignoring..",
+                                        conn_id.short();
+                                        "event" => title
+                                    );
+                                    continue;
+                                },
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        self.resolve_collision(
+            PeerConnection {
+                conn: exist,
+                id: om_exist.id,
+                asn: om_exist.asn(),
+            },
+            PeerConnection {
+                conn: new,
+                id: om_new.id,
+                asn: om_new.asn(),
+            },
+        )
+    }
+
+    fn resolve_collision(
+        &self,
+        exist: PeerConnection<Cnx>,
+        new: PeerConnection<Cnx>,
+    ) -> FsmState<Cnx> {
+        /*
+         * 1) The BGP Identifier of the local system is compared to the BGP
+         *    Identifier of the remote system (as specified in the OPEN
+         *    message).  Comparing BGP Identifiers is done by converting them
+         *    to host byte order and treating them as 4-octet unsigned
+         *    integers.
+         *
+         * 2) If the value of the local BGP Identifier is less than the
+         *    remote one, the local system closes the BGP connection that
+         *    already exists (the one that is already in the OpenConfirm
+         *    state), and accepts the BGP connection initiated by the remote
+         *    system.
+         *
+         * 3) Otherwise, the local system closes the newly created BGP
+         *    connection (the one associated with the newly received OPEN
+         *    message), and continues to use the existing one (the one that
+         *    is already in the OpenConfirm state).
+         *
+         *    Unless allowed via configuration, a connection collision with an
+         *    existing BGP connection that is in the Established state causes
+         *    closing of the newly created connection.
+         *
+         *    Note that a connection collision cannot be detected with connections
+         *    that are in Idle, Connect, or Active states.
+         *
+         *    Closing the BGP connection (that results from the collision
+         *    resolution procedure) is accomplished by sending the NOTIFICATION
+         *    message with the Error Code Cease.
+         */
+
+        // XXX: Is this the right thing to do?
+        //      RIDs or ASNs differing across parallel connections to the same
+        //      peer IP seems pretty unlikely to occur organically, but what
+        //      what would the alternative be? just take the values from one
+        //      connection and assume it matches the other?
+        if new.id != exist.id {
+            collision_log!(self, error, new.conn, exist.conn,
+                "collision error: rx BGP-ID mismatch, {} (new conn) != {} (existing conn). fsm transition to idle",
+                new.id, exist.id;
             );
-            collision_log!(self, info, new, exist.conn,
-                "fsm transition to idle";
+
+            return FsmState::Idle;
+        } else if new.asn != exist.asn {
+            collision_log!(self, error, new.conn, exist.conn,
+                "collision error: rx ASN mismatch, {} (new conn) != {} (existing conn). fsm transition to idle",
+                new.asn, exist.asn;
             );
 
             return FsmState::Idle;
         }
 
-        if my_id > new_id {
-            collision_log!(self, info, new, exist.conn,
-                "collision resolution: existing conn wins with higher BGP-ID ({my_id} > {new_id})";
+        collision_log!(self, info, new.conn, exist.conn,
+            "collision detected: local id {}, remote id {}",
+            self.id, new.id;
+        );
+
+        /*
+         *  If this connection is to be dropped due to connection collision,
+         *  the local system:
+         *
+         *   - sends a NOTIFICATION with a Cease,
+         *
+         *   - sets the ConnectRetryTimer to zero,
+         *
+         *   - releases all BGP resources,
+         *
+         *   - drops the TCP connection,
+         *
+         *   - increments the ConnectRetryCounter by 1,
+         *
+         *   - (optionally) performs peer oscillation damping if the
+         *     DampPeerOscillations attribute is set to TRUE, and
+         *
+         *   - changes its state to Idle.
+         */
+        if self.id > new.id {
+            collision_log!(self, info, new.conn, exist.conn,
+                "collision resolution: existing conn wins with higher RID ({} > {})",
+                self.id, new.id;
             );
 
             // Our RID is higher, we win. Kill `new`. Kill it to death.
-            self.send_collision_resolution_notification(&new);
+            self.send_collision_resolution_notification(&new.conn);
+            self.unregister_conn(new.conn.id());
 
             lock!(exist.conn.clock().timers.hold_timer).restart();
             lock!(exist.conn.clock().timers.keepalive_timer).restart();
@@ -2723,488 +3893,43 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // Our RID is lower, we lose. Barring any errors, setup
         // new conn and leave `existing` for dead.
-        collision_log!(self, info, new, exist.conn,
-            "collision resolution: new conn wins ({new_id} >= {my_id})";
+        collision_log!(self, info, new.conn, exist.conn,
+            "collision resolution: new conn wins ({} >= {})",
+            new.id, self.id;
         );
 
         self.send_collision_resolution_notification(&exist.conn);
+        self.unregister_conn(exist.conn.id());
 
-        self.connect_retry_counter.store(0, Ordering::Relaxed);
+        self.zero_connect_retry();
         self.counters
             .connection_retries
             .fetch_add(1, Ordering::Relaxed);
 
-        if let Err(e) = self.handle_open(&new, &om) {
-            collision_log!(self, warn, new, exist.conn,
-                "new conn failed to handle open message: {e}";
-                "error" => format!("{e}")
-            );
-            collision_log!(self, info, new, exist.conn,
-                "fsm transition existing conn to idle";
-            );
+        lock!(new.conn.clock().timers.hold_timer).restart();
+        lock!(new.conn.clock().timers.keepalive_timer).restart();
 
-            return FsmState::Idle;
-        }
-
-        lock!(new.clock().timers.hold_timer).restart();
-        lock!(new.clock().timers.keepalive_timer).restart();
-
-        FsmState::SessionSetup(PeerConnection {
-            conn: new,
-            id: new_id,
-        })
+        FsmState::SessionSetup(new)
     }
 
-    // Handler for collisions when existing connection was in OpenSent state
-    fn collision_detection_open_sent(
-        self: &Arc<Self>,
-        exist: Cnx,
-        new: Cnx,
-    ) -> FsmState<Cnx> {
-        if let Err(e) = self.send_open(&new) {
-            collision_log!(self, error, new, exist,
-                "error sending open to new conn: {e}";
-                "error" => format!("{e}")
-            );
-            collision_log!(self, info, new, exist,
-                "fsm transition existing conn to open confirm";
-                "error" => format!("{e}")
-            );
-            return FsmState::OpenSent(exist);
-        }
-
-        lock!(new.clock().timers.hold_timer).restart();
-        self.counters
-            .passive_connections_accepted
-            .fetch_add(1, Ordering::Relaxed);
-
-        // We just sent an Open to `new`, so treat it like it's in OpenSent.
-        // Now both `new` and `exist` are OpenSent and we need to care for them
-        // until they both get Open messages and we can do collision resolution.
-
-        let mut select = Select::new();
-        let op_new = select.recv(&new.event_rx);
-        let exist_event_rx = read_lock!(self.event_rx);
-        let op_exist = select.recv(&exist_event_rx);
-        let mut opens = (None, None);
-
-        let (om_new, om_exist) = loop {
-            // We don't need ready_timeout() or ready_deadline() because the
-            // hold timer is running for both connections. In the worst case
-            // (from a delay standpoint), we will return when the timer pops
-            // for HoldTimerExpires.
-            let (event, is_new, _conn, mh) = match select.ready() {
-                i if i == op_new => match new.event_rx.recv() {
-                    Ok(event) => {
-                        collision_log!(self, debug, new, exist,
-                            "new conn received fsm event {}", event.title();
-                            "event" => event.title()
-                        );
-                        (event, true, &new, new.message_history.clone())
-                    }
-                    Err(e) => {
-                        collision_log!(self, error, new, exist,
-                            "new conn event rx error: {e}";
-                            "error" => format!("{e}")
-                        );
-                        drop(exist_event_rx); // Drop the read lock before returning
-                        return FsmState::OpenSent(exist);
-                    }
-                },
-                i if i == op_exist => match exist_event_rx.recv() {
-                    Ok(event) => {
-                        collision_log!(self, debug, new, exist,
-                            "existing conn received fsm event {}", event.title();
-                            "event" => event.title()
-                        );
-                        (event, false, &exist, self.message_history.clone())
-                    }
-                    Err(e) => {
-                        collision_log!(self, error, new, exist,
-                            "existing conn event rx error: {e}";
-                            "error" => format!("{e}")
-                        );
-                        drop(exist_event_rx); // Drop the read lock before calling commandeer
-                        self.commandeer(
-                            new.event_rx,
-                            new.event_tx.clone(),
-                            lock!(new.message_history).clone(),
-                            new.clock,
-                        );
-
-                        return FsmState::OpenSent(new);
-                    }
-                },
-                i => {
-                    collision_log!(self, info, new, exist,
-                        "select returned invalid index {i}, fsm transition to idle";
-                    );
-                    drop(exist_event_rx); // Drop the read lock before returning
-                    return FsmState::Idle;
+    fn collision_conn_kind(
+        &self,
+        rx: &ConnectionId,
+        exist: &ConnectionId,
+        new: &ConnectionId,
+    ) -> CollisionConnectionKind<Cnx> {
+        match self.get_conn(rx) {
+            Some(conn) => {
+                if rx == new {
+                    CollisionConnectionKind::New
+                } else if rx == exist {
+                    CollisionConnectionKind::Exist
+                } else {
+                    CollisionConnectionKind::Unexpected(conn)
                 }
-            };
-
-            match event {
-                FsmEvent::Connection(ConnectionEvent::Message {
-                    msg,
-                    conn_id,
-                }) => {
-                    match msg {
-                        Message::Open(om) => {
-                            lock!(mh).receive(
-                                om.clone().into(),
-                                Some(conn_id.clone()),
-                            );
-                            self.counters
-                                .opens_received
-                                .fetch_add(1, Ordering::Relaxed);
-                            if is_new {
-                                opens.0 = Some(om);
-                            } else {
-                                opens.1 = Some(om);
-                            }
-                        }
-
-                        // Because we are maintaining two connections in
-                        // parallel, we must handle Keepalives here.
-                        // e.g.
-                        // It is valid if we receive and process an Open and a
-                        // Keepalive via one connection before receiving and
-                        // processing an Open via the other connection. In this
-                        // case, we shouldn't bail out to Idle.
-                        //
-                        // To stay on the conservative side, we will only accept
-                        // Keepalives from a connection if it has already
-                        // received an Open.
-                        Message::KeepAlive => {
-                            self.counters
-                                .keepalives_received
-                                .fetch_add(1, Ordering::Relaxed);
-                            if is_new && opens.0.is_some() {
-                                lock!(new.clock().timers.hold_timer).restart();
-                                lock!(new.clock().timers.keepalive_timer)
-                                    .restart();
-                            } else if !is_new && opens.1.is_some() {
-                                lock!(exist.clock().timers.hold_timer)
-                                    .restart();
-                                lock!(exist.clock().timers.keepalive_timer)
-                                    .restart();
-                            } else {
-                                collision_log!(self, warn, new, exist,
-                                    "existing conn rx unexpected {} message", msg.title();
-                                    "message" => msg.title()
-                                );
-
-                                self.send_fsm_notification(&exist);
-
-                                collision_log!(self, info, new, exist,
-                                    "fsm transition new conn to open sent";
-                                );
-
-                                return FsmState::OpenSent(new);
-                            }
-                        }
-
-                        _ => {
-                            if is_new {
-                                collision_log!(self, warn, new, exist,
-                                    "new conn rx unexpected {} message", msg.title();
-                                    "message" => msg.title()
-                                );
-
-                                self.send_fsm_notification(&new);
-
-                                collision_log!(self, info, new, exist,
-                                    "fsm transition existing conn to open sent";
-                                );
-
-                                return FsmState::OpenSent(exist);
-                            } else {
-                                collision_log!(self, warn, new, exist,
-                                    "existing conn rx unexpected {} message", msg.title();
-                                    "message" => msg.title()
-                                );
-
-                                self.send_fsm_notification(&exist);
-
-                                collision_log!(self, info, new, exist,
-                                    "fsm transition new conn to open sent";
-                                );
-
-                                return FsmState::OpenSent(new);
-                            }
-                        }
-                    }
-                }
-
-                FsmEvent::Admin(AdminEvent::ManualStop) => {
-                    if is_new {
-                        collision_log!(self, info, new, exist,
-                            "new conn rx manual stop, fsm transition to idle";
-                        );
-                    } else {
-                        collision_log!(self, info, new, exist,
-                            "existing conn rx manual stop, fsm transition to idle";
-                        );
-                    }
-
-                    self.send_notification(
-                        &new,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeShutdown,
-                        ),
-                    );
-
-                    self.send_notification(
-                        &exist,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeShutdown,
-                        ),
-                    );
-
-                    self.connect_retry_counter.store(0, Ordering::Relaxed);
-                    {
-                        let guard = &self.clock;
-                        lock!(guard.timers.connect_retry_timer)
-                    }
-                    .restart();
-
-                    drop(exist_event_rx); // Drop the read lock before returning
-                    return FsmState::Idle;
-                }
-
-                FsmEvent::Admin(AdminEvent::Reset) => {
-                    if is_new {
-                        collision_log!(self, info, new, exist,
-                            "new conn rx fsm reset, fsm transition to idle";
-                        );
-                    } else {
-                        collision_log!(self, info, new, exist,
-                            "existing conn rx fsm reset, fsm transition to idle";
-                        );
-                    }
-
-                    self.send_notification(
-                        &new,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeReset,
-                        ),
-                    );
-
-                    self.send_notification(
-                        &exist,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeReset,
-                        ),
-                    );
-
-                    self.connect_retry_counter.store(0, Ordering::Relaxed);
-                    {
-                        let guard = &self.clock;
-                        lock!(guard.timers.connect_retry_timer)
-                    }
-                    .restart();
-
-                    drop(exist_event_rx); // Drop the read lock before returning
-                    return FsmState::Idle;
-                }
-
-                FsmEvent::Connection(ConnectionEvent::HoldTimerExpires(
-                    conn_id,
-                )) => {
-                    if is_new {
-                        collision_log!(self, warn, new, exist,
-                            "hold timer expired for new conn";
-                        );
-
-                        self.send_hold_timer_expired_notification(&new);
-                        drop(exist_event_rx); // Drop the read lock before calling commandeer
-
-                        self.commandeer(
-                            new.event_rx,
-                            new.event_tx.clone(),
-                            lock!(new.message_history).clone(),
-                            new.clock,
-                        );
-
-                        collision_log!(self, info, new, exist,
-                            "fsm transition existing conn to open sent";
-                        );
-
-                        return FsmState::OpenSent(exist);
-                    } else {
-                        collision_log!(self, warn, new, exist,
-                            "hold timer expired for existing conn";
-                        );
-
-                        self.send_hold_timer_expired_notification(&exist);
-                        drop(exist_event_rx); // Drop the read lock before calling commandeer
-
-                        self.commandeer(
-                            new.event_rx,
-                            new.event_tx.clone(),
-                            lock!(new.message_history).clone(),
-                            new.clock,
-                        );
-
-                        collision_log!(self, info, new, exist,
-                            "fsm transition new conn to open sent";
-                        );
-
-                        return FsmState::OpenSent(new);
-                    }
-                }
-
-                FsmEvent::Session(SessionEvent::ConnectRetryTimerExpires)
-                | FsmEvent::Connection(
-                    ConnectionEvent::KeepaliveTimerExpires(conn_id),
-                )
-                | FsmEvent::Session(SessionEvent::IdleHoldTimerExpires) => {
-                    if is_new {
-                        collision_log!(self, warn, new, exist,
-                            "{} event not allowed in this state, drop new conn", event.title();
-                        );
-
-                        self.send_fsm_notification(&new);
-
-                        collision_log!(self, info, new, exist,
-                            "fsm transition existing conn to open sent";
-                        );
-
-                        return FsmState::OpenSent(exist);
-                    } else {
-                        collision_log!(self, warn, new, exist,
-                            "{} event not allowed in this state, drop existing conn", event.title();
-                        );
-
-                        self.send_fsm_notification(&exist);
-                        drop(exist_event_rx); // Drop the read lock before calling commandeer
-
-                        self.commandeer(
-                            new.event_rx,
-                            new.event_tx.clone(),
-                            lock!(new.message_history).clone(),
-                            new.clock,
-                        );
-
-                        collision_log!(self, info, new, exist,
-                            "fsm transition new conn to open sent";
-                        );
-
-                        return FsmState::OpenSent(new);
-                    }
-                }
-
-                other => {
-                    if is_new {
-                        collision_log!(self, warn, new, exist,
-                            "unexpected {} event received by new conn, ignoring..", other.title();
-                        );
-                    } else {
-                        collision_log!(self, warn, new, exist,
-                            "unexpected {} event received by existing conn, ignoring..", other.title();
-                        );
-                    }
-
-                    continue;
-                }
-            };
-
-            match opens {
-                (Some(new), Some(exist)) => break (new, exist),
-                _ => continue,
             }
-        };
-
-        // Drop the read lock now that we're done with the loop and before any potential commandeer() calls
-        drop(exist_event_rx);
-
-        let my_id = self.id;
-        let new_id = om_new.id;
-        let exist_id = om_exist.id;
-        if new_id != exist_id {
-            // XXX: Is this the right thing to do here?
-            //      RIDs differing across parallel connections to the same
-            //      peer IP seems pretty unlikely to occur organically, but
-            //      what would the alternative be? just take the RID of one
-            //      connection and assume both match?
-            collision_log!(self, error, new, exist,
-                "collision error: rx BGP-ID mismatch, {new_id} (new conn) != {exist_id} (existing conn)";
-            );
-            collision_log!(self, info, new, exist,
-                "fsm transition to idle";
-            );
-
-            return FsmState::Idle;
+            None => CollisionConnectionKind::Missing,
         }
-
-        collision_log!(self, info, new, exist,
-            "collision detected: local id {my_id}, remote id {new_id}";
-        );
-
-        if my_id > new_id {
-            collision_log!(self, info, new, exist,
-                "collision resolution: existing conn wins with higher RID ({my_id} > {new_id})";
-            );
-
-            // Our RID is higher, we win. Kill `new`. Kill it to death.
-            self.send_collision_resolution_notification(&new);
-
-            if let Err(e) = self.handle_open(&exist, &om_exist) {
-                collision_log!(self, warn, new, exist,
-                    "existing conn won, but failed to handle open message: ({e}), fsm transition to idle";
-                    "error" => format!("{e}")
-                );
-
-                return FsmState::Idle;
-            }
-
-            lock!(exist.clock().timers.hold_timer).restart();
-            lock!(exist.clock().timers.keepalive_timer).restart();
-
-            return FsmState::SessionSetup(PeerConnection {
-                conn: exist,
-                id: new_id,
-            });
-        }
-
-        // Our RID is lower, we lose. Barring any errors, setup
-        // new conn and leave `existing` for dead.
-        collision_log!(self, info, new, exist,
-            "collision resolution: new conn wins ({new_id} >= {my_id})";
-        );
-
-        self.send_collision_resolution_notification(&exist);
-
-        lock!(self.clock.timers.connect_retry_timer).zero();
-        self.counters
-            .connection_retries
-            .fetch_add(1, Ordering::Relaxed);
-
-        if let Err(e) = self.handle_open(&new, &om_new) {
-            collision_log!(self, warn, new, exist,
-                "new conn won but failed to handle open message: {e}, fsm transition to idle";
-                "error" => format!("{e}")
-            );
-
-            return FsmState::Idle;
-        }
-
-        self.counters
-            .passive_connections_accepted
-            .fetch_add(1, Ordering::Relaxed);
-
-        lock!(new.clock().timers.hold_timer).restart();
-        lock!(new.clock().timers.keepalive_timer).restart();
-
-        FsmState::SessionSetup(PeerConnection {
-            conn: new,
-            id: new_id,
-        })
     }
 
     /// Sync up with peers.
@@ -3216,7 +3941,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 //TODO possible death loop. Should we just panic here?
                 session_log!(self, error, pc.conn,
                     "failed to get originated routes from db";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
                     "error" => format!("{e}")
                 );
                 return FsmState::SessionSetup(pc);
@@ -3228,7 +3952,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         fanout.add_egress(
             self.neighbor.host.ip(),
             crate::fanout::Egress {
-                event_tx: Some(read_lock!(self.event_tx).clone()),
+                event_tx: Some(self.event_tx.clone()),
                 log: self.log.clone(),
             },
         );
@@ -3252,7 +3976,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             {
                 session_log!(self, error, pc.conn,
                     "failed to send update, fsm transition to idle";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
                     "error" => format!("{e}")
                 );
                 return self.exit_established(pc);
@@ -3290,11 +4013,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Able to exchange update, notification and keepliave messages with peers.
     fn on_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
-        let event = match read_lock!(self.event_rx).recv() {
+        let event = match self.event_rx.recv() {
             Ok(event) => {
                 session_log!(self, debug, pc.conn,
                     "received fsm event";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
                     "event" => event.title()
                 );
                 event
@@ -3305,322 +4027,475 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 // means the channel is toast.
                 session_log!(self, error, pc.conn,
                     "event rx error: {e}";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
                     "error" => format!("{e}")
                 );
                 return FsmState::Established(pc);
             }
         };
         match event {
-            FsmEvent::Admin(AdminEvent::Reset) => {
-                session_log!(self, info, pc.conn,
-                    "rx reset, fsm transition to idle";
-                    "fsm_state" => format!("{}", self.state()).as_str()
-                );
-                self.exit_established(pc)
-            }
-            // When the keepalive timer fires, send a keepalive to the peer.
-            FsmEvent::Connection(ConnectionEvent::KeepaliveTimerExpires(
-                conn_id,
-            )) => {
-                self.send_keepalive(&pc.conn);
-                // XXX: How has this been working without the timer being reset
-                //      after each keepalive is sent?
-                lock!(pc.conn.clock().timers.keepalive_timer).restart();
-                FsmState::Established(pc)
-            }
-
-            // If the hold timer fires, it means we've not received a keepalive
-            // from the peer within the hold time - so exit the established
-            // state and restart the peer FSM from the connect state.
-            FsmEvent::Connection(ConnectionEvent::HoldTimerExpires(
-                conn_id,
-            )) => {
-                session_log!(self, warn, pc.conn,
-                    "hold timer expired, fsm transition to idle";
-                    "fsm_state" => format!("{}", self.state()).as_str()
-                );
-                self.counters
-                    .hold_timer_expirations
-                    .fetch_add(1, Ordering::Relaxed);
-                self.send_hold_timer_expired_notification(&pc.conn);
-                self.exit_established(pc)
-            }
-
-            // We've received an update message from the peer. Reset the hold
-            // timer and apply the update to the RIB.
-            FsmEvent::Connection(ConnectionEvent::Message {
-                msg: Message::Update(m),
-                conn_id,
-            }) => {
-                lock!(pc.conn.clock().timers.hold_timer).reset();
-                session_log!(self, info, pc.conn, "received update";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "message" => "update",
-                    "message_contents" => format!("{m}").as_str()
-                );
-                let peer_as = lock!(self.remote_asn).unwrap_or(0);
-                self.apply_update(m.clone(), &pc, peer_as);
-                lock!(self.message_history).receive(m.into(), None);
-                self.counters
-                    .updates_received
-                    .fetch_add(1, Ordering::Relaxed);
-                FsmState::Established(pc)
-            }
-
-            FsmEvent::Connection(ConnectionEvent::Message {
-                msg: Message::RouteRefresh(m),
-                conn_id,
-            }) => {
-                lock!(pc.conn.clock().timers.hold_timer).reset();
-                session_log!(self, info, pc.conn, "received route refresh";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "message" => "route refresh",
-                    "message_contents" => format!("{m}").as_str()
-                );
-                lock!(self.message_history).receive(m.clone().into(), None);
-                self.counters
-                    .route_refresh_received
-                    .fetch_add(1, Ordering::Relaxed);
-                if let Err(e) = self.handle_refresh(m, &pc) {
-                    session_log!(self, error, pc.conn,
-                        "error handling route refresh, fsm transition to idle";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
-                        "error" => format!("{e}")
-                    );
+            FsmEvent::Admin(admin_event) => match admin_event {
+                AdminEvent::ManualStop => {
+                    self.stop(Some(&pc.conn), None, StopReason::Shutdown);
                     self.exit_established(pc)
-                } else {
+                }
+
+                AdminEvent::Reset => {
+                    self.stop(Some(&pc.conn), None, StopReason::Reset);
+                    self.exit_established(pc)
+                }
+
+                // An announce request has come from the administrative API or
+                // another peer session (redistribution). Send the update to our
+                // peer.
+                AdminEvent::Announce(update) => {
+                    if let Err(e) = self.send_update(
+                        update,
+                        &pc.conn,
+                        ShaperApplication::Current,
+                    ) {
+                        session_log!(self, error, pc.conn,
+                            "failed to send update, fsm transition to idle";
+                            "error" => format!("{e}")
+                        );
+                        return self.exit_established(pc);
+                    }
                     FsmState::Established(pc)
                 }
-            }
 
-            // We've received a notification from the peer. They are displeased
-            // with us. Exit established and restart from the connect state.
-            FsmEvent::Connection(ConnectionEvent::Message {
-                msg: Message::Notification(m),
-                conn_id,
-            }) => {
-                session_log!(self, warn, pc.conn,
-                    "notification received, fsm transition to idle";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "message" => "notification",
-                    "message_contents" => format!("{m}")
-                );
-                lock!(self.message_history).receive(m.into(), None);
-                self.counters
-                    .notifications_received
-                    .fetch_add(1, Ordering::Relaxed);
-                self.exit_established(pc)
-            }
-
-            // We've received a keepliave from the peer, reset the hold timer
-            // and re-enter the established state.
-            FsmEvent::Connection(ConnectionEvent::Message {
-                msg: Message::KeepAlive,
-                conn_id,
-            }) => {
-                session_log!(self, trace, pc.conn,
-                    "keepalive received";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "message" => "keepalive"
-                );
-                self.counters
-                    .keepalives_received
-                    .fetch_add(1, Ordering::Relaxed);
-                lock!(pc.conn.clock().timers.hold_timer).reset();
-                FsmState::Established(pc)
-            }
-
-            // An announce request has come from the administrative API or
-            // another peer session (redistribution). Send the update to our
-            // peer.
-            FsmEvent::Admin(AdminEvent::Announce(update)) => {
-                if let Err(e) = self.send_update(
-                    update,
-                    &pc.conn,
-                    ShaperApplication::Current,
-                ) {
-                    session_log!(self, error, pc.conn,
-                        "failed to send update, fsm transition to idle";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
-                        "error" => format!("{e}")
-                    );
-                    return self.exit_established(pc);
+                AdminEvent::ShaperChanged(previous) => {
+                    match self.originate_update(
+                        &pc,
+                        ShaperApplication::Difference(previous),
+                    ) {
+                        Err(e) => {
+                            session_log!(self, error, pc.conn,
+                                "failed to originate update, fsm transition to idle";
+                                "error" => format!("{e}")
+                            );
+                            self.exit_established(pc)
+                        }
+                        Ok(()) => FsmState::Established(pc),
+                    }
                 }
-                FsmState::Established(pc)
-            }
 
-            FsmEvent::Session(SessionEvent::IdleHoldTimerExpires) => {
-                self.counters
-                    .idle_hold_timer_expirations
-                    .fetch_add(1, Ordering::Relaxed);
-                lock!(self.clock.timers.idle_hold_timer).disable();
-                FsmState::Established(pc)
-            }
+                AdminEvent::ExportPolicyChanged(previous) => {
+                    let originated = match self.db.get_origin4() {
+                        Ok(value) => value,
+                        Err(e) => {
+                            //TODO possible death loop. Should we just panic here?
+                            session_log!(self, error, pc.conn,
+                                "failed to get originated routes from db";
+                                "error" => format!("{e}")
+                            );
+                            return FsmState::SessionSetup(pc);
+                        }
+                    };
+                    let originated_before: BTreeSet<Prefix4> = match previous {
+                        ImportExportPolicy::NoFiltering => {
+                            originated.iter().cloned().collect()
+                        }
+                        ImportExportPolicy::Allow(list) => originated
+                            .clone()
+                            .into_iter()
+                            .filter(|x| list.contains(&Prefix::from(*x)))
+                            .collect(),
+                    };
+                    let session = lock!(self.session);
+                    let current = &session.allow_export;
+                    let originated_after: BTreeSet<Prefix4> = match current {
+                        ImportExportPolicy::NoFiltering => {
+                            originated.iter().cloned().collect()
+                        }
+                        ImportExportPolicy::Allow(list) => originated
+                            .clone()
+                            .into_iter()
+                            .filter(|x| list.contains(&Prefix::from(*x)))
+                            .collect(),
+                    };
+                    drop(session);
 
-            // On an unexpected message, log a warning and re-enter the
-            // established state.
-            FsmEvent::Connection(ConnectionEvent::Message {
-                msg: Message::Open(om),
-                conn_id,
-            }) => {
-                self.counters
-                    .unexpected_open_message
-                    .fetch_add(1, Ordering::Relaxed);
-                session_log!(self, warn, pc.conn, "unexpected message";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "message" => "open",
-                    "message_contents" => format!("{om}").as_str()
-                );
-                FsmState::Established(pc)
-            }
+                    let to_withdraw: BTreeSet<&Prefix4> = originated_before
+                        .difference(&originated_after)
+                        .collect();
 
-            FsmEvent::Admin(AdminEvent::ShaperChanged(previous)) => {
-                match self.originate_update(
-                    &pc,
-                    ShaperApplication::Difference(previous),
-                ) {
-                    Err(e) => {
+                    let to_announce: BTreeSet<&Prefix4> = originated_after
+                        .difference(&originated_before)
+                        .collect();
+
+                    if to_withdraw.is_empty() && to_announce.is_empty() {
+                        return FsmState::Established(pc);
+                    }
+
+                    let update = UpdateMessage {
+                        path_attributes: self.router.base_attributes(),
+                        withdrawn: to_withdraw
+                            .into_iter()
+                            .map(|x| crate::messages::Prefix::from(*x))
+                            .collect(),
+                        nlri: to_announce
+                            .into_iter()
+                            .map(|x| crate::messages::Prefix::from(*x))
+                            .collect(),
+                    };
+
+                    if let Err(e) = self.send_update(
+                        update,
+                        &pc.conn,
+                        ShaperApplication::Current,
+                    ) {
                         session_log!(self, error, pc.conn,
-                            "failed to originate update, fsm transition to idle";
-                            "fsm_state" => format!("{}", self.state()).as_str(),
+                            "failed to send update, fsm transition to idle";
                             "error" => format!("{e}")
                         );
+                        return self.exit_established(pc);
+                    }
+
+                    FsmState::Established(pc)
+                }
+
+                AdminEvent::CheckerChanged(_previous) => {
+                    //TODO
+                    FsmState::Established(pc)
+                }
+
+                AdminEvent::SendRouteRefresh => {
+                    self.db.mark_bgp_peer_stale(pc.conn.peer().ip());
+                    // XXX: Update for IPv6
+                    self.send_route_refresh(&pc.conn);
+                    FsmState::Established(pc)
+                }
+
+                AdminEvent::ReAdvertiseRoutes => {
+                    if let Err(e) = self.refresh_react(&pc.conn) {
+                        session_log!(self, error, pc.conn,
+                            "route re-advertisement error: {e}";
+                            "error" => format!("{e}")
+                        );
+                        return self.exit_established(pc);
+                    }
+                    FsmState::Established(pc)
+                }
+
+                AdminEvent::PathAttributesChanged => {
+                    match self.originate_update(&pc, ShaperApplication::Current)
+                    {
+                        Err(e) => {
+                            session_log!(self, error, pc.conn,
+                                "failed to originate update, fsm transition to idle";
+                                "error" => format!("{e}")
+                            );
+                            self.exit_established(pc)
+                        }
+                        Ok(()) => FsmState::Established(pc),
+                    }
+                }
+
+                AdminEvent::ManualStart => {
+                    let title = admin_event.title();
+                    session_log_lite!(self, warn,
+                        "unexpected admin fsm event {title}, ignoring";
+                        "event" => title
+                    );
+                    FsmState::Established(pc)
+                }
+            },
+
+            FsmEvent::Session(session_event) => match session_event {
+                SessionEvent::ConnectRetryTimerExpires => {
+                    session_log!(self, info,  pc.conn,
+                        "rx {}, fsm transition to idle",
+                        session_event.title();
+                    );
+                    self.send_fsm_notification(&pc.conn);
+
+                    self.connect_retry_counter.store(0, Ordering::Relaxed);
+                    lock!(self.clock.timers.connect_retry_timer).restart();
+
+                    self.exit_established(pc)
+                }
+
+                SessionEvent::IdleHoldTimerExpires => {
+                    session_log!(self, info,  pc.conn,
+                        "rx delay open timer expires, fsm transition to idle";
+                    );
+                    self.send_fsm_notification(&pc.conn);
+
+                    self.zero_connect_retry();
+                    self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
+
+                    self.exit_established(pc)
+                }
+
+                SessionEvent::Connected(new)
+                | SessionEvent::TcpConnectionConfirmed(new) => {
+                    match new.creator() {
+                        ConnectionCreator::Dispatcher => {
+                            session_log!(self, info, new,
+                                "inbound connection not allowed in established (peer: {}, conn_id: {})",
+                                new.peer(), new.id().short();
+                            );
+                            self.counters
+                                .passive_connections_declined
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        ConnectionCreator::Connector => {
+                            session_log!(self, info, new,
+                                "outbound connection completed but not allowed in established (peer: {}, conn_id: {})",
+                                new.peer(), new.id().short();
+                            );
+                            self.counters
+                                .active_connections_declined
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    FsmState::Established(pc)
+                }
+            },
+
+            FsmEvent::Connection(connection_event) => match connection_event {
+                /*
+                 *   If the HoldTimer_Expires event occurs (Event 10), the local
+                 *   system:
+                 *
+                 *   - sends a NOTIFICATION message with the Error Code Hold Timer
+                 *     Expired,
+                 *
+                 *   - sets the ConnectRetryTimer to zero,
+                 *
+                 *   - releases all BGP resources,
+                 *
+                 *   - drops the TCP connection,
+                 *
+                 *   - increments the ConnectRetryCounter by 1,
+                 *
+                 *   - (optionally) performs peer oscillation damping if the
+                 *     DampPeerOscillations attribute is set to TRUE, and
+                 *
+                 *   - changes its state to Idle.
+                 */
+                ConnectionEvent::HoldTimerExpires(_conn_id) => {
+                    // If the HoldTimer fires, it means we've not received a
+                    // Keepalive or Update from the peer within the hold time.
+                    // So exit Established and restart the peer FSM from Idle
+                    session_log!(self, warn, pc.conn,
+                        "hold timer expired, fsm transition to idle";
+                    );
+                    self.counters
+                        .hold_timer_expirations
+                        .fetch_add(1, Ordering::Relaxed);
+
+                    self.send_hold_timer_expired_notification(&pc.conn);
+
+                    self.zero_connect_retry();
+                    self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
+
+                    self.exit_established(pc)
+                }
+
+                /*
+                 *   If the KeepaliveTimer_Expires event occurs (Event 11), the local
+                 *   system:
+                 *
+                 *     - sends a KEEPALIVE message, and
+                 *
+                 *     - restarts its KeepaliveTimer, unless the negotiated HoldTime
+                 *       value is zero.
+                 */
+                ConnectionEvent::KeepaliveTimerExpires(_conn_id) => {
+                    self.send_keepalive(&pc.conn);
+                    FsmState::Established(pc)
+                }
+
+                ConnectionEvent::DelayOpenTimerExpires(_conn_id) => {
+                    session_log!(self, info,  pc.conn,
+                        "rx delay open timer expires, fsm transition to idle";
+                    );
+                    self.send_fsm_notification(&pc.conn);
+
+                    self.zero_connect_retry();
+                    self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
+
+                    self.exit_established(pc)
+                }
+
+                /*
+                 *  If a valid OPEN message (BGPOpen (Event 19)) is received, and if
+                 *  the CollisionDetectEstablishedState optional attribute is TRUE,
+                 *  the OPEN message will be checked to see if it collides (Section
+                 *  6.8) with any other connection.  If the BGP implementation
+                 *  determines that this connection needs to be terminated, it will
+                 *  process an OpenCollisionDump event (Event 23).  If this connection
+                 *  needs to be terminated, the local system:
+                 *
+                 *    - sends a NOTIFICATION with a Cease,
+                 *
+                 *    - sets the ConnectRetryTimer to zero,
+                 *
+                 *    - deletes all routes associated with this connection,
+                 *
+                 *    - releases all BGP resources,
+                 *
+                 *    - drops the TCP connection,
+                 *
+                 *    - increments the ConnectRetryCounter by 1,
+                 *
+                 *    - (optionally) performs peer oscillation damping if the
+                 *      DampPeerOscillations is set to TRUE, and
+                 *
+                 *    - changes its state to Idle.
+                 */
+                ConnectionEvent::Message { msg, conn_id } => match msg {
+                    Message::Open(om) => {
+                        self.counters
+                            .unexpected_open_message
+                            .fetch_add(1, Ordering::Relaxed);
+                        session_log!(self, warn, pc.conn,
+                            "unexpected open message (conn_id {}), fsm transition to idle",
+                            conn_id.short();
+                            "message" => "open",
+                            "message_contents" => format!("{om}").as_str()
+                        );
+
+                        self.send_notification(
+                            &pc.conn,
+                            ErrorCode::Cease,
+                            ErrorSubcode::Cease(CeaseErrorSubcode::Unspecific),
+                        );
+
+                        self.zero_connect_retry();
+                        self.connect_retry_counter
+                            .fetch_add(1, Ordering::Relaxed);
+
                         self.exit_established(pc)
                     }
-                    Ok(()) => FsmState::Established(pc),
-                }
-            }
 
-            FsmEvent::Admin(AdminEvent::ExportPolicyChanged(previous)) => {
-                let originated = match self.db.get_origin4() {
-                    Ok(value) => value,
-                    Err(e) => {
-                        //TODO possible death loop. Should we just panic here?
-                        session_log!(self, error, pc.conn,
-                            "failed to get originated routes from db";
-                            "fsm_state" => format!("{}", self.state()).as_str(),
-                            "error" => format!("{e}")
+                    /*
+                     *  If the local system receives an UPDATE message (Event 27), the
+                     *  local system:
+                     *
+                     *    - processes the message,
+                     *
+                     *    - restarts its HoldTimer, if the negotiated HoldTime value is
+                     *      non-zero, and
+                     *
+                     *    - remains in the Established state.
+                     */
+                    Message::Update(m) => {
+                        lock!(pc.conn.clock().timers.hold_timer).reset();
+                        session_log!(self, info, pc.conn, "received update (conn_id: {})",
+                            conn_id.short();
+                            "message" => "update",
+                            "message_contents" => format!("{m}").as_str()
                         );
-                        return FsmState::SessionSetup(pc);
+                        let peer_as = lock!(self.remote_asn).unwrap_or(0);
+                        self.apply_update(m.clone(), &pc, peer_as);
+                        lock!(self.message_history).receive(m.into(), None);
+                        self.counters
+                            .updates_received
+                            .fetch_add(1, Ordering::Relaxed);
+                        FsmState::Established(pc)
                     }
-                };
-                let originated_before: BTreeSet<Prefix4> = match previous {
-                    ImportExportPolicy::NoFiltering => {
-                        originated.iter().cloned().collect()
-                    }
-                    ImportExportPolicy::Allow(list) => originated
-                        .clone()
-                        .into_iter()
-                        .filter(|x| list.contains(&Prefix::from(*x)))
-                        .collect(),
-                };
-                let session = lock!(self.session);
-                let current = &session.allow_export;
-                let originated_after: BTreeSet<Prefix4> = match current {
-                    ImportExportPolicy::NoFiltering => {
-                        originated.iter().cloned().collect()
-                    }
-                    ImportExportPolicy::Allow(list) => originated
-                        .clone()
-                        .into_iter()
-                        .filter(|x| list.contains(&Prefix::from(*x)))
-                        .collect(),
-                };
-                drop(session);
 
-                let to_withdraw: BTreeSet<&Prefix4> =
-                    originated_before.difference(&originated_after).collect();
-
-                let to_announce: BTreeSet<&Prefix4> =
-                    originated_after.difference(&originated_before).collect();
-
-                if to_withdraw.is_empty() && to_announce.is_empty() {
-                    return FsmState::Established(pc);
-                }
-
-                let update = UpdateMessage {
-                    path_attributes: self.router.base_attributes(),
-                    withdrawn: to_withdraw
-                        .into_iter()
-                        .map(|x| crate::messages::Prefix::from(*x))
-                        .collect(),
-                    nlri: to_announce
-                        .into_iter()
-                        .map(|x| crate::messages::Prefix::from(*x))
-                        .collect(),
-                };
-
-                if let Err(e) = self.send_update(
-                    update,
-                    &pc.conn,
-                    ShaperApplication::Current,
-                ) {
-                    session_log!(self, error, pc.conn,
-                        "failed to send update, fsm transition to idle";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
-                        "error" => format!("{e}")
-                    );
-                    return self.exit_established(pc);
-                }
-
-                FsmState::Established(pc)
-            }
-
-            FsmEvent::Admin(AdminEvent::PathAttributesChanged) => {
-                match self.originate_update(&pc, ShaperApplication::Current) {
-                    Err(e) => {
-                        session_log!(self, error, pc.conn,
-                            "failed to originate update, fsm transition to idle";
-                            "fsm_state" => format!("{}", self.state()).as_str(),
-                            "error" => format!("{e}")
+                    /*
+                     *  If the local system receives a NOTIFICATION message (Event 24 or
+                     *  Event 25) or a TcpConnectionFails (Event 18) from the underlying
+                     *  TCP, the local system:
+                     *
+                     *    - sets the ConnectRetryTimer to zero,
+                     *
+                     *    - deletes all routes associated with this connection,
+                     *
+                     *    - releases all the BGP resources,
+                     *
+                     *    - drops the TCP connection,
+                     *
+                     *    - increments the ConnectRetryCounter by 1,
+                     *
+                     *    - changes its state to Idle.
+                     */
+                    Message::Notification(m) => {
+                        // We've received a notification from the peer. They are
+                        // displeased with us. Exit established and restart from
+                        // the idle state.
+                        session_log!(self, warn, pc.conn,
+                            "notification received (conn_id: {}), fsm transition to idle",
+                            conn_id.short();
+                            "message" => "notification",
+                            "message_contents" => format!("{m}")
                         );
+
+                        lock!(self.message_history).receive(m.into(), None);
+                        self.counters
+                            .notifications_received
+                            .fetch_add(1, Ordering::Relaxed);
+
+                        self.zero_connect_retry();
                         self.exit_established(pc)
                     }
-                    Ok(()) => FsmState::Established(pc),
-                }
-            }
 
-            FsmEvent::Admin(AdminEvent::SendRouteRefresh) => {
-                self.db.mark_bgp_peer_stale(pc.conn.peer().ip());
-                self.send_route_refresh(&pc.conn);
-                FsmState::Established(pc)
-            }
+                    /*
+                     *  If the local system receives a KEEPALIVE message (Event 26), the
+                     *  local system:
+                     *
+                     *    - restarts its HoldTimer, if the negotiated HoldTime value is
+                     *      non-zero, and
+                     *
+                     *    - remains in the Established state.
+                     */
+                    Message::KeepAlive => {
+                        session_log!(self, trace, pc.conn,
+                            "keepalive received (conn_id: {})", conn_id.short();
+                            "message" => "keepalive"
+                        );
+                        self.counters
+                            .keepalives_received
+                            .fetch_add(1, Ordering::Relaxed);
+                        lock!(pc.conn.clock().timers.hold_timer).reset();
+                        FsmState::Established(pc)
+                    }
 
-            FsmEvent::Admin(AdminEvent::ReAdvertiseRoutes) => {
-                if let Err(e) = self.refresh_react(&pc.conn) {
-                    session_log!(self, error, pc.conn,
-                        "route re-advertisement error: {e}";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
-                        "error" => format!("{e}")
-                    );
-                    return self.exit_established(pc);
-                }
-                FsmState::Established(pc)
-            }
-
-            FsmEvent::Admin(AdminEvent::CheckerChanged(_previous)) => {
-                //TODO
-                FsmState::Established(pc)
-            }
-
-            // Some unexpeted event, log and re-enter established.
-            e => {
-                session_log!(self, warn, pc.conn,
-                    "unexpected fsm event, ignoring";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
-                    "event" => e.title()
-                );
-                FsmState::Established(pc)
-            }
+                    /*
+                     *   RFC 2918:
+                     *
+                     *   If a BGP speaker receives from its peer a ROUTE-REFRESH message with
+                     *   the <AFI, SAFI> that the speaker didn't advertise to the peer at the
+                     *   session establishment time via capability advertisement, the speaker
+                     *   shall ignore such a message.  Otherwise, the BGP speaker shall re-
+                     *   advertise to that peer the Adj-RIB-Out of the <AFI, SAFI> carried in
+                     *   the message, based on its outbound route filtering policy.
+                     */
+                    Message::RouteRefresh(m) => {
+                        lock!(pc.conn.clock().timers.hold_timer).reset();
+                        session_log!(self, info, pc.conn,
+                            "received route refresh (conn_id: {})",
+                            conn_id.short();
+                            "message" => "route refresh",
+                            "message_contents" => format!("{m}").as_str()
+                        );
+                        lock!(self.message_history)
+                            .receive(m.clone().into(), None);
+                        self.counters
+                            .route_refresh_received
+                            .fetch_add(1, Ordering::Relaxed);
+                        if let Err(e) = self.handle_refresh(m, &pc) {
+                            session_log!(self, error, pc.conn,
+                                "error handling route refresh (conn_id: {}), fsm transition to idle",
+                                conn_id.short();
+                                "error" => format!("{e}")
+                            );
+                            self.exit_established(pc)
+                        } else {
+                            FsmState::Established(pc)
+                        }
+                    }
+                },
+            },
         }
     }
 
     // Housekeeping items to do when a session shutdown is requested.
     pub fn on_shutdown(&self) {
-        session_log_lite!(self, info, "shutting down";
-            "fsm_state" => format!("{}", self.state()).as_str()
-        );
+        session_log_lite!(self, info, "shutting down";);
 
         // Go back to the beginning of the state machine.
         *(lock!(self.state)) = FsmStateKind::Idle;
@@ -3629,31 +4504,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.shutdown.store(false, Ordering::Release);
         self.running.store(false, Ordering::Release);
 
-        session_log_lite!(self, info, "shutdown complete";
-            "fsm_state" => format!("{}", self.state()).as_str()
-        );
+        session_log_lite!(self, info, "shutdown complete";);
     }
 
     /// Send an event to the state machine driving this peer session.
     pub fn send_event(&self, e: FsmEvent<Cnx>) -> Result<(), Error> {
-        read_lock!(self.event_tx)
+        self.event_tx
             .send(e)
             .map_err(|e| Error::ChannelSend(e.to_string()))
     }
 
     /// Handle an open message
     fn handle_open(&self, conn: &Cnx, om: &OpenMessage) -> Result<(), Error> {
-        let mut remote_asn = om.asn as u32;
         let remote_id = om.id;
-        for p in &om.parameters {
-            if let OptionalParameter::Capabilities(caps) = p {
-                for c in caps {
-                    if let Capability::FourOctetAs { asn } = c {
-                        remote_asn = *asn;
-                    }
-                }
-            }
-        }
+        let remote_asn = om.asn();
         if let Some(expected_remote_asn) = lock!(self.session).remote_asn {
             if remote_asn != expected_remote_asn {
                 self.send_notification(
@@ -3686,7 +4550,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Err(e) => {
                     session_log!(self, error, conn,
                         "open checker exec failed: {e}";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
                         "error" => format!("{e}")
                     );
                 }
@@ -3733,13 +4596,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Send a keepalive message to the session peer.
     fn send_keepalive(&self, conn: &Cnx) {
         session_log!(self, trace, conn, "sending keepalive";
-            "fsm_state" => format!("{}", self.state()).as_str(),
             "message" => "keepalive"
         );
         if let Err(e) = conn.send(Message::KeepAlive) {
             session_log!(self, error, conn, "failed to send keepalive: {e}";
-                "fsm_state" => format!("{}", self.state()).as_str(),
-                "error" => format!("{e}")
+                "error" => e.to_string()
             );
             self.counters
                 .keepalive_send_failure
@@ -3748,12 +4609,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.counters
                 .keepalives_sent
                 .fetch_add(1, Ordering::Relaxed);
+            // XXX: How has this been working without the timer being reset
+            //      after each keepalive is sent?
+            lock!(conn.clock().timers.keepalive_timer).restart();
         }
     }
 
     fn send_route_refresh(&self, conn: &Cnx) {
         session_log!(self, info, conn, "sending route refresh";
-            "fsm_state" => format!("{}", self.state()).as_str(),
             "message" => "route refresh"
         );
         if let Err(e) = conn.send(Message::RouteRefresh(RouteRefreshMessage {
@@ -3761,7 +4624,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             safi: Safi::NlriUnicast as u8,
         })) {
             session_log!(self, error, conn, "failed to send route refresh: {e}";
-                "fsm_state" => format!("{}", self.state()).as_str(),
                 "error" => format!("{e}")
             );
             self.counters
@@ -3815,7 +4677,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         session_log!(self, info, conn,
             "sending notification: {error_code} / {error_subcode}";
-            "fsm_state" => format!("{}", self.state()).as_str(),
             "message" => "notification",
             "message_contents" => format!("{notification}").as_str()
         );
@@ -3826,7 +4687,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Err(e) = conn.send(msg) {
             session_log!(self, error, conn,
                 "failed to send notification: {e}";
-                "fsm_state" => format!("{}", self.state()).as_str(),
                 "error" => format!("{e}")
             );
             self.counters
@@ -3876,7 +4736,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Err(e) => {
                     session_log!(self, error, conn,
                         "open shaper exec failed: {e}";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
                         "error" => format!("{e}")
                     );
                 }
@@ -3889,7 +4748,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Err(e) = conn.send(out) {
             session_log!(self, error, conn,
                 "send_open failed: {e}";
-                "fsm_state" => format!("{}", self.state()).as_str(),
                 "error" => format!("{e}")
             );
             self.counters
@@ -4036,7 +4894,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Err(e) = conn.send(out) {
             session_log!(self, error, conn,
                 "failed to send update: {e}";
-                "fsm_state" => format!("{}", self.state()).as_str(),
                 "error" => format!("{e}")
             );
             self.counters
@@ -4050,7 +4907,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Exit the established state. Remove prefixes received from the session
     /// peer from our RIB. Issue a withdraw to the peer and transition to back
-    /// to the connect state.
+    /// to the idle state.
     fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
         lock!(pc.conn.clock().timers.hold_timer).disable();
@@ -4064,6 +4921,209 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         FsmState::Idle
     }
 
+    // XXX: See if we can make this pattern applicable more generally
+    fn bump_msg_counter(&self, msg: MessageKind, unexpected: bool) {
+        match msg {
+            MessageKind::Open => {
+                self.counters.opens_received.fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .unexpected_open_message
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            MessageKind::Notification => {
+                self.counters
+                    .notifications_received
+                    .fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .unexpected_notification_message
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            MessageKind::KeepAlive => {
+                self.counters
+                    .keepalives_received
+                    .fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .unexpected_keepalive_message
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            MessageKind::Update => {
+                self.counters
+                    .updates_received
+                    .fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .unexpected_update_message
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            MessageKind::RouteRefresh => {
+                self.counters
+                    .route_refresh_received
+                    .fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .unexpected_route_refresh_message
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if unexpected {
+            match msg {
+                MessageKind::Open => {
+                    self.counters
+                        .unexpected_open_message
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                MessageKind::Notification => {
+                    self.counters
+                        .unexpected_notification_message
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                MessageKind::KeepAlive => {
+                    self.counters
+                        .unexpected_keepalive_message
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                MessageKind::Update => {
+                    self.counters
+                        .unexpected_update_message
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                MessageKind::RouteRefresh => {
+                    self.counters
+                        .unexpected_route_refresh_message
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    fn restart_connect_retry(&self) {
+        /*
+         * RFC 4271:
+         * Each BGP peer paired in a potential connection will
+         * attempt to connect to the other, unless configured to
+         * remain in the idle state, or configured to remain passive.
+         */
+        if lock!(self.session).passive_tcp_establishment {
+            // While the RFC does state that we should start the
+            // ConnectRetryTimer at various points in the FSM, it doesn't
+            // consider whether the connection is passive. It would directly
+            // contradict the point of passive establishment if we attempt to
+            // connect to our peer. So we instead stop ConnectRetryTimer.
+            lock!(self.clock.timers.connect_retry_timer).stop();
+        } else {
+            // We are active, so go ahead and restart ConnectRetryTimer.
+            lock!(self.clock.timers.connect_retry_timer).restart();
+        }
+    }
+
+    fn zero_connect_retry(&self) {
+        // Only zero the ConnectRetryTimer if the session is active.
+        // Passive peers should never enter FsmState::Connect and
+        // thus have no use for the ConnectRetryTimer.
+        if lock!(self.session).passive_tcp_establishment {
+            lock!(self.clock.timers.connect_retry_timer).stop();
+        } else {
+            lock!(self.clock.timers.connect_retry_timer).zero();
+            lock!(self.clock.timers.connect_retry_timer).enable();
+        }
+    }
+
+    fn stop(
+        &self,
+        conn1: Option<&Cnx>,
+        conn2: Option<&Cnx>,
+        reason: StopReason,
+    ) {
+        match reason {
+            StopReason::Reset => {
+                if let Some(c1) = conn1 {
+                    self.send_notification(
+                        c1,
+                        ErrorCode::Cease,
+                        ErrorSubcode::Cease(
+                            CeaseErrorSubcode::AdministrativeReset,
+                        ),
+                    );
+                }
+                if let Some(c2) = conn2 {
+                    self.send_notification(
+                        c2,
+                        ErrorCode::Cease,
+                        ErrorSubcode::Cease(
+                            CeaseErrorSubcode::AdministrativeReset,
+                        ),
+                    );
+                }
+                self.counters
+                    .connect_retry_counter
+                    .store(0, Ordering::Relaxed);
+                self.zero_connect_retry();
+            }
+
+            StopReason::Shutdown => {
+                if let Some(c1) = conn1 {
+                    self.send_notification(
+                        c1,
+                        ErrorCode::Cease,
+                        ErrorSubcode::Cease(
+                            CeaseErrorSubcode::AdministrativeShutdown,
+                        ),
+                    );
+                }
+                if let Some(c2) = conn2 {
+                    self.send_notification(
+                        c2,
+                        ErrorCode::Cease,
+                        ErrorSubcode::Cease(
+                            CeaseErrorSubcode::AdministrativeShutdown,
+                        ),
+                    );
+                }
+                self.counters
+                    .connect_retry_counter
+                    .store(0, Ordering::Relaxed);
+                self.zero_connect_retry();
+            }
+
+            StopReason::FsmError => {
+                if let Some(c1) = conn1 {
+                    self.send_fsm_notification(c1)
+                }
+                if let Some(c2) = conn2 {
+                    self.send_fsm_notification(c2)
+                }
+                self.counters
+                    .connect_retry_counter
+                    .fetch_add(1, Ordering::Relaxed);
+                self.zero_connect_retry();
+            }
+
+            StopReason::HoldTimeExpired => {
+                if let Some(c1) = conn1 {
+                    self.send_hold_timer_expired_notification(c1);
+                    lock!(c1.clock().timers.hold_timer).disable();
+                }
+                if let Some(c2) = conn2 {
+                    self.send_hold_timer_expired_notification(c2);
+                    lock!(c2.clock().timers.hold_timer).disable();
+                }
+                self.counters
+                    .hold_timer_expirations
+                    .fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .connect_retry_counter
+                    .fetch_add(1, Ordering::Relaxed);
+                self.zero_connect_retry();
+            }
+        }
+
+        if let Some(c1) = conn1 {
+            self.unregister_conn(c1.id());
+        }
+
+        if let Some(c2) = conn2 {
+            self.unregister_conn(c2.id());
+        }
+    }
+
     /// Apply an update by adding it to our RIB.
     fn apply_update(
         &self,
@@ -4074,7 +5134,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Err(e) = self.check_update(&update) {
             session_log!(self, warn, pc.conn,
                 "update check failed: {e}";
-                "fsm_state" => format!("{}", self.state()).as_str(),
                 "error" => format!("{e}"),
                 "message" => "update",
                 "message_contents" => format!("{update}").as_str()
@@ -4100,7 +5159,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Err(e) => {
                     session_log!(self, error, pc.conn,
                         "open checker exec failed: {e}";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
                         "error" => format!("{e}")
                     );
                 }
@@ -4132,12 +5190,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     pub fn refresh_react(&self, conn: &Cnx) -> Result<(), Error> {
+        // XXX: Update for IPv6
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
                 session_log!(self, error, conn,
                     "failed to get originated routes from db";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
                     "error" => format!("{e}")
                 );
                 // This is not a protocol level issue
@@ -4162,6 +5220,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         msg: RouteRefreshMessage,
         pc: &PeerConnection<Cnx>,
     ) -> Result<(), Error> {
+        // XXX: Update for IPv6
         if msg.afi != Afi::Ipv4 as u16 {
             return Ok(());
         }
@@ -4189,7 +5248,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             Err(e) => {
                 session_log!(self, error, pc.conn,
                     "failed to get originated routes from db";
-                    "fsm_state" => format!("{}", self.state()).as_str(),
                     "error" => format!("{e}")
                 );
                 Vec::new()
@@ -4233,7 +5291,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 None => {
                     session_log!(self, warn, pc.conn,
                         "recieved update with nlri, but no nexthop";
-                        "fsm_state" => format!("{}", self.state()).as_str(),
                         "message" => "update",
                         "message_contents" => format!("{update}").as_str()
                     );
@@ -4418,7 +5475,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         reset_needed |= self.update_session_info(info)?;
 
         if reset_needed {
-            read_lock!(self.event_tx)
+            self.event_tx
                 .send(FsmEvent::Admin(AdminEvent::Reset))
                 .map_err(|e| Error::EventSend(e.to_string()))?;
         }
@@ -4528,7 +5585,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             let previous = current.allow_export.clone();
             current.allow_export = info.allow_export;
             drop(current);
-            read_lock!(self.event_tx)
+            self.event_tx
                 .send(FsmEvent::Admin(AdminEvent::ExportPolicyChanged(
                     previous,
                 )))
@@ -4538,13 +5595,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         if path_attributes_changed {
-            read_lock!(self.event_tx)
+            self.event_tx
                 .send(FsmEvent::Admin(AdminEvent::PathAttributesChanged))
                 .map_err(|e| Error::EventSend(e.to_string()))?;
         }
 
         if refresh_needed {
-            read_lock!(self.event_tx)
+            self.event_tx
                 .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh))
                 .map_err(|e| Error::EventSend(e.to_string()))?;
         }

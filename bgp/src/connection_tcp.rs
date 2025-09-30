@@ -362,14 +362,14 @@ impl BgpConnectionTcp {
             dropped.clone(),
             log.clone(),
             creator,
-            id.clone(),
+            id,
         )?;
         let connection_clock = ConnectionClock::new(
             config.resolution,
             config.keepalive_time,
             config.hold_time,
             config.delay_open_time,
-            id.clone(),
+            id,
             event_tx.clone(),
             log.clone(),
         );
@@ -434,10 +434,7 @@ impl BgpConnectionTcp {
                         "message_contents" => format!("{msg}")
                     );
                     if let Err(e) = event_tx.send(FsmEvent::Connection(
-                        ConnectionEvent::Message {
-                            msg,
-                            conn_id: conn_id.clone(),
-                        },
+                        ConnectionEvent::Message { msg, conn_id },
                     )) {
                         connection_log_lite!(log,
                             warn,
