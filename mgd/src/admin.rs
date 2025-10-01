@@ -14,11 +14,9 @@ use dropshot::{
 use mg_api::*;
 use mg_common::stats::MgLowerStats;
 use rdb::{BfdPeerConfig, Db, Prefix};
-use semver::{BuildMetadata, Prerelease, Version};
 use slog::o;
 use slog::{Logger, error, info, warn};
 use std::collections::HashMap;
-use std::fs::File;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
@@ -327,20 +325,4 @@ impl MgAdminApi for MgAdminApiImpl {
 
 pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {
     mg_admin_api_mod::api_description::<MgAdminApiImpl>().unwrap()
-}
-
-pub fn apigen() {
-    let api = mg_admin_api_mod::stub_api_description().unwrap();
-    let openapi = api.openapi(
-        "Maghemite Admin",
-        Version {
-            major: 0,
-            minor: 1,
-            patch: 0,
-            pre: Prerelease::EMPTY,
-            build: BuildMetadata::EMPTY,
-        },
-    );
-    let mut out = File::create("mg-admin.json").expect("create json api file");
-    openapi.write(&mut out).expect("write json api file");
 }
