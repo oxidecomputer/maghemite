@@ -8,14 +8,14 @@ use bgp::params::*;
 use bgp_admin::BgpContext;
 use dropshot::{
     ApiDescription, ConfigDropshot, HttpError, HttpResponseDeleted,
-    HttpResponseOk, HttpResponseUpdatedNoContent, HttpServerStarter, Path,
-    Query, RequestContext, TypedBody,
+    HttpResponseOk, HttpResponseUpdatedNoContent, Path, Query, RequestContext,
+    TypedBody,
 };
 use mg_api::*;
 use mg_common::stats::MgLowerStats;
 use rdb::{BfdPeerConfig, Db, Prefix};
 use slog::o;
-use slog::{Logger, error, info, warn};
+use slog::{Logger, error, info};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -49,14 +49,26 @@ pub fn start_server(
 
     let api = api_description();
 
-    let server = HttpServerStarter::new(&ds_config, api, context, &ds_log)
-        .map_err(|e| format!("new admin dropshot: {}", e))?;
+    let server = dropshot::ServerBuilder::new(api, context, ds_log)
+        .config(ds_config)
+        .version_policy(dropshot::VersionPolicy::Dynamic(Box::new(
+            dropshot::ClientSpecifiesVersionInHeader::new(
+                omicron_common::api::VERSION_HEADER,
+                mg_api::latest_version(),
+            ),
+        )));
 
     info!(log, "admin: listening on {}", sa);
 
     Ok(tokio::spawn(async move {
-        match server.start().await {
-            Ok(_) => warn!(log, "admin: unexpected server exit"),
+        match server.start() {
+            Ok(server) => {
+                info!(log, "admin: server started");
+                match server.await {
+                    Ok(()) => info!(log, "admin: server exited"),
+                    Err(e) => error!(log, "admin: server error {:?}", e),
+                }
+            }
             Err(e) => error!(log, "admin: server start error {:?}", e),
         }
     }))

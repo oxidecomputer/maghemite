@@ -7,21 +7,21 @@ use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
 use ddm_api::*;
 use ddm_types::db::{PeerInfo, TunnelRoute};
 use ddm_types::exchange::PathVector;
+use dropshot::ApiDescription;
+use dropshot::ApiDescriptionBuildErrors;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
 use dropshot::ConfigLoggingLevel;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
-use dropshot::HttpServerStarter;
 use dropshot::Path;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
-use dropshot::{ApiDescription, ApiDescriptionBuildErrors};
 use mg_common::lock;
 use mg_common::net::TunnelOrigin;
 use oxnet::Ipv6Net;
-use slog::{Logger, error, info, warn};
+use slog::{Logger, error, info};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
@@ -74,16 +74,27 @@ pub fn handler(
 
     let api = api_description().map_err(|e| e.to_string())?;
 
+    let server = dropshot::ServerBuilder::new(api, context, ds_log)
+        .config(config)
+        .version_policy(dropshot::VersionPolicy::Dynamic(Box::new(
+            dropshot::ClientSpecifiesVersionInHeader::new(
+                omicron_common::api::VERSION_HEADER,
+                ddm_api::latest_version(),
+            ),
+        )));
+
     info!(log, "admin: listening on {}", sa);
 
     let log = log.clone();
     spawn(async move {
-        let server = HttpServerStarter::new(&config, api, context, &ds_log)
-            .map_err(|e| format!("new admin dropshot: {}", e))
-            .unwrap();
-
-        match server.start().await {
-            Ok(_) => warn!(log, "admin: unexpected server exit"),
+        match server.start() {
+            Ok(server) => {
+                info!(log, "admin: server started");
+                match server.await {
+                    Ok(()) => info!(log, "admin: server exited"),
+                    Err(e) => error!(log, "admin: server error {:?}", e),
+                }
+            }
             Err(e) => error!(log, "admin: server start error {:?}", e),
         }
     });

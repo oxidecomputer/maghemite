@@ -34,8 +34,8 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
     let apis = vec![
         ManagedApiConfig {
             ident: "ddm-admin",
-            versions: Versions::Lockstep {
-                version: semver::Version::new(0, 1, 0),
+            versions: Versions::Versioned {
+                supported_versions: ddm_api::supported_versions(),
             },
             title: "DDM Admin",
             metadata: ManagedApiMetadata {
@@ -48,8 +48,8 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
         },
         ManagedApiConfig {
             ident: "mg-admin",
-            versions: Versions::Lockstep {
-                version: semver::Version::new(0, 1, 0),
+            versions: Versions::Versioned {
+                supported_versions: mg_api::supported_versions(),
             },
             title: "Maghemite Admin",
             metadata: ManagedApiMetadata {
