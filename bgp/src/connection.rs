@@ -167,6 +167,11 @@ pub trait BgpConnector<Cnx: BgpConnection> {
 /// Connection establishment (including policy application) is handled by the
 /// BgpConnector and BgpListener traits for outbound and inbound connections
 /// respectively.
+///
+/// The receive loop is not started automatically when the connection is
+/// created. It must be explicitly started by calling `start_recv_loop()`.
+/// This allows the SessionRunner to complete connection registration before
+/// any messages can be received, preventing race conditions.
 pub trait BgpConnection: Send + Clone {
     /// The type of connector used to establish outbound connections for this
     /// connection type.
@@ -192,4 +197,10 @@ pub trait BgpConnection: Send + Clone {
 
     /// Return the connection-level clock for this connection.
     fn clock(&self) -> &ConnectionClock;
+
+    /// Start the receive loop for this connection. This spawns a background
+    /// thread that will receive messages and send them to the SessionRunner.
+    /// This method is idempotent - calling it multiple times has no effect
+    /// after the first call.
+    fn start_recv_loop(&self);
 }

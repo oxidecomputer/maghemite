@@ -277,7 +277,6 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
     }
 }
 
-#[derive(Clone)]
 pub struct BgpConnectionTcp {
     id: ConnectionId,
     peer: SocketAddr,
@@ -293,6 +292,40 @@ pub struct BgpConnectionTcp {
     creator: ConnectionCreator,
     // Connection-level timers for keepalive, hold, and delay open
     connection_clock: ConnectionClock,
+    // Parameters for spawning the recv loop (stored until start_recv_loop is called)
+    // Note: No Arc needed! recv loop is started before cloning in register_conn()
+    recv_loop_params: Mutex<Option<RecvLoopParams>>,
+    // Track whether recv loop has been started
+    recv_loop_started: AtomicBool,
+}
+
+impl Clone for BgpConnectionTcp {
+    fn clone(&self) -> Self {
+        // Clones always have empty recv loop params since the original connection
+        // should have started the recv loop before being cloned (in register_conn).
+        Self {
+            id: self.id,
+            peer: self.peer,
+            source: self.source,
+            conn: self.conn.clone(),
+            #[cfg(target_os = "illumos")]
+            sas: self.sas.clone(),
+            #[cfg(target_os = "illumos")]
+            sa_keepalive_running: self.sa_keepalive_running.clone(),
+            dropped: self.dropped.clone(),
+            log: self.log.clone(),
+            creator: self.creator,
+            connection_clock: self.connection_clock.clone(),
+            recv_loop_params: Mutex::new(None),
+            recv_loop_started: AtomicBool::new(true),
+        }
+    }
+}
+
+/// Parameters needed to spawn the receive loop for a BGP connection
+struct RecvLoopParams {
+    event_tx: Sender<FsmEvent<BgpConnectionTcp>>,
+    timeout: Duration,
 }
 
 impl BgpConnection for BgpConnectionTcp {
@@ -326,6 +359,50 @@ impl BgpConnection for BgpConnectionTcp {
     fn clock(&self) -> &ConnectionClock {
         &self.connection_clock
     }
+
+    fn start_recv_loop(&self) {
+        // Check if already started (idempotent)
+        if self
+            .recv_loop_started
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_err()
+        {
+            // Already started, nothing to do
+            return;
+        }
+
+        // Take the params (they should exist since we haven't started yet)
+        let params = lock!(self.recv_loop_params).take();
+        if let Some(params) = params {
+            connection_log_lite!(self.log,
+                info,
+                "spawning recv loop for {}", self.peer;
+                "creator" => self.creator.as_str(),
+                "connection" => format!("{:?}", lock!(self.conn)),
+                "connection_peer" => format!("{}", self.peer)
+            );
+
+            let peer = self.peer;
+            let event_tx = params.event_tx;
+            let timeout = params.timeout;
+            let dropped = self.dropped.clone();
+            let log = self.log.clone();
+            let creator = self.creator;
+            let conn_id = self.id;
+
+            // Clone the TcpStream for the recv thread
+            if let Ok(conn) = lock!(self.conn).try_clone() {
+                Self::spawn_recv_loop(
+                    peer, event_tx, conn, timeout, dropped, log, creator, conn_id,
+                );
+            }
+        }
+    }
 }
 
 impl Drop for BgpConnectionTcp {
@@ -340,6 +417,7 @@ impl Drop for BgpConnectionTcp {
 impl BgpConnectionTcp {
     /// Create a new BgpConnectionTcp with an established TcpStream.
     /// This is a private constructor used by BgpConnectorTcp and BgpListenerTcp.
+    /// The receive loop is not started until start_recv_loop() is called.
     #[allow(clippy::too_many_arguments)]
     fn with_conn(
         source: SocketAddr,
@@ -354,16 +432,6 @@ impl BgpConnectionTcp {
         let id = ConnectionId::new(source, peer);
 
         let dropped = Arc::new(AtomicBool::new(false));
-        Self::recv(
-            peer,
-            event_tx.clone(),
-            conn.try_clone()?,
-            timeout,
-            dropped.clone(),
-            log.clone(),
-            creator,
-            id,
-        )?;
         let connection_clock = ConnectionClock::new(
             config.resolution,
             config.keepalive_time,
@@ -373,6 +441,12 @@ impl BgpConnectionTcp {
             event_tx.clone(),
             log.clone(),
         );
+
+        // Store the parameters for spawning the recv loop later
+        let recv_loop_params = Mutex::new(Some(RecvLoopParams {
+            event_tx,
+            timeout,
+        }));
 
         Ok(Self {
             id,
@@ -387,11 +461,14 @@ impl BgpConnectionTcp {
             sas: Arc::new(Mutex::new(None)),
             creator,
             connection_clock,
+            recv_loop_params,
+            recv_loop_started: AtomicBool::new(false),
         })
     }
 
+    /// Spawn the receive loop thread for this connection.
     #[allow(clippy::too_many_arguments)]
-    fn recv(
+    fn spawn_recv_loop(
         peer: SocketAddr,
         event_tx: Sender<FsmEvent<Self>>,
         mut conn: TcpStream,
@@ -400,18 +477,19 @@ impl BgpConnectionTcp {
         log: Logger,
         creator: ConnectionCreator,
         conn_id: ConnectionId,
-    ) -> Result<(), Error> {
+    ) {
         if !timeout.is_zero() {
-            conn.set_read_timeout(Some(timeout))?;
+            if let Err(e) = conn.set_read_timeout(Some(timeout)) {
+                connection_log_lite!(log,
+                    error,
+                    "failed to set read timeout: {e}";
+                    "creator" => creator.as_str(),
+                    "connection_peer" => format!("{peer}"),
+                    "error" => format!("{e}")
+                );
+                return;
+            }
         }
-
-        connection_log_lite!(log,
-            info,
-            "spawning recv loop for {peer}";
-            "creator" => creator.as_str(),
-            "connection" => format!("{conn:?}"),
-            "connection_peer" => format!("{peer}")
-        );
 
         spawn(move || loop {
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {
@@ -452,8 +530,6 @@ impl BgpConnectionTcp {
                 }
             }
         });
-
-        Ok(())
     }
 
     fn recv_header(
