@@ -398,7 +398,8 @@ impl BgpConnection for BgpConnectionTcp {
             // Clone the TcpStream for the recv thread
             if let Ok(conn) = lock!(self.conn).try_clone() {
                 Self::spawn_recv_loop(
-                    peer, event_tx, conn, timeout, dropped, log, creator, conn_id,
+                    peer, event_tx, conn, timeout, dropped, log, creator,
+                    conn_id,
                 );
             }
         }
@@ -443,10 +444,8 @@ impl BgpConnectionTcp {
         );
 
         // Store the parameters for spawning the recv loop later
-        let recv_loop_params = Mutex::new(Some(RecvLoopParams {
-            event_tx,
-            timeout,
-        }));
+        let recv_loop_params =
+            Mutex::new(Some(RecvLoopParams { event_tx, timeout }));
 
         Ok(Self {
             id,
