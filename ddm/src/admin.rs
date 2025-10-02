@@ -21,7 +21,7 @@ use dropshot::TypedBody;
 use mg_common::lock;
 use mg_common::net::TunnelOrigin;
 use oxnet::Ipv6Net;
-use slog::{Logger, error, info, warn};
+use slog::{Logger, error, info};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
@@ -88,7 +88,13 @@ pub fn handler(
     let log = log.clone();
     spawn(async move {
         match server.start() {
-            Ok(_) => warn!(log, "admin: unexpected server exit"),
+            Ok(server) => {
+                info!(log, "admin: server started");
+                match server.await {
+                    Ok(()) => info!(log, "admin: server exited"),
+                    Err(e) => error!(log, "admin: server error {:?}", e),
+                }
+            }
             Err(e) => error!(log, "admin: server start error {:?}", e),
         }
     });

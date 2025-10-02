@@ -62,10 +62,16 @@ pub fn start_server(
 
     Ok(tokio::spawn(async move {
         match server.start() {
-            Ok(_) => warn!(log, "admin: unexpected server exit"),
+            Ok(server) => {
+                info!(log, "admin: server started");
+                match server.await {
+                    Ok(()) => info!(log, "admin: server exited"),
+                    Err(e) => error!(log, "admin: server error {:?}", e),
+                }
+            }
             Err(e) => error!(log, "admin: server start error {:?}", e),
         }
-    }))
+    })
 }
 
 pub enum MgAdminApiImpl {}
