@@ -15,7 +15,7 @@ use mg_api::*;
 use mg_common::stats::MgLowerStats;
 use rdb::{BfdPeerConfig, Db, Prefix};
 use slog::o;
-use slog::{Logger, error, info, warn};
+use slog::{Logger, error, info};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -71,7 +71,7 @@ pub fn start_server(
             }
             Err(e) => error!(log, "admin: server start error {:?}", e),
         }
-    })
+    }))
 }
 
 pub enum MgAdminApiImpl {}
