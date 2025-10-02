@@ -113,7 +113,7 @@ ddm-types = { path = "ddm-types" }
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "3d1263ced8177893d46da54a914e4c510dc2bfc8"
+rev = "795a1e0aeefb7a2c6fe4139779fdf66930d09b80"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
