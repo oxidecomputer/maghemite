@@ -59,7 +59,7 @@ socket2 = { version = "0.5", features = ["all"] }
 ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.219", features = ["derive"] }
 hostname = "0.3"
-thiserror = "1.0"
+thiserror = "2.0"
 dropshot = { version = "0.16.4", features = [ "usdt-probes" ] }
 dropshot-api-manager = "0.2.2"
 dropshot-api-manager-types = "0.2.2"
