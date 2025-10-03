@@ -9,8 +9,9 @@ macro_rules! session_log {
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
             "conn" => format!("{:?}", $conn.conn()),
+            "conn_id" => format!("{:?}", $conn.id().short()),
             "connection_clock" => format!("{}", $conn.clock()),
-            "creator" => format!("{}", $conn.creator()),
+            "creator" => $conn.creator().as_str(),
             "fsm_state" => $self.state().as_str(),
             $($key => $value),*
         )
@@ -25,8 +26,9 @@ macro_rules! session_log {
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
             "conn" => format!("{:?}", $conn.conn()),
+            "conn_id" => format!("{:?}", $conn.id().short()),
             "connection_clock" => format!("{}", $conn.clock()),
-            "creator" => format!("{}", $conn.creator()),
+            "creator" => $conn.creator().as_str(),
             "fsm_state" => $self.state().as_str(),
             $($key => $value),*
         )
@@ -41,8 +43,9 @@ macro_rules! session_log {
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
             "conn" => format!("{:?}", $conn.conn()),
+            "conn_id" => format!("{:?}", $conn.id().short()),
             "connection_clock" => format!("{}", $conn.clock()),
-            "creator" => format!("{}", $conn.creator()),
+            "creator" => $conn.creator().as_str(),
             "fsm_state" => $self.state().as_str(),
         )
     };
@@ -56,8 +59,9 @@ macro_rules! session_log {
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
             "conn" => format!("{:?}", $conn.conn()),
+            "conn_id" => format!("{:?}", $conn.id().short()),
             "connection_clock" => format!("{}", $conn.clock()),
-            "creator" => format!("{}", $conn.creator()),
+            "creator" => $conn.creator().as_str(),
             "fsm_state" => $self.state().as_str(),
         )
     };
@@ -129,11 +133,13 @@ macro_rules! collision_log {
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
             "new_conn" => format!("{:?}", $new.conn()),
+            "new_conn_id" => format!("{:?}", $new.id().short()),
             "new_connection_clock" => format!("{}", $new.clock()),
-            "new_creator" => format!("{}", $new.creator()),
+            "new_creator" => $new.creator().as_str(),
             "exist_conn" => format!("{:?}", $exist.conn()),
+            "exist_conn_id" => format!("{:?}", $exist.id().short()),
             "exist_connection_clock" => format!("{}", $exist.clock()),
-            "exist_creator" => format!("{}", $exist.creator()),
+            "exist_creator" => $exist.creator().as_str(),
             $($key => $value),*
         )
     };
@@ -148,11 +154,13 @@ macro_rules! collision_log {
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
             "new_conn" => format!("{:?}", $new.conn()),
+            "new_conn_id" => format!("{:?}", $new.id().short()),
             "new_connection_clock" => format!("{}", $new.clock()),
-            "new_creator" => format!("{}", $new.creator()),
+            "new_creator" => $new.creator().as_str(),
             "exist_conn" => format!("{:?}", $exist.conn()),
+            "exist_conn_id" => format!("{:?}", $exist.id().short()),
             "exist_connection_clock" => format!("{}", $exist.clock()),
-            "exist_creator" => format!("{}", $exist.creator()),
+            "exist_creator" => $exist.creator().as_str(),
             $($key => $value),*
         )
     };
@@ -167,11 +175,13 @@ macro_rules! collision_log {
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
             "new_conn" => format!("{:?}", $new.conn()),
+            "new_conn_id" => format!("{:?}", $new.id().short()),
             "new_connection_clock" => format!("{}", $new.clock()),
-            "new_creator" => format!("{}", $new.creator()),
+            "new_creator" => $new.creator().as_str(),
             "exist_conn" => format!("{:?}", $exist.conn()),
+            "exist_conn_id" => format!("{:?}", $exist.id().short()),
             "exist_connection_clock" => format!("{}", $exist.clock()),
-            "exist_creator" => format!("{}", $exist.creator()),
+            "exist_creator" => $exist.creator().as_str(),
         )
     };
     ($self:expr, $level:ident, $new:expr, $exist:expr, $msg:expr, $($args:expr),*) => {
@@ -185,11 +195,13 @@ macro_rules! collision_log {
             "neighbor" => format!("{}", $self.neighbor.host.ip()),
             "session_clock" => format!("{}", $self.clock),
             "new_conn" => format!("{:?}", $new.conn()),
+            "new_conn_id" => format!("{:?}", $new.id().short()),
             "new_connection_clock" => format!("{}", $new.clock()),
-            "new_creator" => format!("{}", $new.creator()),
+            "new_creator" => $new.creator().as_str(),
             "exist_conn" => format!("{:?}", $exist.conn()),
+            "exist_conn_id" => format!("{:?}", $exist.id().short()),
             "exist_connection_clock" => format!("{}", $exist.clock()),
-            "exist_creator" => format!("{}", $exist.creator()),
+            "exist_creator" => $exist.creator().as_str(),
         )
     };
 }
@@ -239,7 +251,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => format!("{}", $self.creator()),
+            "creator" => $self.creator().as_str(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),
             $($key => $value),*
@@ -251,7 +263,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => format!("{}", $self.creator()),
+            "creator" => $self.creator().as_str(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),
             $($key => $value),*
@@ -263,7 +275,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => format!("{}", $self.creator()),
+            "creator" => $self.creator().as_str(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),
         )
@@ -274,7 +286,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => format!("{}", $self.creator()),
+            "creator" => $self.creator().as_str(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),
         )
