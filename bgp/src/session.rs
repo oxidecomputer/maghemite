@@ -247,7 +247,7 @@ impl fmt::Debug for AdminEvent {
 impl AdminEvent {
     fn title(&self) -> &'static str {
         match self {
-            AdminEvent::Announce(_) => "update",
+            AdminEvent::Announce(_) => "announce",
             AdminEvent::ShaperChanged(_) => "shaper changed",
             AdminEvent::CheckerChanged(_) => "checker changed",
             AdminEvent::ExportPolicyChanged(_) => "export policy changed",
@@ -266,6 +266,8 @@ pub enum StopReason {
     Shutdown,
     FsmError,
     HoldTimeExpired,
+    ConnectionRejected,
+    CollisionResolution,
 }
 
 /// FsmEvents pertaining to a specific Connection
@@ -1201,14 +1203,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
 
                         if let Some(conn) = self.get_conn(new.id()) {
-                            self.send_notification(
-                                &conn,
-                                ErrorCode::Cease,
-                                ErrorSubcode::Cease(
-                                    CeaseErrorSubcode::ConnectionRejected,
-                                ),
+                            self.stop(
+                                Some(&conn),
+                                None,
+                                StopReason::ConnectionRejected,
                             );
                         }
+
+                        // `new` is never registered so unregister is not needed
 
                         continue;
                     }
@@ -1240,12 +1242,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "unexpected connection fsm event {} for known but inactive conn (conn_id: {}), closing..",
                                         connection_event.title(), conn_id.short();
                                     );
-                                    self.send_notification(
-                                        &conn,
-                                        ErrorCode::Cease,
-                                        ErrorSubcode::Cease(
-                                            CeaseErrorSubcode::ConnectionRejected,
-                                        ),
+                                    self.stop(
+                                        Some(&conn),
+                                        None,
+                                        StopReason::ConnectionRejected,
                                     );
                                 }
                                 // We should never hit this path, because we
@@ -1270,12 +1270,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "message" => msg.title(),
                                         "message_contents" => format!("{msg}")
                                     );
-                                    self.send_notification(
-                                        &conn,
-                                        ErrorCode::Cease,
-                                        ErrorSubcode::Cease(
-                                            CeaseErrorSubcode::ConnectionRejected,
-                                        ),
+                                    self.stop(
+                                        Some(&conn),
+                                        None,
+                                        StopReason::ConnectionRejected,
                                     );
                                 }
                                 // We should never hit this path, because we
@@ -1910,12 +1908,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.counters
                             .active_connections_declined
                             .fetch_add(1, Ordering::Relaxed);
-                        self.send_notification(
-                            &confirmed,
-                            ErrorCode::Cease,
-                            ErrorSubcode::Cease(
-                                CeaseErrorSubcode::ConnectionRejected,
-                            ),
+                        self.stop(
+                            Some(&confirmed),
+                            None,
+                            StopReason::ConnectionRejected,
                         );
                         continue;
                     }
@@ -2138,7 +2134,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message_contents" => format!("{msg}")
                             );
 
-                            self.send_fsm_notification(&conn);
+                            self.stop(
+                                Some(&conn),
+                                None,
+                                StopReason::FsmError,
+                            );
 
                             lock!(self.clock.timers.connect_retry_timer).stop();
                             self.connect_retry_counter
@@ -2807,14 +2807,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     .fetch_add(1, Ordering::Relaxed);
                             }
                         }
-                        self.send_notification(
-                            &extra,
-                            ErrorCode::Cease,
-                            ErrorSubcode::Cease(
-                                CeaseErrorSubcode::ConnectionRejected,
-                            ),
+                        self.stop(
+                            Some(&extra),
+                            None,
+                            StopReason::ConnectionRejected,
                         );
-                        self.unregister_conn(extra.id());
                         continue;
                     }
                 },
@@ -3128,8 +3125,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         )
                                         .restart();
                                         self.bump_msg_counter(msg_kind, false);
-                                        self.send_collision_resolution_notification(&new);
-                                        self.unregister_conn(new.id());
+                                        self.stop(
+                                            Some(&new),
+                                            None,
+                                            StopReason::CollisionResolution,
+                                        );
                                         return FsmState::SessionSetup(exist);
                                     } else {
                                         self.bump_msg_counter(msg_kind, true);
@@ -3362,12 +3362,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     .fetch_add(1, Ordering::Relaxed);
                             }
                         }
-                        self.send_notification(
-                            &extra,
-                            ErrorCode::Cease,
-                            ErrorSubcode::Cease(
-                                CeaseErrorSubcode::ConnectionRejected,
-                            ),
+                        self.stop(
+                            Some(&exist),
+                            None,
+                            StopReason::ConnectionRejected,
                         );
                         // unregister_conn() call is not needed, since we
                         // haven't registered `extra`
@@ -3523,7 +3521,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     "message" => msg_kind
                                                 );
 
-                                                self.send_fsm_notification(&exist);
+                                                self.stop(
+                                                    Some(&exist),
+                                                    None,
+                                                    StopReason::FsmError,
+                                                );
 
                                                 lock!(self.clock.timers.connect_retry_timer).stop();
                                                 self.connect_retry_counter
@@ -3672,7 +3674,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     "message" => msg_kind
                                                 );
 
-                                                self.send_fsm_notification(&new);
+                                                self.stop(
+                                                    Some(&new),
+                                                    None,
+                                                    StopReason::FsmError,
+                                                );
 
                                                 lock!(self.clock.timers.connect_retry_timer).stop();
                                                 self.connect_retry_counter
@@ -3981,8 +3987,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             );
 
             // Our RID is higher, we win. Kill `new`. Kill it to death.
-            self.send_collision_resolution_notification(&new.conn);
-            self.unregister_conn(new.conn.id());
+            self.stop(Some(&new.conn), None, StopReason::CollisionResolution);
 
             lock!(exist.conn.clock().timers.hold_timer).restart();
             lock!(exist.conn.clock().timers.keepalive_timer).restart();
@@ -3996,8 +4001,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             new.id, self.id;
         );
 
-        self.send_collision_resolution_notification(&exist.conn);
-        self.unregister_conn(exist.conn.id());
+        self.stop(Some(&exist.conn), None, StopReason::CollisionResolution);
 
         lock!(self.clock.timers.connect_retry_timer).stop();
         self.counters
@@ -4304,7 +4308,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "rx {}, fsm transition to idle",
                         session_event.title();
                     );
-                    self.send_fsm_notification(&pc.conn);
+                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
                     self.exit_established(pc)
                 }
 
@@ -4312,7 +4316,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     session_log!(self, info,  pc.conn,
                         "rx delay open timer expires, fsm transition to idle";
                     );
-                    self.send_fsm_notification(&pc.conn);
+                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
                     self.exit_established(pc)
                 }
 
@@ -4338,15 +4342,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 .fetch_add(1, Ordering::Relaxed);
                         }
                     }
-
-                    self.send_notification(
-                        &new,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::ConnectionRejected,
-                        ),
-                    );
-
+                    self.stop(Some(&new), None, StopReason::ConnectionRejected);
                     FsmState::Established(pc)
                 }
             },
@@ -4383,7 +4379,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.counters
                             .hold_timer_expirations
                             .fetch_add(1, Ordering::Relaxed);
-                        self.send_hold_timer_expired_notification(&pc.conn);
+                        self.stop(
+                            Some(&pc.conn),
+                            None,
+                            StopReason::HoldTimeExpired,
+                        );
                         self.exit_established(pc)
                     } else {
                         session_log!(self, warn, pc.conn,
@@ -4447,32 +4447,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 }
 
-                /*
-                 *  If a valid OPEN message (BGPOpen (Event 19)) is received, and if
-                 *  the CollisionDetectEstablishedState optional attribute is TRUE,
-                 *  the OPEN message will be checked to see if it collides (Section
-                 *  6.8) with any other connection.  If the BGP implementation
-                 *  determines that this connection needs to be terminated, it will
-                 *  process an OpenCollisionDump event (Event 23).  If this connection
-                 *  needs to be terminated, the local system:
-                 *
-                 *    - sends a NOTIFICATION with a Cease,
-                 *
-                 *    - sets the ConnectRetryTimer to zero,
-                 *
-                 *    - deletes all routes associated with this connection,
-                 *
-                 *    - releases all BGP resources,
-                 *
-                 *    - drops the TCP connection,
-                 *
-                 *    - increments the ConnectRetryCounter by 1,
-                 *
-                 *    - (optionally) performs peer oscillation damping if the
-                 *      DampPeerOscillations is set to TRUE, and
-                 *
-                 *    - changes its state to Idle.
-                 */
                 ConnectionEvent::Message { msg, ref conn_id } => {
                     let msg_kind = msg.kind();
 
@@ -4490,6 +4464,32 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
 
                     match msg {
+                        /*
+                         *  If a valid OPEN message (BGPOpen (Event 19)) is received, and if
+                         *  the CollisionDetectEstablishedState optional attribute is TRUE,
+                         *  the OPEN message will be checked to see if it collides (Section
+                         *  6.8) with any other connection.  If the BGP implementation
+                         *  determines that this connection needs to be terminated, it will
+                         *  process an OpenCollisionDump event (Event 23).  If this connection
+                         *  needs to be terminated, the local system:
+                         *
+                         *    - sends a NOTIFICATION with a Cease,
+                         *
+                         *    - sets the ConnectRetryTimer to zero,
+                         *
+                         *    - deletes all routes associated with this connection,
+                         *
+                         *    - releases all BGP resources,
+                         *
+                         *    - drops the TCP connection,
+                         *
+                         *    - increments the ConnectRetryCounter by 1,
+                         *
+                         *    - (optionally) performs peer oscillation damping if the
+                         *      DampPeerOscillations is set to TRUE, and
+                         *
+                         *    - changes its state to Idle.
+                         */
                         Message::Open(om) => {
                             session_log!(self, warn, pc.conn,
                                 "unexpected {msg_kind} (conn_id {}), fsm transition to idle",
@@ -4498,12 +4498,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message_contents" => format!("{om}").as_str()
                             );
                             self.bump_msg_counter(msg_kind, true);
-                            self.send_notification(
-                                &pc.conn,
-                                ErrorCode::Cease,
-                                ErrorSubcode::Cease(
-                                    CeaseErrorSubcode::Unspecific,
-                                ),
+                            // The above RFC excerpt explains proper Open
+                            // handling if CollisionDetectEstablishedState is
+                            // enabled, but doesn't explain proper handling if
+                            // it is NOT enabled (and we don't support this
+                            // option). So instead of sending a Cease as if we
+                            // were resolving a collision, we send an FSM Error.
+                            self.stop(
+                                Some(&pc.conn),
+                                None,
+                                StopReason::FsmError,
                             );
                             self.exit_established(pc)
                         }
@@ -4657,6 +4661,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         crate::messages::OpenErrorSubcode::BadPeerAS,
                     ),
                 );
+                self.unregister_conn(conn.id());
                 return Err(Error::UnexpectedAsn(ExpectationMismatch {
                     expected: expected_remote_asn,
                     got: remote_asn,
@@ -4702,6 +4707,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.send_notification(conn, ErrorCode::Open, ErrorSubcode::Open(
                         crate::messages::OpenErrorSubcode::UnacceptableHoldTime,
                     ));
+                    self.unregister_conn(conn.id());
                     return Err(Error::HoldTimeTooSmall);
                 }
                 if requested < ht.interval.as_secs() {
@@ -4782,12 +4788,36 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         )
     }
 
+    fn send_rejected_notification(&self, conn: &Cnx) {
+        self.send_notification(
+            conn,
+            ErrorCode::Cease,
+            ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionRejected),
+        )
+    }
+
     fn send_fsm_notification(&self, conn: &Cnx) {
         self.send_notification(
             conn,
             ErrorCode::Fsm,
             // Unspecific, FSM doesn't have a defined subcode
             ErrorSubcode::Fsm(0),
+        )
+    }
+
+    fn send_admin_shutdown_notification(&self, conn: &Cnx) {
+        self.send_notification(
+            conn,
+            ErrorCode::Cease,
+            ErrorSubcode::Cease(CeaseErrorSubcode::AdministrativeShutdown),
+        )
+    }
+
+    fn send_admin_reset_notification(&self, conn: &Cnx) {
+        self.send_notification(
+            conn,
+            ErrorCode::Cease,
+            ErrorSubcode::Cease(CeaseErrorSubcode::AdministrativeReset),
         )
     }
 
@@ -5169,22 +5199,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         match reason {
             StopReason::Reset => {
                 if let Some(c1) = conn1 {
-                    self.send_notification(
-                        c1,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeReset,
-                        ),
-                    );
+                    self.send_admin_reset_notification(c1);
                 }
                 if let Some(c2) = conn2 {
-                    self.send_notification(
-                        c2,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeReset,
-                        ),
-                    );
+                    self.send_admin_reset_notification(c2);
                 }
                 self.counters
                     .connect_retry_counter
@@ -5194,22 +5212,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             StopReason::Shutdown => {
                 if let Some(c1) = conn1 {
-                    self.send_notification(
-                        c1,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeShutdown,
-                        ),
-                    );
+                    self.send_admin_shutdown_notification(c1);
                 }
                 if let Some(c2) = conn2 {
-                    self.send_notification(
-                        c2,
-                        ErrorCode::Cease,
-                        ErrorSubcode::Cease(
-                            CeaseErrorSubcode::AdministrativeShutdown,
-                        ),
-                    );
+                    self.send_admin_shutdown_notification(c2);
                 }
                 self.counters
                     .connect_retry_counter
@@ -5246,6 +5252,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .connect_retry_counter
                     .fetch_add(1, Ordering::Relaxed);
                 self.restart_connect_retry();
+            }
+
+            StopReason::ConnectionRejected => {
+                if let Some(c1) = conn1 {
+                    self.send_rejected_notification(c1);
+                }
+                if let Some(c2) = conn2 {
+                    self.send_rejected_notification(c2);
+                }
+            }
+
+            StopReason::CollisionResolution => {
+                if let Some(c1) = conn1 {
+                    self.send_collision_resolution_notification(c1);
+                }
+                if let Some(c2) = conn2 {
+                    self.send_collision_resolution_notification(c2);
+                }
             }
         }
 
