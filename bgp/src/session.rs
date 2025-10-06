@@ -1156,11 +1156,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     AdminEvent::ManualStart | AdminEvent::Reset => {
                         lock!(self.clock.timers.idle_hold_timer).disable();
 
-                        self.restart_connect_retry();
-
                         if lock!(self.session).passive_tcp_establishment {
+                            lock!(self.clock.timers.connect_retry_timer).stop();
                             return FsmState::Active;
                         } else {
+                            lock!(self.clock.timers.connect_retry_timer)
+                                .restart();
                             return FsmState::Connect;
                         }
                     }
@@ -1194,11 +1195,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                         lock!(self.clock.timers.idle_hold_timer).disable();
 
-                        self.restart_connect_retry();
-
                         if lock!(self.session).passive_tcp_establishment {
+                            lock!(self.clock.timers.connect_retry_timer).stop();
                             return FsmState::Active;
                         } else {
+                            lock!(self.clock.timers.connect_retry_timer)
+                                .restart();
                             return FsmState::Connect;
                         }
                     }
@@ -1472,6 +1474,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     "subsequent connect attempt failed";
                                     "error" => format!("{e}")
                                 );
+                                lock!(self.clock.timers.connect_retry_timer)
+                                    .stop();
+                                return FsmState::Active;
                             }
                             Ok(conn) => {
                                 if let Err(e) =
@@ -1486,9 +1491,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "error" => format!("{e}")
                                     );
                                 }
+                                lock!(self.clock.timers.connect_retry_timer)
+                                    .restart();
+                                continue;
                             }
                         }
-                        self.restart_connect_retry();
                     }
 
                     /*
@@ -1870,8 +1877,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                      *   - changes its state to Connect.
                      */
                     SessionEvent::ConnectRetryTimerExpires => {
-                        self.restart_connect_retry();
-
                         // RFC 4271 says that in Idle the FSM should restart the
                         // ConnectRetryTimer "In response to a
                         // ManualStart_with_PassiveTcpEstablishment event" even
@@ -1880,14 +1885,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         // transitioning to Connect and attempting a new
                         // outbound TCP session, which is exactly the opposite
                         // of what you want to do for a passive peer.
-                        // ConnectRetryTimer is stopped for passive peers in
-                        // restart_connect_retry(), so we can just ignore this
-                        // and stay in Active.
                         if lock!(self.session).passive_tcp_establishment {
                             session_log_lite!(self, info,
                                 "rx {} but peer is configured as passive, staying in active",
                                 session_event.title();
                             );
+                            lock!(self.clock.timers.connect_retry_timer).stop();
                             continue;
                         }
 
@@ -1899,6 +1902,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.counters
                             .connection_retries
                             .fetch_add(1, Ordering::Relaxed);
+                        lock!(self.clock.timers.connect_retry_timer).restart();
 
                         return FsmState::Connect;
                     }
@@ -3104,7 +3108,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         if let Err(e) =
                                             self.handle_open(&new, &om)
                                         {
-                                            session_log!(self, warn, new,
+                                            collision_log!(self, warn, new, exist.conn,
                                                 "new conn failed to handle open message ({e}), existing conn falls back to open confirm";
                                                 "error" => format!("{e}")
                                             );
@@ -3528,16 +3532,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             // `exist` is in OpenConfirm
                                             // Open is an FSM Error.
                                             Some(_) => {
-                                                self.bump_msg_counter(msg_kind, true);
-                                                self.connect_retry_counter
-                                                    .fetch_add(1, Ordering::Relaxed);
-                                                lock!(self.clock.timers.connect_retry_timer).stop();
                                                 collision_log!(self, warn, new, exist,
                                                     "existing conn rx unexpected {msg_kind} (conn_id: {}), fallback to new conn",
                                                     conn_id.short();
                                                     "message" => "open",
                                                     "message_contents" => format!("{om}").as_str()
                                                 );
+
+                                                self.bump_msg_counter(msg_kind, true);
+                                                self.stop(Some(&exist), None, StopReason::FsmError);
 
                                                 // RFC 4271 says there's an FSM for
                                                 // each configured peer + each
@@ -4770,7 +4773,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Ok(result) => match result {
                     CheckerResult::Accept => {}
                     CheckerResult::Drop => {
-                        return Err(Error::PolicyCheckFailed)
+                        // XXX: This can probably be removed with more robust
+                        //      policy handling
+                        self.unregister_conn(conn.id());
+                        return Err(Error::PolicyCheckFailed);
                     }
                 },
                 Err(e) => {
@@ -4778,6 +4784,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "open checker exec failed: {e}";
                         "error" => format!("{e}")
                     );
+                    // XXX: This can probably be removed with more robust
+                    //      policy handling
+                    self.unregister_conn(conn.id());
                 }
             }
         }
@@ -5249,43 +5258,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
-    /// Handler for ConnectRetryTimer restarts.
-    ///
-    /// RFC 4271 uses several unique terms when referring to how a timer should
-    /// be manipulated: "sets," "resets," "starts," "restarts," "clears," and
-    /// "stops," just to name a few off the top of my head. None of these have
-    /// a definition or clarification as to whether they are intended to have
-    /// different subtleties in operation, however 20+ year old IETF mailing
-    /// list threads seem to have folks on both sides ("this is obvious, we
-    /// can't explain English" vs "this is confusing and adds friction").
-    /// Despite discussion around making the phrasing more clear in the RFC,
-    /// that was never done. So this is effectively a wrapper for any operations
-    /// that seem to indicate a timer should be started/restarted. In particular
-    /// this wrapper is meant to address the ambiguities in the RFC around
-    /// PassiveTcpEstablishment. It is quite clear that passive means not to
-    /// make any attempt to connect to the peer, however the FSM description
-    /// says to start the ConnectRetryTimer in Idle upon any Start events
-    /// (including Passive Starts). The problem there being that the FSM event
-    /// handlers for ConnectRetryTimer_Expires in Active and Connect do not
-    /// check whether the session is passive before starting a new connection
-    /// attempt and moving into (or staying in) the Connect state. As such,
-    /// this simple wrapper exists to add PassiveTcpEstablishment handling to
-    /// the events where ConnectRetryTimer would otherwise be blindly started.
-    fn restart_connect_retry(&self) {
-        /*
-         * RFC 4721:
-         *
-         * Each BGP peer paired in a potential connection will
-         * attempt to connect to the other, unless configured to
-         * remain in the idle state, or configured to remain passive.
-         */
-        if lock!(self.session).passive_tcp_establishment {
-            lock!(self.clock.timers.connect_retry_timer).stop();
-        } else {
-            lock!(self.clock.timers.connect_retry_timer).restart();
-        }
-    }
-
     fn stop(
         &self,
         conn1: Option<&Cnx>,
@@ -5303,7 +5275,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .connect_retry_counter
                     .store(0, Ordering::Relaxed);
-                self.restart_connect_retry();
+                self.counters
+                    .connection_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                lock!(self.clock.timers.connect_retry_timer).stop();
             }
 
             StopReason::Shutdown => {
@@ -5316,7 +5291,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .connect_retry_counter
                     .store(0, Ordering::Relaxed);
-                self.restart_connect_retry();
+                self.counters
+                    .connection_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                lock!(self.clock.timers.connect_retry_timer).stop();
             }
 
             StopReason::FsmError => {
@@ -5329,7 +5307,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .connect_retry_counter
                     .fetch_add(1, Ordering::Relaxed);
-                self.restart_connect_retry();
+                self.counters
+                    .connection_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                lock!(self.clock.timers.connect_retry_timer).stop();
             }
 
             StopReason::HoldTimeExpired => {
@@ -5347,7 +5328,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .connect_retry_counter
                     .fetch_add(1, Ordering::Relaxed);
-                self.restart_connect_retry();
+                self.counters
+                    .connection_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                lock!(self.clock.timers.connect_retry_timer).stop();
             }
 
             StopReason::ConnectionRejected => {
