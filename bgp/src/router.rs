@@ -101,6 +101,16 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn shutdown(&self) {
+        slog::info!(
+            self.log,
+            "router (asn: {}, id: {}) received shutdown request, stopping sessions",
+            self.config.asn, self.config.id;
+            slog::o!(
+                "component" => crate::COMPONENT_BGP,
+                "module" => crate::MOD_ROUTER,
+                "unit" => UNIT_SESSION_RUNNER,
+            )
+        );
         for (addr, s) in lock!(self.sessions).iter() {
             lock!(self.addr_to_session).remove(addr);
             s.shutdown();

@@ -270,7 +270,12 @@ impl Display for SessionClock {
 
 impl Drop for SessionClock {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Relaxed);
+        // Only signal shutdown when this is the last clone being dropped.
+        // Since all fields are Arc-wrapped and shared across clones, we check
+        // if this is the final reference before stopping the clock thread.
+        if Arc::strong_count(&self.shutdown) == 1 {
+            self.shutdown.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -413,6 +418,11 @@ impl Display for ConnectionClock {
 
 impl Drop for ConnectionClock {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Relaxed);
+        // Only signal shutdown when this is the last clone being dropped.
+        // Since all fields are Arc-wrapped and shared across clones, we check
+        // if this is the final reference before stopping the clock thread.
+        if Arc::strong_count(&self.shutdown) == 1 {
+            self.shutdown.store(true, Ordering::Relaxed);
+        }
     }
 }

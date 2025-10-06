@@ -29,7 +29,8 @@ use std::{
 // Use non-standard port outside the privileged range to avoid needing privs
 const TEST_BGP_PORT: u16 = 10179;
 
-// XXX: Add test impl of BgpConnection for FSM tests.
+// XXX: add an iBGP option for the tests
+// XXX: Add test impl of BgpConnection (and Clock?) for FSM tests.
 //      The DUT will still have a SessionRunner & timers, but the test peer will
 //      be simulated by test code + will inject different events into the DUT's
 //      FSM event queue so we can test all events in each state. We should have
@@ -327,7 +328,11 @@ fn basic_peering_helper<
         .expect("manual start session two");
 
     wait_for_eq!(
-        r1_session.state(),
+        {
+            let state = r1_session.state();
+            println!("r1_session.state(): {state}");
+            state
+        },
         FsmStateKind::Established,
         "r1 state should move to Established after manual start of r2"
     );
@@ -412,12 +417,7 @@ fn basic_update_helper<
     let r1 = &test_routers[0];
     let r2 = &test_routers[1];
 
-    // originate a prefix
-    r1.router
-        .create_origin4(vec![ip!("1.2.3.0/24")])
-        .expect("originate");
-
-    // once we reach established the originated routes should have propagated
+    // let the session get into established state
     let r1_session = r1
         .router
         .get_session(r2_addr.ip())
@@ -429,9 +429,16 @@ fn basic_update_helper<
     wait_for_eq!(r1_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
+    // originate a prefix
+    r1.router
+        .create_origin4(vec![ip!("1.2.3.0/24")])
+        .expect("originate");
+
+    // create handle to rdb::Prefix -- create_origin4 takes messages::Prefix,
+    // so we can't pass this same handle to the earlier method call.
     let prefix = Prefix::V4(cidr!("1.2.3.0/24"));
 
-    wait_for_eq!(r2.router.db.get_prefix_paths(&prefix).is_empty(), false);
+    wait_for!(!r2.router.db.get_prefix_paths(&prefix).is_empty());
 
     // shut down r1 and ensure that the prefixes are withdrawn from r2 on
     // session timeout.
@@ -446,7 +453,7 @@ fn basic_update_helper<
         FsmStateKind::Established,
         "r2 state should NOT be established after shutdown of r1"
     );
-    wait_for_eq!(r2.router.db.get_prefix_paths(&prefix).is_empty(), true);
+    wait_for!(r2.router.db.get_prefix_paths(&prefix).is_empty());
 
     // Clean up properly
     r2.shutdown();

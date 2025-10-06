@@ -205,24 +205,6 @@ pub enum Error {
 
     #[error("Tcpkey database error: {0}")]
     TcpKey(String),
-
-    #[error("FsmEvent::ManualStop received")]
-    FsmManualStop,
-
-    #[error("FsmEvent::Reset received")]
-    FsmReset,
-
-    #[error("FsmEvent::HoldTimerExpires received")]
-    FsmHoldTimerExpires,
-
-    #[error("Unexpected FsmEvent::Message {0} received")]
-    FsmUnexpectedMessage(String),
-
-    #[error("FsmEvent {0} received, but not allowed in this context")]
-    FsmEventNotAllowed(String),
-
-    #[error("FsmEvent {0} received, but not expected")]
-    FsmUnexpectedEvent(String),
 }
 
 #[derive(Debug)]

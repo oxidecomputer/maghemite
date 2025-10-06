@@ -277,11 +277,9 @@ impl BgpConnection for BgpConnectionChannel {
         // Take the params (they should exist since we haven't started yet)
         let params = lock!(self.recv_loop_params).take();
         if let Some(params) = params {
-            connection_log_lite!(self.log,
-                info,
-                "spawning recv loop for {}", self.peer;
-                "creator" => self.creator.as_str(),
-                "peer" => format!("{}", self.peer)
+            connection_log!(self, info,
+                "spawning recv loop for {} (conn_id: {})",
+                self.peer(), self.conn_id.short();
             );
 
             let peer = self.peer;
@@ -360,7 +358,8 @@ impl BgpConnectionChannel {
                 Ok(msg) => {
                     connection_log_lite!(log,
                         debug,
-                        "recv {} msg from {peer}", msg.title();
+                        "recv {} msg from {peer} (conn_id: {})",
+                        msg.title(), conn_id.short();
                         "creator" => creator.as_str(),
                         "peer" => format!("{peer}"),
                         "message" => msg.title(),

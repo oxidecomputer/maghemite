@@ -39,10 +39,12 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
 
     pub fn run<Listener: BgpListener<Cnx>>(&self) {
         'listener: loop {
+            // We need to check the shutdown flag in the listener loop so we can
+            // still return even if bind() keeps failing and we're stuck
             if self.shutdown.load(Ordering::Acquire) {
                 dispatcher_log!(self,
                     info,
-                    "shutting down";
+                    "dispatcher shutdown from listener loop";
                     "listen_address" => &self.listen
                 );
                 self.shutdown.store(false, Ordering::Release);
@@ -62,10 +64,25 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                         "listen_address" => &self.listen
                     );
                     sleep(Duration::from_secs(1));
+                    // XXX: possible death loop?
                     continue 'listener;
                 }
             };
             'accept: loop {
+                // We also need to check the shutdown flag inside the accept
+                // loop, because we won't restart the listener loop unless we've
+                // encountered an error indicating we can't just call accept()
+                // again and we need a whole new listener.
+                if self.shutdown.load(Ordering::Acquire) {
+                    dispatcher_log!(self,
+                        info,
+                        "dispatcher shutdown from accept loop";
+                        "listen_address" => &self.listen
+                    );
+                    self.shutdown.store(false, Ordering::Release);
+                    break 'listener;
+                }
+
                 let accepted = match listener.accept(
                     self.log.clone(),
                     self.addr_to_session.clone(),
@@ -133,6 +150,10 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
     }
 
     pub fn shutdown(&self) {
+        dispatcher_log!(self, info,
+            "dispatcher received shutdown request, setting shutdown flag";
+            "listen_address" => &self.listen
+        );
         self.shutdown.store(true, Ordering::Release);
     }
 }

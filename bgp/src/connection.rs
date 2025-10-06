@@ -115,10 +115,10 @@ pub trait BgpListener<Cnx: BgpConnection> {
     where
         Self: Sized;
 
-    /// Accept a connection. If no connections are currently available this
-    /// function will block. This function may be called multiple times,
-    /// returning a new connection each time. Policy application is handled
-    /// by the Dispatcher after the addr_to_session lookup.
+    /// Accept a connection. This Listener is non-blocking, so the timeout
+    /// is used as a sleep between accept attempts. This function may be called
+    /// multiple times, returning a new connection each time. Policy application
+    /// is handled by the Dispatcher after the addr_to_session lookup.
     fn accept(
         &self,
         log: Logger,

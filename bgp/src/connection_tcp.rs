@@ -8,7 +8,7 @@ use crate::connection::{
     MAX_MD5SIG_KEYLEN,
 };
 use crate::error::Error;
-use crate::log::connection_log_lite;
+use crate::log::{connection_log, connection_log_lite};
 use crate::messages::{
     ErrorCode, ErrorSubcode, Header, Message, MessageType, NotificationMessage,
     OpenMessage, RouteRefreshMessage, UpdateMessage,
@@ -90,6 +90,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                 "at least one address required".into(),
             ))?;
         let listener = TcpListener::bind(addr)?;
+        listener.set_nonblocking(true)?;
         Ok(Self { listener, addr })
     }
 
@@ -101,7 +102,13 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         >,
         timeout: Duration,
     ) -> Result<BgpConnectionTcp, Error> {
-        let (conn, mut peer) = self.listener.accept()?;
+        let (conn, mut peer) = self.listener.accept().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::WouldBlock {
+                Error::Timeout
+            } else {
+                e.into()
+            }
+        })?;
 
         let ip = peer.ip().to_canonical();
         peer.set_ip(ip);
@@ -379,12 +386,8 @@ impl BgpConnection for BgpConnectionTcp {
         // Take the params (they should exist since we haven't started yet)
         let params = lock!(self.recv_loop_params).take();
         if let Some(params) = params {
-            connection_log_lite!(self.log,
-                info,
+            connection_log!(self, info,
                 "spawning recv loop for {}", self.peer;
-                "creator" => self.creator.as_str(),
-                "connection" => format!("{:?}", lock!(self.conn)),
-                "connection_peer" => format!("{}", self.peer)
             );
 
             let peer = self.peer;
@@ -410,8 +413,20 @@ impl Drop for BgpConnectionTcp {
     fn drop(&mut self) {
         #[cfg(target_os = "illumos")]
         self.md5_sig_drop();
-        self.dropped
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        connection_log!(self, trace,
+            "dropping connection {:?} (conn_id {})",
+            self.conn(), self.id().short();
+            "connection" => format!("{:?}", self.conn()),
+            "connection_id" => self.id().short(),
+            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+        );
+        // Only set dropped flag if this is the last reference.
+        // This prevents the recv loop from closing prematurely when intermediate
+        // clones are dropped during FSM state transitions (e.g., collision resolution).
+        if Arc::strong_count(&self.dropped) == 1 {
+            self.dropped
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
 
@@ -481,53 +496,85 @@ impl BgpConnectionTcp {
             if let Err(e) = conn.set_read_timeout(Some(timeout)) {
                 connection_log_lite!(log,
                     error,
-                    "failed to set read timeout: {e}";
+                    "failed to set read timeout in recv loop for {peer} (conn_id: {}): {e}",
+                    conn_id.short();
                     "creator" => creator.as_str(),
+                    "connection" => format!("{conn:?}"),
                     "connection_peer" => format!("{peer}"),
+                    "connection_id" => conn_id.short(),
                     "error" => format!("{e}")
                 );
                 return;
             }
         }
 
-        spawn(move || loop {
-            if dropped.load(std::sync::atomic::Ordering::Relaxed) {
-                break;
-            }
-            match Self::recv_msg(
-                &mut conn,
-                dropped.clone(),
-                &log,
-                creator.as_str(),
-            ) {
-                Ok(msg) => {
-                    connection_log_lite!(log,
-                        trace,
-                        "recv {} msg from {peer}", msg.title();
+        let l = log.clone();
+
+        spawn(move || {
+            loop {
+                if dropped.load(std::sync::atomic::Ordering::Relaxed) {
+                    connection_log_lite!(l, info,
+                        "recv loop dropped (peer: {peer}, conn_id: {}), closing..",
+                        conn_id.short();
                         "creator" => creator.as_str(),
                         "connection" => format!("{conn:?}"),
                         "connection_peer" => format!("{peer}"),
-                        "message" => msg.title(),
-                        "message_contents" => format!("{msg}")
+                        "connection_id" => conn_id.short()
                     );
-                    if let Err(e) = event_tx.send(FsmEvent::Connection(
-                        ConnectionEvent::Message { msg, conn_id },
-                    )) {
-                        connection_log_lite!(log,
-                            warn,
-                            "error sending event to {peer}: {e}";
+                    break;
+                }
+                match Self::recv_msg(
+                    &mut conn,
+                    dropped.clone(),
+                    &l,
+                    creator.as_str(),
+                ) {
+                    Ok(msg) => {
+                        connection_log_lite!(l, trace,
+                            "recv {} msg from {peer} (conn_id: {})",
+                            msg.title(), conn_id.short();
                             "creator" => creator.as_str(),
                             "connection" => format!("{conn:?}"),
                             "connection_peer" => format!("{peer}"),
+                            "connection_id" => conn_id.short(),
+                            "message" => msg.title(),
+                            "message_contents" => format!("{msg}")
+                        );
+                        if let Err(e) = event_tx.send(FsmEvent::Connection(
+                            ConnectionEvent::Message { msg, conn_id },
+                        )) {
+                            connection_log_lite!(l, warn,
+                                "error sending event to {peer}: {e}";
+                                "creator" => creator.as_str(),
+                                "connection" => format!("{conn:?}"),
+                                "connection_peer" => format!("{peer}"),
+                                "connection_id" => conn_id.short(),
+                                "error" => format!("{e}")
+                            );
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        connection_log_lite!(l, info,
+                            "recv_msg error (peer: {peer}, conn_id: {}): {e}",
+                            conn_id.short();
+                            "creator" => creator.as_str(),
+                            "connection" => format!("{conn:?}"),
+                            "connection_peer" => format!("{peer}"),
+                            "connection_id" => conn_id.short(),
                             "error" => format!("{e}")
                         );
-                        break;
                     }
                 }
-                Err(_e) => {
-                    //TODO log?
-                }
             }
+            connection_log_lite!(l, info,
+                "recv loop closed (peer: {peer}, conn_id: {})",
+                conn_id.short();
+                "creator" => creator.as_str(),
+                "connection" => format!("{conn:?}"),
+                "connection_peer" => format!("{peer}"),
+                "connection_id" => conn_id.short()
+            );
         });
     }
 

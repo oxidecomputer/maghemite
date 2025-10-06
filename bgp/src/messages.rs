@@ -776,12 +776,14 @@ impl Display for UpdateMessage {
 
         let mut p_str = String::new();
         for p in self.path_attributes.iter() {
-            p_str.push_str(&format!("{} ", p.value));
+            p_str.push_str(&format!("{}, ", p.value));
         }
 
         write!(
             f,
-            "Update[ path_attributes({p_str}) withdrawn({w_str}) nlri({n_str}) ]",
+            "Update[ path_attributes{p_str}) withdrawn({}) nlri({}) ]",
+            if !w_str.is_empty() { &w_str } else { "empty" },
+            if !n_str.is_empty() { &n_str } else { "empty" }
         )
     }
 }
@@ -1246,9 +1248,9 @@ impl PathAttributeValue {
 impl Display for PathAttributeValue {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            PathAttributeValue::Origin(po) => write!(f, "{po}"),
+            PathAttributeValue::Origin(po) => write!(f, "origin: {po}"),
             PathAttributeValue::AsPath(path_segs) => {
-                let mut path = String::new();
+                let mut path = String::from("as-path: [");
                 for seg in path_segs.iter() {
                     for val in seg.value.iter() {
                         let mut v = val.to_string();
@@ -1256,39 +1258,44 @@ impl Display for PathAttributeValue {
                         path.push_str(&v);
                     }
                 }
+                path.push(']');
                 write!(f, "{path}")
             }
-            PathAttributeValue::NextHop(nh) => write!(f, "{nh}"),
-            PathAttributeValue::MultiExitDisc(med) => write!(f, "{med}"),
-            PathAttributeValue::LocalPref(pref) => write!(f, "{pref}"),
+            PathAttributeValue::NextHop(nh) => write!(f, "next-hop: {nh}"),
+            PathAttributeValue::MultiExitDisc(med) => write!(f, "med: {med}"),
+            PathAttributeValue::LocalPref(pref) => {
+                write!(f, "local-pref: {pref}")
+            }
             // XXX: Do real formatting
             PathAttributeValue::Aggregator(agg) => write!(
                 f,
-                "{} {} {} {} {} {}",
+                "aggregator: [{} {} {} {} {} {}]",
                 agg[0], agg[1], agg[2], agg[3], agg[4], agg[5]
             ),
             PathAttributeValue::Communities(comms) => {
-                let mut comm_str = String::new();
+                let mut comm_str = String::from("communities: [");
                 for comm in comms.iter() {
                     let mut c = u32::from(*comm).to_string();
                     c.push(' ');
                     comm_str.push_str(&c);
                 }
+                comm_str.push(']');
                 write!(f, "{comm_str}")
             }
             PathAttributeValue::As4Path(path_segs) => {
-                let mut path = String::new();
+                let mut path = String::from("as4-path: [");
                 for seg in path_segs.iter() {
                     for val in seg.value.iter() {
                         path.push_str(val.to_string().as_str());
                     }
                 }
+                path.push(']');
                 write!(f, "{path}")
             }
             // XXX: Do real formatting
             PathAttributeValue::As4Aggregator(agg) => write!(
                 f,
-                "{} {} {} {} {} {} {} {}",
+                "as4-aggregator: [{} {} {} {} {} {} {} {}]",
                 agg[0], agg[1], agg[2], agg[3], agg[4], agg[5], agg[6], agg[7]
             ),
         }
@@ -1364,7 +1371,11 @@ pub enum PathOrigin {
 
 impl Display for PathOrigin {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{}", *self as u8)
+        match self {
+            PathOrigin::Igp => write!(f, "igp"),
+            PathOrigin::Egp => write!(f, "egp"),
+            PathOrigin::Incomplete => write!(f, "incomplete"),
+        }
     }
 }
 

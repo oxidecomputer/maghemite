@@ -2230,6 +2230,30 @@
           }
         ]
       },
+      "ConnectionId": {
+        "description": "Unique identifier for a BGP connection instance",
+        "type": "object",
+        "properties": {
+          "local": {
+            "description": "Local socket address for this connection",
+            "type": "string"
+          },
+          "remote": {
+            "description": "Remote socket address for this connection",
+            "type": "string"
+          },
+          "uuid": {
+            "description": "Unique identifier for this connection instance",
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "local",
+          "remote",
+          "uuid"
+        ]
+      },
       "DeleteStaticRoute4Request": {
         "type": "object",
         "properties": {
@@ -2440,7 +2464,7 @@
             "description": "Handler for Connection Collisions (RFC 4271 6.8)",
             "type": "string",
             "enum": [
-              "CollisionDetection"
+              "ConnectionCollision"
             ]
           },
           {
@@ -2612,6 +2636,14 @@
         "description": "A message history entry is a BGP message with an associated timestamp",
         "type": "object",
         "properties": {
+          "connection_id": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConnectionId"
+              }
+            ]
+          },
           "message": {
             "$ref": "#/components/schemas/Message"
           },

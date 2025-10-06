@@ -491,7 +491,8 @@ impl Db {
                             self,
                             error,
                             "error parsing bfd entry value {value:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
+                            "unit" => UNIT_PERSISTENT,
+                            "error" => format!("{e}")
                         );
                         return None;
                     }
@@ -503,6 +504,11 @@ impl Db {
     }
 
     pub fn create_origin4(&self, ps: &[Prefix4]) -> Result<(), Error> {
+        rdb_log!(self, info,
+            "create origin4: {ps:?}";
+            "unit" => UNIT_PERSISTENT
+        );
+
         let current = self.get_origin4()?;
         if !current.is_empty() {
             return Err(Error::Conflict("origin already exists".to_string()));

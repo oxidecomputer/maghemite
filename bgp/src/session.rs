@@ -2,21 +2,24 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::clock::SessionClock;
-use crate::config::PeerConfig;
-use crate::connection::{
-    BgpConnection, BgpConnector, ConnectionCreator, ConnectionId,
+use crate::{
+    clock::SessionClock,
+    config::PeerConfig,
+    connection::{
+        BgpConnection, BgpConnector, ConnectionCreator, ConnectionId,
+    },
+    error::{Error, ExpectationMismatch},
+    fanout::Fanout,
+    log::{collision_log, session_log, session_log_lite},
+    messages::{
+        AddPathElement, Afi, Capability, CeaseErrorSubcode, Community,
+        ErrorCode, ErrorSubcode, Message, MessageKind, NotificationMessage,
+        OpenMessage, PathAttributeValue, RouteRefreshMessage, Safi,
+        UpdateMessage,
+    },
+    policy::{CheckerResult, ShaperResult},
+    router::Router,
 };
-use crate::error::{Error, ExpectationMismatch};
-use crate::fanout::Fanout;
-use crate::log::{collision_log, session_log, session_log_lite};
-use crate::messages::{
-    AddPathElement, Afi, Capability, CeaseErrorSubcode, Community, ErrorCode,
-    ErrorSubcode, Message, MessageKind, NotificationMessage, OpenMessage,
-    PathAttributeValue, RouteRefreshMessage, Safi, UpdateMessage,
-};
-use crate::policy::{CheckerResult, ShaperResult};
-use crate::router::Router;
 use crossbeam_channel::{Receiver, Sender};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
@@ -24,13 +27,19 @@ pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fmt::{self, Display, Formatter};
-use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt::{self, Display, Formatter},
+    net::SocketAddr,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex, RwLock,
+    },
+    time::{Duration, Instant},
+};
 
+// XXX: Make this configurable
+const EVENT_RX_TIMEOUT: Duration = Duration::from_millis(100);
 const UNIT_SESSION_RUNNER: &str = "session_runner";
 
 #[derive(Debug)]
@@ -203,8 +212,8 @@ pub enum AdminEvent {
     ManualStart,
 
     /// Local system administrator manually stops the peer connection
-    // XXX: We have handlers for this, but no senders. This is likely how we'll
-    // want to implement `neighbor shutdown`.
+    // XXX: We have handlers for this, but no senders. This is likely how
+    // `neighbor shutdown` will be implemented.
     ManualStop,
 
     /// Fires when we need to ask the peer for a route refresh.
@@ -886,6 +895,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// away. Simply sets a flag that the session is to be shut down which will
     /// be acted upon in the state machine loop.
     pub fn shutdown(&self) {
+        session_log_lite!(self, info,
+            "session runner (peer {}) received shutdown request, setting shutdown flag",
+            self.neighbor.host.ip();
+        );
         self.shutdown.store(true, Ordering::Release);
     }
 
@@ -971,6 +984,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
+                session_log_lite!(self, info,
+                    "caught shutdown flag";
+                );
                 self.on_shutdown();
                 return;
             }
@@ -1105,7 +1121,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.cleanup_connections();
 
         loop {
-            let event = match self.event_rx.recv() {
+            // Check to see if a shutdown has been requested.
+            if self.shutdown.load(Ordering::Acquire) {
+                return FsmState::Idle;
+            }
+
+            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
                 Ok(event) => {
                     session_log_lite!(self, debug, "received fsm event {}",
                         event.title();
@@ -1113,6 +1134,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     );
                     event
                 }
+
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+
                 Err(e) => {
                     session_log_lite!(self, error, "event rx error: {e}";
                         "error" => format!("{e}")
@@ -1345,10 +1369,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
-                break FsmState::Idle;
+                return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv() {
+            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
                 Ok(event) => {
                     session_log_lite!(self,
                         debug,
@@ -1357,6 +1381,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     );
                     event
                 }
+
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+
                 Err(e) => {
                     session_log_lite!(self,
                         error,
@@ -1652,7 +1679,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// currently implemented, so for now we don't have special handling here.
     fn on_active(&self) -> FsmState<Cnx> {
         loop {
-            let event = match self.event_rx.recv() {
+            // Check to see if a shutdown has been requested.
+            if self.shutdown.load(Ordering::Acquire) {
+                return FsmState::Idle;
+            }
+
+            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
                 Ok(event) => {
                     session_log_lite!(self, debug, "received fsm event {}",
                         self.state();
@@ -1660,6 +1692,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     );
                     event
                 }
+
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+
                 Err(e) => {
                     session_log_lite!(self, error, "event rx error: {e}";
                         "error" => format!("{e}")
@@ -1931,13 +1966,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Waiting for open message from peer.
     fn on_open_sent(&self, conn: Cnx) -> FsmState<Cnx> {
         let om = loop {
-            let event = match self.event_rx.recv() {
+            // Check to see if a shutdown has been requested.
+            if self.shutdown.load(Ordering::Acquire) {
+                return FsmState::Idle;
+            }
+
+            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
                 Ok(event) => {
                     session_log!(self, debug, conn, "received fsm event {}",
                         event.title(); "event" => event.title()
                     );
                     event
                 }
+
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+
                 Err(e) => {
                     session_log!(self, error, conn, "event rx error: {e}";
                         "error" => format!("{e}")
@@ -2334,7 +2377,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Waiting for keepalive or notification from peer.
     fn on_open_confirm(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
-        let event = match self.event_rx.recv() {
+        // Check to see if a shutdown has been requested.
+        if self.shutdown.load(Ordering::Acquire) {
+            return FsmState::Idle;
+        }
+
+        let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
             Ok(event) => {
                 session_log!(self, debug, pc.conn,
                      "received fsm event";
@@ -2342,6 +2390,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 );
                 event
             }
+
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                return FsmState::OpenConfirm(pc)
+            }
+
             Err(e) => {
                 session_log!(self, error,  pc.conn,
                     "event rx error: {e}";
@@ -2686,8 +2739,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
-    // XXX: consolidate the get_conn / bump_msg_counter patterns in all FsmEvent handlers
-
     /// Handler for collisions when existing connection was in OpenConfirm state
     /// when the new connection was encountered.
     ///
@@ -2710,7 +2761,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         new: Cnx,
     ) -> FsmState<Cnx> {
         let om = loop {
-            let event = match self.event_rx.recv() {
+            // Check to see if a shutdown has been requested.
+            if self.shutdown.load(Ordering::Acquire) {
+                return FsmState::Idle;
+            }
+
+            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
                 Ok(event) => {
                     collision_log!(self, debug, new, exist.conn,
                         "received fsm event {}", event.title();
@@ -2718,6 +2774,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     );
                     event
                 }
+
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+
                 Err(e) => {
                     collision_log!(self, error, new, exist.conn,
                         "event rx error for ({e}), fsm transition to idle";
@@ -3242,7 +3301,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let mut new_open: Option<OpenMessage> = None;
         let mut exist_open: Option<OpenMessage> = None;
         let (om_new, om_exist) = loop {
-            let event = match self.event_rx.recv() {
+            // Check to see if a shutdown has been requested.
+            if self.shutdown.load(Ordering::Acquire) {
+                return FsmState::Idle;
+            }
+
+            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
                 Ok(event) => {
                     collision_log!(self, debug, new, exist,
                         "received fsm event {}", event.title();
@@ -3250,6 +3314,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     );
                     event
                 }
+
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+
                 Err(e) => {
                     collision_log!(self, error, new, exist,
                         "event rx error for ({e}), fsm transition to idle";
@@ -4036,6 +4103,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Sync up with peers.
     fn session_setup(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
+        // Check to see if a shutdown has been requested.
+        if self.shutdown.load(Ordering::Acquire) {
+            return FsmState::Idle;
+        }
+
         // Collect the prefixes this router is originating.
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
@@ -4050,15 +4122,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         // Ensure the router has a fanout entry for this peer.
-        let mut fanout = write_lock!(self.fanout);
-        fanout.add_egress(
+        write_lock!(self.fanout).add_egress(
             self.neighbor.host.ip(),
             crate::fanout::Egress {
                 event_tx: Some(self.event_tx.clone()),
                 log: self.log.clone(),
             },
         );
-        drop(fanout);
 
         self.send_keepalive(&pc.conn);
         lock!(pc.conn.clock().timers.keepalive_timer).restart();
@@ -4115,7 +4185,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Able to exchange update, notification and keepliave messages with peers.
     fn on_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
-        let event = match self.event_rx.recv() {
+        // Check to see if a shutdown has been requested.
+        if self.shutdown.load(Ordering::Acquire) {
+            return self.exit_established(pc);
+        }
+
+        let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
             Ok(event) => {
                 session_log!(self, debug, pc.conn,
                     "received fsm event";
@@ -4123,6 +4198,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 );
                 event
             }
+
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                return FsmState::Established(pc)
+            }
+
             Err(e) => {
                 //TODO possible death loop. Should we just panic here? Is it
                 // even possible to recover from an error here as it likely
@@ -4451,14 +4531,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let msg_kind = msg.kind();
 
                     if *conn_id != *pc.conn.id() {
-                        session_log!(self, warn, pc.conn,
-                            "rx {msg_kind} for unexpected known connection (conn_id: {}). closing..",
-                            conn_id.short();
-                            "message" => msg_kind,
-                            "message_contents" => format!("{msg}")
-                        );
                         if let Some(conn) = self.get_conn(conn_id) {
+                            session_log!(self, warn, pc.conn,
+                                "rx {msg_kind} for unexpected known connection (conn_id: {}). closing..",
+                                conn_id.short();
+                                "message" => msg_kind,
+                                "message_contents" => format!("{msg}")
+                            );
                             self.stop(Some(&conn), None, StopReason::FsmError);
+                        } else {
+                            session_log!(self, warn, pc.conn,
+                                "rx {msg_kind} for unknown connection (conn_id: {}). ignoring..",
+                                conn_id.short();
+                                "message" => msg_kind,
+                                "message_contents" => format!("{msg}")
+                            );
                         }
                         return FsmState::Established(pc);
                     }
@@ -4629,7 +4716,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     // Housekeeping items to do when a session shutdown is requested.
     pub fn on_shutdown(&self) {
-        session_log_lite!(self, info, "shutting down";);
+        session_log_lite!(self, info, "session runner (peer {}) shutting down",
+            self.neighbor.host.ip();
+        );
 
         // Go back to the beginning of the state machine.
         *(lock!(self.state)) = FsmStateKind::Idle;
@@ -4638,7 +4727,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.shutdown.store(false, Ordering::Release);
         self.running.store(false, Ordering::Release);
 
-        session_log_lite!(self, info, "shutdown complete";);
+        session_log_lite!(self, info, "session runner (peer {}) shutdown complete",
+            self.neighbor.host.ip();
+        );
     }
 
     /// Send an event to the state machine driving this peer session.
@@ -5048,6 +5139,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         lock!(self.message_history).send(out.clone(), None);
 
         self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
+
+        session_log!(self, info, conn, "sending update";
+            "message" => "update",
+            "message_contents" => format!("{out}")
+        );
 
         if let Err(e) = conn.send(out) {
             session_log!(self, error, conn,
