@@ -954,9 +954,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         lock!(self.connections).get(&primary_id).cloned()
     }
 
-    /// Clean up connections when transitioning to Idle state
+    /// Clean up all connections associated with this SessionRunner
     fn cleanup_connections(&self) {
         let mut connections = lock!(self.connections);
+        // Disable timers before dropping to ensure timers stop immediately
+        for conn in connections.values() {
+            conn.clock().disable_all();
+        }
         connections.clear();
         *lock!(self.primary_connection) = None;
     }
@@ -985,7 +989,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
                 session_log_lite!(self, info,
-                    "caught shutdown flag";
+                    "session runner (peer: {}) caught shutdown flag",
+                    self.neighbor.host.ip();
                 );
                 self.on_shutdown();
                 return;
@@ -1015,8 +1020,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 session_log_lite!(
                     self,
                     info,
-                    "fsm transition {} -> {}",
-                    previous,
+                    "fsm transition {previous} -> {}",
                     current.kind()
                 );
                 match current.kind() {
@@ -1089,6 +1093,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Initial state. Refuse all incoming BGP connections. No resources
     /// allocated to peer.
     fn idle(&self) -> FsmState<Cnx> {
+        // Clean up connection registry
+        self.cleanup_connections();
+
         // IdleHoldTimer is the mechanism by which maghemite implements
         // DampPeerOscillation. This holds the peer in Idle until the timer has
         // popped, preventing the connection from flapping. The interval is
@@ -1099,6 +1106,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             if ihl.interval.is_zero() {
                 // If IdleHoldTimer is not configured, send IdleHoldTimerExpires
                 // so we immediately move into the next state.
+                ihl.stop();
                 if let Err(e) = self
                     .event_tx
                     .send(FsmEvent::Session(SessionEvent::IdleHoldTimerExpires))
@@ -1111,14 +1119,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             } else {
                 // If IdleHoldTimer is configured (non-zero), start the timer.
-                // No events will be handled until this timer pops, except for
-                // explicit adminstrative start/restart events.
+                // No events will move the FSM out of Idle until this timer pops
+                // except for explicit adminstrative start/restart events.
                 ihl.restart();
             }
         }
-
-        // Clean up connection registry
-        self.cleanup_connections();
 
         loop {
             // Check to see if a shutdown has been requested.
@@ -1154,7 +1159,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
                     AdminEvent::ManualStart | AdminEvent::Reset => {
-                        lock!(self.clock.timers.idle_hold_timer).disable();
+                        lock!(self.clock.timers.idle_hold_timer).stop();
 
                         if lock!(self.session).passive_tcp_establishment {
                             lock!(self.clock.timers.connect_retry_timer).stop();
@@ -1189,11 +1194,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     // DampPeerOscillations period has ended.
                     // Move into the next FSM State.
                     SessionEvent::IdleHoldTimerExpires => {
+                        lock!(self.clock.timers.idle_hold_timer).stop();
                         self.counters
                             .idle_hold_timer_expirations
                             .fetch_add(1, Ordering::Relaxed);
-
-                        lock!(self.clock.timers.idle_hold_timer).disable();
 
                         if lock!(self.session).passive_tcp_establishment {
                             lock!(self.clock.timers.connect_retry_timer).stop();
@@ -1347,7 +1351,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             &session_info,
         ) {
             Err(e) => {
-                session_log_lite!(self, warn, "initial connect attempt failed";
+                session_log_lite!(self, warn, "initial connect attempt failed: {e}";
                     "error" => format!("{e}")
                 )
             }
@@ -1479,17 +1483,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 return FsmState::Active;
                             }
                             Ok(conn) => {
-                                if let Err(e) =
-                                    self.event_tx.send(FsmEvent::Session(
-                                        SessionEvent::TcpConnectionConfirmed(
-                                            conn,
-                                        ),
-                                    ))
-                                {
-                                    session_log_lite!(self, error,
+                                match self.event_tx.send(FsmEvent::Session(
+                                    SessionEvent::TcpConnectionConfirmed(conn),
+                                )) {
+                                    Err(e) => session_log_lite!(self, error,
                                         "failed to send TcpConnectionConfirmed event: {e}";
                                         "error" => format!("{e}")
-                                    );
+                                    ),
+                                    Ok(()) => session_log_lite!(self, error,
+                                        "subsequent connect attempt successful";
+                                    ),
                                 }
                                 lock!(self.clock.timers.connect_retry_timer)
                                     .restart();
@@ -3446,6 +3449,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 FsmEvent::Connection(connection_event) => {
                     match connection_event {
+                        // XXX: Make sure we always log the message type + conn_id
                         ConnectionEvent::Message { msg, ref conn_id } => {
                             let msg_kind = msg.kind();
                             match self.collision_conn_kind(conn_id, exist.id(), new.id()) {
@@ -4012,17 +4016,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         //      connection and assume it matches the other?
         if new.id != exist.id {
             collision_log!(self, error, new.conn, exist.conn,
-                "collision error: rx BGP-ID mismatch, {} (new conn) != {} (existing conn). fsm transition to idle",
-                new.id, exist.id;
+                "collision error: rx BGP-ID mismatch, {} (new conn {}) != {} (existing conn {}). fsm transition to idle",
+                new.id,
+                new.conn.id().short(),
+                exist.id,
+                exist.conn.id().short();
             );
-
             return FsmState::Idle;
         } else if new.asn != exist.asn {
             collision_log!(self, error, new.conn, exist.conn,
-                "collision error: rx ASN mismatch, {} (new conn) != {} (existing conn). fsm transition to idle",
-                new.asn, exist.asn;
+                "collision error: rx ASN mismatch, {} (new conn {}) != {} (existing conn {}). fsm transition to idle",
+                new.asn,
+                new.conn.id().short(),
+                exist.asn,
+                exist.conn.id().short();
             );
-
             return FsmState::Idle;
         }
 
@@ -4052,8 +4060,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
          */
         if self.id > new.id {
             collision_log!(self, info, new.conn, exist.conn,
-                "collision resolution: existing conn wins with higher RID ({} > {})",
-                self.id, new.id;
+                "collision resolution: existing conn ({}) wins with higher RID ({} > {})",
+                exist.conn.id().short(), self.id, new.id;
             );
 
             // Our RID is higher, we win. Kill `new`. Kill it to death.
@@ -4067,8 +4075,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // Our RID is lower, we lose. Setup new conn and leave existing for dead
         collision_log!(self, info, new.conn, exist.conn,
-            "collision resolution: new conn wins ({} >= {})",
-            new.id, self.id;
+            "collision resolution: new conn ({}) wins ({} >= {})",
+            new.conn.id().short(), new.id, self.id;
         );
 
         self.stop(Some(&exist.conn), None, StopReason::CollisionResolution);
@@ -4719,18 +4727,34 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     // Housekeeping items to do when a session shutdown is requested.
     pub fn on_shutdown(&self) {
-        session_log_lite!(self, info, "session runner (peer {}) shutting down",
+        session_log_lite!(self, info,
+            "session runner (peer {}): shutdown start",
             self.neighbor.host.ip();
         );
 
-        // Go back to the beginning of the state machine.
-        *(lock!(self.state)) = FsmStateKind::Idle;
+        self.cleanup_connections();
+
+        // Disable session-level timers
+        self.clock.stop_all();
+
+        let previous = self.state();
+        let next = FsmStateKind::Idle;
+        if previous != next {
+            session_log_lite!(
+                self,
+                info,
+                "fsm transition {previous} -> {next}";
+            );
+            // Go back to the beginning of the state machine.
+            *(lock!(self.state)) = next;
+        }
 
         // Reset the shutdown signal and running flag.
         self.shutdown.store(false, Ordering::Release);
         self.running.store(false, Ordering::Release);
 
-        session_log_lite!(self, info, "session runner (peer {}) shutdown complete",
+        session_log_lite!(self, info,
+            "session runner (peer {}): shutdown complete",
             self.neighbor.host.ip();
         );
     }

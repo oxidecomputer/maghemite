@@ -131,17 +131,10 @@ impl Timer {
         self.enable();
     }
 
-    /// Set the remaining time on the timer to 0
-    pub fn zero(&self) {
-        // triggers a saturating sub for the entire interval,
-        // ensuring the clock always drops to 0
-        self.tick(self.interval)
-    }
-
     /// Disable and zero the timer.
     pub fn stop(&self) {
         self.disable();
-        self.zero();
+        self.reset();
     }
 }
 
@@ -246,10 +239,10 @@ impl SessionClock {
         }
     }
 
-    pub fn disable_all(&self) {
+    pub fn stop_all(&self) {
         let timers = &self.timers;
-        lock!(timers.connect_retry_timer).disable();
-        lock!(timers.idle_hold_timer).disable();
+        lock!(timers.connect_retry_timer).stop();
+        lock!(timers.idle_hold_timer).stop();
     }
 }
 

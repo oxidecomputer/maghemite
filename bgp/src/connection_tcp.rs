@@ -411,19 +411,19 @@ impl BgpConnection for BgpConnectionTcp {
 
 impl Drop for BgpConnectionTcp {
     fn drop(&mut self) {
-        #[cfg(target_os = "illumos")]
-        self.md5_sig_drop();
-        connection_log!(self, trace,
-            "dropping connection {:?} (conn_id {})",
-            self.conn(), self.id().short();
-            "connection" => format!("{:?}", self.conn()),
-            "connection_id" => self.id().short(),
-            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
-        );
         // Only set dropped flag if this is the last reference.
         // This prevents the recv loop from closing prematurely when intermediate
         // clones are dropped during FSM state transitions (e.g., collision resolution).
         if Arc::strong_count(&self.dropped) == 1 {
+            connection_log!(self, trace,
+                "dropping connection {:?} (conn_id {})",
+                self.conn(), self.id().short();
+                "connection" => format!("{:?}", self.conn()),
+                "connection_id" => self.id().short(),
+                "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+            );
+            #[cfg(target_os = "illumos")]
+            self.md5_sig_drop();
             self.dropped
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }

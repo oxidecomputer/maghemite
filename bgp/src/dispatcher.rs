@@ -38,13 +38,18 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
     }
 
     pub fn run<Listener: BgpListener<Cnx>>(&self) {
+        dispatcher_log!(self,
+            info,
+            "dispatcher started";
+            "listen_address" => &self.listen
+        );
         'listener: loop {
             // We need to check the shutdown flag in the listener loop so we can
             // still return even if bind() keeps failing and we're stuck
             if self.shutdown.load(Ordering::Acquire) {
                 dispatcher_log!(self,
                     info,
-                    "dispatcher shutdown from listener loop";
+                    "dispatcher caught shutdown flag from listener loop";
                     "listen_address" => &self.listen
                 );
                 self.shutdown.store(false, Ordering::Release);
@@ -76,7 +81,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                 if self.shutdown.load(Ordering::Acquire) {
                     dispatcher_log!(self,
                         info,
-                        "dispatcher shutdown from accept loop";
+                        "dispatcher caught shutdown flag from accept loop";
                         "listen_address" => &self.listen
                     );
                     self.shutdown.store(false, Ordering::Release);
@@ -147,6 +152,11 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                 }
             }
         }
+        dispatcher_log!(self,
+            info,
+            "dispatcher shutdown complete";
+            "listen_address" => &self.listen
+        );
     }
 
     pub fn shutdown(&self) {
