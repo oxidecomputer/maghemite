@@ -1340,34 +1340,36 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // Start with an initial connection attempt using BgpConnector
         session_log_lite!(self, debug, "starting initial connect attempt";);
-        let session_info = lock!(self.session);
-        match Cnx::Connector::connect(
-            self.neighbor.host,
-            self.clock.resolution,
-            min_ttl,
-            md5_auth_key.clone(),
-            self.log.clone(),
-            self.event_tx.clone(),
-            &session_info,
-        ) {
-            Err(e) => {
-                session_log_lite!(self, warn, "initial connect attempt failed: {e}";
-                    "error" => format!("{e}")
-                )
-            }
-            Ok(conn) => {
-                session_log!(self, debug, conn,
-                    "initial connect attempt succeeded (peer: {}, conn_id: {})",
-                    conn.peer(), conn.id().short();
-                );
-                if let Err(e) = self.event_tx.send(FsmEvent::Session(
-                    SessionEvent::TcpConnectionConfirmed(conn),
-                )) {
-                    session_log_lite!(self,
-                        error,
-                        "failed to send TcpConnectionConfirmed event: {e}";
+        {
+            let session_info = lock!(self.session);
+            match Cnx::Connector::connect(
+                self.neighbor.host,
+                self.clock.resolution,
+                min_ttl,
+                md5_auth_key.clone(),
+                self.log.clone(),
+                self.event_tx.clone(),
+                &session_info,
+            ) {
+                Err(e) => {
+                    session_log_lite!(self, warn, "initial connect attempt failed: {e}";
                         "error" => format!("{e}")
+                    )
+                }
+                Ok(conn) => {
+                    session_log!(self, debug, conn,
+                        "initial connect attempt succeeded (peer: {}, conn_id: {})",
+                        conn.peer(), conn.id().short();
                     );
+                    if let Err(e) = self.event_tx.send(FsmEvent::Session(
+                        SessionEvent::TcpConnectionConfirmed(conn),
+                    )) {
+                        session_log_lite!(self,
+                            error,
+                            "failed to send TcpConnectionConfirmed event: {e}";
+                            "error" => format!("{e}")
+                        );
+                    }
                 }
             }
         }
@@ -1439,51 +1441,57 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 },
 
-                FsmEvent::Session(session_event) => match session_event {
-                    /*
-                     * In response to the ConnectRetryTimer_Expires event (Event 9), the
-                     * local system:
-                     *
-                     *   - drops the TCP connection,
-                     *
-                     *   - restarts the ConnectRetryTimer,
-                     *
-                     *   - stops the DelayOpenTimer and resets the timer to zero,
-                     *
-                     *   - initiates a TCP connection to the other BGP peer,
-                     *
-                     *   - continues to listen for a connection that may be initiated by
-                     *     the remote BGP peer, and
-                     *
-                     *   - stays in the Connect state.
-                     */
-                    SessionEvent::ConnectRetryTimerExpires => {
-                        self.counters
-                            .connection_retries
-                            .fetch_add(1, Ordering::Relaxed);
+                FsmEvent::Session(session_event) => {
+                    match session_event {
+                        /*
+                         * In response to the ConnectRetryTimer_Expires event (Event 9), the
+                         * local system:
+                         *
+                         *   - drops the TCP connection,
+                         *
+                         *   - restarts the ConnectRetryTimer,
+                         *
+                         *   - stops the DelayOpenTimer and resets the timer to zero,
+                         *
+                         *   - initiates a TCP connection to the other BGP peer,
+                         *
+                         *   - continues to listen for a connection that may be initiated by
+                         *     the remote BGP peer, and
+                         *
+                         *   - stays in the Connect state.
+                         */
+                        SessionEvent::ConnectRetryTimerExpires => {
+                            self.counters
+                                .connection_retries
+                                .fetch_add(1, Ordering::Relaxed);
 
-                        // Attempt to establish a new connection using BgpConnector
-                        let session_info = lock!(self.session);
-                        match Cnx::Connector::connect(
-                            self.neighbor.host,
-                            Duration::from_millis(100),
-                            min_ttl,
-                            md5_auth_key.clone(),
-                            self.log.clone(),
-                            self.event_tx.clone(),
-                            &session_info,
-                        ) {
-                            Err(e) => {
-                                session_log_lite!(self, warn,
-                                    "subsequent connect attempt failed";
-                                    "error" => format!("{e}")
-                                );
-                                lock!(self.clock.timers.connect_retry_timer)
-                                    .stop();
-                                return FsmState::Active;
-                            }
-                            Ok(conn) => {
-                                match self.event_tx.send(FsmEvent::Session(
+                            // Attempt to establish a new connection using BgpConnector
+                            {
+                                let session_info = lock!(self.session);
+                                match Cnx::Connector::connect(
+                                    self.neighbor.host,
+                                    Duration::from_millis(100),
+                                    min_ttl,
+                                    md5_auth_key.clone(),
+                                    self.log.clone(),
+                                    self.event_tx.clone(),
+                                    &session_info,
+                                ) {
+                                    Err(e) => {
+                                        session_log_lite!(self, warn,
+                                            "subsequent connect attempt failed";
+                                            "error" => format!("{e}")
+                                        );
+                                        lock!(
+                                            self.clock
+                                                .timers
+                                                .connect_retry_timer
+                                        )
+                                        .stop();
+                                        return FsmState::Active;
+                                    }
+                                    Ok(conn) => {
+                                        match self.event_tx.send(FsmEvent::Session(
                                     SessionEvent::TcpConnectionConfirmed(conn),
                                 )) {
                                     Err(e) => session_log_lite!(self, error,
@@ -1494,96 +1502,102 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "subsequent connect attempt successful";
                                     ),
                                 }
-                                lock!(self.clock.timers.connect_retry_timer)
-                                    .restart();
-                                continue;
-                            }
-                        }
-                    }
-
-                    /*
-                     * If the TCP connection succeeds (Event 16 or Event 17), the local
-                     * system checks the DelayOpen attribute prior to processing.  If the
-                     * DelayOpen attribute is set to TRUE, the local system:
-                     *
-                     *   - stops the ConnectRetryTimer (if running) and sets the
-                     *     ConnectRetryTimer to zero,
-                     *
-                     *   - sets the DelayOpenTimer to the initial value, and
-                     *
-                     *   - stays in the Connect state.
-                     *
-                     * If the DelayOpen attribute is set to FALSE, the local system:
-                     *
-                     *   - stops the ConnectRetryTimer (if running) and sets the
-                     *     ConnectRetryTimer to zero,
-                     *
-                     *   - completes BGP initialization
-                     *
-                     *   - sends an OPEN message to its peer,
-                     *
-                     *   - sets the HoldTimer to a large value, and
-                     *
-                     *   - changes its state to OpenSent.
-                     *
-                     * A HoldTimer value of 4 minutes is suggested.
-                     */
-                    SessionEvent::Connected(accepted)
-                    | SessionEvent::TcpConnectionConfirmed(accepted) => {
-                        match accepted.creator() {
-                            ConnectionCreator::Dispatcher => {
-                                session_log!(self, info, accepted,
-                                    "accepted inbound connection from {}", accepted.peer();
-                                );
-                                self.counters
-                                    .passive_connections_accepted
-                                    .fetch_add(1, Ordering::Relaxed);
-                            }
-                            ConnectionCreator::Connector => {
-                                session_log!(self, info, accepted,
-                                    "outbound connection to {} accepted", accepted.peer();
-                                );
-                                self.counters
-                                    .active_connections_accepted
-                                    .fetch_add(1, Ordering::Relaxed);
+                                        lock!(
+                                            self.clock
+                                                .timers
+                                                .connect_retry_timer
+                                        )
+                                        .restart();
+                                        continue;
+                                    }
+                                }
                             }
                         }
 
-                        self.register_conn(&accepted);
+                        /*
+                         * If the TCP connection succeeds (Event 16 or Event 17), the local
+                         * system checks the DelayOpen attribute prior to processing.  If the
+                         * DelayOpen attribute is set to TRUE, the local system:
+                         *
+                         *   - stops the ConnectRetryTimer (if running) and sets the
+                         *     ConnectRetryTimer to zero,
+                         *
+                         *   - sets the DelayOpenTimer to the initial value, and
+                         *
+                         *   - stays in the Connect state.
+                         *
+                         * If the DelayOpen attribute is set to FALSE, the local system:
+                         *
+                         *   - stops the ConnectRetryTimer (if running) and sets the
+                         *     ConnectRetryTimer to zero,
+                         *
+                         *   - completes BGP initialization
+                         *
+                         *   - sends an OPEN message to its peer,
+                         *
+                         *   - sets the HoldTimer to a large value, and
+                         *
+                         *   - changes its state to OpenSent.
+                         *
+                         * A HoldTimer value of 4 minutes is suggested.
+                         */
+                        SessionEvent::Connected(accepted)
+                        | SessionEvent::TcpConnectionConfirmed(accepted) => {
+                            match accepted.creator() {
+                                ConnectionCreator::Dispatcher => {
+                                    session_log!(self, info, accepted,
+                                        "accepted inbound connection from {}", accepted.peer();
+                                    );
+                                    self.counters
+                                        .passive_connections_accepted
+                                        .fetch_add(1, Ordering::Relaxed);
+                                }
+                                ConnectionCreator::Connector => {
+                                    session_log!(self, info, accepted,
+                                        "outbound connection to {} accepted", accepted.peer();
+                                    );
+                                    self.counters
+                                        .active_connections_accepted
+                                        .fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
 
-                        // DelayOpen can be configured for a peer, but its functionality
-                        // is not implemented.  Follow DelayOpen == false instructions.
+                            self.register_conn(&accepted);
 
-                        lock!(self.clock.timers.connect_retry_timer).stop();
+                            // DelayOpen can be configured for a peer, but its functionality
+                            // is not implemented.  Follow DelayOpen == false instructions.
 
-                        if let Err(e) = self.send_open(&accepted) {
-                            session_log!(self, error, accepted,
-                                "failed to send open, fsm transition to idle";
-                                "error" => format!("{e}")
+                            lock!(self.clock.timers.connect_retry_timer).stop();
+
+                            if let Err(e) = self.send_open(&accepted) {
+                                session_log!(self, error, accepted,
+                                    "failed to send open, fsm transition to idle";
+                                    "error" => format!("{e}")
+                                );
+                                return FsmState::Idle;
+                            }
+
+                            lock!(accepted.clock().timers.hold_timer).restart();
+
+                            return FsmState::OpenSent(accepted);
+                        }
+
+                        // Event 13
+                        SessionEvent::IdleHoldTimerExpires => {
+                            lock!(self.clock.timers.connect_retry_timer).stop();
+                            self.connect_retry_counter
+                                .fetch_add(1, Ordering::Relaxed);
+
+                            session_log_lite!(self,
+                                warn,
+                                "{} event not allowed in this state, fsm transition to idle",
+                                session_event.title();
                             );
+
                             return FsmState::Idle;
                         }
-
-                        lock!(accepted.clock().timers.hold_timer).restart();
-
-                        return FsmState::OpenSent(accepted);
                     }
-
-                    // Event 13
-                    SessionEvent::IdleHoldTimerExpires => {
-                        lock!(self.clock.timers.connect_retry_timer).stop();
-                        self.connect_retry_counter
-                            .fetch_add(1, Ordering::Relaxed);
-
-                        session_log_lite!(self,
-                            warn,
-                            "{} event not allowed in this state, fsm transition to idle",
-                            session_event.title();
-                        );
-
-                        return FsmState::Idle;
-                    }
-                },
+                }
 
                 /*
                  * In response to any other events (Events 8, 10-11, 13, 19, 23,
