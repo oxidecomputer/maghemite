@@ -4,11 +4,11 @@
 
 use crate::connection::{BgpConnection, ConnectionId};
 use crate::session::{ConnectionEvent, FsmEvent, SessionEvent};
-use crossbeam_channel::Sender;
 use mg_common::lock;
 use slog::{error, Logger};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn, JoinHandle};
 use std::time::Duration;

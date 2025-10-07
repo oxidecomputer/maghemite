@@ -13,7 +13,6 @@ use crate::{
         AdminEvent, FsmEvent, FsmStateKind, SessionEndpoint, SessionInfo,
     },
 };
-use crossbeam_channel::unbounded;
 use lazy_static::lazy_static;
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
@@ -22,7 +21,7 @@ use rdb::{Asn, Prefix};
 use std::{
     collections::BTreeMap,
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::{mpsc::channel, Arc, Mutex},
     thread::spawn,
 };
 
@@ -167,7 +166,7 @@ where
         // Set up all peer sessions for this router
         for neighbor in &logical_router.neighbors {
             // Each session gets its own channel pair for FsmEvents
-            let (event_tx, event_rx) = unbounded();
+            let (event_tx, event_rx) = channel();
             let peer_config = neighbor.peer_config.clone();
 
             router

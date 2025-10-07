@@ -7,22 +7,29 @@
 /// code in this file is to implement BgpListener and BgpConnection such that
 /// the core functionality of the BGP upper-half in `session.rs` may be tested
 /// rapidly using a simulated network.
-use crate::clock::ConnectionClock;
-use crate::connection::{
-    BgpConnection, BgpConnector, BgpListener, ConnectionCreator, ConnectionId,
+use crate::{
+    clock::ConnectionClock,
+    connection::{
+        BgpConnection, BgpConnector, BgpListener, ConnectionCreator,
+        ConnectionId,
+    },
+    error::Error,
+    log::{connection_log, connection_log_lite},
+    messages::Message,
+    session::{ConnectionEvent, FsmEvent, SessionEndpoint, SessionInfo},
 };
-use crate::error::Error;
-use crate::log::{connection_log, connection_log_lite};
-use crate::messages::Message;
-use crate::session::{ConnectionEvent, FsmEvent, SessionEndpoint, SessionInfo};
-use crossbeam_channel::{unbounded, RecvTimeoutError};
 use mg_common::lock;
 use slog::Logger;
-use std::collections::{BTreeMap, HashMap};
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
-use std::thread::spawn;
-use std::time::Duration;
+use std::{
+    collections::{BTreeMap, HashMap},
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    sync::{
+        mpsc::{channel as mpsc_channel, Receiver, RecvTimeoutError, Sender},
+        Arc, Mutex,
+    },
+    thread::spawn,
+    time::Duration,
+};
 
 const UNIT_CONNECTION: &str = "connection_channel";
 
@@ -79,7 +86,7 @@ impl Network {
 
     /// Bind to the specified address and return a listener.
     fn bind(&self, sa: SocketAddr) -> Listener {
-        let (tx, rx) = unbounded();
+        let (tx, rx) = mpsc_channel();
         lock!(self.endpoints).insert(sa, tx);
         Listener { rx }
     }
@@ -469,8 +476,6 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
 
 // BIDI
 
-use crossbeam_channel::{Receiver, Sender};
-
 /// A combined (duplex) mpsc sender/receiver.
 pub struct Endpoint<T> {
     pub rx: Receiver<T>,
@@ -486,7 +491,7 @@ impl<T> Endpoint<T> {
 /// Analagous to crossbeam_channel::unbounded for bidirectional endpoints.
 #[allow(dead_code)]
 pub fn channel<T>() -> (Endpoint<T>, Endpoint<T>) {
-    let (tx_a, rx_b) = unbounded();
-    let (tx_b, rx_a) = unbounded();
+    let (tx_a, rx_b) = mpsc_channel();
+    let (tx_b, rx_a) = mpsc_channel();
     (Endpoint::new(rx_a, tx_a), Endpoint::new(rx_b, tx_b))
 }

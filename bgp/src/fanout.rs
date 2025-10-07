@@ -6,10 +6,10 @@ use crate::connection::BgpConnection;
 use crate::messages::UpdateMessage;
 use crate::session::{AdminEvent, FsmEvent};
 use crate::{COMPONENT_BGP, MOD_NEIGHBOR};
-use crossbeam_channel::Sender;
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
+use std::sync::mpsc::Sender;
 
 const UNIT_FANOUT: &str = "fanout";
 

@@ -2,30 +2,36 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::clock::ConnectionClock;
-use crate::connection::{
-    BgpConnection, BgpConnector, BgpListener, ConnectionCreator, ConnectionId,
-    MAX_MD5SIG_KEYLEN,
+use crate::{
+    clock::ConnectionClock,
+    connection::{
+        BgpConnection, BgpConnector, BgpListener, ConnectionCreator,
+        ConnectionId, MAX_MD5SIG_KEYLEN,
+    },
+    error::Error,
+    log::{connection_log, connection_log_lite},
+    messages::{
+        ErrorCode, ErrorSubcode, Header, Message, MessageType,
+        NotificationMessage, OpenMessage, RouteRefreshMessage, UpdateMessage,
+    },
+    session::{
+        ConnectionEvent, FsmEvent, SessionEndpoint, SessionEvent, SessionInfo,
+    },
 };
-use crate::error::Error;
-use crate::log::{connection_log, connection_log_lite};
-use crate::messages::{
-    ErrorCode, ErrorSubcode, Header, Message, MessageType, NotificationMessage,
-    OpenMessage, RouteRefreshMessage, UpdateMessage,
-};
-use crate::session::{ConnectionEvent, FsmEvent, SessionEndpoint, SessionInfo};
-use crossbeam_channel::Sender;
 use libc::{c_int, sockaddr_storage};
 use mg_common::lock;
 use slog::Logger;
-use std::collections::BTreeMap;
-use std::io::Read;
-use std::io::Write;
-use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
-use std::thread::spawn;
-use std::time::Duration;
+use std::sync::mpsc::Sender;
+use std::{
+    collections::BTreeMap,
+    io::Read,
+    io::Write,
+    net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    sync::atomic::AtomicBool,
+    sync::{Arc, Mutex},
+    thread::spawn,
+    time::Duration,
+};
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
 use {crate::log::connection_log, std::os::fd::AsRawFd};
 
@@ -405,7 +411,6 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
             );
 
             // Send the TcpConnectionConfirmed event
-            use crate::session::SessionEvent;
             if let Err(e) = event_tx.send(FsmEvent::Session(
                 SessionEvent::TcpConnectionConfirmed(conn),
             )) {

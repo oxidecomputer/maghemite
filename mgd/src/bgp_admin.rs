@@ -17,7 +17,6 @@ use bgp::{
     session::{AdminEvent, FsmEvent, SessionEndpoint, SessionInfo},
     BGP_PORT,
 };
-use crossbeam_channel::{unbounded, Sender};
 use dropshot::{
     endpoint, ApiDescription, ClientErrorStatusCode, HttpError,
     HttpResponseDeleted, HttpResponseOk, HttpResponseUpdatedNoContent, Query,
@@ -28,6 +27,7 @@ use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 
 const UNIT_BGP: &str = "bgp";
@@ -913,7 +913,7 @@ pub(crate) mod helpers {
             "params" => format!("{rq:#?}")
         );
 
-        let (event_tx, event_rx) = unbounded();
+        let (event_tx, event_rx) = channel();
 
         // XXX: Do we really want both rq and info?
         //      SessionInfo and Neighbor types could probably be merged.

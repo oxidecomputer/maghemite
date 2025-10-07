@@ -18,7 +18,6 @@ use crate::session::{
     AdminEvent, FsmEvent, NeighborInfo, SessionEndpoint, SessionInfo,
     SessionRunner,
 };
-use crossbeam_channel::{Receiver, Sender};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db};
 use rdb::{Prefix4, Prefix6};
@@ -29,6 +28,7 @@ use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::spawn;

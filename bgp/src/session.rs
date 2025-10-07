@@ -21,13 +21,13 @@ use crate::{
     router::Router,
     IO_TIMEOUT,
 };
-use crossbeam_channel::{Receiver, Sender};
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
+use std::sync::mpsc::{Receiver, Sender};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
@@ -1139,7 +1139,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     event
                 }
 
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
                     session_log_lite!(self, error, "event rx error: {e}";
@@ -1380,7 +1380,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     event
                 }
 
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
                     session_log_lite!(self,
@@ -1678,7 +1678,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     event
                 }
 
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
                     session_log_lite!(self, error, "event rx error: {e}";
@@ -1961,7 +1961,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     event
                 }
 
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
                     session_log!(self, error, conn, "event rx error: {e}";
@@ -2373,7 +2373,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 event
             }
 
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 return FsmState::OpenConfirm(pc)
             }
 
@@ -2757,7 +2757,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     event
                 }
 
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
                     collision_log!(self, error, new, exist.conn,
@@ -3297,7 +3297,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     event
                 }
 
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
                     collision_log!(self, error, new, exist,
@@ -4185,7 +4185,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 event
             }
 
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 return FsmState::Established(pc)
             }
 
