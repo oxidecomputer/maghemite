@@ -19,6 +19,7 @@ use crate::{
     },
     policy::{CheckerResult, ShaperResult},
     router::Router,
+    IO_TIMEOUT,
 };
 use crossbeam_channel::{Receiver, Sender};
 use mg_common::{lock, read_lock, write_lock};
@@ -38,8 +39,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-// XXX: Make this configurable
-const EVENT_RX_TIMEOUT: Duration = Duration::from_millis(100);
 const UNIT_SESSION_RUNNER: &str = "session_runner";
 
 #[derive(Debug)]
@@ -1131,7 +1130,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
+            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
                 Ok(event) => {
                     session_log_lite!(self, debug, "received fsm event {}",
                         event.title();
@@ -1167,6 +1166,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         } else {
                             lock!(self.clock.timers.connect_retry_timer)
                                 .restart();
+                            session_log_lite!(self, debug, "starting connect attempt";);
+                            {
+                                let session_info = lock!(self.session).clone();
+                                if let Err(e) = Cnx::Connector::connect(
+                                    self.neighbor.host,
+                                    IO_TIMEOUT,
+                                    self.log.clone(),
+                                    self.event_tx.clone(),
+                                    session_info,
+                                ) {
+                                    session_log_lite!(self, error,
+                                        "failed to spawn connection thread: {e}";
+                                        "error" => format!("{e}")
+                                    );
+                                }
+                            }
                             return FsmState::Connect;
                         }
                     }
@@ -1205,6 +1220,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         } else {
                             lock!(self.clock.timers.connect_retry_timer)
                                 .restart();
+                            session_log_lite!(self, debug, "starting connect attempt";);
+                            {
+                                let session_info = lock!(self.session).clone();
+                                if let Err(e) = Cnx::Connector::connect(
+                                    self.neighbor.host,
+                                    IO_TIMEOUT,
+                                    self.log.clone(),
+                                    self.event_tx.clone(),
+                                    session_info,
+                                ) {
+                                    session_log_lite!(self, error,
+                                        "failed to spawn connection thread: {e}";
+                                        "error" => format!("{e}")
+                                    );
+                                }
+                            }
                             return FsmState::Connect;
                         }
                     }
@@ -1328,59 +1359,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Waiting for a TCP connection to be completed (inbound or outbound).
-    /// Connect is the only state where we initiate outbound connections.
-    /// Passive peers should never enter the Connect state, since they never
-    /// initiate outbound connections.
+    /// Passive peers should never enter the Connect state.
     /// The only time non Notification messages are handled in Connect is when
     /// an Open is received while DelayOpenTimer is running. DelayOpen is not
     /// currently implemented, so for now we don't have special handling here.
     fn on_connect(&self) -> FsmState<Cnx> {
-        let min_ttl = lock!(self.session).min_ttl;
-        let md5_auth_key = lock!(self.session).md5_auth_key.clone();
-
-        // Start with an initial connection attempt using BgpConnector
-        session_log_lite!(self, debug, "starting initial connect attempt";);
-        {
-            let session_info = lock!(self.session);
-            match Cnx::Connector::connect(
-                self.neighbor.host,
-                self.clock.resolution,
-                min_ttl,
-                md5_auth_key.clone(),
-                self.log.clone(),
-                self.event_tx.clone(),
-                &session_info,
-            ) {
-                Err(e) => {
-                    session_log_lite!(self, warn, "initial connect attempt failed: {e}";
-                        "error" => format!("{e}")
-                    )
-                }
-                Ok(conn) => {
-                    session_log!(self, debug, conn,
-                        "initial connect attempt succeeded (peer: {}, conn_id: {})",
-                        conn.peer(), conn.id().short();
-                    );
-                    if let Err(e) = self.event_tx.send(FsmEvent::Session(
-                        SessionEvent::TcpConnectionConfirmed(conn),
-                    )) {
-                        session_log_lite!(self,
-                            error,
-                            "failed to send TcpConnectionConfirmed event: {e}";
-                            "error" => format!("{e}")
-                        );
-                    }
-                }
-            }
-        }
-
         loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
+            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
                 Ok(event) => {
                     session_log_lite!(self,
                         debug,
@@ -1467,51 +1457,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                             // Attempt to establish a new connection using BgpConnector
                             {
-                                let session_info = lock!(self.session);
-                                match Cnx::Connector::connect(
+                                let session_info = lock!(self.session).clone();
+                                if let Err(e) = Cnx::Connector::connect(
                                     self.neighbor.host,
-                                    Duration::from_millis(100),
-                                    min_ttl,
-                                    md5_auth_key.clone(),
+                                    IO_TIMEOUT,
                                     self.log.clone(),
                                     self.event_tx.clone(),
-                                    &session_info,
+                                    session_info,
                                 ) {
-                                    Err(e) => {
-                                        session_log_lite!(self, warn,
-                                            "subsequent connect attempt failed";
-                                            "error" => format!("{e}")
-                                        );
-                                        lock!(
-                                            self.clock
-                                                .timers
-                                                .connect_retry_timer
-                                        )
-                                        .stop();
-                                        return FsmState::Active;
-                                    }
-                                    Ok(conn) => {
-                                        match self.event_tx.send(FsmEvent::Session(
-                                    SessionEvent::TcpConnectionConfirmed(conn),
-                                )) {
-                                    Err(e) => session_log_lite!(self, error,
-                                        "failed to send TcpConnectionConfirmed event: {e}";
+                                    session_log_lite!(self, error,
+                                        "failed to spawn connection thread: {e}";
                                         "error" => format!("{e}")
-                                    ),
-                                    Ok(()) => session_log_lite!(self, error,
-                                        "subsequent connect attempt successful";
-                                    ),
-                                }
-                                        lock!(
-                                            self.clock
-                                                .timers
-                                                .connect_retry_timer
-                                        )
-                                        .restart();
-                                        continue;
-                                    }
+                                    );
                                 }
                             }
+                            lock!(self.clock.timers.connect_retry_timer)
+                                .restart();
                         }
 
                         /*
@@ -1708,7 +1669,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
+            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
                 Ok(event) => {
                     session_log_lite!(self, debug, "received fsm event {}",
                         self.state();
@@ -1992,7 +1953,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
+            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
                 Ok(event) => {
                     session_log!(self, debug, conn, "received fsm event {}",
                         event.title(); "event" => event.title()
@@ -2403,7 +2364,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return FsmState::Idle;
         }
 
-        let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
+        let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
             Ok(event) => {
                 session_log!(self, debug, pc.conn,
                      "received fsm event";
@@ -2787,7 +2748,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
+            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
                 Ok(event) => {
                     collision_log!(self, debug, new, exist.conn,
                         "received fsm event {}", event.title();
@@ -3327,7 +3288,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
+            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
                 Ok(event) => {
                     collision_log!(self, debug, new, exist,
                         "received fsm event {}", event.title();
@@ -4215,7 +4176,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return self.exit_established(pc);
         }
 
-        let event = match self.event_rx.recv_timeout(EVENT_RX_TIMEOUT) {
+        let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
             Ok(event) => {
                 session_log!(self, debug, pc.conn,
                     "received fsm event";

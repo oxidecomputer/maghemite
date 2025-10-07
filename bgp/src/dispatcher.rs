@@ -2,17 +2,22 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::connection::{BgpConnection, BgpListener};
-use crate::log::dispatcher_log;
-use crate::session::{FsmEvent, SessionEndpoint, SessionEvent};
+use crate::{
+    connection::{BgpConnection, BgpListener},
+    log::dispatcher_log,
+    session::{FsmEvent, SessionEndpoint, SessionEvent},
+    IO_TIMEOUT,
+};
 use mg_common::lock;
 use slog::Logger;
-use std::collections::BTreeMap;
-use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::sleep;
-use std::time::Duration;
+use std::{
+    collections::BTreeMap,
+    net::IpAddr,
+    sync::atomic::{AtomicBool, Ordering},
+    sync::{Arc, Mutex},
+    thread::sleep,
+    time::Duration,
+};
 
 const UNIT_DISPATCHER: &str = "dispatcher";
 
@@ -91,7 +96,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                 let accepted = match listener.accept(
                     self.log.clone(),
                     self.addr_to_session.clone(),
-                    Duration::from_millis(100),
+                    IO_TIMEOUT,
                 ) {
                     Ok(c) => {
                         dispatcher_log!(self,

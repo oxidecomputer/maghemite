@@ -393,12 +393,10 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
     fn connect(
         peer: SocketAddr,
         timeout: Duration,
-        _min_ttl: Option<u8>, // Ignored for test connections
-        _md5_key: Option<String>, // Ignored for test connections
         log: Logger,
         event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
-        config: &SessionInfo,
-    ) -> Result<BgpConnectionChannel, Error> {
+        config: SessionInfo,
+    ) -> Result<(), Error> {
         let creator = ConnectionCreator::Connector;
         let addr = config
             .bind_addr
@@ -411,20 +409,59 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
             "timeout" => timeout.as_millis()
         );
 
+        // For the channel-based test implementation, we perform the connection
+        // synchronously since it's just in-memory channel creation. In a real
+        // implementation, this would be async like BgpConnectorTcp.
         let (local, remote) = channel();
         match NET.connect(addr, peer, remote) {
-            Ok(()) => Ok(BgpConnectionChannel::with_conn(
-                addr, peer, local, event_tx, timeout, log, creator, config,
-            )),
+            Ok(()) => {
+                let conn = BgpConnectionChannel::with_conn(
+                    addr,
+                    peer,
+                    local,
+                    event_tx.clone(),
+                    timeout,
+                    log.clone(),
+                    creator,
+                    &config,
+                );
+
+                connection_log_lite!(log,
+                    info,
+                    "channel connection to {peer} established (conn_id: {})",
+                    conn.id().short();
+                    "creator" => creator.as_str(),
+                    "peer" => format!("{peer}"),
+                    "local" => format!("{addr}"),
+                    "connection_id" => conn.id().short()
+                );
+
+                // Send the TcpConnectionConfirmed event
+                use crate::session::SessionEvent;
+                if let Err(e) = event_tx.send(FsmEvent::Session(
+                    SessionEvent::TcpConnectionConfirmed(conn),
+                )) {
+                    connection_log_lite!(log,
+                        error,
+                        "failed to send TcpConnectionConfirmed event for {peer}: {e}";
+                        "creator" => creator.as_str(),
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                }
+                Ok(())
+            }
             Err(e) => {
                 connection_log_lite!(log,
-                    error,
+                    debug,
                     "connect error: {e:?}";
                     "creator" => creator.as_str(),
                     "timeout" => timeout.as_millis(),
                     "error" => format!("{e}")
                 );
-                Err(e)
+                // Return Ok here because the connection attempt was made,
+                // even though it failed. The FSM will handle the retry.
+                Ok(())
             }
         }
     }

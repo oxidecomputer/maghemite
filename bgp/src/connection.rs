@@ -136,22 +136,23 @@ pub trait BgpListener<Cnx: BgpConnection> {
 }
 
 /// Implementors of this trait initiate outbound BGP connections to peers.
-/// BgpConnector is responsible for completely establishing the connection and
-/// applying all policy (TTL, MD5) before returning a valid BgpConnection.
+/// BgpConnector spawns a background thread to establish the connection and
+/// applies all policy (TTL, MD5) before sending a SessionEvent::TcpConnectionConfirmed
+/// on the event channel. Connection failures are silent - the ConnectRetryTimer
+/// will handle retries.
 pub trait BgpConnector<Cnx: BgpConnection> {
-    /// Establish an outbound connection to a peer with policy applied.
-    /// On success, returns a fully established BgpConnection. The connection
-    /// will have policy (ttl, md5) applied and the receive loop started.
+    /// Initiate an outbound connection attempt to a peer in a background thread.
+    /// On success, sends SessionEvent::TcpConnectionConfirmed via event_tx.
+    /// On failure, logs the error but does not send an event (FSM retry logic handles it).
+    /// Returns Err only if the thread spawn itself fails.
     #[allow(clippy::too_many_arguments)]
     fn connect(
         peer: SocketAddr,
         timeout: Duration,
-        min_ttl: Option<u8>,
-        md5_key: Option<String>,
         log: Logger,
         event_tx: Sender<FsmEvent<Cnx>>,
-        config: &SessionInfo,
-    ) -> Result<Cnx, Error>
+        config: SessionInfo,
+    ) -> Result<(), Error>
     where
         Self: Sized;
 }

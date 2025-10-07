@@ -33,3 +33,7 @@ pub const MOD_ROUTER: &str = "router";
 pub const MOD_NEIGHBOR: &str = "neighbor";
 pub const MOD_CLOCK: &str = "clock";
 pub const MOD_POLICY: &str = "policy";
+
+// XXX: Make this configurable
+pub const IO_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(100);

@@ -194,93 +194,232 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
     fn connect(
         peer: SocketAddr,
         timeout: Duration,
-        min_ttl: Option<u8>,
-        _md5_key: Option<String>, // TODO: Fix MD5 implementation for macOS
         log: Logger,
         event_tx: Sender<FsmEvent<BgpConnectionTcp>>,
-        config: &SessionInfo,
-    ) -> Result<BgpConnectionTcp, Error> {
-        let s = match peer {
-            SocketAddr::V4(_) => socket2::Socket::new(
-                socket2::Domain::IPV4,
-                socket2::Type::STREAM,
-                None,
-            )?,
-            SocketAddr::V6(_) => socket2::Socket::new(
-                socket2::Domain::IPV6,
-                socket2::Type::STREAM,
-                None,
-            )?,
-        };
+        config: SessionInfo,
+    ) -> Result<(), Error> {
+        // Spawn a background thread to perform the connection attempt
+        spawn(move || {
+            connection_log_lite!(log,
+                debug,
+                "starting connection attempt to {peer}";
+                "creator" => ConnectionCreator::Connector.as_str(),
+                "peer" => format!("{peer}"),
+                "timeout" => timeout.as_millis()
+            );
 
-        // Apply MD5 authentication before connecting
-        #[cfg(target_os = "linux")]
-        if let Some(key) = &_md5_key {
-            let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
-            let len = key.len();
-            keyval[..len].copy_from_slice(key.as_bytes());
-            if let Err(e) =
-                set_md5_sig_fd(s.as_raw_fd(), len as u16, keyval, peer)
-            {
-                return Err(e);
-            }
-        }
-
-        #[cfg(target_os = "illumos")]
-        if let Some(key) = &_md5_key {
-            let sources = match source_address_select(peer.ip()) {
-                Ok(s) => s,
-                Err(e) => return Err(Error::InvalidAddress(e.to_string())),
+            let s = match peer {
+                SocketAddr::V4(_) => match socket2::Socket::new(
+                    socket2::Domain::IPV4,
+                    socket2::Type::STREAM,
+                    None,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        connection_log_lite!(log,
+                            warn,
+                            "failed to create IPv4 socket for {peer}: {e}";
+                            "creator" => ConnectionCreator::Connector.as_str(),
+                            "peer" => format!("{peer}"),
+                            "error" => format!("{e}")
+                        );
+                        return;
+                    }
+                },
+                SocketAddr::V6(_) => match socket2::Socket::new(
+                    socket2::Domain::IPV6,
+                    socket2::Type::STREAM,
+                    None,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        connection_log_lite!(log,
+                            warn,
+                            "failed to create IPv6 socket for {peer}: {e}";
+                            "creator" => ConnectionCreator::Connector.as_str(),
+                            "peer" => format!("{peer}"),
+                            "error" => format!("{e}")
+                        );
+                        return;
+                    }
+                },
             };
-            if sources.is_empty() {
-                return Err(Error::InvalidAddress(String::from(
-                    "no source address",
-                )));
+
+            // Apply MD5 authentication before connecting
+            #[cfg(target_os = "linux")]
+            if let Some(key) = &config.md5_auth_key {
+                let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
+                let len = key.len();
+                keyval[..len].copy_from_slice(key.as_bytes());
+                if let Err(e) =
+                    set_md5_sig_fd(s.as_raw_fd(), len as u16, keyval, peer)
+                {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to apply MD5 auth for {peer}: {e}";
+                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
             }
-            let local: Vec<SocketAddr> = sources
-                .iter()
-                .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
-                .collect();
-            if let Err(e) = set_md5_sig_fd(s.as_raw_fd(), key, local, peer) {
-                return Err(e);
+
+            #[cfg(target_os = "illumos")]
+            if let Some(key) = &config.md5_auth_key {
+                let sources = match source_address_select(peer.ip()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        connection_log_lite!(log,
+                            warn,
+                            "failed to select source address for {peer}: {e}";
+                            "creator" => ConnectionCreator::Connector.as_str(),
+                            "peer" => format!("{peer}"),
+                            "error" => format!("{e}")
+                        );
+                        return;
+                    }
+                };
+                if sources.is_empty() {
+                    connection_log_lite!(log,
+                        warn,
+                        "no source address available for {peer}";
+                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "peer" => format!("{peer}")
+                    );
+                    return;
+                }
+                let local: Vec<SocketAddr> = sources
+                    .iter()
+                    .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
+                    .collect();
+                if let Err(e) = set_md5_sig_fd(s.as_raw_fd(), key, local, peer)
+                {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to apply MD5 auth for {peer}: {e}";
+                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
             }
-        }
 
-        // Bind to source address if specified
-        if let Some(source_addr) = config.bind_addr {
-            let mut src = source_addr;
-            // clear source port, we only want to set the source ip
-            src.set_port(0);
-            let ba: socket2::SockAddr = src.into();
-            s.bind(&ba)?;
-        }
+            // Bind to source address if specified
+            if let Some(source_addr) = config.bind_addr {
+                let mut src = source_addr;
+                // clear source port, we only want to set the source ip
+                src.set_port(0);
+                let ba: socket2::SockAddr = src.into();
+                if let Err(e) = s.bind(&ba) {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to bind to source {src} for {peer}: {e}";
+                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "peer" => format!("{peer}"),
+                        "source" => format!("{src}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
+            }
 
-        // Establish the connection
-        let sa: socket2::SockAddr = peer.into();
-        let new_conn: TcpStream = match s.connect_timeout(&sa, timeout) {
-            Ok(()) => s.into(),
-            Err(e) => return Err(Error::Io(e)),
-        };
+            // Establish the connection (THIS IS THE BLOCKING CALL)
+            let sa: socket2::SockAddr = peer.into();
+            let new_conn: TcpStream = match s.connect_timeout(&sa, timeout) {
+                Ok(()) => s.into(),
+                Err(e) => {
+                    connection_log_lite!(log,
+                        debug,
+                        "connection attempt to {peer} failed: {e}";
+                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
+            };
 
-        // Apply TTL if specified
-        if let Some(ttl) = min_ttl {
-            apply_min_ttl(&new_conn, ttl, peer)?;
-        }
+            // Apply TTL if specified
+            if let Some(ttl) = config.min_ttl {
+                if let Err(e) = apply_min_ttl(&new_conn, ttl, peer) {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to apply min TTL for {peer}: {e}";
+                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
+            }
 
-        // Determine the actual source address
-        let actual_source = new_conn.local_addr()?;
+            // Determine the actual source address
+            let actual_source = match new_conn.local_addr() {
+                Ok(addr) => addr,
+                Err(e) => {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to get local address for {peer}: {e}";
+                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
+            };
 
-        // Create the connection object with the established stream
-        BgpConnectionTcp::with_conn(
-            actual_source,
-            peer,
-            new_conn,
-            timeout,
-            event_tx,
-            log,
-            ConnectionCreator::Connector,
-            config,
-        )
+            // Create the connection object with the established stream
+            let conn = match BgpConnectionTcp::with_conn(
+                actual_source,
+                peer,
+                new_conn,
+                timeout,
+                event_tx.clone(),
+                log.clone(),
+                ConnectionCreator::Connector,
+                &config,
+            ) {
+                Ok(conn) => conn,
+                Err(e) => {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to create connection object for {peer}: {e}";
+                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
+            };
+
+            connection_log_lite!(log,
+                info,
+                "connection to {peer} established (conn_id: {})",
+                conn.id().short();
+                "creator" => ConnectionCreator::Connector.as_str(),
+                "peer" => format!("{peer}"),
+                "local" => format!("{actual_source}"),
+                "connection_id" => conn.id().short()
+            );
+
+            // Send the TcpConnectionConfirmed event
+            use crate::session::SessionEvent;
+            if let Err(e) = event_tx.send(FsmEvent::Session(
+                SessionEvent::TcpConnectionConfirmed(conn),
+            )) {
+                connection_log_lite!(log,
+                    error,
+                    "failed to send TcpConnectionConfirmed event for {peer}: {e}";
+                    "creator" => ConnectionCreator::Connector.as_str(),
+                    "peer" => format!("{peer}"),
+                    "error" => format!("{e}")
+                );
+            }
+        });
+
+        Ok(())
     }
 }
 
