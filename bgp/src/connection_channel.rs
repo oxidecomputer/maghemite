@@ -384,9 +384,21 @@ impl BgpConnectionChannel {
                         );
                     }
                 }
-                Err(_e) => {
-                    //TODO this goes a bit nuts .... sort out why
-                    //error!(log, "recv: {e}");
+                Err(RecvTimeoutError::Timeout) => {
+                    // Normal timeout, continue waiting for messages
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    // Peer closed connection, exit recv loop cleanly
+                    connection_log_lite!(log,
+                        debug,
+                        "peer {peer} disconnected (conn_id: {}), terminating recv loop",
+                        conn_id.short();
+                        "creator" => creator.as_str(),
+                        "peer" => format!("{peer}"),
+                        "conn_id" => conn_id.short()
+                    );
+                    break;
                 }
             }
         });

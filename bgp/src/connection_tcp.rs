@@ -708,6 +708,9 @@ impl BgpConnectionTcp {
                             "connection_id" => conn_id.short(),
                             "error" => format!("{e}")
                         );
+                        // Break the loop on connection errors to prevent zombie threads
+                        // that continue trying to read from closed connections
+                        break;
                     }
                 }
             }
@@ -750,6 +753,13 @@ impl BgpConnectionTcp {
                     }
                 }
             }?;
+            // Check for EOF (peer closed connection)
+            if n == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "peer closed connection",
+                ));
+            }
             i += n;
             if i < Header::WIRE_SIZE {
                 continue;
