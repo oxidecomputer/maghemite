@@ -21,7 +21,7 @@ oxnet.workspace = true
 backoff.workspace = true
 smf.workspace = true
 uuid.workspace = true
-fs2 = "0.4"
+libc.workspace = true
 
 # We need this on illumos, but must omit it on other platforms
 [dependencies.libnet]

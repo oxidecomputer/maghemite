@@ -2776,7 +2776,7 @@ dependencies = [
  "anyhow",
  "backoff",
  "clap",
- "fs2",
+ "libc",
  "libnet",
  "omicron-common",
  "oximeter",

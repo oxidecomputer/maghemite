@@ -5,16 +5,33 @@
 //! Test utilities and macros for use across multiple crates.
 
 use crate::lock;
-use fs2::FileExt;
 use slog::{error, info, Logger};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::IpAddr;
+use std::os::unix::io::AsRawFd;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 pub const DEFAULT_INTERVAL: u64 = 1;
 pub const DEFAULT_ITERATIONS: u64 = 30;
+
+/// Cross-platform file locking trait using libc's flock(2)
+trait FileLockExt {
+    fn lock_exclusive(&self) -> std::io::Result<()>;
+}
+
+impl FileLockExt for File {
+    fn lock_exclusive(&self) -> std::io::Result<()> {
+        let fd = self.as_raw_fd();
+        let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+}
 
 #[macro_export]
 macro_rules! wait_for_eq {
