@@ -21,34 +21,31 @@ use crate::{
 use libc::{c_int, sockaddr_storage};
 use mg_common::lock;
 use slog::Logger;
-use std::sync::mpsc::Sender;
 use std::{
     collections::BTreeMap,
     io::Read,
     io::Write,
     net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::atomic::AtomicBool,
-    sync::{Arc, Mutex},
+    sync::{mpsc::Sender, Arc, Mutex},
     thread::spawn,
     time::Duration,
 };
-#[cfg(any(target_os = "linux", target_os = "illumos"))]
-use {crate::log::connection_log, std::os::fd::AsRawFd};
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
-#[cfg(target_os = "illumos")]
-use itertools::Itertools;
-#[cfg(any(target_os = "linux", target_os = "illumos"))]
-use libc::{c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP};
 #[cfg(target_os = "linux")]
 use libc::{IP_MINTTL, TCP_MD5SIG};
 #[cfg(target_os = "illumos")]
-use slog::debug;
-#[cfg(target_os = "illumos")]
-use std::collections::HashSet;
-#[cfg(target_os = "illumos")]
-use std::time::Instant;
+use {
+    itertools::Itertools,
+    std::{collections::HashSet, time::Instant},
+};
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use {
+    libc::{c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP},
+    std::os::fd::AsRawFd,
+};
 
 #[cfg(target_os = "illumos")]
 const IP_MINTTL: i32 = 0x1c;
@@ -148,14 +145,14 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         if let Some(ttl) = min_ttl {
             apply_min_ttl(&tcp_stream, ttl, conn.peer)?;
         }
+
         if let Some(ref key) = md5_key {
-            // Apply MD5 authentication to the accepted connection
             #[cfg(target_os = "linux")]
             {
                 let mut keyval = [0u8; MAX_MD5SIG_KEYLEN];
                 let len = key.len();
                 keyval[..len].copy_from_slice(key.as_bytes());
-                set_md5_sig_fd(
+                set_md5_sig(
                     tcp_stream.as_raw_fd(),
                     len as u16,
                     keyval,
@@ -174,7 +171,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                         .iter()
                         .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
                         .collect();
-                    set_md5_sig_fd(
+                    conn.manage_md5_associations(
                         tcp_stream.as_raw_fd(),
                         key,
                         local,
@@ -189,6 +186,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                 let _ = key; // Suppress unused variable warning
             }
         }
+
         Ok(())
     }
 }
@@ -258,7 +256,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                 let len = key.len();
                 keyval[..len].copy_from_slice(key.as_bytes());
                 if let Err(e) =
-                    set_md5_sig_fd(s.as_raw_fd(), len as u16, keyval, peer)
+                    set_md5_sig(s.as_raw_fd(), len as u16, keyval, peer)
                 {
                     connection_log_lite!(log,
                         warn,
@@ -299,7 +297,8 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     .iter()
                     .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
                     .collect();
-                if let Err(e) = set_md5_sig_fd(s.as_raw_fd(), key, local, peer)
+                if let Err(e) =
+                    init_md5_associations(s.as_raw_fd(), key, local, peer)
                 {
                     connection_log_lite!(log,
                         warn,
@@ -399,6 +398,42 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     return;
                 }
             };
+
+            // Start SA tracking and keepalive for Illumos MD5
+            #[cfg(target_os = "illumos")]
+            if let Some(key) = &config.md5_auth_key {
+                let sources = match source_address_select(peer.ip()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        connection_log_lite!(log,
+                            warn,
+                            "failed to select source address for SA tracking for {peer}: {e}";
+                            "creator" => ConnectionCreator::Connector.as_str(),
+                            "peer" => format!("{peer}"),
+                            "error" => format!("{e}")
+                        );
+                        return;
+                    }
+                };
+                if !sources.is_empty() {
+                    let local: Vec<SocketAddr> = sources
+                        .iter()
+                        .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
+                        .collect();
+                    if let Err(e) =
+                        conn.set_md5_security_associations(key, local, peer)
+                    {
+                        connection_log_lite!(log,
+                            warn,
+                            "failed to start SA tracking for {peer}: {e}";
+                            "creator" => ConnectionCreator::Connector.as_str(),
+                            "peer" => format!("{peer}"),
+                            "error" => format!("{e}")
+                        );
+                        return;
+                    }
+                }
+            }
 
             connection_log_lite!(log,
                 info,
@@ -942,29 +977,17 @@ impl BgpConnectionTcp {
     }
 
     #[cfg(target_os = "illumos")]
-    fn set_md5_sig_fd(
+    fn manage_md5_associations(
         &self,
         fd: i32,
         key: &str,
         locals: Vec<SocketAddr>,
         peer: SocketAddr,
     ) -> Result<(), Error> {
+        // First set up the socket using the standalone function
+        init_md5_associations(fd, key, locals.clone(), peer)?;
+        // Then start SA tracking and keepalive
         self.set_md5_security_associations(key, locals, peer)?;
-
-        let yes: c_int = 1;
-        unsafe {
-            if libc::setsockopt(
-                fd,
-                IPPROTO_TCP,
-                TCP_MD5SIG,
-                &yes as *const c_int as *const c_void,
-                std::mem::size_of::<c_int>() as u32,
-            ) != 0
-            {
-                return Err(Error::Io(std::io::Error::last_os_error()));
-            }
-        }
-
         Ok(())
     }
 
@@ -1015,7 +1038,7 @@ impl BgpConnectionTcp {
 
         // Get one run in before returning, this helps the SAs to
         // get set up before setting up the socket.
-        Self::do_sa_keepalive(&self.sas, &self.log);
+        Self::do_sa_keepalive(&self.sas, &self.log, self.conn());
 
         connection_log!(self,
             debug,
@@ -1027,17 +1050,22 @@ impl BgpConnectionTcp {
         let dropped = self.dropped.clone();
         let log = self.log.clone();
         let sas = self.sas.clone();
+        let conn = self.conn();
         spawn(move || loop {
             sleep(PFKEY_KEEPALIVE);
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            Self::do_sa_keepalive(&sas, &log);
+            Self::do_sa_keepalive(&sas, &log, conn);
         });
     }
 
     #[cfg(target_os = "illumos")]
-    fn do_sa_keepalive(sas: &Arc<Mutex<Option<Md5Sas>>>, log: &Logger) {
+    fn do_sa_keepalive(
+        sas: &Arc<Mutex<Option<Md5Sas>>>,
+        log: &Logger,
+        conn: (SocketAddr, SocketAddr),
+    ) {
         use std::ops::{Add, Sub};
 
         // While an API action that results in changing the authkey will
@@ -1061,11 +1089,10 @@ impl BgpConnectionTcp {
                             b.into(),
                             valid_time,
                         ) {
-                            connection_log!(self,
+                            connection_log_lite!(log,
                                 error,
                                 "error updating pf_key {a} -> {b}: {e}";
-                                "connection" => format!("{:?}", lock!(self.conn)),
-                                "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                                "connection" => format!("{conn:?}"),
                                 "error" => format!("{e}")
                             );
                         }
@@ -1075,11 +1102,10 @@ impl BgpConnectionTcp {
                         sas.key.as_str(),
                         valid_time,
                     ) {
-                        connection_log!(self,
+                        connection_log_lite!(log,
                             error,
                             "error adding pf_key {a} -> {b}: {e}";
-                            "connection" => format!("{:?}", lock!(self.conn)),
-                            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                            "connection" => format!("{conn:?}"),
                             "error" => format!("{e}")
                         );
                     }
@@ -1090,7 +1116,7 @@ impl BgpConnectionTcp {
 }
 
 #[cfg(target_os = "linux")]
-fn set_md5_sig_fd(
+fn set_md5_sig(
     fd: i32,
     keylen: u16,
     key: [u8; MAX_MD5SIG_KEYLEN],
@@ -1224,9 +1250,11 @@ fn apply_min_ttl(
     Ok(())
 }
 
-/// Apply MD5 signature to socket for Illumos
+/// Initialize MD5 associations for Illumos (initial setup only, no SA tracking)
+/// This is called before the BgpConnectionTcp object exists, so it only sets up
+/// the socket. SA tracking and keepalive are started later via instance methods.
 #[cfg(target_os = "illumos")]
-fn set_md5_sig_fd(
+fn init_md5_associations(
     fd: i32,
     key: &str,
     locals: Vec<SocketAddr>,
@@ -1235,12 +1263,11 @@ fn set_md5_sig_fd(
     // Set MD5 security associations for Illumos
     for local in locals.iter() {
         for (a, b) in sa_set(*local, peer) {
-            let valid_time = std::time::Instant::now().add(PFKEY_DURATION);
             if let Err(e) = libnet::pf_key::tcp_md5_key_add(
                 a.into(),
                 b.into(),
                 key,
-                valid_time,
+                PFKEY_DURATION,
             ) {
                 return Err(Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
