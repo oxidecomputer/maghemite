@@ -4033,38 +4033,56 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
          *
          *   - changes its state to Idle.
          */
-        if self.id > new.id {
-            collision_log!(self, info, new.conn, exist.conn,
-                "collision resolution: existing conn ({}) wins with higher RID ({} > {})",
-                exist.conn.id().short(), self.id, new.id;
+
+        // Determine which connection we initiated vs the peer initiated.
+        // We use ConnectionCreator to identify who initiated each connection.
+        let (our_conn, peer_conn) =
+            if exist.conn.creator() == ConnectionCreator::Connector {
+                // exist is the connection we initiated (outbound)
+                // new is the connection peer initiated (inbound)
+                (exist, new)
+            } else {
+                // new is the connection we initiated (outbound)
+                // exist is the connection peer initiated (inbound)
+                (new, exist)
+            };
+
+        if self.id > peer_conn.id {
+            // Our RID is higher, we win. Kill the inbound connection to death.
+            collision_log!(self, info, our_conn.conn, peer_conn.conn,
+                "collision resolution: our outbound conn ({}) wins with higher RID ({} > {})",
+                our_conn.conn.id().short(), self.id, peer_conn.id;
             );
 
-            // Our RID is higher, we win. Kill `new`. Kill it to death.
-            self.stop(Some(&new.conn), None, StopReason::CollisionResolution);
+            self.stop(
+                Some(&peer_conn.conn),
+                None,
+                StopReason::CollisionResolution,
+            );
 
-            lock!(exist.conn.clock().timers.hold_timer).restart();
-            lock!(exist.conn.clock().timers.keepalive_timer).restart();
+            lock!(our_conn.conn.clock().timers.hold_timer).restart();
+            lock!(our_conn.conn.clock().timers.keepalive_timer).restart();
 
-            return FsmState::SessionSetup(exist);
+            return FsmState::SessionSetup(our_conn);
         }
 
-        // Our RID is lower, we lose. Setup new conn and leave existing for dead
-        collision_log!(self, info, new.conn, exist.conn,
-            "collision resolution: new conn ({}) wins ({} >= {})",
-            new.conn.id().short(), new.id, self.id;
+        // Our RID is lower, we lose. Toss the outbound connection to the wolves
+        collision_log!(self, info, peer_conn.conn, our_conn.conn,
+            "collision resolution: peer's outbound conn ({}) wins ({} >= {})",
+            peer_conn.conn.id().short(), peer_conn.id, self.id;
         );
 
-        self.stop(Some(&exist.conn), None, StopReason::CollisionResolution);
+        self.stop(Some(&our_conn.conn), None, StopReason::CollisionResolution);
 
         lock!(self.clock.timers.connect_retry_timer).stop();
         self.counters
             .connection_retries
             .fetch_add(1, Ordering::Relaxed);
 
-        lock!(new.conn.clock().timers.hold_timer).restart();
-        lock!(new.conn.clock().timers.keepalive_timer).restart();
+        lock!(peer_conn.conn.clock().timers.hold_timer).restart();
+        lock!(peer_conn.conn.clock().timers.keepalive_timer).restart();
 
-        FsmState::SessionSetup(new)
+        FsmState::SessionSetup(peer_conn)
     }
 
     fn collision_conn_kind(
