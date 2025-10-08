@@ -252,6 +252,7 @@ macro_rules! connection_log {
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
             "creator" => $self.creator().as_str(),
+            "connection_id" => $self.id().short(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),
             $($key => $value),*
@@ -264,6 +265,7 @@ macro_rules! connection_log {
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
             "creator" => $self.creator().as_str(),
+            "connection_id" => $self.id().short(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),
             $($key => $value),*
@@ -276,6 +278,7 @@ macro_rules! connection_log {
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
             "creator" => $self.creator().as_str(),
+            "connection_id" => $self.id().short(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),
         )
@@ -287,6 +290,7 @@ macro_rules! connection_log {
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
             "creator" => $self.creator().as_str(),
+            "connection_id" => $self.id().short(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),
         )

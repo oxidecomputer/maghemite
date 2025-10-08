@@ -222,7 +222,8 @@ impl BgpConnection for BgpConnectionChannel {
         let guard = lock!(self.conn_tx);
         connection_log!(self,
             trace,
-            "send {} message via channel to {}", msg.title(), self.peer();
+            "send {} message via channel to {} ({})",
+            msg.title(), self.peer(), self.id().short();
             "message" => msg.title(),
             "message_contents" => format!("{msg}")
         );
@@ -232,7 +233,8 @@ impl BgpConnection for BgpConnectionChannel {
         {
             connection_log!(self,
                 error,
-                "error sending message via channel to {}: {e}", self.peer();
+                "error sending message via channel to {} ({}): {e}",
+                self.peer(), self.id().short();
                 "error" => format!("{e}"),
                 "network_state" => format!("{}", *NET)
             );
@@ -365,7 +367,7 @@ impl BgpConnectionChannel {
                 Ok(msg) => {
                     connection_log_lite!(log,
                         debug,
-                        "recv {} msg from {peer} (conn_id: {})",
+                        "recv {} msg from {peer} ({})",
                         msg.title(), conn_id.short();
                         "creator" => creator.as_str(),
                         "peer" => format!("{peer}"),
@@ -392,11 +394,11 @@ impl BgpConnectionChannel {
                     // Peer closed connection, exit recv loop cleanly
                     connection_log_lite!(log,
                         debug,
-                        "peer {peer} disconnected (conn_id: {}), terminating recv loop",
+                        "peer {peer} disconnected ({}), terminating recv loop",
                         conn_id.short();
                         "creator" => creator.as_str(),
                         "peer" => format!("{peer}"),
-                        "conn_id" => conn_id.short()
+                        "connection_id" => conn_id.short()
                     );
                     break;
                 }
