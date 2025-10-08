@@ -317,8 +317,8 @@ impl LoopbackIpManager {
 
         #[cfg(target_os = "illumos")]
         let output = {
-            let ip_descr = format!("{}", ip.address).replace('.', "_");
-            let addr_obj = format!("{}/test-{}", ifname, ip_descr);
+            let ip_descr = format!("{}", ip.address).replace('.', "dot");
+            let addr_obj = format!("{}/test{}", ifname, ip_descr);
             Command::new("pfexec")
                 .args([
                     "ipadm",
@@ -454,8 +454,8 @@ impl LoopbackIpManager {
     ) {
         #[cfg(target_os = "illumos")]
         let output = {
-            let ip_descr = format!("{}", ip.address).replace('.', "_");
-            let addr_obj = format!("{}/test-{}", ifname, ip_descr);
+            let ip_descr = format!("{}", ip.address).replace('.', "dot");
+            let addr_obj = format!("{}/test{}", ifname, ip_descr);
             Command::new("pfexec")
                 .args(["ipadm", "delete-addr", &addr_obj])
                 .output()
