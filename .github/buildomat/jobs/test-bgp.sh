@@ -26,11 +26,11 @@ rustc --version
 curl -sSfL --retry 10 https://get.nexte.st/"$NEXTEST_VERSION"/"$PLATFORM" | gunzip | tar -xvf - -C ~/.cargo/bin
 
 pushd bgp
-cargo nextest run
+pfexec cargo nextest run
 cp *.log /work/
 popd
 
 pushd mgd
-cargo nextest run
+pfexec cargo nextest run
 cp *.log /work/
 popd
