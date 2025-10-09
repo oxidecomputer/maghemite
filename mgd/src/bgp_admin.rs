@@ -935,8 +935,7 @@ pub(crate) mod helpers {
         let start_session = if ensure {
             match get_router!(&ctx, rq.asn)?.ensure_session(
                 rq.clone().into(),
-                // XXX: replace this when `update-source` is implemented
-                DEFAULT_BGP_LISTEN,
+                None,
                 event_tx.clone(),
                 event_rx,
                 info,
@@ -947,7 +946,7 @@ pub(crate) mod helpers {
         } else {
             get_router!(&ctx, rq.asn)?.new_session(
                 rq.clone().into(),
-                DEFAULT_BGP_LISTEN,
+                None,
                 event_tx.clone(),
                 event_rx,
                 info,

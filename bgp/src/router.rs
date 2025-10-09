@@ -156,7 +156,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     pub fn ensure_session(
         self: &Arc<Self>,
         peer: PeerConfig,
-        bind_addr: SocketAddr,
+        bind_addr: Option<SocketAddr>,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
@@ -176,7 +176,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     pub fn new_session(
         self: &Arc<Self>,
         peer: PeerConfig,
-        bind_addr: SocketAddr,
+        bind_addr: Option<SocketAddr>,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
@@ -195,7 +195,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         self: &Arc<Self>,
         mut a2s: MutexGuard<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>,
         peer: PeerConfig,
-        bind_addr: SocketAddr,
+        bind_addr: Option<SocketAddr>,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
@@ -209,7 +209,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         session_info.idle_hold_time = Duration::from_secs(peer.idle_hold_time);
         session_info.delay_open_time = Duration::from_secs(peer.delay_open);
         session_info.resolution = Duration::from_millis(peer.resolution);
-        session_info.bind_addr = Some(bind_addr);
+        session_info.bind_addr = bind_addr;
 
         let session = Arc::new(Mutex::new(session_info));
 

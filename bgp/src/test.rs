@@ -178,7 +178,7 @@ where
             let session_runner = router
                 .new_session(
                     peer_config,
-                    bind_addr,
+                    Some(bind_addr),
                     event_tx.clone(),
                     event_rx,
                     neighbor.session_info.clone().unwrap_or_default(),

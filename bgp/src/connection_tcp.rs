@@ -112,15 +112,13 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
             }
         })?;
 
-        let ip = peer.ip().to_canonical();
-        peer.set_ip(ip);
-
-        // Get the actual local socket address for this accepted connection.
+        // Get the actual socket addresses for this accepted connection.
         // This is critical for dual-stack scenarios where the listener may bind
         // to an IPv6 address but accept IPv4 connections (via IPv4-mapped IPv6).
-        // Using conn.local_addr() ensures we get the correct address family
-        // for the actual connection, not just the listener's bind address.
-        let local = conn.local_addr()?;
+        let ip = peer.ip().to_canonical();
+        peer.set_ip(ip);
+        let mut local = conn.local_addr()?;
+        local.set_ip(local.ip().to_canonical());
 
         // Check if we have a session for this peer
         match lock!(addr_to_session).get(&ip) {
