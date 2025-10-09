@@ -116,7 +116,7 @@ impl Network {
 /// A struct to implement BgpListener for our simulated test network.
 pub struct BgpListenerChannel {
     listener: Listener,
-    addr: SocketAddr,
+    bind_addr: SocketAddr,
 }
 
 impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
@@ -132,7 +132,10 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
                 "at least one address required".into(),
             ))?;
         let listener = NET.bind(addr);
-        Ok(Self { listener, addr })
+        Ok(Self {
+            listener,
+            bind_addr: addr,
+        })
     }
 
     fn accept(
@@ -144,11 +147,18 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         timeout: Duration,
     ) -> Result<BgpConnectionChannel, Error> {
         let (peer, endpoint) = self.listener.accept(timeout)?;
+
+        // For channel-based test connections, we use the bind address as the local
+        // address. In a real network scenario (like TCP), we would need to get the
+        // actual connection's local address to handle dual-stack correctly, but for
+        // testing purposes with channels, the bind address is the connection address.
+        let local = self.bind_addr;
+
         match lock!(addr_to_session).get(&peer.ip()) {
             Some(session_endpoint) => {
                 let config = lock!(session_endpoint.config);
                 Ok(BgpConnectionChannel::with_conn(
-                    self.addr,
+                    local,
                     peer,
                     endpoint,
                     session_endpoint.event_tx.clone(),

@@ -563,6 +563,48 @@ pub struct UpdateMessage {
 
 impl UpdateMessage {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+        // Validate next-hop address family matches NLRI address family
+        // For IPv4 unicast, NEXT_HOP must be an IPv4 address (4 bytes).
+        // For IPv6 unicast, NEXT_HOP must be either a standalone GUA (16 bytes)
+        // or a GUA with a LL (32 bytes).
+        if !self.nlri.is_empty() || !self.withdrawn.is_empty() {
+            let next_hop = self.path_attributes.iter().find_map(|attr| {
+                if let PathAttributeValue::NextHop(addr) = attr.value {
+                    Some(addr)
+                } else {
+                    None
+                }
+            });
+
+            if let Some(nh) = next_hop {
+                let nh_is_v4 = matches!(nh, IpAddr::V4(_));
+
+                // Check NLRI prefixes
+                for prefix in &self.nlri {
+                    let prefix_is_v4 = prefix.value.len() <= 4;
+                    if prefix_is_v4 != nh_is_v4 {
+                        return Err(Error::UnsupportedOperation(format!(
+                            "Address family mismatch: {} NLRI with {} next-hop",
+                            if prefix_is_v4 { "IPv4" } else { "IPv6" },
+                            if nh_is_v4 { "IPv4" } else { "IPv6" }
+                        )));
+                    }
+                }
+
+                // Check withdrawn prefixes
+                for prefix in &self.withdrawn {
+                    let prefix_is_v4 = prefix.value.len() <= 4;
+                    if prefix_is_v4 != nh_is_v4 {
+                        return Err(Error::UnsupportedOperation(format!(
+                            "Address family mismatch: {} withdrawn with {} next-hop",
+                            if prefix_is_v4 { "IPv4" } else { "IPv6" },
+                            if nh_is_v4 { "IPv4" } else { "IPv6" }
+                        )));
+                    }
+                }
+            }
+        }
+
         let mut buf = Vec::new();
 
         // withdrawn
@@ -638,11 +680,52 @@ impl UpdateMessage {
 
         let nlri = Self::prefixes_from_wire(input)?;
 
-        Ok(UpdateMessage {
+        let update = UpdateMessage {
             withdrawn,
             path_attributes,
             nlri,
-        })
+        };
+
+        // Validate address family consistency between NLRI and NEXT_HOP
+        if !update.nlri.is_empty() || !update.withdrawn.is_empty() {
+            let next_hop = update.path_attributes.iter().find_map(|attr| {
+                if let PathAttributeValue::NextHop(addr) = attr.value {
+                    Some(addr)
+                } else {
+                    None
+                }
+            });
+
+            if let Some(nh) = next_hop {
+                let nh_is_v4 = matches!(nh, IpAddr::V4(_));
+
+                // Check NLRI prefixes
+                for prefix in &update.nlri {
+                    let prefix_is_v4 = prefix.value.len() <= 4;
+                    if prefix_is_v4 != nh_is_v4 {
+                        return Err(Error::UnsupportedOperation(format!(
+                            "Received UPDATE with address family mismatch: {} NLRI with {} next-hop",
+                            if prefix_is_v4 { "IPv4" } else { "IPv6" },
+                            if nh_is_v4 { "IPv4" } else { "IPv6" }
+                        )));
+                    }
+                }
+
+                // Check withdrawn prefixes
+                for prefix in &update.withdrawn {
+                    let prefix_is_v4 = prefix.value.len() <= 4;
+                    if prefix_is_v4 != nh_is_v4 {
+                        return Err(Error::UnsupportedOperation(format!(
+                            "Received UPDATE with address family mismatch: {} withdrawn with {} next-hop",
+                            if prefix_is_v4 { "IPv4" } else { "IPv6" },
+                            if nh_is_v4 { "IPv4" } else { "IPv6" }
+                        )));
+                    }
+                }
+            }
+        }
+
+        Ok(update)
     }
 
     fn prefixes_from_wire(mut buf: &[u8]) -> Result<Vec<Prefix>, Error> {
@@ -1203,6 +1286,13 @@ impl PathAttributeValue {
                 Ok(PathAttributeValue::As4Path(segments))
             }
             PathAttributeTypeCode::NextHop => {
+                // For IPv4 unicast, the length of this attribute MUST be 4 octets.
+                if input.len() != 4 {
+                    return Err(Error::BadLength {
+                        expected: 4,
+                        found: input.len() as u8,
+                    });
+                }
                 let (_input, b) = take(4usize)(input)?;
                 Ok(PathAttributeValue::NextHop(
                     Ipv4Addr::new(b[0], b[1], b[2], b[3]).into(),
@@ -3335,6 +3425,69 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_nexthop_length_validation() {
+        // Test that NEXT_HOP path attribute with incorrect length is rejected
+
+        // Build a minimal valid UPDATE message manually, then corrupt the NEXT_HOP length
+        let mut buf = Vec::new();
+
+        // Withdrawn routes length (0)
+        buf.extend_from_slice(&0u16.to_be_bytes());
+
+        // Path attributes length (will be filled in later)
+        let path_attrs_len_offset = buf.len();
+        buf.extend_from_slice(&0u16.to_be_bytes());
+
+        let path_attrs_start = buf.len();
+
+        // ORIGIN attribute (well-known, transitive, complete)
+        buf.push(0x40); // flags
+        buf.push(1); // type code (ORIGIN)
+        buf.push(1); // length
+        buf.push(0); // IGP
+
+        // AS_PATH attribute (well-known, transitive, complete)
+        buf.push(0x40); // flags
+        buf.push(2); // type code (AS_PATH)
+        buf.push(6); // length
+        buf.push(2); // AS_SEQUENCE
+        buf.push(1); // path segment length
+        buf.extend_from_slice(&(65000u32).to_be_bytes());
+
+        // NEXT_HOP attribute with WRONG LENGTH (16 bytes instead of 4)
+        buf.push(0x40); // flags
+        buf.push(3); // type code (NEXT_HOP)
+        buf.push(16); // length - THIS IS WRONG, should be 4 for IPv4!
+        buf.extend_from_slice(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 0, 2, 1,
+        ]); // :: (IPv6)
+
+        // Fill in path attributes length
+        let path_attrs_len = (buf.len() - path_attrs_start) as u16;
+        buf[path_attrs_len_offset..path_attrs_len_offset + 2]
+            .copy_from_slice(&path_attrs_len.to_be_bytes());
+
+        // NLRI: 198.51.100.0/24
+        buf.push(24); // prefix length
+        buf.extend_from_slice(&[198, 51, 100]); // prefix bytes
+
+        // Try to parse - should fail with BadLength error
+        let result = UpdateMessage::from_wire(&buf);
+        assert!(
+            result.is_err(),
+            "Expected parsing to fail with bad NEXT_HOP length"
+        );
+
+        match result.unwrap_err() {
+            Error::BadLength { expected, found } => {
+                assert_eq!(expected, 4, "Expected length should be 4");
+                assert_eq!(found, 16, "Found length should be 16");
+            }
+            other => panic!("Expected BadLength error, got: {:?}", other),
         }
     }
 }

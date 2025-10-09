@@ -91,6 +91,7 @@ struct LogicalRouter {
     asn: Asn,
     id: u32,
     listen_addr: SocketAddr,
+    bind_addr: Option<SocketAddr>,
     neighbors: Vec<Neighbor>,
 }
 
@@ -169,10 +170,15 @@ where
             let (event_tx, event_rx) = channel();
             let peer_config = neighbor.peer_config.clone();
 
-            router
+            // Use bind_addr from LogicalRouter if specified, otherwise use listen_addr
+            let bind_addr = logical_router
+                .bind_addr
+                .unwrap_or(logical_router.listen_addr);
+
+            let session_runner = router
                 .new_session(
                     peer_config,
-                    logical_router.listen_addr,
+                    bind_addr,
                     event_tx.clone(),
                     event_rx,
                     neighbor.session_info.clone().unwrap_or_default(),
@@ -180,6 +186,13 @@ where
                 .unwrap_or_else(|_| {
                     panic!("new session on router {}", logical_router.name)
                 });
+
+            // If LogicalRouter.bind_addr is None, clear the bind_addr
+            // that was just set by new_session (at router.rs:212)
+            if logical_router.bind_addr.is_none() {
+                let mut info = lock!(session_runner.session);
+                info.bind_addr = None;
+            }
 
             // Store the sender so we can send ManualStart later
             session_senders.push(event_tx);
@@ -235,6 +248,7 @@ fn basic_peering_helper<
             asn: Asn::FourOctet(4200000001),
             id: 1,
             listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
             neighbors: vec![Neighbor {
                 peer_config: PeerConfig {
                     name: "r2".into(),
@@ -257,6 +271,7 @@ fn basic_peering_helper<
             asn: Asn::FourOctet(4200000002),
             id: 2,
             listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
             neighbors: vec![Neighbor {
                 peer_config: PeerConfig {
                     name: "r1".into(),
@@ -375,6 +390,7 @@ fn basic_update_helper<
             asn: Asn::FourOctet(4200000001),
             id: 1,
             listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
             neighbors: vec![Neighbor {
                 peer_config: PeerConfig {
                     name: "r2".into(),
@@ -394,6 +410,7 @@ fn basic_update_helper<
             asn: Asn::FourOctet(4200000002),
             id: 2,
             listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
             neighbors: vec![Neighbor {
                 peer_config: PeerConfig {
                     name: "r1".into(),
@@ -564,6 +581,7 @@ fn test_three_router_chain_tcp() {
             asn: Asn::FourOctet(4200000001),
             id: 1,
             listen_addr: sockaddr!(&format!("{r1_addr}:{TEST_BGP_PORT}")),
+            bind_addr: Some(sockaddr!(&format!("{r1_addr}:{TEST_BGP_PORT}"))),
             neighbors: vec![Neighbor {
                 peer_config: PeerConfig {
                     name: "r2".into(),
@@ -583,6 +601,7 @@ fn test_three_router_chain_tcp() {
             asn: Asn::FourOctet(4200000002),
             id: 2,
             listen_addr: sockaddr!(&format!("{r2_addr}:{TEST_BGP_PORT}")),
+            bind_addr: Some(sockaddr!(&format!("{r2_addr}:{TEST_BGP_PORT}"))),
             neighbors: vec![
                 Neighbor {
                     peer_config: PeerConfig {
@@ -617,6 +636,7 @@ fn test_three_router_chain_tcp() {
             asn: Asn::FourOctet(4200000003),
             id: 3,
             listen_addr: sockaddr!(&format!("{r3_addr}:{TEST_BGP_PORT}")),
+            bind_addr: Some(sockaddr!(&format!("{r3_addr}:{TEST_BGP_PORT}"))),
             neighbors: vec![Neighbor {
                 peer_config: PeerConfig {
                     name: "r2".into(),
