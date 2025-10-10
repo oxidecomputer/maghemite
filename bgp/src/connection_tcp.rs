@@ -198,7 +198,6 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
 pub struct BgpConnectorTcp;
 
 impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
-    #[allow(clippy::too_many_arguments)]
     fn connect(
         peer: SocketAddr,
         timeout: Duration,

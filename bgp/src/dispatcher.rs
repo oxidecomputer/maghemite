@@ -141,7 +141,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
 
                         if let Err(e) =
                             session_endpoint.event_tx.send(FsmEvent::Session(
-                                SessionEvent::Connected(accepted),
+                                SessionEvent::TcpConnectionAcked(accepted),
                             ))
                         {
                             dispatcher_log!(self,

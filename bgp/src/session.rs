@@ -335,13 +335,18 @@ pub enum SessionEvent<Cnx: BgpConnection> {
     /// Fires when the session's idle hold timer expires.
     IdleHoldTimerExpires,
 
-    /// A connection to the peer has been made. We use this event to indicate
-    /// an inbound connection has completed.
-    Connected(Cnx),
+    /// Fires when the local systems tcp-syn recieved a syn-ack from the remote
+    /// peer and the local system has sent an ack.
+    /// i.e.
+    /// We have ACKed the peer's connection.
+    /// We use this event to indicate an inbound connection has completed.
+    TcpConnectionAcked(Cnx),
 
     /// Fires when the local system has received the final ack in establishing
-    /// a TCP connection with the peer. We use this event to indicate an
-    /// outbound connection has completed.
+    /// a TCP connection with the peer.
+    /// i.e.
+    /// The peer has confirmed our connection.
+    /// We use this event to indicate an outbound connection has completed.
     TcpConnectionConfirmed(Cnx),
 }
 
@@ -354,7 +359,9 @@ impl<Cnx: BgpConnection> fmt::Debug for SessionEvent<Cnx> {
             SessionEvent::IdleHoldTimerExpires => {
                 write!(f, "idle hold timer expires")
             }
-            SessionEvent::Connected(_) => write!(f, "connected"),
+            SessionEvent::TcpConnectionAcked(_) => {
+                write!(f, "tcp connection acked")
+            }
             SessionEvent::TcpConnectionConfirmed(_) => {
                 write!(f, "tcp connection confirmed")
             }
@@ -369,7 +376,7 @@ impl<Cnx: BgpConnection> SessionEvent<Cnx> {
                 "connect retry timer expires"
             }
             SessionEvent::IdleHoldTimerExpires => "idle hold timer expires",
-            SessionEvent::Connected(_) => "connected",
+            SessionEvent::TcpConnectionAcked(_) => "tcp connection acked",
             SessionEvent::TcpConnectionConfirmed(_) => {
                 "tcp connection confirmed"
             }
@@ -488,10 +495,6 @@ pub enum UnusedEvent {
     /// source/destination IP address/port.
     TcpConnectionInvalid,
 
-    /// Fires when the local systems tcp-syn recieved a syn-ack from the remote
-    /// peer and the local system has sent an ack.
-    TcpConnectionAcked,
-
     /// Fires when the remote peer sends a TCP fin or the local connection times
     /// out.
     TcpConnectionFails,
@@ -517,7 +520,6 @@ impl fmt::Debug for UnusedEvent {
             }
             Self::TcpConnectionValid => write!(f, "tcp connection valid"),
             Self::TcpConnectionInvalid => write!(f, "tcp connection invalid"),
-            Self::TcpConnectionAcked => write!(f, "tcp connection acked"),
             Self::TcpConnectionFails => write!(f, "tcp connection fails"),
             Self::BgpOpen => write!(f, "bgp open"),
             Self::DelayedBgpOpen => write!(f, "delay bgp open"),
@@ -547,7 +549,6 @@ impl UnusedEvent {
             Self::DelayOpenTimerExpires => "delay open timer expires",
             Self::TcpConnectionValid => "tcp connection valid",
             Self::TcpConnectionInvalid => "tcp connection invalid",
-            Self::TcpConnectionAcked => "tcp connection acked",
             Self::TcpConnectionFails => "tcp connection fails",
             Self::BgpOpen => "bgp open",
             Self::DelayedBgpOpen => "delay bgp open",
@@ -1240,7 +1241,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
                     }
 
-                    SessionEvent::Connected(new)
+                    SessionEvent::TcpConnectionAcked(new)
                     | SessionEvent::TcpConnectionConfirmed(new) => {
                         match new.creator() {
                             ConnectionCreator::Dispatcher => {
@@ -1502,7 +1503,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          *
                          * A HoldTimer value of 4 minutes is suggested.
                          */
-                        SessionEvent::Connected(accepted)
+                        SessionEvent::TcpConnectionAcked(accepted)
                         | SessionEvent::TcpConnectionConfirmed(accepted) => {
                             match accepted.creator() {
                                 ConnectionCreator::Dispatcher => {
@@ -1887,7 +1888,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     // The Dispatcher has accepted a TCP connection initiated by
                     // the peer.
-                    SessionEvent::Connected(accepted) => {
+                    SessionEvent::TcpConnectionAcked(accepted) => {
                         session_log!(self, info, accepted,
                             "accepted inbound connection from {}", accepted.peer();
                         );
@@ -2069,9 +2070,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                      * tracked per Connection Collision processing (Section 6.8) until an
                      * OPEN message is received.
                      */
-                    SessionEvent::Connected(new)
+                    SessionEvent::TcpConnectionAcked(new)
                     | SessionEvent::TcpConnectionConfirmed(new) => {
-                        match new.creator() {
+                        let new_creator = new.creator();
+                        if new_creator == conn.creator() {
+                            collision_log!(self, error, new, conn,
+                                "rejected new {} connection for {}: has same creator as existing connection {}",
+                                new_creator.direction(),
+                                new.id().short(),
+                                conn.id().short();
+                            );
+                            continue;
+                        }
+
+                        match new_creator {
                             ConnectionCreator::Dispatcher => {
                                 collision_log!(self, info, new, conn,
                                     "new inbound connection from {} (conn_id: {})",
@@ -2611,9 +2623,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  * OpenConfirm, the local system needs to track the second
                  * connection.
                  */
-                SessionEvent::Connected(new)
+                SessionEvent::TcpConnectionAcked(new)
                 | SessionEvent::TcpConnectionConfirmed(new) => {
-                    match new.creator() {
+                    let new_creator = new.creator();
+                    if new_creator == pc.conn.creator() {
+                        collision_log!(self, error, new, pc.conn,
+                            "rejected new {} connection for {}: has same creator as existing connection {}",
+                            new_creator.direction(),
+                            new.id().short(),
+                            pc.conn.id().short();
+                        );
+                        return FsmState::OpenConfirm(pc);
+                    }
+
+                    match new_creator {
                         ConnectionCreator::Dispatcher => {
                             collision_log!(self, info, new, pc.conn,
                                 "new inbound connection from {} (conn_id: {})",
@@ -2826,7 +2849,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Idle;
                     }
 
-                    SessionEvent::Connected(extra)
+                    SessionEvent::TcpConnectionAcked(extra)
                     | SessionEvent::TcpConnectionConfirmed(extra) => {
                         match extra.creator() {
                             ConnectionCreator::Dispatcher => {
@@ -3389,7 +3412,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                      * tracked per Connection Collision processing (Section 6.8) until an
                      * OPEN message is received.
                      */
-                    SessionEvent::Connected(extra)
+                    SessionEvent::TcpConnectionAcked(extra)
                     | SessionEvent::TcpConnectionConfirmed(extra) => {
                         match extra.creator() {
                             ConnectionCreator::Dispatcher => {
@@ -4404,7 +4427,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.exit_established(pc)
                 }
 
-                SessionEvent::Connected(new)
+                SessionEvent::TcpConnectionAcked(new)
                 | SessionEvent::TcpConnectionConfirmed(new) => {
                     match new.creator() {
                         ConnectionCreator::Dispatcher => {

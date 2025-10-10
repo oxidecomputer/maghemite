@@ -45,6 +45,13 @@ impl ConnectionCreator {
             ConnectionCreator::Connector => "connector",
         }
     }
+
+    pub fn direction(&self) -> &'static str {
+        match self {
+            ConnectionCreator::Dispatcher => "inbound",
+            ConnectionCreator::Connector => "outbound",
+        }
+    }
 }
 
 impl std::fmt::Display for ConnectionCreator {
@@ -145,7 +152,6 @@ pub trait BgpConnector<Cnx: BgpConnection> {
     /// On success, sends SessionEvent::TcpConnectionConfirmed via event_tx.
     /// On failure, logs the error but does not send an event (FSM retry logic handles it).
     /// Returns Err only if the thread spawn itself fails.
-    #[allow(clippy::too_many_arguments)]
     fn connect(
         peer: SocketAddr,
         timeout: Duration,

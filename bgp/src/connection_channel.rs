@@ -420,7 +420,6 @@ impl BgpConnectionChannel {
 pub struct BgpConnectorChannel;
 
 impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
-    #[allow(clippy::too_many_arguments)]
     fn connect(
         peer: SocketAddr,
         timeout: Duration,
