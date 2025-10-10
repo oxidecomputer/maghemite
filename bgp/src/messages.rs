@@ -864,7 +864,7 @@ impl Display for UpdateMessage {
 
         write!(
             f,
-            "Update[ path_attributes{p_str}) withdrawn({}) nlri({}) ]",
+            "Update[ path_attributes: {p_str}) withdrawn({}) nlri({}) ]",
             if !w_str.is_empty() { &w_str } else { "empty" },
             if !n_str.is_empty() { &n_str } else { "empty" }
         )
