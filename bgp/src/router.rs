@@ -132,7 +132,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
                 )
             );
             spawn(move || {
-                session.start();
+                session.fsm_start();
             });
         }
     }
@@ -254,7 +254,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             )
         );
         spawn(move || {
-            r.start();
+            r.fsm_start();
         });
 
         self.add_fanout(neighbor.host.ip(), event_tx);

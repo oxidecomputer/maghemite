@@ -34,6 +34,7 @@ use std::{
     net::SocketAddr,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::RecvTimeoutError,
         Arc, Mutex, RwLock,
     },
     time::{Duration, Instant},
@@ -41,20 +42,40 @@ use std::{
 
 const UNIT_SESSION_RUNNER: &str = "session_runner";
 
-#[derive(Debug)]
+/// This wraps a BgpConnection with runtime state learned from the peer's Open
+/// message. This encodes all the dynamic (but non-timer related) information
+/// for a given connection into the type system (rather than wrapping each
+/// individual item in an Option hanging off the SessionRunner). "Later" FSM
+/// states and (various helper methods specific to those states) expect a
+/// PeerConnection rather than a BgpConnection, because those are states we
+/// enter after a BgpConnection has already received (and accepted) an Open.
+#[derive(Clone, Debug)]
 pub struct PeerConnection<Cnx: BgpConnection> {
-    conn: Cnx,
-    /// The actual Router-ID learned from the remote peer (runtime state)
-    id: u32,
-    /// The actual ASN learned from the remote peer (runtime state)
-    asn: u32,
+    /// The BgpConnection to the peer itself (TCP or Channel)
+    pub conn: Cnx,
+    /// The actual BGP-ID (Router-ID) learned from the peer (runtime state)
+    pub id: u32,
+    /// The actual ASN learned from the peer (runtime state)
+    pub asn: u32,
+    /// The actual capabilities received from the peer (runtime state)
+    pub caps: BTreeSet<Capability>,
 }
 
+/// This wraps a pair of BgpConnections that have been identified as being a
+/// Connection Collision. This condition is detected in either OpenConfirm or
+/// OpenSent FSM states, and these invariants indicate which state the FSM was
+/// in when the collision was detected.
 pub enum CollisionPair<Cnx: BgpConnection> {
     OpenConfirm(PeerConnection<Cnx>, Cnx),
     OpenSent(Cnx, Cnx),
 }
 
+/// This is a helper enum to classify what connection an FsmEvent is tied to
+/// during a Connection Collision. This was created to work in conjuction with
+/// collision_conn_kind() to make life easier when choosing between one of 2
+/// active connections (`new`/`exist` handled by the current FSM state), an
+/// unexpected connection (in the registry but not being actively handled by the
+/// current FSM state), and an unknown connection (not in the registry),
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum CollisionConnectionKind<Cnx: BgpConnection> {
     New,
@@ -269,6 +290,11 @@ impl AdminEvent {
     }
 }
 
+/// This is a shorthand enum used to represent the different reasons to stop a
+/// BgpConnection and/or return to FsmState::Idle. This goes hand in hand with
+/// the stop() method to clean up state based on the reason for stopping, as
+/// there are consistent patterns in what actions need to be taken when a given
+/// "reason" occurs.
 pub enum StopReason {
     Reset,
     Shutdown,
@@ -572,7 +598,7 @@ pub struct SessionInfo {
     /// Expected ASN of the remote peer (for validation). None means any remote
     /// ASN is acceptable.
     pub remote_asn: Option<u32>,
-    /// Expected Router-ID of the remote peer (for validation)  . None means any
+    /// Expected Router-ID of the remote peer (for validation). None means any
     /// remote BGP-ID is acceptable.
     pub remote_id: Option<u32>,
     /// Optional Source IP used for connection. None means the Source IP is
@@ -773,12 +799,80 @@ pub enum ShaperApplication {
     Difference(Option<rhai::AST>),
 }
 
-/// This is the top level object that tracks a BGP session with a peer.
+/// This is used to represent the "Primary" BgpConnection owned by a
+/// SessionRunner. If there are no collisions in progress, this will be the only
+/// BgpConnection. This exists so we the Router can know which connection to
+/// pull state from when a query arrives for information about a peer.
+#[derive(Debug)]
+pub enum PrimaryConnection<Cnx: BgpConnection> {
+    /// This represents a connection in the "early" FSM states where we haven't
+    /// yet learned details about the BGP peer (via Open message).
+    Partial(Cnx),
+    /// This represents a connection in the "late" FSM states where we know
+    /// details details about the BGP peer (via Open message).
+    Full(PeerConnection<Cnx>),
+}
+
+/// This is the top level object that tracks a BGP session with a peer. There is
+/// one SessionRunner per peer (based on IP), which transitions the peer through
+/// the Finite State Machine (FSM) via the SessionRunner's fsm_* methods.
+/// The FSM entry  point is fsm_start(), which loops indefinitely, cycling
+/// between FsmStates, until a shutdown request is observed. Each fsm_* method
+/// implements logic to read FSM events in a loop  until an event triggers an
+/// FSM state transition. Sometimes the method has its own loop, and sometimes
+/// it relies on fsm_start() to send the FSM back into the same state.
+///
+/// Events that progress the SessionRunner's state machine are sent/received
+/// via an FSM Event Queue (one per SessionRunner). The SessionRunner reads
+/// FSM events from `event_rx` and takes actions accordingly. New FSM events
+/// are generated by sending an FsmEvent to `event_tx`. The SessionRunner owns
+/// its FSM Event Queue sender (`event_tx`) primarily to simplify distribution
+/// to event generators like the BgpListener, BgpConnector, SessionClock, or
+/// ConnectionClock. The SessionRunner provides a handle to event generators by
+/// passing them a clone() of `event_tx`.
+///
+/// A BGP peer's configuration lives in `session`, which is owned by the router
+/// this peer is tied to. When the configuration is updated, it is compared
+/// against the old config to determine whether any state resets need to occur.
+/// For example, changes to HoldTime or KeepaliveTime require a full reset of
+/// the BgpConnection since they are negotiated with the peer via Open messages.
+///
+/// In most cases there is a 1:1 relationship of SessionRunner:BgpConnection,
+/// which represents the underlying message passing connection between the local
+/// system and the configured peer IP address (defined in `connection.rs`).
+/// However, it is entirely possible (and normal) to encounter a transitory
+/// condition where more than one connection is open (called a Connection
+/// Collision), for example when both BGP peers are non-passive and open a new
+/// TCP session at the same time. For this reason, the SessionRunner is capable
+/// of tracking multiple connections until the Connection Collision is resolved.
+/// RFC 4271 describes allocating one FSM for each configured in addition to
+/// one FSM for each inbound connection, so the RFC expects there two be two
+/// completely separate FSMs for the two colliding connections (to the same
+/// peer) until the Connection Collision is resolved. However, many well-known
+/// implementations (e.g. Cisco, FRRouting) implement collision handling
+/// via a single FSM, which is the approach we have chosen. We handle this
+/// in a dedicated FSM state (ConnectionCollision), where two FSMs (one per
+/// connection) are emulated for the lifetime of the collision and the winner
+/// becomes the sole connection for the SessionRunner upon resolution. Each
+/// connection has its own `ConnectionClock` for timers that are connection
+/// specific (e.g. HoldTime, KeepaliveTime), which allows each connection to be
+/// handled according to their own state.
+///
+/// Some notes on timers:
+/// RFC 4271 is a bit ambiguous when it comes to timers. In some cases they say
+/// to "zero" a timer, but do not elaborate on whether timers start at zero and
+/// count up to the interval, or if they start at the interval and count down.
+/// They use terms like "reset," "set to zero," "restart," "stop," and "clear"
+/// without ever defining these terms (even the IETF mailing list has 20 year
+/// old disagreements on whether this is ambiguous, but they never updated the
+/// language). Our timers' values start at the interval and then count down.
+/// We choose to treat all of this verbiage to mean "stop and reset", i.e. we
+/// disable the timer and then set value equal to the interval. The actual timer
+/// implementation lives in `clock.rs`.
 pub struct SessionRunner<Cnx: BgpConnection> {
-    /// A sender that can be used to send FSM events to this session. When a
-    /// new connection is established, a copy of this sender is sent to the
-    /// underlying BGP connection manager to send messages to the session
-    /// runner as they are received.
+    /// FSM Event Queue sender. This handle is owned by the SessionRunner for
+    /// the purpose of passing clones to different threads/events that need to
+    /// generate FsmEvents to be processed by this SessionRunner's FSM.
     pub event_tx: Sender<FsmEvent<Cnx>>,
 
     /// Information about the neighbor this session is to peer with.
@@ -806,18 +900,8 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     asn: Asn,
     id: u32,
 
-    /// The actual ASN learned from the remote peer (runtime state)
-    remote_asn: Arc<Mutex<Option<u32>>>,
-
-    // XXX: stop duplicating this in PeerConnection
-    /// The actual Router-ID learned from the remote peer (runtime state)
-    remote_id: Arc<Mutex<Option<u32>>>,
-
-    /// Capabilities received from the peer (runtime state)
-    capabilities_received: Arc<Mutex<BTreeSet<Capability>>>,
-
-    /// Capabilities sent to the peer (runtime state)
-    capabilities_sent: Arc<Mutex<BTreeSet<Capability>>>,
+    /// Capabilities to send to the peer
+    caps_tx: Arc<Mutex<BTreeSet<Capability>>>,
 
     shutdown: AtomicBool,
     running: AtomicBool,
@@ -828,9 +912,9 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     /// Registry of active connections indexed by ConnectionId
     connections: Arc<Mutex<BTreeMap<ConnectionId, Cnx>>>,
 
-    /// The ConnectionId of the primary connection for the SessionRunner. Mainly
-    /// used as a simple anchor point for pulling out Connection state.
-    primary_connection: Arc<Mutex<Option<ConnectionId>>>,
+    /// A handle to the primary connection for a given peer.
+    /// Used to expose runtime state of the peer itself, not just the FSM.
+    pub primary: Arc<Mutex<Option<PrimaryConnection<Cnx>>>>,
 
     log: Logger,
 }
@@ -880,12 +964,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             message_history: Arc::new(Mutex::new(MessageHistory::default())),
             counters: Arc::new(SessionCounters::default()),
             db,
-            remote_asn: Arc::new(Mutex::new(None)),
-            remote_id: Arc::new(Mutex::new(None)),
-            capabilities_received: Arc::new(Mutex::new(BTreeSet::new())),
-            capabilities_sent: Arc::new(Mutex::new(BTreeSet::new())),
+            caps_tx: Arc::new(Mutex::new(BTreeSet::new())),
             connections: Arc::new(Mutex::new(BTreeMap::new())),
-            primary_connection: Arc::new(Mutex::new(None)),
+            primary: Arc::new(Mutex::new(None)),
         };
         drop(session_info);
         runner
@@ -918,8 +999,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // recv loop params since we already started the loop above.
         lock!(self.connections).insert(conn_id, conn.clone());
 
-        if self.get_primary_conn().is_none() {
-            self.set_primary_conn(Some(conn_id));
+        // If this was the primary connection, either promote another connection
+        // or reset it to None
+        if lock!(self.primary).is_none() {
+            self.set_primary_conn(Some(PrimaryConnection::Partial(
+                conn.clone(),
+            )));
         }
     }
 
@@ -932,9 +1017,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // If this was the primary connection, either promote another connection
         // or reset it to None
-        let mut primary = lock!(self.primary_connection);
-        if primary.as_ref() == Some(conn_id) {
-            *primary = lock!(self.connections).keys().next().cloned();
+        if let Some(primary_id) = self.get_primary_conn_id() {
+            if primary_id == *conn_id {
+                self.set_primary_conn(None);
+            }
         }
     }
 
@@ -944,14 +1030,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Promote a connection to be the primary for this BGP session
-    fn set_primary_conn(&self, conn_id: Option<ConnectionId>) {
-        *lock!(self.primary_connection) = conn_id;
+    fn set_primary_conn(&self, primary: Option<PrimaryConnection<Cnx>>) {
+        *lock!(self.primary) = primary;
     }
 
-    /// Get the primary connection
-    pub fn get_primary_conn(&self) -> Option<Cnx> {
-        let primary_id = (*lock!(self.primary_connection))?;
-        lock!(self.connections).get(&primary_id).cloned()
+    /// Get the ConnectionId of the primary connection
+    pub fn get_primary_conn_id(&self) -> Option<ConnectionId> {
+        if let Some(ref primary) = *lock!(self.primary) {
+            match primary {
+                PrimaryConnection::Partial(ref p) => Some(*p.id()),
+                PrimaryConnection::Full(ref pc) => Some(*pc.conn.id()),
+            }
+        } else {
+            None
+        }
     }
 
     /// Clean up all connections associated with this SessionRunner
@@ -962,12 +1054,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             conn.clock().disable_all();
         }
         connections.clear();
-        *lock!(self.primary_connection) = None;
+        *lock!(self.primary) = None;
     }
 
     /// This is the BGP peer state machine entry point. This function only
     /// returns if a shutdown is requested.
-    pub fn start(self: &Arc<Self>) {
+    pub fn fsm_start(self: &Arc<Self>) {
         // Check if this session is already running.
         if self
             .running
@@ -1002,16 +1094,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // function. All handler functions return the next state as their
             // return value, stash that in the `current` variable.
             current = match current {
-                FsmState::Idle => self.idle(),
-                FsmState::Connect => self.on_connect(),
-                FsmState::Active => self.on_active(),
-                FsmState::OpenSent(conn) => self.on_open_sent(conn),
-                FsmState::OpenConfirm(conn) => self.on_open_confirm(conn),
+                FsmState::Idle => self.fsm_idle(),
+                FsmState::Connect => self.fsm_connect(),
+                FsmState::Active => self.fsm_active(),
+                FsmState::OpenSent(conn) => self.fsm_open_sent(conn),
+                FsmState::OpenConfirm(pc) => self.fsm_open_confirm(pc),
                 FsmState::ConnectionCollision(cpair) => {
-                    self.connection_collision(cpair)
+                    self.fsm_connection_collision(cpair)
                 }
-                FsmState::SessionSetup(conn) => self.session_setup(conn),
-                FsmState::Established(conn) => self.on_established(conn),
+                FsmState::SessionSetup(pc) => self.fsm_session_setup(pc),
+                FsmState::Established(pc) => self.fsm_established(pc),
             };
 
             // If we have made a state transition log that and update the
@@ -1072,7 +1164,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn initialize_capabilities(&self) {
-        *lock!(self.capabilities_sent) = BTreeSet::from([
+        *lock!(self.caps_tx) = BTreeSet::from([
             //Capability::EnhancedRouteRefresh{},
             Capability::MultiprotocolExtensions {
                 afi: 1,  //IP
@@ -1092,7 +1184,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Initial state. Refuse all incoming BGP connections. No resources
     /// allocated to peer.
-    fn idle(&self) -> FsmState<Cnx> {
+    fn fsm_idle(&self) -> FsmState<Cnx> {
         // Clean up connection registry
         self.cleanup_connections();
 
@@ -1364,7 +1456,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// The only time non Notification messages are handled in Connect is when
     /// an Open is received while DelayOpenTimer is running. DelayOpen is not
     /// currently implemented, so for now we don't have special handling here.
-    fn on_connect(&self) -> FsmState<Cnx> {
+    /// Note: ConnectRetryTimer needs to be stopped before any state transitions
+    /// occur. ConnectRetryTimer is used to trigger a new outbound connection
+    /// attempt for non-passive peers while in Active or Connect states, but
+    /// should be stopped before transitioning into other FSM states. Outbound
+    /// connection attempts are also made in Idle for non-passive peers, but
+    /// in Idle this is triggered by a ManualStart/Reset event or upon an
+    /// IdleHoldTimeExpires event, rather than ConnectRetryTimerExpires. This
+    /// is important because in "later" FSM states, a ConnectRetryTimerExpires
+    /// event is considered an FSM error that triggers a Notification and an FSM
+    /// transition back to idle. So we need to get it right.
+    fn fsm_connect(&self) -> FsmState<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
@@ -1381,7 +1483,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     event
                 }
 
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
                     session_log_lite!(self,
@@ -1389,6 +1491,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "event rx error: {e}";
                         "error" => format!("{e}")
                     );
+                    // TODO: Possible death loop. Should we just panic here?
                     continue;
                 }
             };
@@ -1657,13 +1760,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Trying to acquire peer by listening for and accepting a TCP connection.
-    /// We do not initiate connections from Active -- that happens in Connect.
     /// Passive peers only ever live in Active while waiting for connections to
     /// complete; they should never transition to Connect.
     /// The only time non Notification messages are handled in Active is when
     /// an Open is received while DelayOpenTimer is running. DelayOpen is not
     /// currently implemented, so for now we don't have special handling here.
-    fn on_active(&self) -> FsmState<Cnx> {
+    /// Note: ConnectRetryTimer needs to be stopped before any state transitions
+    /// occur. ConnectRetryTimer is used to trigger a new outbound connection
+    /// attempt for non-passive peers while in Active or Connect states, but
+    /// should be stopped before transitioning into other FSM states. Outbound
+    /// connection attempts are also made in Idle for non-passive peers, but
+    /// in Idle this is triggered by a ManualStart/Reset event or upon an
+    /// IdleHoldTimeExpires event, rather than ConnectRetryTimerExpires. This
+    /// is important because in "later" FSM states, a ConnectRetryTimerExpires
+    /// event is considered an FSM error that triggers a Notification and an FSM
+    /// transition back to idle. So we need to get it right.
+    fn fsm_active(&self) -> FsmState<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
@@ -1679,7 +1791,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     event
                 }
 
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
                     session_log_lite!(self, error, "event rx error: {e}";
@@ -1810,6 +1922,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             lock!(self.clock.timers.connect_retry_timer).stop();
                             self.connect_retry_counter
                                 .fetch_add(1, Ordering::Relaxed);
+                            self.counters
+                                .connection_retries
+                                .fetch_add(1, Ordering::Relaxed);
 
                             return FsmState::Idle;
                         }
@@ -1820,6 +1935,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         {
                             lock!(self.clock.timers.connect_retry_timer).stop();
                             self.connect_retry_counter
+                                .fetch_add(1, Ordering::Relaxed);
+                            self.counters
+                                .connection_retries
                                 .fetch_add(1, Ordering::Relaxed);
 
                             session_log_lite!(self, warn,
@@ -1899,6 +2017,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                         self.register_conn(&accepted);
 
+                        lock!(self.clock.timers.connect_retry_timer).stop();
+
                         if let Err(e) = self.send_open(&accepted) {
                             session_log!(self, error, accepted,
                                 "failed to send open, fsm transition to idle";
@@ -1908,7 +2028,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
 
                         lock!(accepted.clock().timers.hold_timer).restart();
-                        lock!(self.clock.timers.connect_retry_timer).stop();
 
                         return FsmState::OpenSent(accepted);
                     }
@@ -1947,7 +2066,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Waiting for open message from peer.
-    fn on_open_sent(&self, conn: Cnx) -> FsmState<Cnx> {
+    fn fsm_open_sent(&self, conn: Cnx) -> FsmState<Cnx> {
         let om = loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
@@ -1962,7 +2081,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     event
                 }
 
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
                     session_log!(self, error, conn, "event rx error: {e}";
@@ -2362,15 +2481,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // hold_timer set in handle_open(), enable it here
         lock!(conn.clock().timers.hold_timer).enable();
 
-        FsmState::OpenConfirm(PeerConnection {
+        let pc = PeerConnection {
             conn,
             id: om.id,
             asn: om.asn(),
-        })
+            caps: om.get_capabilities(),
+        };
+
+        self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+
+        FsmState::OpenConfirm(pc)
     }
 
     /// Waiting for keepalive or notification from peer.
-    fn on_open_confirm(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
+    fn fsm_open_confirm(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
         if self.shutdown.load(Ordering::Acquire) {
             return FsmState::Idle;
@@ -2385,9 +2509,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 event
             }
 
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                return FsmState::OpenConfirm(pc)
-            }
+            Err(RecvTimeoutError::Timeout) => return FsmState::OpenConfirm(pc),
 
             Err(e) => {
                 session_log!(self, error,  pc.conn,
@@ -2720,7 +2842,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// identifying which real FsmState a connection is in currently. FSM Events
     /// are handled for a connection according to the real FsmState a connection
     /// is currently in.
-    fn connection_collision(
+    fn fsm_connection_collision(
         self: &Arc<Self>,
         conn_pair: CollisionPair<Cnx>,
     ) -> FsmState<Cnx> {
@@ -2780,7 +2902,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     event
                 }
 
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
                     collision_log!(self, error, new, exist.conn,
@@ -3262,6 +3384,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 conn: new,
                 id: om.id,
                 asn: om.asn(),
+                caps: om.get_capabilities(),
             },
         )
     }
@@ -3320,7 +3443,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     event
                 }
 
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
                     collision_log!(self, error, new, exist,
@@ -3515,7 +3638,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     match new_open {
                                                         // If `new` has received an Open, it is now in OpenConfirm
                                                         Some(o) => {
-                                                            return FsmState::OpenConfirm(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                                            let pc = PeerConnection {
+                                                                conn: new,
+                                                                id: o.id,
+                                                                asn: o.asn(),
+                                                                caps: o.get_capabilities()
+                                                            };
+                                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                            return FsmState::OpenConfirm(pc);
                                                         }
                                                         // If `new` has not received an Open, it is still in OpenSent
                                                         None => {
@@ -3560,7 +3690,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 match new_open {
                                                     // If `new` has received an Open, it is now in OpenConfirm
                                                     Some(o) => {
-                                                        return FsmState::OpenConfirm(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                                        let pc = PeerConnection {
+                                                            conn: new,
+                                                            id: o.id,
+                                                            asn: o.asn(),
+                                                            caps: o.get_capabilities()
+                                                        };
+                                                        self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                        return FsmState::OpenConfirm(pc);
                                                     }
                                                     // If `new` has not received an Open, it is still in OpenSent
                                                     None => {
@@ -3581,7 +3718,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 self.counters
                                                     .keepalives_received
                                                     .fetch_add(1, Ordering::Relaxed);
-                                                return FsmState::SessionSetup(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                                let pc = PeerConnection {
+                                                    conn: exist,
+                                                    id: o.id,
+                                                    asn: o.asn(),
+                                                    caps: o.get_capabilities()
+                                                };
+                                                self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                return FsmState::SessionSetup(pc);
                                             }
                                             // `exist` is in OpenSent
                                             // keepalive means FSM Error
@@ -3621,7 +3765,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                         return FsmState::OpenSent(new);
                                                     }
                                                     Some(o) => {
-                                                        return FsmState::SessionSetup(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                                        let pc = PeerConnection {
+                                                            conn: new,
+                                                            id: o.id,
+                                                            asn: o.asn(),
+                                                            caps: o.get_capabilities()
+                                                        };
+                                                        self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                        return FsmState::SessionSetup(pc);
                                                     }
                                                 }
                                             }
@@ -3641,7 +3792,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         match new_open {
                                             // If `new` has received an Open, it is now in OpenConfirm
                                             Some(o) => {
-                                                return FsmState::OpenConfirm(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                                let pc = PeerConnection {
+                                                    conn: new,
+                                                    id: o.id,
+                                                    asn: o.asn(),
+                                                    caps: o.get_capabilities()
+                                                };
+                                                self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                return FsmState::OpenConfirm(pc);
                                             }
                                             // If `new` has not received an Open, it is still in OpenSent
                                             None => {
@@ -3681,7 +3839,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     match exist_open {
                                                         // `exist` is in OpenConfirm
                                                         Some(o) => {
-                                                            return FsmState::OpenConfirm(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                                            let pc = PeerConnection {
+                                                                conn: exist,
+                                                                id: o.id,
+                                                                asn: o.asn(),
+                                                                caps: o.get_capabilities()
+                                                            };
+                                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                            return FsmState::OpenConfirm(pc);
                                                         }
                                                         // `exist` is in OpenSent
                                                         None => {
@@ -3713,7 +3878,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 match exist_open {
                                                     // If `exist` has received an Open, it is now in OpenConfirm
                                                     Some(o) => {
-                                                        return FsmState::OpenConfirm(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                                        let pc = PeerConnection {
+                                                            conn: exist,
+                                                            id: o.id,
+                                                            asn: o.asn(),
+                                                            caps: o.get_capabilities()
+                                                        };
+                                                        self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                        return FsmState::OpenConfirm(pc);
                                                     }
                                                     // If `exist` has not received an Open, it is still in OpenSent
                                                     None => {
@@ -3734,7 +3906,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 self.counters
                                                     .keepalives_received
                                                     .fetch_add(1, Ordering::Relaxed);
-                                                return FsmState::SessionSetup(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                                let pc = PeerConnection {
+                                                    conn: new,
+                                                    id: o.id,
+                                                    asn: o.asn(),
+                                                    caps: o.get_capabilities()
+                                                };
+                                                self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                return FsmState::SessionSetup(pc);
                                             }
                                             // `new` is in OpenSent
                                             // keepalive means FSM Error
@@ -3774,7 +3953,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                         return FsmState::OpenSent(exist);
                                                     }
                                                     Some(o) => {
-                                                        return FsmState::SessionSetup(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                                        let pc = PeerConnection {
+                                                            conn: exist,
+                                                            id: o.id,
+                                                            asn: o.asn(),
+                                                            caps: o.get_capabilities()
+                                                        };
+                                                        self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                        return FsmState::SessionSetup(pc);
                                                     }
                                                 }
                                             }
@@ -3794,7 +3980,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         match exist_open {
                                             // If `exist` has received an Open, it is now in OpenConfirm
                                             Some(o) => {
-                                                return FsmState::OpenConfirm(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                                let pc = PeerConnection {
+                                                    conn: exist,
+                                                    id: o.id,
+                                                    asn: o.asn(),
+                                                    caps: o.get_capabilities()
+                                                };
+                                                self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                return FsmState::OpenConfirm(pc);
                                             }
                                             // If `exist` has not received an Open, it is still in OpenSent
                                             None => {
@@ -3841,7 +4034,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             return FsmState::OpenSent(exist);
                                         }
                                         Some(o) => {
-                                            return FsmState::SessionSetup(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                            let pc = PeerConnection {
+                                                conn: exist,
+                                                id: o.id,
+                                                asn: o.asn(),
+                                                caps: o.get_capabilities()
+                                            };
+                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                            return FsmState::SessionSetup(pc);
                                         }
                                     }
                                 },
@@ -3858,7 +4058,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             return FsmState::OpenSent(new);
                                         }
                                         Some(o) => {
-                                            return FsmState::SessionSetup(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                            let pc = PeerConnection {
+                                                conn: new,
+                                                id: o.id,
+                                                asn: o.asn(),
+                                                caps: o.get_capabilities()
+                                            };
+                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                            return FsmState::SessionSetup(pc);
                                         }
                                     }
                                 },
@@ -3907,7 +4114,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             return FsmState::OpenSent(exist);
                                         }
                                         Some(o) => {
-                                            return FsmState::SessionSetup(PeerConnection { conn: exist, id: o.id, asn: o.asn() });
+                                            let pc = PeerConnection {
+                                                conn: exist,
+                                                id: o.id,
+                                                asn: o.asn(),
+                                                caps: o.get_capabilities()
+                                            };
+                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                            return FsmState::SessionSetup(pc);
                                         }
                                     }
                                 },
@@ -3923,7 +4137,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             return FsmState::OpenSent(new);
                                         }
                                         Some(o) => {
-                                            return FsmState::SessionSetup(PeerConnection { conn: new, id: o.id, asn: o.asn() });
+                                            let pc = PeerConnection {
+                                                conn: new,
+                                                id: o.id,
+                                                asn: o.asn(),
+                                                caps: o.get_capabilities()
+                                            };
+                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                            return FsmState::SessionSetup(pc);
                                         }
                                     }
                                 },
@@ -3958,11 +4179,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 conn: exist,
                 id: om_exist.id,
                 asn: om_exist.asn(),
+                caps: om_exist.get_capabilities(),
             },
             PeerConnection {
                 conn: new,
                 id: om_new.id,
                 asn: om_new.asn(),
+                caps: om_new.get_capabilities(),
             },
         )
     }
@@ -4086,6 +4309,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             lock!(our_conn.conn.clock().timers.hold_timer).restart();
             lock!(our_conn.conn.clock().timers.keepalive_timer).restart();
 
+            self.set_primary_conn(Some(PrimaryConnection::Full(
+                our_conn.clone(),
+            )));
+
             return FsmState::SessionSetup(our_conn);
         }
 
@@ -4104,6 +4331,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         lock!(peer_conn.conn.clock().timers.hold_timer).restart();
         lock!(peer_conn.conn.clock().timers.keepalive_timer).restart();
+
+        self.set_primary_conn(Some(PrimaryConnection::Full(peer_conn.clone())));
 
         FsmState::SessionSetup(peer_conn)
     }
@@ -4129,7 +4358,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Sync up with peers.
-    fn session_setup(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
+    fn fsm_session_setup(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
         if self.shutdown.load(Ordering::Acquire) {
             return FsmState::Idle;
@@ -4171,7 +4400,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 update.nlri.push(p.into());
             }
             if let Err(e) =
-                self.send_update(update, &pc.conn, ShaperApplication::Current)
+                self.send_update(update, &pc, ShaperApplication::Current)
             {
                 session_log!(self, error, pc.conn,
                     "failed to send update, fsm transition to idle";
@@ -4204,14 +4433,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         for p in originated {
             update.nlri.push(p.into());
         }
-        if let Err(e) = self.send_update(update, &pc.conn, sa) {
+        if let Err(e) = self.send_update(update, pc, sa) {
             anyhow::bail!("shaper changed: sending update to peer failed {e}");
         }
         Ok(())
     }
 
     /// Able to exchange update, notification and keepliave messages with peers.
-    fn on_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
+    fn fsm_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
         if self.shutdown.load(Ordering::Acquire) {
             return self.exit_established(pc);
@@ -4226,9 +4455,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 event
             }
 
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                return FsmState::Established(pc)
-            }
+            Err(RecvTimeoutError::Timeout) => return FsmState::Established(pc),
 
             Err(e) => {
                 //TODO possible death loop. Should we just panic here? Is it
@@ -4259,7 +4486,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 AdminEvent::Announce(update) => {
                     if let Err(e) = self.send_update(
                         update,
-                        &pc.conn,
+                        &pc,
                         ShaperApplication::Current,
                     ) {
                         session_log!(self, error, pc.conn,
@@ -4349,7 +4576,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     if let Err(e) = self.send_update(
                         update,
-                        &pc.conn,
+                        &pc,
                         ShaperApplication::Current,
                     ) {
                         session_log!(self, error, pc.conn,
@@ -4375,7 +4602,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 AdminEvent::ReAdvertiseRoutes => {
-                    if let Err(e) = self.refresh_react(&pc.conn) {
+                    if let Err(e) = self.refresh_react(&pc) {
                         session_log!(self, error, pc.conn,
                             "route re-advertisement error: {e}";
                             "error" => format!("{e}")
@@ -4644,9 +4871,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message" => "update",
                                 "message_contents" => format!("{m}").as_str()
                             );
-                            // XXX: let peer_as = pc.asn;
-                            let peer_as = lock!(self.remote_asn).unwrap_or(0);
-                            self.apply_update(m.clone(), &pc, peer_as);
+                            self.apply_update(m.clone(), &pc);
                             lock!(self.message_history).receive(m.into(), None);
                             self.bump_msg_counter(msg_kind, false);
                             FsmState::Established(pc)
@@ -4784,7 +5009,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Handle an open message
     fn handle_open(&self, conn: &Cnx, om: &OpenMessage) -> Result<(), Error> {
-        let remote_id = om.id;
         let remote_asn = om.asn();
         if let Some(expected_remote_asn) = lock!(self.session).remote_asn {
             if remote_asn != expected_remote_asn {
@@ -4830,10 +5054,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             }
         }
-        // Update remote peer info and capabilities in SessionRunner fields
-        *lock!(self.remote_asn) = Some(remote_asn);
-        *lock!(self.remote_id) = Some(remote_id);
-        *lock!(self.capabilities_received) = om.get_capabilities();
 
         {
             let clock = conn.clock();
@@ -4998,7 +5218,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Send an open message to the session peer.
     fn send_open(&self, conn: &Cnx) -> Result<(), Error> {
-        let capabilities = lock!(self.capabilities_sent).clone();
+        let capabilities = lock!(self.caps_tx).clone();
         let mut msg = match self.asn {
             Asn::FourOctet(asn) => OpenMessage::new4(
                 asn,
@@ -5015,7 +5235,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         let mut out = Message::from(msg.clone());
         if let Some(shaper) = read_lock!(self.router.policy.shaper).as_ref() {
-            let peer_as = lock!(self.remote_asn).unwrap_or(0);
+            let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
             match crate::policy::shape_outgoing_open(
                 msg.clone(),
                 shaper,
@@ -5057,17 +5277,26 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
-    fn is_ebgp(&self) -> bool {
-        if let Some(remote) = *lock!(self.remote_asn) {
-            if remote != self.asn.as_u32() {
-                return true;
+    fn is_ebgp(&self) -> Option<bool> {
+        if let Some(PrimaryConnection::Full(ref pc)) = *lock!(self.primary) {
+            if pc.asn != self.asn.as_u32() {
+                return Some(true);
+            } else {
+                return Some(false);
             }
         }
-        false
+        None
     }
 
-    fn is_ibgp(&self) -> bool {
-        !self.is_ebgp()
+    fn is_ibgp(&self) -> Option<bool> {
+        if let Some(PrimaryConnection::Full(ref pc)) = *lock!(self.primary) {
+            if pc.asn == self.asn.as_u32() {
+                return Some(true);
+            } else {
+                return Some(false);
+            }
+        }
+        None
     }
 
     fn shape_update(
@@ -5088,7 +5317,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         update: UpdateMessage,
     ) -> Result<ShaperResult, Error> {
         if let Some(shaper) = read_lock!(self.router.policy.shaper).as_ref() {
-            let peer_as = lock!(self.remote_asn).unwrap_or(0);
+            let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
             Ok(crate::policy::shape_outgoing_update(
                 update.clone(),
                 shaper,
@@ -5106,7 +5335,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         update: UpdateMessage,
         previous: Option<rhai::AST>,
     ) -> Result<ShaperResult, Error> {
-        let peer_as = lock!(self.remote_asn).unwrap_or(0);
+        let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
 
         let former = match previous {
             Some(shaper) => crate::policy::shape_outgoing_update(
@@ -5128,10 +5357,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn send_update(
         &self,
         mut update: UpdateMessage,
-        conn: &Cnx,
+        pc: &PeerConnection<Cnx>,
         shaper_application: ShaperApplication,
     ) -> Result<(), Error> {
-        let nexthop = conn.local().ip().to_canonical();
+        let nexthop = pc.conn.local().ip().to_canonical();
 
         update
             .path_attributes
@@ -5143,13 +5372,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .push(PathAttributeValue::MultiExitDisc(med).into());
         }
 
-        if self.is_ibgp() {
-            update.path_attributes.push(
-                PathAttributeValue::LocalPref(
-                    lock!(self.session).local_pref.unwrap_or(0),
-                )
-                .into(),
-            );
+        if let Some(ibgp) = self.is_ibgp() {
+            if ibgp {
+                update.path_attributes.push(
+                    PathAttributeValue::LocalPref(
+                        lock!(self.session).local_pref.unwrap_or(0),
+                    )
+                    .into(),
+                );
+            }
         }
 
         let cs: Vec<Community> = lock!(self.session)
@@ -5189,13 +5420,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
 
-        session_log!(self, info, conn, "sending update";
+        session_log!(self, info, pc.conn, "sending update";
             "message" => "update",
             "message_contents" => format!("{out}")
         );
 
-        if let Err(e) = conn.send(out) {
-            session_log!(self, error, conn,
+        if let Err(e) = pc.conn.send(out) {
+            session_log!(self, error, pc.conn,
                 "failed to send update: {e}";
                 "error" => format!("{e}")
             );
@@ -5225,7 +5456,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         FsmState::Idle
     }
 
-    // XXX: See if we can make this pattern applicable more generally
     fn bump_msg_counter(&self, msg: MessageKind, unexpected: bool) {
         match msg {
             MessageKind::Open => {
@@ -5407,9 +5637,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         &self,
         mut update: UpdateMessage,
         pc: &PeerConnection<Cnx>,
-        peer_as: u32,
     ) {
-        if let Err(e) = self.check_update(&update) {
+        if let Err(e) = self.check_update(&update, pc.asn) {
             session_log!(self, warn, pc.conn,
                 "update check failed: {e}";
                 "error" => format!("{e}"),
@@ -5424,7 +5653,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             match crate::policy::check_incoming_update(
                 update.clone(),
                 checker,
-                peer_as,
+                pc.asn,
                 self.neighbor.host.ip(),
                 self.log.clone(),
             ) {
@@ -5458,7 +5687,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             update.nlri.retain(|x| message_policy.contains(x));
         };
 
-        self.update_rib(&update, pc, peer_as);
+        self.update_rib(&update, pc);
 
         // NOTE: for now we are only acting as an edge router. This means we
         //       do not redistribute announcements. If this changes, uncomment
@@ -5467,12 +5696,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         //    self.fanout_update(&update);
     }
 
-    pub fn refresh_react(&self, conn: &Cnx) -> Result<(), Error> {
+    pub fn refresh_react(&self, pc: &PeerConnection<Cnx>) -> Result<(), Error> {
         // XXX: Update for IPv6
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
-                session_log!(self, error, conn,
+                session_log!(self, error, pc.conn,
                     "failed to get originated routes from db";
                     "error" => format!("{e}")
                 );
@@ -5488,7 +5717,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             for p in originated {
                 update.nlri.push(p.into());
             }
-            self.send_update(update, conn, ShaperApplication::Current)?;
+            self.send_update(update, pc, ShaperApplication::Current)?;
         }
         Ok(())
     }
@@ -5502,16 +5731,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if msg.afi != Afi::Ipv4 as u16 {
             return Ok(());
         }
-        self.refresh_react(&pc.conn)
+        self.refresh_react(pc)
     }
 
     /// Update this router's RIB based on an update message from a peer.
-    fn update_rib(
-        &self,
-        update: &UpdateMessage,
-        pc: &PeerConnection<Cnx>,
-        peer_as: u32,
-    ) {
+    fn update_rib(&self, update: &UpdateMessage, pc: &PeerConnection<Cnx>) {
         self.db.remove_bgp_prefixes(
             update
                 .withdrawn
@@ -5590,7 +5814,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 shutdown: update.graceful_shutdown(),
                 rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                 bgp: Some(BgpPathProperties {
-                    origin_as: peer_as,
+                    origin_as: pc.asn,
                     peer: pc.conn.peer().ip(),
                     id: pc.id,
                     med: update.multi_exit_discriminator(),
@@ -5617,21 +5841,25 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Perform a set of checks on an update to see if we can accept it.
-    fn check_update(&self, update: &UpdateMessage) -> Result<(), Error> {
+    fn check_update(
+        &self,
+        update: &UpdateMessage,
+        peer_as: u32,
+    ) -> Result<(), Error> {
         self.check_for_self_in_path(update)?;
         self.check_nexthop_self(update)?;
         let info = lock!(self.session);
         if info.enforce_first_as {
-            if let Some(peer_as) = *lock!(self.remote_asn) {
-                self.enforce_first_as(update, peer_as)?;
-            }
+            self.enforce_first_as(update, peer_as)?;
         }
         Ok(())
     }
 
     fn apply_static_update_policy(&self, update: &mut UpdateMessage) {
-        if self.is_ebgp() {
-            update.clear_local_pref()
+        if let Some(ebgp) = self.is_ebgp() {
+            if ebgp {
+                update.clear_local_pref()
+            }
         }
         if let Some(pref) = lock!(self.session).local_pref {
             update.set_local_pref(pref);
@@ -5735,7 +5963,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Return the learned remote ASN of the peer (if any).
     pub fn remote_asn(&self) -> Option<u32> {
-        *lock!(self.remote_asn)
+        if let Some(PrimaryConnection::Full(ref pc)) = *lock!(self.primary) {
+            return Some(pc.asn);
+        }
+        None
     }
 
     /// Return how long the BGP peer state machine has been in the current

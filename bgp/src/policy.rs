@@ -326,25 +326,28 @@ pub fn check_incoming_update(
 pub fn shape_outgoing_open(
     m: OpenMessage,
     shaper: &AST,
-    asn: u32,
+    expected_asn: u32,
     address: IpAddr,
     log: Logger,
 ) -> Result<ShaperResult, Error> {
     let ctx = PolicyContext {
         direction: Direction::Incoming,
         message: m.clone().into(),
-        peer: PeerInfo { asn, address },
+        peer: PeerInfo {
+            asn: expected_asn,
+            address,
+        },
     };
 
     let mut scope = new_rhai_scope(&ctx);
     let mut engine = new_rhai_engine();
-    set_engine_logger(&mut engine, log, UNIT_CHECKER, asn);
+    set_engine_logger(&mut engine, log, UNIT_CHECKER, expected_asn);
 
     Ok(engine.call_fn::<ShaperResult>(
         &mut scope,
         shaper,
         "open",
-        (m.clone(), asn as i64, address),
+        (m.clone(), expected_asn as i64, address),
     )?)
 }
 

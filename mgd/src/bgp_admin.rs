@@ -8,7 +8,7 @@ use crate::{
     admin::HandlerContext, bgp_param::*, error::Error, log::bgp_log, register,
 };
 use bgp::router::LoadPolicyError;
-use bgp::session::FsmStateKind;
+use bgp::session::{FsmStateKind, PrimaryConnection};
 use bgp::{
     config::RouterConfig,
     connection::BgpConnection,
@@ -506,8 +506,11 @@ pub async fn get_neighbors(
         // If the session runner has a primary connection, pull the config and
         // runtime state from it. If not, just use the config owned by the
         // session runner as both the config and runtime state.
-        if let Some(conn) = s.get_primary_conn() {
-            let clock = conn.clock();
+        if let Some(ref primary) = *lock!(s.primary) {
+            let clock = match primary {
+                PrimaryConnection::Partial(ref p) => p.clock(),
+                PrimaryConnection::Full(ref pc) => pc.conn.clock(),
+            };
             conf_holdtime = clock.timers.config_hold_time;
             neg_holdtime = lock!(clock.timers.hold_timer).interval;
             conf_keepalive = clock.timers.config_keepalive_time;
