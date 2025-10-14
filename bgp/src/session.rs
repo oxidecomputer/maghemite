@@ -813,6 +813,19 @@ pub enum PrimaryConnection<Cnx: BgpConnection> {
     Full(PeerConnection<Cnx>),
 }
 
+/// Convenience macro for accessing session-level timers with less verbosity
+macro_rules! session_timer {
+    ($self:expr, $timer:ident) => {
+        lock!($self.clock.timers.$timer)
+    };
+}
+/// Convenience macro for accessing connection-level timers with less verbosity
+macro_rules! conn_timer {
+    ($conn:expr, $timer:ident) => {
+        lock!($conn.clock().timers.$timer)
+    };
+}
+
 /// This is the top level object that tracks a BGP session with a peer. There is
 /// one SessionRunner per peer (based on IP), which transitions the peer through
 /// the Finite State Machine (FSM) via the SessionRunner's fsm_* methods.
@@ -1194,7 +1207,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // supplied via PeerConfig as an unsigned int, and is always set to
         // something valid. DampPeerOscillation is disabled if interval == 0.
         {
-            let ihl = lock!(self.clock.timers.idle_hold_timer);
+            let ihl = session_timer!(self, idle_hold);
             if ihl.interval.is_zero() {
                 // If IdleHoldTimer is not configured, send IdleHoldTimerExpires
                 // so we immediately move into the next state.
@@ -1251,32 +1264,33 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
                     AdminEvent::ManualStart | AdminEvent::Reset => {
-                        lock!(self.clock.timers.idle_hold_timer).stop();
+                        session_timer!(self, idle_hold).stop();
 
+                        // peer is passive
                         if lock!(self.session).passive_tcp_establishment {
-                            lock!(self.clock.timers.connect_retry_timer).stop();
+                            session_timer!(self, connect_retry).stop();
                             return FsmState::Active;
-                        } else {
-                            lock!(self.clock.timers.connect_retry_timer)
-                                .restart();
-                            session_log_lite!(self, debug, "starting connect attempt";);
-                            {
-                                let session_info = lock!(self.session).clone();
-                                if let Err(e) = Cnx::Connector::connect(
-                                    self.neighbor.host,
-                                    IO_TIMEOUT,
-                                    self.log.clone(),
-                                    self.event_tx.clone(),
-                                    session_info,
-                                ) {
-                                    session_log_lite!(self, error,
-                                        "failed to spawn connection thread: {e}";
-                                        "error" => format!("{e}")
-                                    );
-                                }
-                            }
-                            return FsmState::Connect;
                         }
+
+                        // peer is active
+                        session_timer!(self, connect_retry).restart();
+                        session_log_lite!(self, debug, "starting connect attempt";);
+                        {
+                            let session_info = lock!(self.session).clone();
+                            if let Err(e) = Cnx::Connector::connect(
+                                self.neighbor.host,
+                                IO_TIMEOUT,
+                                self.log.clone(),
+                                self.event_tx.clone(),
+                                session_info,
+                            ) {
+                                session_log_lite!(self, error,
+                                    "failed to spawn connection thread: {e}";
+                                    "error" => format!("{e}")
+                                );
+                            }
+                        }
+                        return FsmState::Connect;
                     }
 
                     // We are already in Idle, so ManualStop is a no-op.
@@ -1302,35 +1316,41 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     // DampPeerOscillations period has ended.
                     // Move into the next FSM State.
                     SessionEvent::IdleHoldTimerExpires => {
-                        lock!(self.clock.timers.idle_hold_timer).stop();
+                        if !session_timer!(self, idle_hold).enabled() {
+                            continue;
+                        }
+
+                        session_timer!(self, idle_hold).stop();
                         self.counters
                             .idle_hold_timer_expirations
                             .fetch_add(1, Ordering::Relaxed);
 
+                        // peer is passive
                         if lock!(self.session).passive_tcp_establishment {
-                            lock!(self.clock.timers.connect_retry_timer).stop();
+                            session_timer!(self, connect_retry).stop();
                             return FsmState::Active;
-                        } else {
-                            lock!(self.clock.timers.connect_retry_timer)
-                                .restart();
-                            session_log_lite!(self, debug, "starting connect attempt";);
-                            {
-                                let session_info = lock!(self.session).clone();
-                                if let Err(e) = Cnx::Connector::connect(
-                                    self.neighbor.host,
-                                    IO_TIMEOUT,
-                                    self.log.clone(),
-                                    self.event_tx.clone(),
-                                    session_info,
-                                ) {
-                                    session_log_lite!(self, error,
-                                        "failed to spawn connection thread: {e}";
-                                        "error" => format!("{e}")
-                                    );
-                                }
-                            }
-                            return FsmState::Connect;
                         }
+
+                        // peer is active
+                        session_timer!(self, connect_retry).restart();
+                        session_log_lite!(self, debug, "starting connect attempt";);
+                        {
+                            let session_info = lock!(self.session).clone();
+                            if let Err(e) = Cnx::Connector::connect(
+                                self.neighbor.host,
+                                IO_TIMEOUT,
+                                self.log.clone(),
+                                self.event_tx.clone(),
+                                session_info,
+                            ) {
+                                session_log_lite!(self, error,
+                                    "failed to spawn connection thread: {e}";
+                                    "error" => format!("{e}")
+                                );
+                            }
+                        }
+
+                        return FsmState::Connect;
                     }
 
                     SessionEvent::TcpConnectionAcked(new)
@@ -1371,10 +1391,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     // Event 9
                     SessionEvent::ConnectRetryTimerExpires => {
+                        if !session_timer!(self, connect_retry).enabled() {
+                            continue;
+                        }
                         session_log_lite!(self, warn,
                             "unexpected session fsm event {} not allowed in this state", session_event.title();
                         );
-                        lock!(self.clock.timers.connect_retry_timer).disable();
+                        session_timer!(self, connect_retry).disable();
                         continue;
                     }
                 },
@@ -1555,11 +1578,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          *   - stays in the Connect state.
                          */
                         SessionEvent::ConnectRetryTimerExpires => {
+                            if !session_timer!(self, connect_retry).enabled() {
+                                continue;
+                            }
                             self.counters
                                 .connection_retries
                                 .fetch_add(1, Ordering::Relaxed);
-
-                            // Attempt to establish a new connection using BgpConnector
                             {
                                 let session_info = lock!(self.session).clone();
                                 if let Err(e) = Cnx::Connector::connect(
@@ -1575,8 +1599,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     );
                                 }
                             }
-                            lock!(self.clock.timers.connect_retry_timer)
-                                .restart();
+                            session_timer!(self, connect_retry).restart();
                         }
 
                         /*
@@ -1632,7 +1655,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             // DelayOpen can be configured for a peer, but its functionality
                             // is not implemented.  Follow DelayOpen == false instructions.
 
-                            lock!(self.clock.timers.connect_retry_timer).stop();
+                            session_timer!(self, connect_retry).stop();
 
                             if let Err(e) = self.send_open(&accepted) {
                                 session_log!(self, error, accepted,
@@ -1642,23 +1665,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 return FsmState::Idle;
                             }
 
-                            lock!(accepted.clock().timers.hold_timer).restart();
+                            conn_timer!(accepted, hold).restart();
 
                             return FsmState::OpenSent(accepted);
                         }
 
                         // Event 13
                         SessionEvent::IdleHoldTimerExpires => {
-                            lock!(self.clock.timers.connect_retry_timer).stop();
+                            if !session_timer!(self, idle_hold).enabled() {
+                                continue;
+                            }
+                            session_timer!(self, connect_retry).stop();
                             self.connect_retry_counter
                                 .fetch_add(1, Ordering::Relaxed);
-
                             session_log_lite!(self,
                                 warn,
                                 "{} event not allowed in this state, fsm transition to idle",
                                 session_event.title();
                             );
-
                             return FsmState::Idle;
                         }
                     }
@@ -1726,7 +1750,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 self.bump_msg_counter(msg.kind(), true);
                             }
 
-                            lock!(self.clock.timers.connect_retry_timer).stop();
+                            session_timer!(self, connect_retry).stop();
                             self.connect_retry_counter
                                 .fetch_add(1, Ordering::Relaxed);
 
@@ -1738,7 +1762,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         | ConnectionEvent::KeepaliveTimerExpires(ref conn_id)
                         | ConnectionEvent::DelayOpenTimerExpires(ref conn_id) =>
                         {
-                            lock!(self.clock.timers.connect_retry_timer).stop();
+                            session_timer!(self, connect_retry).stop();
 
                             // DelayOpenTimer is stored in the Connection, which
                             // will be dropped in Idle. Skip touching its timer.
@@ -1919,7 +1943,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 self.bump_msg_counter(msg.kind(), true);
                             }
 
-                            lock!(self.clock.timers.connect_retry_timer).stop();
+                            session_timer!(self, connect_retry).stop();
                             self.connect_retry_counter
                                 .fetch_add(1, Ordering::Relaxed);
                             self.counters
@@ -1929,11 +1953,38 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             return FsmState::Idle;
                         }
 
-                        // Events 8 (Automatic Stop), 10-11, 13
-                        ConnectionEvent::HoldTimerExpires(ref conn_id)
-                        | ConnectionEvent::KeepaliveTimerExpires(ref conn_id) =>
-                        {
-                            lock!(self.clock.timers.connect_retry_timer).stop();
+                        // Events 8 (Automatic Stop), 10, 13
+                        ConnectionEvent::HoldTimerExpires(ref conn_id) => {
+                            let Some(conn) = self.get_conn(conn_id) else {
+                                continue;
+                            };
+                            if !conn_timer!(conn, hold).enabled() {
+                                continue;
+                            }
+                            session_timer!(self, connect_retry).stop();
+                            self.connect_retry_counter
+                                .fetch_add(1, Ordering::Relaxed);
+                            self.counters
+                                .connection_retries
+                                .fetch_add(1, Ordering::Relaxed);
+
+                            session_log_lite!(self, warn,
+                                "rx connection fsm event {} (conn_id: {}), but not allowed in this state. fsm transition to idle",
+                                connection_event.title(), conn_id.short();
+                            );
+
+                            return FsmState::Idle;
+                        }
+
+                        // Event 11
+                        ConnectionEvent::KeepaliveTimerExpires(ref conn_id) => {
+                            let Some(conn) = self.get_conn(conn_id) else {
+                                continue;
+                            };
+                            if !conn_timer!(conn, keepalive).enabled() {
+                                continue;
+                            }
+                            session_timer!(self, connect_retry).stop();
                             self.connect_retry_counter
                                 .fetch_add(1, Ordering::Relaxed);
                             self.counters
@@ -1949,6 +2000,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
 
                         ConnectionEvent::DelayOpenTimerExpires(ref conn_id) => {
+                            if let Some(conn) = self.get_conn(conn_id) {
+                                if !conn_timer!(conn, delay_open).enabled() {
+                                    continue;
+                                }
+                            }
                             session_log_lite!(self, warn,
                                 "rx connection fsm event {} (conn_id: {}), but not allowed in this state. ignoring..",
                                 connection_event.title(), conn_id.short();
@@ -1974,6 +2030,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                      *   - changes its state to Connect.
                      */
                     SessionEvent::ConnectRetryTimerExpires => {
+                        if !session_timer!(self, connect_retry).enabled() {
+                            continue;
+                        }
                         // RFC 4271 says that in Idle the FSM should restart the
                         // ConnectRetryTimer "In response to a
                         // ManualStart_with_PassiveTcpEstablishment event" even
@@ -1987,7 +2046,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "rx {} but peer is configured as passive, staying in active",
                                 session_event.title();
                             );
-                            lock!(self.clock.timers.connect_retry_timer).stop();
+                            session_timer!(self, connect_retry).stop();
                             continue;
                         }
 
@@ -1999,7 +2058,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.counters
                             .connection_retries
                             .fetch_add(1, Ordering::Relaxed);
-                        lock!(self.clock.timers.connect_retry_timer).restart();
+                        session_timer!(self, connect_retry).restart();
 
                         return FsmState::Connect;
                     }
@@ -2017,7 +2076,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                         self.register_conn(&accepted);
 
-                        lock!(self.clock.timers.connect_retry_timer).stop();
+                        session_timer!(self, connect_retry).stop();
 
                         if let Err(e) = self.send_open(&accepted) {
                             session_log!(self, error, accepted,
@@ -2027,7 +2086,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             return FsmState::Idle;
                         }
 
-                        lock!(accepted.clock().timers.hold_timer).restart();
+                        conn_timer!(accepted, hold).restart();
 
                         return FsmState::OpenSent(accepted);
                     }
@@ -2054,6 +2113,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
 
                     SessionEvent::IdleHoldTimerExpires => {
+                        if !session_timer!(self, idle_hold).enabled() {
+                            continue;
+                        }
                         session_log_lite!(self, warn,
                             "rx session fsm event {}, but not allowed in {}. ignoring..",
                             session_event.title(), self.state();
@@ -2170,9 +2232,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  */
                 FsmEvent::Session(session_event) => match session_event {
                     // Event 9
-                    SessionEvent::ConnectRetryTimerExpires
+                    SessionEvent::ConnectRetryTimerExpires => {
+                        if !session_timer!(self, connect_retry).enabled() {
+                            continue;
+                        }
+                        let title = session_event.title();
+                        session_log!(self, warn, conn,
+                            "{title} event not allowed in this state, fsm transition to idle";
+                            "event" => title
+                        );
+                        self.stop(Some(&conn), None, StopReason::FsmError);
+                        return FsmState::Idle;
+                    }
+
                     // Event 13
-                    | SessionEvent::IdleHoldTimerExpires => {
+                    SessionEvent::IdleHoldTimerExpires => {
+                        if !session_timer!(self, idle_hold).enabled() {
+                            continue;
+                        }
                         let title = session_event.title();
                         session_log!(self, warn, conn,
                             "{title} event not allowed in this state, fsm transition to idle";
@@ -2233,7 +2310,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                         self.register_conn(&new);
 
-                        lock!(new.clock().timers.hold_timer).restart();
+                        conn_timer!(new, hold).restart();
 
                         return FsmState::ConnectionCollision(
                             CollisionPair::OpenSent(conn, new),
@@ -2259,7 +2336,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         );
                                         continue;
                                     }
-                                },
+                                }
                                 None => {
                                     session_log!(self, warn, conn,
                                         "rx {} from peer {} for unknown connection (conn_id: {}), ignoring",
@@ -2273,10 +2350,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             // Event 19 (BgpOpen)
                             if let Message::Open(om) = msg {
                                 // Event 20 (BGPOpen with DelayOpenTimer running)
-                                lock!(self.message_history).receive(
-                                    om.clone().into(),
-                                    Some(*conn_id),
-                                );
+                                lock!(self.message_history)
+                                    .receive(om.clone().into(), Some(*conn_id));
                                 self.counters
                                     .opens_received
                                     .fetch_add(1, Ordering::Relaxed);
@@ -2290,13 +2365,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message_contents" => format!("{msg}")
                             );
 
-                            self.stop(
-                                Some(&conn),
-                                None,
-                                StopReason::FsmError,
-                            );
+                            self.stop(Some(&conn), None, StopReason::FsmError);
 
-                            lock!(self.clock.timers.connect_retry_timer).stop();
+                            session_timer!(self, connect_retry).stop();
                             self.connect_retry_counter
                                 .fetch_add(1, Ordering::Relaxed);
 
@@ -2306,7 +2377,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 Message::Update(_)
                                 | Message::Notification(_)
                                 | Message::KeepAlive
-                                | Message::RouteRefresh(_) => self.bump_msg_counter(msg.kind(), true),
+                                | Message::RouteRefresh(_) => {
+                                    self.bump_msg_counter(msg.kind(), true)
+                                }
                             }
 
                             return FsmState::Idle;
@@ -2332,6 +2405,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          *   - changes its state to Idle.
                          */
                         ConnectionEvent::HoldTimerExpires(ref conn_id) => {
+                            if !conn_timer!(conn, hold).enabled() {
+                                continue;
+                            }
                             let title = connection_event.title();
                             match self.get_conn(conn_id) {
                                 Some(connection) => {
@@ -2353,7 +2429,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         );
                                         continue;
                                     }
-                                },
+                                }
                                 None => {
                                     session_log!(self, warn, conn,
                                         "rx {title} for unknown connection (conn_id: {}), ignoring..",
@@ -2365,14 +2441,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             self.counters
                                 .hold_timer_expirations
                                 .fetch_add(1, Ordering::Relaxed);
-                            self.stop(Some(&conn), None, StopReason::HoldTimeExpired);
+                            self.stop(
+                                Some(&conn),
+                                None,
+                                StopReason::HoldTimeExpired,
+                            );
                             return FsmState::Idle;
                         }
 
                         // Event 11
-                        ConnectionEvent::KeepaliveTimerExpires(ref conn_id)
-                        // Event 12
-                        | ConnectionEvent::DelayOpenTimerExpires(ref conn_id) => {
+                        ConnectionEvent::KeepaliveTimerExpires(ref conn_id) => {
+                            if !conn_timer!(conn, keepalive).enabled() {
+                                continue;
+                            }
                             let title = connection_event.title();
                             match self.get_conn(conn_id) {
                                 Some(connection) => {
@@ -2394,7 +2475,46 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         );
                                         continue;
                                     }
-                                },
+                                }
+                                None => {
+                                    session_log!(self, warn, conn,
+                                        "rx {title} for unknown connection (conn_id: {}), ignoring..",
+                                        conn_id.short();
+                                    );
+                                    continue;
+                                }
+                            };
+                            self.stop(Some(&conn), None, StopReason::FsmError);
+                            return FsmState::Idle;
+                        }
+
+                        // Event 12
+                        ConnectionEvent::DelayOpenTimerExpires(ref conn_id) => {
+                            if !conn_timer!(conn, delay_open).enabled() {
+                                continue;
+                            }
+                            let title = connection_event.title();
+                            match self.get_conn(conn_id) {
+                                Some(connection) => {
+                                    if connection.id() == conn.id() {
+                                        session_log!(self, warn, conn,
+                                            "rx {title} (conn_id: {}) but event not allowed in this state, fsm transition to idle",
+                                            conn_id.short();
+                                            "event" => title
+                                        );
+                                    } else {
+                                        session_log!(self, warn, conn,
+                                            "rx {title} for known connection (conn_id: {}) that's unexpected in this state? closing conn",
+                                            conn_id.short();
+                                        );
+                                        self.stop(
+                                            Some(&connection),
+                                            None,
+                                            StopReason::FsmError,
+                                        );
+                                        continue;
+                                    }
+                                }
                                 None => {
                                     session_log!(self, warn, conn,
                                         "rx {title} for unknown connection (conn_id: {}), ignoring..",
@@ -2476,10 +2596,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // ACK the open with a keepalive and transition to open confirm.
         self.send_keepalive(&conn);
 
-        lock!(self.clock.timers.connect_retry_timer).stop();
-        lock!(conn.clock().timers.keepalive_timer).restart();
+        session_timer!(self, connect_retry).stop();
+        conn_timer!(conn, keepalive).restart();
         // hold_timer set in handle_open(), enable it here
-        lock!(conn.clock().timers.hold_timer).enable();
+        conn_timer!(conn, hold).enable();
 
         let pc = PeerConnection {
             conn,
@@ -2616,6 +2736,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  *   - changes its state to Idle.
                  */
                 ConnectionEvent::HoldTimerExpires(ref conn_id) => {
+                    if !conn_timer!(pc.conn, hold).enabled() {
+                        return FsmState::OpenConfirm(pc);
+                    }
                     let title = connection_event.title();
                     match self.get_conn(conn_id) {
                         Some(connection) => {
@@ -2665,16 +2788,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  *   - remains in the OpenConfirmed state.
                  */
                 ConnectionEvent::KeepaliveTimerExpires(_conn_id) => {
+                    if !conn_timer!(pc.conn, keepalive).enabled() {
+                        return FsmState::OpenConfirm(pc);
+                    }
                     session_log!(self, warn, pc.conn,
                         "keepalive timer expired, generate keepalive";
                     );
                     self.send_keepalive(&pc.conn);
-                    lock!(pc.conn.clock().timers.keepalive_timer).restart();
+                    conn_timer!(pc.conn, keepalive).restart();
                     FsmState::OpenConfirm(pc)
                 }
 
                 // Event 12
                 ConnectionEvent::DelayOpenTimerExpires(_conn_id) => {
+                    if !conn_timer!(pc.conn, delay_open).enabled() {
+                        return FsmState::OpenConfirm(pc);
+                    }
                     session_log!(self, warn, pc.conn,
                         "delay open timer expires event not allowed in this state, fsm transition to idle";
                     );
@@ -2689,8 +2818,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     // The peer has ACK'd our open message with a keepalive. Start the
                     // session timers and enter session setup.
                     if let Message::KeepAlive = msg {
-                        lock!(pc.conn.clock().timers.hold_timer).restart();
-                        lock!(pc.conn.clock().timers.keepalive_timer).restart();
+                        conn_timer!(pc.conn, hold).restart();
+                        conn_timer!(pc.conn, keepalive).restart();
                         self.bump_msg_counter(msg.kind(), false);
                         FsmState::SessionSetup(pc)
                     } else {
@@ -2719,7 +2848,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             "message_contents" => format!("{msg}")
                         );
                         self.bump_msg_counter(msg.kind(), true);
-                        lock!(self.clock.timers.connect_retry_timer).stop();
+                        session_timer!(self, connect_retry).stop();
                         FsmState::Idle
                     }
                 }
@@ -2727,9 +2856,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             FsmEvent::Session(session_event) => match session_event {
                 // Event 9
-                SessionEvent::ConnectRetryTimerExpires
+                SessionEvent::ConnectRetryTimerExpires => {
+                    if !session_timer!(self, connect_retry).enabled() {
+                        return FsmState::OpenConfirm(pc);
+                    }
+                    let title = session_event.title();
+                    session_log!(self, warn, pc.conn,
+                        "{title} event not allowed in this state, fsm transition to idle";
+                        "event" => title
+                    );
+                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
+                    FsmState::Idle
+                }
+
                 // Event 13
-                | SessionEvent::IdleHoldTimerExpires => {
+                SessionEvent::IdleHoldTimerExpires => {
+                    if !session_timer!(self, idle_hold).enabled() {
+                        return FsmState::OpenConfirm(pc);
+                    }
                     let title = session_event.title();
                     session_log!(self, warn, pc.conn,
                         "{title} event not allowed in this state, fsm transition to idle";
@@ -2767,7 +2911,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             self.counters
                                 .passive_connections_accepted
                                 .fetch_add(1, Ordering::Relaxed);
-
                         }
                         ConnectionCreator::Connector => {
                             collision_log!(self, info, new, pc.conn,
@@ -2790,11 +2933,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     self.register_conn(&new);
 
-                    lock!(new.clock().timers.hold_timer).restart();
+                    conn_timer!(new, hold).restart();
 
-                    FsmState::ConnectionCollision(
-                        CollisionPair::OpenConfirm(pc, new),
-                    )
+                    FsmState::ConnectionCollision(CollisionPair::OpenConfirm(
+                        pc, new,
+                    ))
                 }
             },
         }
@@ -2959,15 +3102,38 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 FsmEvent::Session(session_event) => match session_event {
                     // Event 9
-                    SessionEvent::ConnectRetryTimerExpires
-                    // Event 13
-                    | SessionEvent::IdleHoldTimerExpires => {
+                    SessionEvent::ConnectRetryTimerExpires => {
+                        if !session_timer!(self, connect_retry).enabled() {
+                            continue;
+                        }
                         let title = session_event.title();
                         collision_log!(self, warn, new, exist.conn,
                             "{title} event not allowed in this state, fsm transition to idle";
                             "event" => title
                         );
-                        self.stop(Some(&new), Some(&exist.conn), StopReason::FsmError);
+                        self.stop(
+                            Some(&new),
+                            Some(&exist.conn),
+                            StopReason::FsmError,
+                        );
+                        return FsmState::Idle;
+                    }
+
+                    // Event 13
+                    SessionEvent::IdleHoldTimerExpires => {
+                        if !session_timer!(self, idle_hold).enabled() {
+                            continue;
+                        }
+                        let title = session_event.title();
+                        collision_log!(self, warn, new, exist.conn,
+                            "{title} event not allowed in this state, fsm transition to idle";
+                            "event" => title
+                        );
+                        self.stop(
+                            Some(&new),
+                            Some(&exist.conn),
+                            StopReason::FsmError,
+                        );
                         return FsmState::Idle;
                     }
 
@@ -3007,6 +3173,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         ConnectionEvent::HoldTimerExpires(conn_id) => {
                             match self.get_conn(&conn_id) {
                                 Some(connection) => {
+                                    if !conn_timer!(connection, hold).enabled()
+                                    {
+                                        continue;
+                                    }
                                     if conn_id == *new.id() {
                                         collision_log!(self, warn, new, exist.conn,
                                             "hold timer expired (conn_id: {}), fsm transition existing conn back to open confirm",
@@ -3084,20 +3254,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 new.id(),
                             ) {
                                 CollisionConnectionKind::New => {
+                                    if !conn_timer!(new, keepalive).enabled() {
+                                        continue;
+                                    }
                                     self.send_keepalive(&new);
-                                    lock!(new.clock().timers.keepalive_timer)
-                                        .restart();
+                                    conn_timer!(new, keepalive).restart();
                                 }
                                 CollisionConnectionKind::Exist => {
+                                    if !conn_timer!(exist.conn, keepalive)
+                                        .enabled()
+                                    {
+                                        continue;
+                                    }
                                     self.send_keepalive(&exist.conn);
-                                    lock!(
-                                        exist
-                                            .conn
-                                            .clock()
-                                            .timers
-                                            .keepalive_timer
-                                    )
-                                    .restart();
+                                    conn_timer!(exist.conn, keepalive)
+                                        .restart();
                                 }
 
                                 CollisionConnectionKind::Unexpected(
@@ -3294,22 +3465,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     // (CollisionDetectEstablishedState), so we
                                     // send a CollisionResolution notification.
                                     if let Message::KeepAlive = msg {
-                                        lock!(
-                                            exist
-                                                .conn
-                                                .clock()
-                                                .timers
-                                                .hold_timer
-                                        )
-                                        .restart();
-                                        lock!(
-                                            exist
-                                                .conn
-                                                .clock()
-                                                .timers
-                                                .keepalive_timer
-                                        )
-                                        .restart();
+                                        conn_timer!(exist.conn, hold).restart();
+                                        conn_timer!(exist.conn, keepalive)
+                                            .restart();
                                         self.bump_msg_counter(msg_kind, false);
                                         self.stop(
                                             Some(&new),
@@ -3516,15 +3674,38 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  */
                 FsmEvent::Session(session_event) => match session_event {
                     // Event 9
-                    SessionEvent::ConnectRetryTimerExpires
-                    // Event 13
-                    | SessionEvent::IdleHoldTimerExpires => {
+                    SessionEvent::ConnectRetryTimerExpires => {
+                        if !session_timer!(self, connect_retry).enabled() {
+                            continue;
+                        }
                         let title = session_event.title();
                         collision_log!(self, warn, new, exist,
                             "{title} event not allowed in this state, fsm transition to idle";
                             "event" => title
                         );
-                        self.stop(Some(&new), Some(&exist), StopReason::FsmError);
+                        self.stop(
+                            Some(&new),
+                            Some(&exist),
+                            StopReason::FsmError,
+                        );
+                        return FsmState::Idle;
+                    }
+
+                    // Event 13
+                    SessionEvent::IdleHoldTimerExpires => {
+                        if !session_timer!(self, idle_hold).enabled() {
+                            continue;
+                        }
+                        let title = session_event.title();
+                        collision_log!(self, warn, new, exist,
+                            "{title} event not allowed in this state, fsm transition to idle";
+                            "event" => title
+                        );
+                        self.stop(
+                            Some(&new),
+                            Some(&exist),
+                            StopReason::FsmError,
+                        );
                         return FsmState::Idle;
                     }
 
@@ -3713,8 +3894,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             // SessionSetup (Established)
                                             Some(o) => {
                                                 self.bump_msg_counter(msg_kind, false);
-                                                lock!(new.clock().timers.hold_timer).restart();
-                                                lock!(new.clock().timers.keepalive_timer).restart();
+                                                conn_timer!(new, hold).restart();
+                                                conn_timer!(new, keepalive).restart();
                                                 self.counters
                                                     .keepalives_received
                                                     .fetch_add(1, Ordering::Relaxed);
@@ -3743,7 +3924,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     StopReason::FsmError,
                                                 );
 
-                                                lock!(self.clock.timers.connect_retry_timer).stop();
+                                                session_timer!(self, connect_retry).stop();
                                                 self.connect_retry_counter
                                                     .fetch_add(1, Ordering::Relaxed);
 
@@ -3782,7 +3963,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         self.bump_msg_counter(msg_kind, true);
                                         self.connect_retry_counter
                                             .fetch_add(1, Ordering::Relaxed);
-                                        lock!(self.clock.timers.connect_retry_timer).stop();
+                                        session_timer!(self, connect_retry).stop();
                                         collision_log!(self, warn, new, exist,
                                             "existing conn rx unexpected {msg_kind} (conn_id: {}), fallback to new conn",
                                             conn_id.short();
@@ -3868,7 +4049,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 self.bump_msg_counter(msg_kind, true);
                                                 self.connect_retry_counter
                                                     .fetch_add(1, Ordering::Relaxed);
-                                                lock!(self.clock.timers.connect_retry_timer).stop();
+                                                session_timer!(self, connect_retry).stop();
                                                 collision_log!(self, warn, new, exist,
                                                     "new conn rx unexpected {msg_kind} (conn_id: {}), fallback to existing conn",
                                                     conn_id.short();
@@ -3901,8 +4082,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             // SessionSetup (Established)
                                             Some(o) => {
                                                 self.bump_msg_counter(msg_kind, false);
-                                                lock!(new.clock().timers.hold_timer).restart();
-                                                lock!(new.clock().timers.keepalive_timer).restart();
+                                                conn_timer!(new, hold).restart();
+                                                conn_timer!(new, keepalive).restart();
                                                 self.counters
                                                     .keepalives_received
                                                     .fetch_add(1, Ordering::Relaxed);
@@ -3931,7 +4112,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     StopReason::FsmError,
                                                 );
 
-                                                lock!(self.clock.timers.connect_retry_timer).stop();
+                                                session_timer!(self, connect_retry).stop();
                                                 self.connect_retry_counter
                                                     .fetch_add(1, Ordering::Relaxed);
 
@@ -3970,7 +4151,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         self.bump_msg_counter(msg_kind, true);
                                         self.connect_retry_counter
                                             .fetch_add(1, Ordering::Relaxed);
-                                        lock!(self.clock.timers.connect_retry_timer).stop();
+                                        session_timer!(self, connect_retry).stop();
                                         collision_log!(self, warn, new, exist,
                                             "new conn rx unexpected {msg_kind} (conn_id: {}), fallback to existing conn",
                                             conn_id.short();
@@ -4023,6 +4204,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                             match self.collision_conn_kind(conn_id, exist.id(), new.id()) {
                                 CollisionConnectionKind::New => {
+                                    if !conn_timer!(new, hold).enabled() {
+                                        continue;
+                                    }
                                     collision_log!(self, warn, new, exist,
                                         "new conn rx {title} (conn_id: {}), fallback to existing conn",
                                         conn_id.short();
@@ -4047,6 +4231,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 },
 
                                 CollisionConnectionKind::Exist => {
+                                    if !conn_timer!(exist, hold).enabled() {
+                                        continue;
+                                    }
                                     collision_log!(self, warn, new, exist,
                                         "existing conn rx {title} (conn_id: {}), fallback to new conn",
                                         conn_id.short();
@@ -4306,8 +4493,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 StopReason::CollisionResolution,
             );
 
-            lock!(our_conn.conn.clock().timers.hold_timer).restart();
-            lock!(our_conn.conn.clock().timers.keepalive_timer).restart();
+            conn_timer!(our_conn.conn, hold).restart();
+            conn_timer!(our_conn.conn, keepalive).restart();
 
             self.set_primary_conn(Some(PrimaryConnection::Full(
                 our_conn.clone(),
@@ -4324,13 +4511,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         self.stop(Some(&our_conn.conn), None, StopReason::CollisionResolution);
 
-        lock!(self.clock.timers.connect_retry_timer).stop();
+        session_timer!(self, connect_retry).stop();
         self.counters
             .connection_retries
             .fetch_add(1, Ordering::Relaxed);
 
-        lock!(peer_conn.conn.clock().timers.hold_timer).restart();
-        lock!(peer_conn.conn.clock().timers.keepalive_timer).restart();
+        conn_timer!(peer_conn.conn, hold).restart();
+        conn_timer!(peer_conn.conn, keepalive).restart();
 
         self.set_primary_conn(Some(PrimaryConnection::Full(peer_conn.clone())));
 
@@ -4387,7 +4574,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         );
 
         self.send_keepalive(&pc.conn);
-        lock!(pc.conn.clock().timers.keepalive_timer).restart();
+        conn_timer!(pc.conn, keepalive).restart();
 
         // Send an update to our peer with the prefixes this router is
         // originating.
@@ -4638,6 +4825,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             FsmEvent::Session(session_event) => match session_event {
                 SessionEvent::ConnectRetryTimerExpires => {
+                    if !session_timer!(self, connect_retry).enabled() {
+                        return FsmState::Established(pc);
+                    }
                     session_log!(self, info,  pc.conn,
                         "rx {}, fsm transition to idle",
                         session_event.title();
@@ -4647,6 +4837,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 SessionEvent::IdleHoldTimerExpires => {
+                    if !session_timer!(self, idle_hold).enabled() {
+                        return FsmState::Established(pc);
+                    }
                     session_log!(self, info,  pc.conn,
                         "rx delay open timer expires, fsm transition to idle";
                     );
@@ -4704,6 +4897,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  */
                 ConnectionEvent::HoldTimerExpires(ref conn_id) => {
                     if *conn_id == *pc.conn.id() {
+                        if !conn_timer!(pc.conn, hold).enabled() {
+                            return FsmState::Established(pc);
+                        }
                         // If the HoldTimer fires, it means we've not received a
                         // Keepalive or Update from the peer within the hold time.
                         // So exit Established and restart the peer FSM from Idle
@@ -4725,7 +4921,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             connection_event.title(), conn_id.short();
                             "event" => connection_event.title()
                         );
-                        if let Some(conn) = self.get_conn(conn_id) {
+                        if let Some(conn) = self
+                            .get_conn(conn_id)
+                            .filter(|c| conn_timer!(c, hold).enabled())
+                        {
                             self.stop(
                                 Some(&conn),
                                 None,
@@ -4747,6 +4946,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  */
                 ConnectionEvent::KeepaliveTimerExpires(ref conn_id) => {
                     if *conn_id == *pc.conn.id() {
+                        if !conn_timer!(pc.conn, keepalive).enabled() {
+                            return FsmState::Established(pc);
+                        }
                         self.send_keepalive(&pc.conn);
                     } else {
                         session_log!(self, warn, pc.conn,
@@ -4754,7 +4956,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             connection_event.title(), conn_id.short();
                             "event" => connection_event.title()
                         );
-                        if let Some(conn) = self.get_conn(conn_id) {
+                        if let Some(conn) = self
+                            .get_conn(conn_id)
+                            .filter(|c| conn_timer!(c, keepalive).enabled())
+                        {
                             self.stop(Some(&conn), None, StopReason::FsmError);
                         }
                     }
@@ -4763,6 +4968,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 ConnectionEvent::DelayOpenTimerExpires(ref conn_id) => {
                     if *conn_id == *pc.conn.id() {
+                        if !conn_timer!(pc.conn, delay_open).enabled() {
+                            return FsmState::Established(pc);
+                        }
                         session_log!(self, info,  pc.conn,
                             "rx delay open timer expires, fsm transition to idle";
                         );
@@ -4774,7 +4982,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             connection_event.title(), conn_id.short();
                             "event" => connection_event.title()
                         );
-                        if let Some(conn) = self.get_conn(conn_id) {
+                        if let Some(conn) = self
+                            .get_conn(conn_id)
+                            .filter(|c| conn_timer!(c, delay_open).enabled())
+                        {
                             self.stop(Some(&conn), None, StopReason::FsmError);
                         }
                         FsmState::Established(pc)
@@ -4865,7 +5076,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          *    - remains in the Established state.
                          */
                         Message::Update(m) => {
-                            lock!(pc.conn.clock().timers.hold_timer).reset();
+                            conn_timer!(pc.conn, hold).reset();
                             session_log!(self, info, pc.conn, "received {msg_kind} (conn_id: {})",
                                 conn_id.short();
                                 "message" => "update",
@@ -4924,7 +5135,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message" => "keepalive"
                             );
                             self.bump_msg_counter(msg_kind, false);
-                            lock!(pc.conn.clock().timers.hold_timer).reset();
+                            conn_timer!(pc.conn, hold).reset();
                             FsmState::Established(pc)
                         }
 
@@ -4939,7 +5150,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          *   the message, based on its outbound route filtering policy.
                          */
                         Message::RouteRefresh(m) => {
-                            lock!(pc.conn.clock().timers.hold_timer).reset();
+                            conn_timer!(pc.conn, hold).reset();
                             session_log!(self, info, pc.conn,
                                 "received route refresh (conn_id: {})",
                                 conn_id.short();
@@ -5057,8 +5268,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         {
             let clock = conn.clock();
-            let mut ht = lock!(clock.timers.hold_timer);
-            let mut kt = lock!(clock.timers.keepalive_timer);
+            let mut ht = lock!(clock.timers.hold);
+            let mut kt = lock!(clock.timers.keepalive);
             let mut theirs = false;
             // XXX: handle peer sending us a holdtime of 0 (keepalives disabled)
             let requested = u64::from(om.hold_time);
@@ -5105,7 +5316,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.counters
                 .keepalives_sent
                 .fetch_add(1, Ordering::Relaxed);
-            lock!(conn.clock().timers.keepalive_timer).restart();
+            conn_timer!(conn, keepalive).restart();
         }
     }
 
@@ -5222,12 +5433,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let mut msg = match self.asn {
             Asn::FourOctet(asn) => OpenMessage::new4(
                 asn,
-                lock!(conn.clock().timers.hold_timer).interval.as_secs() as u16,
+                conn_timer!(conn, hold).interval.as_secs() as u16,
                 self.id,
             ),
             Asn::TwoOctet(asn) => OpenMessage::new2(
                 asn,
-                lock!(conn.clock().timers.hold_timer).interval.as_secs() as u16,
+                conn_timer!(conn, hold).interval.as_secs() as u16,
                 self.id,
             ),
         };
@@ -5443,9 +5654,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// peer from our RIB. Issue a withdraw to the peer and transition to back
     /// to the idle state.
     fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
-        lock!(pc.conn.clock().timers.hold_timer).disable();
-        lock!(pc.conn.clock().timers.keepalive_timer).disable();
-        lock!(self.clock.timers.connect_retry_timer).stop();
+        conn_timer!(pc.conn, hold).disable();
+        conn_timer!(pc.conn, keepalive).disable();
+        session_timer!(self, connect_retry).stop();
         self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
 
         write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
@@ -5548,7 +5759,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
-                lock!(self.clock.timers.connect_retry_timer).stop();
+                session_timer!(self, connect_retry).stop();
             }
 
             StopReason::Shutdown => {
@@ -5564,7 +5775,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
-                lock!(self.clock.timers.connect_retry_timer).stop();
+                session_timer!(self, connect_retry).stop();
             }
 
             StopReason::FsmError => {
@@ -5580,17 +5791,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
-                lock!(self.clock.timers.connect_retry_timer).stop();
+                session_timer!(self, connect_retry).stop();
             }
 
             StopReason::HoldTimeExpired => {
                 if let Some(c1) = conn1 {
                     self.send_hold_timer_expired_notification(c1);
-                    lock!(c1.clock().timers.hold_timer).disable();
+                    conn_timer!(c1, hold).disable();
                 }
                 if let Some(c2) = conn2 {
                     self.send_hold_timer_expired_notification(c2);
-                    lock!(c2.clock().timers.hold_timer).disable();
+                    conn_timer!(c2, hold).disable();
                 }
                 self.counters
                     .hold_timer_expirations
@@ -5601,7 +5812,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.counters
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
-                lock!(self.clock.timers.connect_retry_timer).stop();
+                session_timer!(self, connect_retry).stop();
             }
 
             StopReason::ConnectionRejected => {
@@ -6019,7 +6230,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 reset_needed = true;
             }
 
-            lock!(self.clock.timers.idle_hold_timer).interval =
+            session_timer!(self, idle_hold).interval =
                 Duration::from_secs(cfg.idle_hold_time);
 
             guard.delay_open_time = Duration::from_secs(cfg.delay_open);

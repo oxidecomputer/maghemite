@@ -19,9 +19,9 @@ const UNIT_TIMER: &str = "timer";
 #[derive(Debug)]
 pub struct SessionTimers {
     /// How long to wait between connection attempts.
-    pub connect_retry_timer: Mutex<Timer>,
+    pub connect_retry: Mutex<Timer>,
     /// Amount of time that a peer is held in the idle state.
-    pub idle_hold_timer: Mutex<Timer>,
+    pub idle_hold: Mutex<Timer>,
 }
 
 /// Timers for connection-level events that are tied to individual connections
@@ -30,17 +30,17 @@ pub struct ConnectionTimers {
     /// How long to keep a session alive between keepalive or update messages.
     /// The actual timer used for connection liveness detection is negotiated
     /// the BGP peer (shortest interval in either peer's Open wins).
-    pub hold_timer: Mutex<Timer>,
+    pub hold: Mutex<Timer>,
     /// The locally configured Hold Time for this peer
     pub config_hold_time: Duration,
     /// Time between sending keepalive messages. The actual timer used for
     /// triggering keepalives is negotiated with the BGP peer
     /// (negotiated hold timer / 3).
-    pub keepalive_timer: Mutex<Timer>,
+    pub keepalive: Mutex<Timer>,
     /// The locally configured Keepalive Time for this peer
     pub config_keepalive_time: Duration,
     /// Interval to wait before sending an open message.
-    pub delay_open_timer: Mutex<Timer>,
+    pub delay_open: Mutex<Timer>,
 }
 
 #[derive(Debug)]
@@ -170,8 +170,8 @@ impl SessionClock {
     ) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
         let timers = Arc::new(SessionTimers {
-            connect_retry_timer: Mutex::new(Timer::new(connect_retry_interval)),
-            idle_hold_timer: Mutex::new(Timer::new(idle_hold_interval)),
+            connect_retry: Mutex::new(Timer::new(connect_retry_interval)),
+            idle_hold: Mutex::new(Timer::new(idle_hold_interval)),
         });
         let join_handle = Arc::new(Self::run(
             resolution,
@@ -203,7 +203,7 @@ impl SessionClock {
 
             Self::check_timer(
                 resolution,
-                &lock!(timers.connect_retry_timer),
+                &lock!(timers.connect_retry),
                 FsmEvent::Session(SessionEvent::ConnectRetryTimerExpires),
                 event_tx.clone(),
                 &log,
@@ -211,7 +211,7 @@ impl SessionClock {
 
             Self::check_timer(
                 resolution,
-                &lock!(timers.idle_hold_timer),
+                &lock!(timers.idle_hold),
                 FsmEvent::Session(SessionEvent::IdleHoldTimerExpires),
                 event_tx.clone(),
                 &log,
@@ -241,15 +241,15 @@ impl SessionClock {
 
     pub fn stop_all(&self) {
         let timers = &self.timers;
-        lock!(timers.connect_retry_timer).stop();
-        lock!(timers.idle_hold_timer).stop();
+        lock!(timers.connect_retry).stop();
+        lock!(timers.idle_hold).stop();
     }
 }
 
 impl Display for SessionClock {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let connect_retry = lock!(self.timers.connect_retry_timer);
-        let idle_hold = lock!(self.timers.idle_hold_timer);
+        let connect_retry = lock!(self.timers.connect_retry);
+        let idle_hold = lock!(self.timers.idle_hold);
         write!(
             f,
             "SessionClock {{ resolution: {}.{:03}s, connect_retry: {}, idle_hold: {} }}",
@@ -294,9 +294,9 @@ impl ConnectionClock {
     ) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
         let timers = Arc::new(ConnectionTimers {
-            keepalive_timer: Mutex::new(Timer::new(keepalive_interval)),
-            hold_timer: Mutex::new(Timer::new(hold_interval)),
-            delay_open_timer: Mutex::new(Timer::new(delay_open_interval)),
+            keepalive: Mutex::new(Timer::new(keepalive_interval)),
+            hold: Mutex::new(Timer::new(hold_interval)),
+            delay_open: Mutex::new(Timer::new(delay_open_interval)),
             config_hold_time: hold_interval,
             config_keepalive_time: keepalive_interval,
         });
@@ -333,7 +333,7 @@ impl ConnectionClock {
 
             Self::check_timer(
                 resolution,
-                &lock!(timers.keepalive_timer),
+                &lock!(timers.keepalive),
                 FsmEvent::Connection(ConnectionEvent::KeepaliveTimerExpires(
                     conn_id,
                 )),
@@ -343,7 +343,7 @@ impl ConnectionClock {
 
             Self::check_timer(
                 resolution,
-                &lock!(timers.hold_timer),
+                &lock!(timers.hold),
                 FsmEvent::Connection(ConnectionEvent::HoldTimerExpires(
                     conn_id,
                 )),
@@ -353,7 +353,7 @@ impl ConnectionClock {
 
             Self::check_timer(
                 resolution,
-                &lock!(timers.delay_open_timer),
+                &lock!(timers.delay_open),
                 FsmEvent::Connection(ConnectionEvent::DelayOpenTimerExpires(
                     conn_id,
                 )),
@@ -385,17 +385,17 @@ impl ConnectionClock {
 
     pub fn disable_all(&self) {
         let timers = &self.timers;
-        lock!(timers.keepalive_timer).disable();
-        lock!(timers.hold_timer).disable();
-        lock!(timers.delay_open_timer).disable();
+        lock!(timers.keepalive).disable();
+        lock!(timers.hold).disable();
+        lock!(timers.delay_open).disable();
     }
 }
 
 impl Display for ConnectionClock {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let keepalive = lock!(self.timers.keepalive_timer);
-        let hold = lock!(self.timers.hold_timer);
-        let delay_open = lock!(self.timers.delay_open_timer);
+        let keepalive = lock!(self.timers.keepalive);
+        let hold = lock!(self.timers.hold);
+        let delay_open = lock!(self.timers.delay_open);
         write!(
             f,
             "ConnectionClock {{ conn_id: {}, resolution: {}.{:03}s, keepalive: {}, hold: {}, delay_open: {} }}",

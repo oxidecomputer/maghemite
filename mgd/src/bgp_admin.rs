@@ -512,9 +512,9 @@ pub async fn get_neighbors(
                 PrimaryConnection::Full(ref pc) => pc.conn.clock(),
             };
             conf_holdtime = clock.timers.config_hold_time;
-            neg_holdtime = lock!(clock.timers.hold_timer).interval;
+            neg_holdtime = lock!(clock.timers.hold).interval;
             conf_keepalive = clock.timers.config_keepalive_time;
-            neg_keepalive = lock!(clock.timers.keepalive_timer).interval;
+            neg_keepalive = lock!(clock.timers.keepalive).interval;
         } else {
             let session_info = lock!(s.session);
             conf_holdtime = session_info.hold_time;
