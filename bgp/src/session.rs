@@ -825,6 +825,15 @@ macro_rules! conn_timer {
         lock!($conn.clock().timers.$timer)
     };
 }
+/// Convenience macro for calculating connect() timeout.
+/// The connect() timeout is currently calculated as 1/3 of the configured
+/// ConnectRetryTime. This allows user configuration to influence the timeout
+/// and ensures a Connector thread will wrap up before ConnectRetryTimeExpires.
+macro_rules! connect_timeout {
+    ($self:expr) => {
+        lock!($self.clock.timers.connect_retry).interval / 3
+    };
+}
 
 /// This is the top level object that tracks a BGP session with a peer. There is
 /// one SessionRunner per peer (based on IP), which transitions the peer through
@@ -1279,7 +1288,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             let session_info = lock!(self.session).clone();
                             if let Err(e) = Cnx::Connector::connect(
                                 self.neighbor.host,
-                                IO_TIMEOUT,
+                                connect_timeout!(self),
                                 self.log.clone(),
                                 self.event_tx.clone(),
                                 session_info,
@@ -1338,7 +1347,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             let session_info = lock!(self.session).clone();
                             if let Err(e) = Cnx::Connector::connect(
                                 self.neighbor.host,
-                                IO_TIMEOUT,
+                                connect_timeout!(self),
                                 self.log.clone(),
                                 self.event_tx.clone(),
                                 session_info,
@@ -1588,7 +1597,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 let session_info = lock!(self.session).clone();
                                 if let Err(e) = Cnx::Connector::connect(
                                     self.neighbor.host,
-                                    IO_TIMEOUT,
+                                    connect_timeout!(self),
                                     self.log.clone(),
                                     self.event_tx.clone(),
                                     session_info,
