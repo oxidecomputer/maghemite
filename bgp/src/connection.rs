@@ -151,14 +151,15 @@ pub trait BgpConnector<Cnx: BgpConnection> {
     /// Initiate an outbound connection attempt to a peer in a background thread.
     /// On success, sends SessionEvent::TcpConnectionConfirmed via event_tx.
     /// On failure, logs the error but does not send an event (FSM retry logic handles it).
-    /// Returns Err only if the thread spawn itself fails.
+    /// Returns a JoinHandle to the spawned thread, allowing the caller to track
+    /// the connection attempt and detect panics.
     fn connect(
         peer: SocketAddr,
         timeout: Duration,
         log: Logger,
         event_tx: Sender<FsmEvent<Cnx>>,
         config: SessionInfo,
-    ) -> Result<(), Error>
+    ) -> Result<std::thread::JoinHandle<()>, Error>
     where
         Self: Sized;
 }

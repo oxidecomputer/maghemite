@@ -792,6 +792,7 @@ pub struct SessionCounters {
     // Connection failure counters
     pub tcp_connection_failure: AtomicU64,
     pub md5_auth_failures: AtomicU64,
+    pub connector_panics: AtomicU64,
 }
 
 pub enum ShaperApplication {
@@ -938,6 +939,10 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     /// Used to expose runtime state of the peer itself, not just the FSM.
     pub primary: Arc<Mutex<Option<PrimaryConnection<Cnx>>>>,
 
+    /// Handle to the currently running connector thread, if any.
+    /// Used to track outbound connection attempts and prevent duplicate spawns.
+    connector_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+
     log: Logger,
 }
 
@@ -989,6 +994,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             caps_tx: Arc::new(Mutex::new(BTreeSet::new())),
             connections: Arc::new(Mutex::new(BTreeMap::new())),
             primary: Arc::new(Mutex::new(None)),
+            connector_handle: Mutex::new(None),
         };
         drop(session_info);
         runner
@@ -1003,6 +1009,85 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.neighbor.host.ip();
         );
         self.shutdown.store(true, Ordering::Release);
+    }
+
+    /// Join a connector thread and handle any panic, logging appropriately
+    /// and updating panic counters.
+    fn join_connector_thread(
+        &self,
+        handle: std::thread::JoinHandle<()>,
+        context: &str,
+    ) {
+        match handle.join() {
+            Ok(()) => {
+                session_log_lite!(self, debug,
+                    "connector thread completed successfully";
+                    "context" => context
+                );
+            }
+            Err(e) => {
+                session_log_lite!(self, error,
+                    "connector thread panicked: {:?}", e;
+                    "context" => context,
+                    "panic" => format!("{:?}", e)
+                );
+                self.counters
+                    .connector_panics
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Initiate an outbound connection attempt to the BGP peer.
+    /// Checks for existing connection attempts, joins finished ones (detecting panics),
+    /// and initiates a new connection only if safe to do so.
+    fn initiate_connection(&self, timeout: Duration) {
+        // Clone session info first, before acquiring any locks
+        let session_info = lock!(self.session).clone();
+
+        // First critical section: check and join old connector thread
+        {
+            let mut handle_guard = lock!(self.connector_handle);
+
+            if let Some(old_handle) = handle_guard.take() {
+                // Check if thread is still running
+                if !old_handle.is_finished() {
+                    // Thread still running, put handle back and skip spawn
+                    *handle_guard = Some(old_handle);
+                    session_log_lite!(self, debug,
+                        "connector already running, skipping spawn";
+                    );
+                    return;
+                }
+
+                // Thread finished, join to check for panics
+                self.join_connector_thread(old_handle, "checking previous");
+            }
+            // Lock is released here at end of scope
+        }
+
+        // Spawn new connector with NO locks held (critical for avoiding deadlock)
+        let handle = match Cnx::Connector::connect(
+            self.neighbor.host,
+            timeout,
+            self.log.clone(),
+            self.event_tx.clone(),
+            session_info,
+        ) {
+            Ok(h) => h,
+            Err(e) => {
+                session_log_lite!(self, error,
+                    "failed to spawn connection thread: {e}";
+                    "error" => format!("{e}")
+                );
+                return;
+            }
+        };
+
+        *lock!(self.connector_handle) = Some(handle);
+        session_log_lite!(self, debug,
+            "spawned new connector thread";
+        );
     }
 
     /// Add a connection to the registry. Newly registered connection is
@@ -1284,21 +1369,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         // peer is active
                         session_timer!(self, connect_retry).restart();
                         session_log_lite!(self, debug, "starting connect attempt";);
-                        {
-                            let session_info = lock!(self.session).clone();
-                            if let Err(e) = Cnx::Connector::connect(
-                                self.neighbor.host,
-                                connect_timeout!(self),
-                                self.log.clone(),
-                                self.event_tx.clone(),
-                                session_info,
-                            ) {
-                                session_log_lite!(self, error,
-                                    "failed to spawn connection thread: {e}";
-                                    "error" => format!("{e}")
-                                );
-                            }
-                        }
+                        // Evaluate timeout before calling to avoid holding timer lock
+                        let timeout = connect_timeout!(self);
+                        self.initiate_connection(timeout);
                         return FsmState::Connect;
                     }
 
@@ -1343,21 +1416,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         // peer is active
                         session_timer!(self, connect_retry).restart();
                         session_log_lite!(self, debug, "starting connect attempt";);
-                        {
-                            let session_info = lock!(self.session).clone();
-                            if let Err(e) = Cnx::Connector::connect(
-                                self.neighbor.host,
-                                connect_timeout!(self),
-                                self.log.clone(),
-                                self.event_tx.clone(),
-                                session_info,
-                            ) {
-                                session_log_lite!(self, error,
-                                    "failed to spawn connection thread: {e}";
-                                    "error" => format!("{e}")
-                                );
-                            }
-                        }
+                        // Evaluate timeout before calling to avoid holding timer lock
+                        let timeout = connect_timeout!(self);
+                        self.initiate_connection(timeout);
 
                         return FsmState::Connect;
                     }
@@ -1593,21 +1654,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             self.counters
                                 .connection_retries
                                 .fetch_add(1, Ordering::Relaxed);
-                            {
-                                let session_info = lock!(self.session).clone();
-                                if let Err(e) = Cnx::Connector::connect(
-                                    self.neighbor.host,
-                                    connect_timeout!(self),
-                                    self.log.clone(),
-                                    self.event_tx.clone(),
-                                    session_info,
-                                ) {
-                                    session_log_lite!(self, error,
-                                        "failed to spawn connection thread: {e}";
-                                        "error" => format!("{e}")
-                                    );
-                                }
-                            }
+
+                            // Initiate connection, which properly handles thread lifecycle
+                            let timeout = connect_timeout!(self);
+                            self.initiate_connection(timeout);
+
                             session_timer!(self, connect_retry).restart();
                         }
 
@@ -5194,6 +5245,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         );
 
         self.cleanup_connections();
+
+        // Join the connector thread if one is running to ensure clean shutdown
+        if let Some(handle) = lock!(self.connector_handle).take() {
+            session_log_lite!(self, debug,
+                "joining connector thread during shutdown";
+            );
+            self.join_connector_thread(handle, "shutdown");
+        }
 
         // Disable session-level timers
         self.clock.stop_all();

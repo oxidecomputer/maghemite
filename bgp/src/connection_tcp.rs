@@ -204,9 +204,9 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
         log: Logger,
         event_tx: Sender<FsmEvent<BgpConnectionTcp>>,
         config: SessionInfo,
-    ) -> Result<(), Error> {
+    ) -> Result<std::thread::JoinHandle<()>, Error> {
         // Spawn a background thread to perform the connection attempt
-        spawn(move || {
+        let handle = spawn(move || {
             connection_log_lite!(log,
                 debug,
                 "starting connection attempt to {peer}";
@@ -462,7 +462,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
             }
         });
 
-        Ok(())
+        Ok(handle)
     }
 }
 

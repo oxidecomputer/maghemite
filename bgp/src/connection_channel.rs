@@ -426,7 +426,7 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
         log: Logger,
         event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
         config: SessionInfo,
-    ) -> Result<(), Error> {
+    ) -> Result<std::thread::JoinHandle<()>, Error> {
         let creator = ConnectionCreator::Connector;
         let addr = config
             .bind_addr
@@ -439,61 +439,61 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
             "timeout" => timeout.as_millis()
         );
 
-        // For the channel-based test implementation, we perform the connection
-        // synchronously since it's just in-memory channel creation. In a real
-        // implementation, this would be async like BgpConnectorTcp.
-        let (local, remote) = channel();
-        match NET.connect(addr, peer, remote) {
-            Ok(()) => {
-                let conn = BgpConnectionChannel::with_conn(
-                    addr,
-                    peer,
-                    local,
-                    event_tx.clone(),
-                    timeout,
-                    log.clone(),
-                    creator,
-                    &config,
-                );
+        // For the channel-based test implementation, we spawn a thread to maintain
+        // consistency with the TCP implementation, even though the connection
+        // is synchronous. This allows SessionRunner to track the connector thread.
+        let handle = spawn(move || {
+            let (local, remote) = channel();
+            match NET.connect(addr, peer, remote) {
+                Ok(()) => {
+                    let conn = BgpConnectionChannel::with_conn(
+                        addr,
+                        peer,
+                        local,
+                        event_tx.clone(),
+                        timeout,
+                        log.clone(),
+                        creator,
+                        &config,
+                    );
 
-                connection_log_lite!(log,
-                    info,
-                    "channel connection to {peer} established (conn_id: {})",
-                    conn.id().short();
-                    "creator" => creator.as_str(),
-                    "peer" => format!("{peer}"),
-                    "local" => format!("{addr}"),
-                    "connection_id" => conn.id().short()
-                );
-
-                // Send the TcpConnectionConfirmed event
-                use crate::session::SessionEvent;
-                if let Err(e) = event_tx.send(FsmEvent::Session(
-                    SessionEvent::TcpConnectionConfirmed(conn),
-                )) {
                     connection_log_lite!(log,
-                        error,
-                        "failed to send TcpConnectionConfirmed event for {peer}: {e}";
+                        info,
+                        "channel connection to {peer} established (conn_id: {})",
+                        conn.id().short();
                         "creator" => creator.as_str(),
                         "peer" => format!("{peer}"),
+                        "local" => format!("{addr}"),
+                        "connection_id" => conn.id().short()
+                    );
+
+                    // Send the TcpConnectionConfirmed event
+                    use crate::session::SessionEvent;
+                    if let Err(e) = event_tx.send(FsmEvent::Session(
+                        SessionEvent::TcpConnectionConfirmed(conn),
+                    )) {
+                        connection_log_lite!(log,
+                            error,
+                            "failed to send TcpConnectionConfirmed event for {peer}: {e}";
+                            "creator" => creator.as_str(),
+                            "peer" => format!("{peer}"),
+                            "error" => format!("{e}")
+                        );
+                    }
+                }
+                Err(e) => {
+                    connection_log_lite!(log,
+                        debug,
+                        "connect error: {e:?}";
+                        "creator" => creator.as_str(),
+                        "timeout" => timeout.as_millis(),
                         "error" => format!("{e}")
                     );
                 }
-                Ok(())
             }
-            Err(e) => {
-                connection_log_lite!(log,
-                    debug,
-                    "connect error: {e:?}";
-                    "creator" => creator.as_str(),
-                    "timeout" => timeout.as_millis(),
-                    "error" => format!("{e}")
-                );
-                // Return Ok here because the connection attempt was made,
-                // even though it failed. The FSM will handle the retry.
-                Ok(())
-            }
-        }
+        });
+
+        Ok(handle)
     }
 }
 
