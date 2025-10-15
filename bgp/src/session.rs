@@ -3712,6 +3712,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 },
 
+                // This applies to both OpenSent and OpenConfirm
                 /*
                  * In response to any other event (Events 9, 11-13, 20, 25-28), the
                  * local system:
@@ -3851,13 +3852,34 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                                 CollisionConnectionKind::Exist => {
                                     if let Message::Open(om) = msg {
+                                        // Event 19
                                         lock!(self.message_history).receive(
                                             om.clone().into(),
                                             Some(*conn_id),
                                         );
                                         match exist_open {
-                                            // `exist` is in OpenSent
-                                            // Open moves us to OpenConfirm
+                                            /*
+                                             * OpenSent:
+                                             *
+                                             * [..]
+                                             *
+                                             * When an OPEN message is received, all fields are checked for
+                                             * correctness.  If there are no errors in the OPEN message (Event
+                                             * 19), the local system:
+                                             *
+                                             *   - resets the DelayOpenTimer to zero,
+                                             *
+                                             *   - sets the BGP ConnectRetryTimer to zero,
+                                             *
+                                             *   - sends a KEEPALIVE message, and
+                                             *
+                                             *   - sets a KeepaliveTimer (via the text below)
+                                             *
+                                             *   - sets the HoldTimer according to the negotiated value (see
+                                             *     Section 4.2),
+                                             *
+                                             *   - changes its state to OpenConfirm.
+                                             */
                                             None => {
                                                 self.bump_msg_counter(msg_kind, false);
 
@@ -3895,6 +3917,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     }
                                                 }
 
+                                                self.send_keepalive(&exist);
+
                                                 if let Some(o_new) = new_open {
                                                     break (o_new, om);
                                                 } else {
@@ -3902,8 +3926,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     continue;
                                                 }
                                             }
-                                            // `exist` is in OpenConfirm
-                                            // Open is an FSM Error.
+                                            // `exist` is in OpenConfirm.
+                                            // In OpenConfirm, an Open is
+                                            // indicative of a collision.
+                                            // We already know we're in a
+                                            // collision, so treat this as an
+                                            // FSM error.
                                             Some(_) => {
                                                 collision_log!(self, warn, new, exist,
                                                     "existing conn rx unexpected {msg_kind} (conn_id: {}), fallback to new conn",
@@ -3948,14 +3976,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             }
                                         }
                                     } else if let Message::KeepAlive = msg {
+                                        // Event 26
                                         match exist_open {
-                                            // `exist` is in OpenConfirm
-                                            // keepalive means move into
-                                            // SessionSetup (Established)
+                                            /*
+                                             * OpenConfirm state:
+                                             *
+                                             * [..]
+                                             *
+                                             * If the local system receives a KEEPALIVE message (KeepAliveMsg
+                                             * (Event 26)), the local system:
+                                             *
+                                             *   - restarts the HoldTimer and
+                                             *
+                                             *   - changes its state to Established.
+                                             */
                                             Some(o) => {
                                                 self.bump_msg_counter(msg_kind, false);
-                                                conn_timer!(new, hold).restart();
-                                                conn_timer!(new, keepalive).restart();
+                                                conn_timer!(exist, hold).restart();
+                                                conn_timer!(exist, keepalive).restart();
                                                 self.counters
                                                     .keepalives_received
                                                     .fetch_add(1, Ordering::Relaxed);
@@ -3966,10 +4004,38 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     caps: o.get_capabilities()
                                                 };
                                                 self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                // Stop the losing connection before transitioning
+                                                self.stop(
+                                                    Some(&new),
+                                                    None,
+                                                    StopReason::CollisionResolution,
+                                                );
                                                 return FsmState::SessionSetup(pc);
                                             }
-                                            // `exist` is in OpenSent
-                                            // keepalive means FSM Error
+                                            /*
+                                             * OpenSent:
+                                             *
+                                             * [..]
+                                             *
+                                             *  In response to any other event (Events 9, 11-13, 20, 25-28), the
+                                             *  local system:
+                                             *
+                                             *    - sends the NOTIFICATION with the Error Code Finite State
+                                             *      Machine Error,
+                                             *
+                                             *    - sets the ConnectRetryTimer to zero,
+                                             *
+                                             *    - releases all BGP resources,
+                                             *
+                                             *    - drops the TCP connection,
+                                             *
+                                             *    - increments the ConnectRetryCounter by 1,
+                                             *
+                                             *    - (optionally) performs peer oscillation damping if the
+                                             *      DampPeerOscillations attribute is set to TRUE, and
+                                             *
+                                             *    - changes its state to Idle.
+                                             */
                                             None => {
                                                 self.bump_msg_counter(msg_kind, true);
                                                 collision_log!(self, warn, new, exist,
@@ -4052,13 +4118,34 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                                 CollisionConnectionKind::New => {
                                     if let Message::Open(om) = msg {
+                                        // Event 19
                                         lock!(self.message_history).receive(
                                             om.clone().into(),
                                             Some(*conn_id),
                                         );
                                         match new_open {
-                                            // `new` is in OpenSent
-                                            // Open moves us to OpenConfirm
+                                            /*
+                                             * OpenSent:
+                                             *
+                                             * [..]
+                                             *
+                                             * When an OPEN message is received, all fields are checked for
+                                             * correctness.  If there are no errors in the OPEN message (Event
+                                             * 19), the local system:
+                                             *
+                                             *   - resets the DelayOpenTimer to zero,
+                                             *
+                                             *   - sets the BGP ConnectRetryTimer to zero,
+                                             *
+                                             *   - sends a KEEPALIVE message, and
+                                             *
+                                             *   - sets a KeepaliveTimer (via the text below)
+                                             *
+                                             *   - sets the HoldTimer according to the negotiated value (see
+                                             *     Section 4.2),
+                                             *
+                                             *   - changes its state to OpenConfirm.
+                                             */
                                             None => {
                                                 self.bump_msg_counter(msg_kind, false);
 
@@ -4096,6 +4183,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     }
                                                 }
 
+                                                self.send_keepalive(&new);
+
                                                 if let Some(o_exist) = exist_open {
                                                     break(om, o_exist);
                                                 } else {
@@ -4103,8 +4192,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     continue;
                                                 }
                                             }
-                                            // `new` is in OpenConfirm
-                                            // Open is an FSM Error.
+                                            /*
+                                             * OpenConfirm state:
+                                             *
+                                             * [..]
+                                             *
+                                             * If the local system receives a KEEPALIVE message (KeepAliveMsg
+                                             * (Event 26)), the local system:
+                                             *
+                                             *   - restarts the HoldTimer and
+                                             *
+                                             *   - changes its state to Established.
+                                             */
                                             Some(_) => {
                                                 self.bump_msg_counter(msg_kind, true);
                                                 self.connect_retry_counter
@@ -4136,10 +4235,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             }
                                         }
                                     } else if let Message::KeepAlive = msg {
+                                        // Event 26
                                         match new_open {
-                                            // `new` is in OpenConfirm
-                                            // keepalive means move into
-                                            // SessionSetup (Established)
+                                            /*
+                                             * If the local system receives a KEEPALIVE message (KeepAliveMsg
+                                             * (Event 26)), the local system:
+                                             *
+                                             *   - restarts the HoldTimer and
+                                             *
+                                             *   - changes its state to Established.
+                                             */
                                             Some(o) => {
                                                 self.bump_msg_counter(msg_kind, false);
                                                 conn_timer!(new, hold).restart();
@@ -4154,10 +4259,38 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     caps: o.get_capabilities()
                                                 };
                                                 self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                // Stop the losing connection before transitioning
+                                                self.stop(
+                                                    Some(&exist),
+                                                    None,
+                                                    StopReason::CollisionResolution,
+                                                );
                                                 return FsmState::SessionSetup(pc);
                                             }
-                                            // `new` is in OpenSent
-                                            // keepalive means FSM Error
+                                            /*
+                                             * OpenSent:
+                                             *
+                                             * [..]
+                                             *
+                                             *  In response to any other event (Events 9, 11-13, 20, 25-28), the
+                                             *  local system:
+                                             *
+                                             *    - sends the NOTIFICATION with the Error Code Finite State
+                                             *      Machine Error,
+                                             *
+                                             *    - sets the ConnectRetryTimer to zero,
+                                             *
+                                             *    - releases all BGP resources,
+                                             *
+                                             *    - drops the TCP connection,
+                                             *
+                                             *    - increments the ConnectRetryCounter by 1,
+                                             *
+                                             *    - (optionally) performs peer oscillation damping if the
+                                             *      DampPeerOscillations attribute is set to TRUE, and
+                                             *
+                                             *    - changes its state to Idle.
+                                             */
                                             None => {
                                                 self.bump_msg_counter(msg_kind, true);
                                                 collision_log!(self, warn, new, exist,
