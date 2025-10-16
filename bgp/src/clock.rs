@@ -66,6 +66,11 @@ pub struct Timer {
     /// How long a timer runs until it fires.
     pub interval: Duration,
 
+    /// Optional jitter range applied on restart. None = no jitter.
+    /// Some((min, max)) applies a random factor in [min, max] to the interval.
+    /// RFC 4271 recommends (0.75, 1.0) for ConnectRetryTimer and related timers.
+    jitter_range: Option<(f64, f64)>,
+
     /// Timer state. The first value indicates if the timer is enabled. The
     /// second value indicates how much time is left.
     value: Arc<Mutex<TimerValue>>,
@@ -76,6 +81,25 @@ impl Timer {
     pub fn new(interval: Duration) -> Self {
         Self {
             interval,
+            jitter_range: None,
+            value: Arc::new(Mutex::new(TimerValue {
+                enabled: false,
+                remaining: interval,
+            })),
+        }
+    }
+
+    /// Create a new timer with the specified interval and jitter range.
+    /// The jitter_range parameter expects (min, max) where both values are
+    /// factors to multiply the interval by. RFC 4271 recommends (0.75, 1.0) for
+    /// ConnectRetryTimer and related timers.
+    pub fn new_with_jitter(
+        interval: Duration,
+        jitter_range: (f64, f64),
+    ) -> Self {
+        Self {
+            interval,
+            jitter_range: Some(jitter_range),
             value: Arc::new(Mutex::new(TimerValue {
                 enabled: false,
                 remaining: interval,
@@ -120,9 +144,21 @@ impl Timer {
         lock!(self.value).remaining
     }
 
-    /// Reset the value of a timer to the timers interval.
+    /// Reset the value of a timer to the timer's interval.
+    /// If jitter is configured, a new random value within the jitter range
+    /// is calculated and applied to the value each time this is called.
+    /// The jitter is recalculated on every reset.
     pub fn reset(&self) {
-        lock!(self.value).remaining = self.interval;
+        let interval = match self.jitter_range {
+            Some((min, max)) => {
+                use rand::Rng;
+                let mut rng = rand::thread_rng();
+                let factor = rng.gen_range(min..=max);
+                self.interval.mul_f64(factor)
+            }
+            None => self.interval,
+        };
+        lock!(self.value).remaining = interval;
     }
 
     /// Reset the timer to the interval and enable it.
@@ -135,6 +171,12 @@ impl Timer {
     pub fn stop(&self) {
         self.disable();
         self.reset();
+    }
+
+    /// Update the jitter range for this timer. The new jitter will be applied
+    /// on the next restart() call.
+    pub fn set_jitter_range(&mut self, jitter_range: Option<(f64, f64)>) {
+        self.jitter_range = jitter_range;
     }
 }
 
@@ -165,13 +207,25 @@ impl SessionClock {
         resolution: Duration,
         connect_retry_interval: Duration,
         idle_hold_interval: Duration,
+        connect_retry_jitter: Option<(f64, f64)>,
+        idle_hold_jitter: Option<(f64, f64)>,
         event_tx: Sender<FsmEvent<Cnx>>,
         log: Logger,
     ) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
         let timers = Arc::new(SessionTimers {
-            connect_retry: Mutex::new(Timer::new(connect_retry_interval)),
-            idle_hold: Mutex::new(Timer::new(idle_hold_interval)),
+            connect_retry: Mutex::new(match connect_retry_jitter {
+                Some(jitter) => {
+                    Timer::new_with_jitter(connect_retry_interval, jitter)
+                }
+                None => Timer::new(connect_retry_interval),
+            }),
+            idle_hold: Mutex::new(match idle_hold_jitter {
+                Some(jitter) => {
+                    Timer::new_with_jitter(idle_hold_interval, jitter)
+                }
+                None => Timer::new(idle_hold_interval),
+            }),
         });
         let join_handle = Arc::new(Self::run(
             resolution,

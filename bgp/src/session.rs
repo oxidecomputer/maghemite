@@ -640,6 +640,13 @@ pub struct SessionInfo {
     pub delay_open_time: Duration,
     /// Timer resolution for clocks (how often timers tick)
     pub resolution: Duration,
+    /// Jitter range for connect_retry timer
+    /// (None = disabled, Some((min, max)) = enabled)
+    /// RFC 4271 recommends 0.75-1.0 range to prevent synchronized behavior
+    pub connect_retry_jitter: Option<(f64, f64)>,
+    /// Jitter range for idle_hold timer
+    /// (None = disabled, Some((min, max)) = enabled)
+    pub idle_hold_jitter: Option<(f64, f64)>,
 }
 
 impl Default for SessionInfo {
@@ -665,6 +672,8 @@ impl Default for SessionInfo {
             idle_hold_time: Duration::from_secs(0), // No dampening by default
             delay_open_time: Duration::from_secs(5),
             resolution: Duration::from_millis(100), // 100ms timer resolution
+            idle_hold_jitter: Some((0.75, 1.0)), // RFC 4271 recommended range
+            connect_retry_jitter: None,          // Disabled by default
         }
     }
 }
@@ -980,6 +989,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 session_info.resolution,
                 session_info.connect_retry_time,
                 session_info.idle_hold_time,
+                session_info.connect_retry_jitter,
+                session_info.idle_hold_jitter,
                 event_tx.clone(),
                 log.clone(),
             )),
@@ -6500,6 +6511,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if current.vlan_id != info.vlan_id {
             current.vlan_id = info.vlan_id;
             reset_needed = true;
+        }
+
+        // Update jitter settings (no session reset required)
+        if current.connect_retry_jitter != info.connect_retry_jitter {
+            current.connect_retry_jitter = info.connect_retry_jitter;
+            lock!(self.clock.timers.connect_retry)
+                .set_jitter_range(info.connect_retry_jitter);
+        }
+
+        if current.idle_hold_jitter != info.idle_hold_jitter {
+            current.idle_hold_jitter = info.idle_hold_jitter;
+            lock!(self.clock.timers.idle_hold)
+                .set_jitter_range(info.idle_hold_jitter);
         }
 
         if current.allow_export != info.allow_export {

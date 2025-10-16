@@ -23,6 +23,7 @@ itertools.workspace = true
 oxnet.workspace = true
 crossbeam-channel.workspace = true
 uuid.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 pretty-hex.workspace = true
