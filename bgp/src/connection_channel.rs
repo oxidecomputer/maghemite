@@ -24,6 +24,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     net::{IpAddr, SocketAddr, ToSocketAddrs},
     sync::{
+        atomic::{AtomicU64, Ordering},
         mpsc::{channel as mpsc_channel, Receiver, RecvTimeoutError, Sender},
         Arc, Mutex,
     },
@@ -32,6 +33,9 @@ use std::{
 };
 
 const UNIT_CONNECTION: &str = "connection_channel";
+
+/// Global counter for assigning unique IDs to channel pairs
+static CHANNEL_PAIR_ID: AtomicU64 = AtomicU64::new(0);
 
 lazy_static! {
     static ref NET: Network = Network::new();
@@ -198,6 +202,8 @@ pub struct BgpConnectionChannel {
     recv_loop_params: Mutex<Option<RecvLoopParamsChannel>>,
     // Track whether recv loop has been started
     recv_loop_started: std::sync::atomic::AtomicBool,
+    // Unique identifier for the underlying channel pair (shared by both endpoints)
+    channel_id: u64,
 }
 
 impl Clone for BgpConnectionChannel {
@@ -214,6 +220,7 @@ impl Clone for BgpConnectionChannel {
             connection_clock: self.connection_clock.clone(),
             recv_loop_params: Mutex::new(None),
             recv_loop_started: std::sync::atomic::AtomicBool::new(true),
+            channel_id: self.channel_id,
         }
     }
 }
@@ -232,10 +239,11 @@ impl BgpConnection for BgpConnectionChannel {
         let guard = lock!(self.conn_tx);
         connection_log!(self,
             trace,
-            "send {} message via channel to {} ({})",
-            msg.title(), self.peer(), self.id().short();
+            "send {} message via channel to {} (conn_id: {}, channel_id: {})",
+            msg.title(), self.peer(), self.id().short(), self.channel_id;
             "message" => msg.title(),
-            "message_contents" => format!("{msg}")
+            "message_contents" => format!("{msg}"),
+            "channel_id" => self.channel_id
         );
         if let Err(e) = guard
             .send(msg)
@@ -243,10 +251,11 @@ impl BgpConnection for BgpConnectionChannel {
         {
             connection_log!(self,
                 error,
-                "error sending message via channel to {} ({}): {e}",
-                self.peer(), self.id().short();
+                "error sending message via channel to {} (conn_id: {}, channel_id: {}): {e}",
+                self.peer(), self.id().short(), self.channel_id;
                 "error" => format!("{e}"),
-                "network_state" => format!("{}", *NET)
+                "network_state" => format!("{}", *NET),
+                "channel_id" => self.channel_id
             );
             return Err(e);
         }
@@ -297,8 +306,9 @@ impl BgpConnection for BgpConnectionChannel {
         let params = lock!(self.recv_loop_params).take();
         if let Some(params) = params {
             connection_log!(self, info,
-                "spawning recv loop for {} (conn_id: {})",
-                self.peer(), self.conn_id.short();
+                "spawning recv loop for {} (conn_id: {}, channel_id: {})",
+                self.peer(), self.conn_id.short(), self.channel_id;
+                "channel_id" => self.channel_id
             );
 
             let peer = self.peer;
@@ -308,9 +318,10 @@ impl BgpConnection for BgpConnectionChannel {
             let log = self.log.clone();
             let creator = self.creator;
             let conn_id = self.conn_id;
+            let channel_id = self.channel_id;
 
             Self::spawn_recv_loop(
-                peer, rx, event_tx, timeout, log, creator, conn_id,
+                peer, rx, event_tx, timeout, log, creator, conn_id, channel_id,
             );
         }
     }
@@ -342,6 +353,8 @@ impl BgpConnectionChannel {
             log.clone(),
         );
 
+        let channel_id = conn.channel_id;
+
         // Store the parameters for spawning the recv loop later
         let recv_loop_params = Mutex::new(Some(RecvLoopParamsChannel {
             rx: conn.rx,
@@ -359,6 +372,7 @@ impl BgpConnectionChannel {
             connection_clock,
             recv_loop_params,
             recv_loop_started: std::sync::atomic::AtomicBool::new(false),
+            channel_id,
         }
     }
 
@@ -371,18 +385,20 @@ impl BgpConnectionChannel {
         log: Logger,
         creator: ConnectionCreator,
         conn_id: ConnectionId,
+        channel_id: u64,
     ) {
         spawn(move || loop {
             match rx.recv_timeout(timeout) {
                 Ok(msg) => {
                     connection_log_lite!(log,
                         debug,
-                        "recv {} msg from {peer} ({})",
-                        msg.title(), conn_id.short();
+                        "recv {} msg from {peer} (conn_id: {}, channel_id: {})",
+                        msg.title(), conn_id.short(), channel_id;
                         "creator" => creator.as_str(),
                         "peer" => format!("{peer}"),
                         "message" => msg.title(),
-                        "message_contents" => format!("{msg}")
+                        "message_contents" => format!("{msg}"),
+                        "channel_id" => channel_id
                     );
                     if let Err(e) = event_tx.send(FsmEvent::Connection(
                         ConnectionEvent::Message { msg, conn_id },
@@ -392,7 +408,8 @@ impl BgpConnectionChannel {
                             "error sending event to {peer}: {e}";
                             "creator" => creator.as_str(),
                             "peer" => format!("{peer}"),
-                            "error" => format!("{e}")
+                            "error" => format!("{e}"),
+                            "channel_id" => channel_id
                         );
                     }
                 }
@@ -404,11 +421,12 @@ impl BgpConnectionChannel {
                     // Peer closed connection, exit recv loop cleanly
                     connection_log_lite!(log,
                         debug,
-                        "peer {peer} disconnected ({}), terminating recv loop",
-                        conn_id.short();
+                        "peer {peer} disconnected (conn_id: {}, channel_id: {}), terminating recv loop",
+                        conn_id.short(), channel_id;
                         "creator" => creator.as_str(),
                         "peer" => format!("{peer}"),
-                        "connection_id" => conn_id.short()
+                        "connection_id" => conn_id.short(),
+                        "channel_id" => channel_id
                     );
                     break;
                 }
@@ -459,12 +477,13 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
 
                     connection_log_lite!(log,
                         info,
-                        "channel connection to {peer} established (conn_id: {})",
-                        conn.id().short();
+                        "channel connection to {peer} established (conn_id: {}, channel_id: {})",
+                        conn.id().short(), conn.channel_id;
                         "creator" => creator.as_str(),
                         "peer" => format!("{peer}"),
                         "local" => format!("{addr}"),
-                        "connection_id" => conn.id().short()
+                        "connection_id" => conn.id().short(),
+                        "channel_id" => conn.channel_id
                     );
 
                     // Send the TcpConnectionConfirmed event
@@ -503,11 +522,12 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
 pub struct Endpoint<T> {
     pub rx: Receiver<T>,
     pub tx: Sender<T>,
+    pub channel_id: u64,
 }
 
 impl<T> Endpoint<T> {
-    fn new(rx: Receiver<T>, tx: Sender<T>) -> Self {
-        Self { rx, tx }
+    fn new(rx: Receiver<T>, tx: Sender<T>, channel_id: u64) -> Self {
+        Self { rx, tx, channel_id }
     }
 }
 
@@ -516,5 +536,6 @@ impl<T> Endpoint<T> {
 pub fn channel<T>() -> (Endpoint<T>, Endpoint<T>) {
     let (tx_a, rx_b) = mpsc_channel();
     let (tx_b, rx_a) = mpsc_channel();
-    (Endpoint::new(rx_a, tx_a), Endpoint::new(rx_b, tx_b))
+    let channel_id = CHANNEL_PAIR_ID.fetch_add(1, Ordering::Relaxed);
+    (Endpoint::new(rx_a, tx_a, channel_id), Endpoint::new(rx_b, tx_b, channel_id))
 }
