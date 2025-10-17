@@ -377,6 +377,7 @@ impl BgpConnectionChannel {
     }
 
     /// Spawn the receive loop thread for this connection.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_recv_loop(
         peer: SocketAddr,
         rx: Receiver<Message>,
@@ -537,5 +538,8 @@ pub fn channel<T>() -> (Endpoint<T>, Endpoint<T>) {
     let (tx_a, rx_b) = mpsc_channel();
     let (tx_b, rx_a) = mpsc_channel();
     let channel_id = CHANNEL_PAIR_ID.fetch_add(1, Ordering::Relaxed);
-    (Endpoint::new(rx_a, tx_a, channel_id), Endpoint::new(rx_b, tx_b, channel_id))
+    (
+        Endpoint::new(rx_a, tx_a, channel_id),
+        Endpoint::new(rx_b, tx_b, channel_id),
+    )
 }

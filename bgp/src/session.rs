@@ -809,17 +809,19 @@ pub enum ShaperApplication {
     Difference(Option<rhai::AST>),
 }
 
-/// This is used to represent the "Primary" BgpConnection owned by a
-/// SessionRunner. If there are no collisions in progress, this will be the only
-/// BgpConnection. This exists so we the Router can know which connection to
-/// pull state from when a query arrives for information about a peer.
-#[derive(Debug)]
-pub enum PrimaryConnection<Cnx: BgpConnection> {
+/// This is used to represent a BgpConnection based on what progress it's made
+/// through the FSM.
+#[derive(Clone, Debug)]
+pub enum ConnectionKind<Cnx: BgpConnection> {
     /// This represents a connection in the "early" FSM states where we haven't
     /// yet learned details about the BGP peer (via Open message).
+    /// i.e.
+    /// OpenSent or earlier.
     Partial(Cnx),
     /// This represents a connection in the "late" FSM states where we know
     /// details details about the BGP peer (via Open message).
+    /// i.e.
+    /// OpenConfirm or later.
     Full(PeerConnection<Cnx>),
 }
 
@@ -946,7 +948,10 @@ pub struct SessionRunner<Cnx: BgpConnection> {
 
     /// A handle to the primary connection for a given peer.
     /// Used to expose runtime state of the peer itself, not just the FSM.
-    pub primary: Arc<Mutex<Option<PrimaryConnection<Cnx>>>>,
+    /// If there are no collisions in progress, this will be the only
+    /// BgpConnection. This exists so we the Router can know which connection to
+    /// pull state from when a query arrives for information about a peer.
+    pub primary: Arc<Mutex<Option<ConnectionKind<Cnx>>>>,
 
     /// Handle to the currently running connector thread, if any.
     /// Used to track outbound connection attempts and prevent duplicate spawns.
@@ -1120,9 +1125,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // If this was the primary connection, either promote another connection
         // or reset it to None
         if lock!(self.primary).is_none() {
-            self.set_primary_conn(Some(PrimaryConnection::Partial(
-                conn.clone(),
-            )));
+            self.set_primary_conn(Some(ConnectionKind::Partial(conn.clone())));
         }
     }
 
@@ -1148,7 +1151,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Promote a connection to be the primary for this BGP session
-    fn set_primary_conn(&self, primary: Option<PrimaryConnection<Cnx>>) {
+    fn set_primary_conn(&self, primary: Option<ConnectionKind<Cnx>>) {
         *lock!(self.primary) = primary;
     }
 
@@ -1156,8 +1159,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     pub fn get_primary_conn_id(&self) -> Option<ConnectionId> {
         if let Some(ref primary) = *lock!(self.primary) {
             match primary {
-                PrimaryConnection::Partial(ref p) => Some(*p.id()),
-                PrimaryConnection::Full(ref pc) => Some(*pc.conn.id()),
+                ConnectionKind::Partial(ref p) => Some(*p.id()),
+                ConnectionKind::Full(ref pc) => Some(*pc.conn.id()),
             }
         } else {
             None
@@ -2679,7 +2682,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             caps: om.get_capabilities(),
         };
 
-        self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+        self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
 
         FsmState::OpenConfirm(pc)
     }
@@ -3608,13 +3611,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         self.resolve_collision(
-            exist,
-            PeerConnection {
+            ConnectionKind::Full(exist),
+            ConnectionKind::Full(PeerConnection {
                 conn: new,
                 id: om.id,
                 asn: om.asn(),
                 caps: om.get_capabilities(),
-            },
+            }),
+            om.id,
         )
     }
 
@@ -3918,7 +3922,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                                 asn: o.asn(),
                                                                 caps: o.get_capabilities()
                                                             };
-                                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                                             return FsmState::OpenConfirm(pc);
                                                         }
                                                         // If `new` has not received an Open, it is still in OpenSent
@@ -3976,7 +3980,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                             asn: o.asn(),
                                                             caps: o.get_capabilities()
                                                         };
-                                                        self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                        self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                                         return FsmState::OpenConfirm(pc);
                                                     }
                                                     // If `new` has not received an Open, it is still in OpenSent
@@ -4014,7 +4018,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     asn: o.asn(),
                                                     caps: o.get_capabilities()
                                                 };
-                                                self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                                 // Stop the losing connection before transitioning
                                                 self.stop(
                                                     Some(&new),
@@ -4089,7 +4093,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                             asn: o.asn(),
                                                             caps: o.get_capabilities()
                                                         };
-                                                        self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                        self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                                         return FsmState::SessionSetup(pc);
                                                     }
                                                 }
@@ -4116,7 +4120,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     asn: o.asn(),
                                                     caps: o.get_capabilities()
                                                 };
-                                                self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                                 return FsmState::OpenConfirm(pc);
                                             }
                                             // If `new` has not received an Open, it is still in OpenSent
@@ -4184,7 +4188,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                                 asn: o.asn(),
                                                                 caps: o.get_capabilities()
                                                             };
-                                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                                             return FsmState::OpenConfirm(pc);
                                                         }
                                                         // `exist` is in OpenSent
@@ -4235,7 +4239,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                             asn: o.asn(),
                                                             caps: o.get_capabilities()
                                                         };
-                                                        self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                        self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                                         return FsmState::OpenConfirm(pc);
                                                     }
                                                     // If `exist` has not received an Open, it is still in OpenSent
@@ -4269,7 +4273,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     asn: o.asn(),
                                                     caps: o.get_capabilities()
                                                 };
-                                                self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                                 // Stop the losing connection before transitioning
                                                 self.stop(
                                                     Some(&exist),
@@ -4344,7 +4348,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                             asn: o.asn(),
                                                             caps: o.get_capabilities()
                                                         };
-                                                        self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                        self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                                         return FsmState::SessionSetup(pc);
                                                     }
                                                 }
@@ -4371,7 +4375,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     asn: o.asn(),
                                                     caps: o.get_capabilities()
                                                 };
-                                                self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                                self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                                 return FsmState::OpenConfirm(pc);
                                             }
                                             // If `exist` has not received an Open, it is still in OpenSent
@@ -4428,7 +4432,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 asn: o.asn(),
                                                 caps: o.get_capabilities()
                                             };
-                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                             return FsmState::SessionSetup(pc);
                                         }
                                     }
@@ -4455,7 +4459,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 asn: o.asn(),
                                                 caps: o.get_capabilities()
                                             };
-                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                             return FsmState::SessionSetup(pc);
                                         }
                                     }
@@ -4511,7 +4515,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 asn: o.asn(),
                                                 caps: o.get_capabilities()
                                             };
-                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                             return FsmState::SessionSetup(pc);
                                         }
                                     }
@@ -4534,7 +4538,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 asn: o.asn(),
                                                 caps: o.get_capabilities()
                                             };
-                                            self.set_primary_conn(Some(PrimaryConnection::Full(pc.clone())));
+                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
                                             return FsmState::SessionSetup(pc);
                                         }
                                     }
@@ -4566,18 +4570,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         self.resolve_collision(
-            PeerConnection {
+            ConnectionKind::Full(PeerConnection {
                 conn: exist,
                 id: om_exist.id,
                 asn: om_exist.asn(),
                 caps: om_exist.get_capabilities(),
-            },
-            PeerConnection {
+            }),
+            ConnectionKind::Full(PeerConnection {
                 conn: new,
                 id: om_new.id,
                 asn: om_new.asn(),
                 caps: om_new.get_capabilities(),
-            },
+            }),
+            om_exist.id,
         )
     }
 
@@ -4588,8 +4593,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// OpenMessage.
     fn resolve_collision(
         &self,
-        exist: PeerConnection<Cnx>,
-        new: PeerConnection<Cnx>,
+        exist: ConnectionKind<Cnx>,
+        new: ConnectionKind<Cnx>,
+        bgp_id: u32,
     ) -> FsmState<Cnx> {
         /*
          * 1) The BGP Identifier of the local system is compared to the BGP
@@ -4621,34 +4627,33 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
          *    message with the Error Code Cease.
          */
 
-        // XXX: Is this the right thing to do?
-        //      RIDs or ASNs differing across parallel connections to the same
-        //      peer IP seems pretty unlikely to occur organically, but what
-        //      what would the alternative be? just take the values from one
-        //      connection and assume it matches the other?
-        if new.id != exist.id {
-            collision_log!(self, error, new.conn, exist.conn,
-                "collision error: rx BGP-ID mismatch, {} (new conn {}) != {} (existing conn {}). fsm transition to idle",
-                new.id,
-                new.conn.id().short(),
-                exist.id,
-                exist.conn.id().short();
-            );
-            return FsmState::Idle;
-        } else if new.asn != exist.asn {
-            collision_log!(self, error, new.conn, exist.conn,
-                "collision error: rx ASN mismatch, {} (new conn {}) != {} (existing conn {}). fsm transition to idle",
-                new.asn,
-                new.conn.id().short(),
-                exist.asn,
-                exist.conn.id().short();
-            );
-            return FsmState::Idle;
-        }
+        // Classify connections by initiator:
+        //  - Dispatcher is inbound
+        //  - Connector is outbound
+        let (ours, theirs) = match exist {
+            ConnectionKind::Partial(ref cnx) => match cnx.creator() {
+                ConnectionCreator::Dispatcher => (new, exist),
+                ConnectionCreator::Connector => (exist, new),
+            },
+            ConnectionKind::Full(ref pc) => match pc.conn.creator() {
+                ConnectionCreator::Dispatcher => (new, exist),
+                ConnectionCreator::Connector => (exist, new),
+            },
+        };
 
-        collision_log!(self, info, new.conn, exist.conn,
-            "collision detected: local id {}, remote id {}",
-            self.id, new.id;
+        // Create conn handles to reduce pattern matching
+        let our_conn = match ours {
+            ConnectionKind::Partial(ref cnx) => cnx,
+            ConnectionKind::Full(ref pc) => &pc.conn,
+        };
+        let their_conn = match theirs {
+            ConnectionKind::Partial(ref cnx) => cnx,
+            ConnectionKind::Full(ref pc) => &pc.conn,
+        };
+
+        collision_log!(self, info, our_conn, their_conn,
+            "collision detected: local id {}, remote id {bgp_id}",
+            self.id;
         );
 
         /*
@@ -4671,61 +4676,49 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
          *   - changes its state to Idle.
          */
 
-        // Determine which connection we initiated vs the peer initiated.
-        // We use ConnectionCreator to identify who initiated each connection.
-        let (our_conn, peer_conn) =
-            if exist.conn.creator() == ConnectionCreator::Connector {
-                // exist is the connection we initiated (outbound)
-                // new is the connection peer initiated (inbound)
-                (exist, new)
-            } else {
-                // new is the connection we initiated (outbound)
-                // exist is the connection peer initiated (inbound)
-                (new, exist)
-            };
-
-        if self.id > peer_conn.id {
-            // Our RID is higher, we win. Kill the inbound connection to death.
-            collision_log!(self, info, our_conn.conn, peer_conn.conn,
-                "collision resolution: our outbound conn ({}) wins with higher RID ({} > {})",
-                our_conn.conn.id().short(), self.id, peer_conn.id;
+        if self.id > bgp_id {
+            // Our RID is higher, we win. Kill the peer's connection to death.
+            collision_log!(self, info, our_conn, their_conn,
+                "collision resolution: local system wins with higher RID ({} > {bgp_id})",
+                self.id;
             );
 
-            self.stop(
-                Some(&peer_conn.conn),
-                None,
-                StopReason::CollisionResolution,
-            );
+            self.stop(Some(their_conn), None, StopReason::CollisionResolution);
 
-            conn_timer!(our_conn.conn, hold).restart();
-            conn_timer!(our_conn.conn, keepalive).restart();
+            conn_timer!(our_conn, hold).restart();
+            conn_timer!(our_conn, keepalive).restart();
 
-            self.set_primary_conn(Some(PrimaryConnection::Full(
-                our_conn.clone(),
-            )));
+            self.set_primary_conn(Some(ours.clone()));
 
-            return FsmState::SessionSetup(our_conn);
+            // Return to the FSM state that aligns with the connection's state
+            match ours {
+                ConnectionKind::Partial(cnx) => return FsmState::OpenSent(cnx),
+                ConnectionKind::Full(pc) => return FsmState::SessionSetup(pc),
+            }
         }
 
-        // Our RID is lower, we lose. Toss the outbound connection to the wolves
-        collision_log!(self, info, peer_conn.conn, our_conn.conn,
-            "collision resolution: peer's outbound conn ({}) wins ({} >= {})",
-            peer_conn.conn.id().short(), peer_conn.id, self.id;
+        // Our RID is lower, we lose. Throw our connection to the wolves
+        collision_log!(self, info, our_conn, their_conn,
+            "collision resolution: peer wins with higher RID ({bgp_id} >= {})",
+            self.id;
         );
 
-        self.stop(Some(&our_conn.conn), None, StopReason::CollisionResolution);
+        self.stop(Some(our_conn), None, StopReason::CollisionResolution);
 
         session_timer!(self, connect_retry).stop();
         self.counters
             .connection_retries
             .fetch_add(1, Ordering::Relaxed);
 
-        conn_timer!(peer_conn.conn, hold).restart();
-        conn_timer!(peer_conn.conn, keepalive).restart();
+        conn_timer!(their_conn, hold).restart();
+        conn_timer!(their_conn, keepalive).restart();
 
-        self.set_primary_conn(Some(PrimaryConnection::Full(peer_conn.clone())));
+        self.set_primary_conn(Some(theirs.clone()));
 
-        FsmState::SessionSetup(peer_conn)
+        match theirs {
+            ConnectionKind::Partial(cnx) => FsmState::OpenSent(cnx),
+            ConnectionKind::Full(pc) => FsmState::OpenConfirm(pc),
+        }
     }
 
     fn collision_conn_kind(
@@ -5701,7 +5694,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn is_ebgp(&self) -> Option<bool> {
-        if let Some(PrimaryConnection::Full(ref pc)) = *lock!(self.primary) {
+        if let Some(ConnectionKind::Full(ref pc)) = *lock!(self.primary) {
             if pc.asn != self.asn.as_u32() {
                 return Some(true);
             } else {
@@ -5712,7 +5705,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn is_ibgp(&self) -> Option<bool> {
-        if let Some(PrimaryConnection::Full(ref pc)) = *lock!(self.primary) {
+        if let Some(ConnectionKind::Full(ref pc)) = *lock!(self.primary) {
             if pc.asn == self.asn.as_u32() {
                 return Some(true);
             } else {
@@ -6386,7 +6379,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Return the learned remote ASN of the peer (if any).
     pub fn remote_asn(&self) -> Option<u32> {
-        if let Some(PrimaryConnection::Full(ref pc)) = *lock!(self.primary) {
+        if let Some(ConnectionKind::Full(ref pc)) = *lock!(self.primary) {
             return Some(pc.asn);
         }
         None

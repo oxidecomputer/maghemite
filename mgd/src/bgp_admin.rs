@@ -8,7 +8,7 @@ use crate::{
     admin::HandlerContext, bgp_param::*, error::Error, log::bgp_log, register,
 };
 use bgp::router::LoadPolicyError;
-use bgp::session::{FsmStateKind, PrimaryConnection};
+use bgp::session::{ConnectionKind, FsmStateKind};
 use bgp::{
     config::RouterConfig,
     connection::BgpConnection,
@@ -508,8 +508,8 @@ pub async fn get_neighbors(
         // session runner as both the config and runtime state.
         if let Some(ref primary) = *lock!(s.primary) {
             let clock = match primary {
-                PrimaryConnection::Partial(ref p) => p.clock(),
-                PrimaryConnection::Full(ref pc) => pc.conn.clock(),
+                ConnectionKind::Partial(ref p) => p.clock(),
+                ConnectionKind::Full(ref pc) => pc.conn.clock(),
             };
             conf_holdtime = clock.timers.config_hold_time;
             neg_holdtime = lock!(clock.timers.hold).interval;
