@@ -1788,21 +1788,27 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     match connection_event {
                         // This is unexpected since DelayOpen isn't implemented.
                         //
-                        // A new connection arrives via FsmEvent::Connected
-                        // or FsmEvent::TcpConnectionConfirmed without its
-                        // recv loop running, i.e. no inbound messages are
-                        // pulled from the connection until the recv loop
-                        // thread is started by register_conn(). Since
-                        // we don't read from the event queue between
-                        // registering a new connection and moving into
-                        // OpenSent (upon Open send success) or Idle (upon
-                        // Open send error), there isn't a chance for
-                        // Messages from a new connection to be read while
-                        // in Connect.
+                        // A new connection arrives via TcpConnectionAcked
+                        // or TcpConnectionConfirmed without its recv loop
+                        // running, i.e. no inbound messages are read from the
+                        // connection until the recv loop thread is started by
+                        // register_conn(). Since we don't read from the event
+                        // queue between registering a new connection and moving
+                        // into OpenSent (upon Open send success) or Idle (upon
+                        // Open send error), there isn't a chance for Messages
+                        // from a new connection to be read while in Connect.
                         //
                         // If/when we implement DelayOpen, this is where we
-                        // need to add handling for Open messages while
-                        // DelayOpenTimer is running (enabled && !expired).
+                        // need to handle Open messages while DelayOpenTimer is
+                        // running (enabled && !expired). We'll also need to
+                        // hang onto the new connection between new connection
+                        // and DelayOpenExpires events.
+                        //
+                        // Note: Connection ID validation is not performed here
+                        // because we don't expect Messages for any connections,
+                        // so we always transition to Idle on any message. When
+                        // DelayOpen is added, we'll need to validate conn_id
+                        // against the connection before processing it.
                         ConnectionEvent::Message { msg, ref conn_id } => {
                             let title = msg.title();
 
@@ -1978,24 +1984,29 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  */
                 FsmEvent::Connection(connection_event) => {
                     match connection_event {
-                        // This is unexpected since DelayOpen isn't
-                        // implemented.
+                        // This is unexpected since DelayOpen isn't implemented.
                         //
-                        // A new connection arrives via FsmEvent::Connected
-                        // or FsmEvent::TcpConnectionConfirmed without its
-                        // recv loop running, i.e. no inbound messages are
-                        // pulled from the connection until the recv loop
-                        // thread is started by register_conn(). Since
-                        // we don't read from the event queue between
-                        // registering a new connection and moving into
-                        // OpenSent (upon Open send success) or Idle (upon
-                        // Open send error), there isn't a chance for
-                        // Messages from a new connection to be read while
-                        // in Connect.
+                        // A new connection arrives via TcpConnectionAcked
+                        // or TcpConnectionConfirmed without its recv loop
+                        // running, i.e. no inbound messages are read from the
+                        // connection until the recv loop thread is started by
+                        // register_conn(). Since we don't read from the event
+                        // queue between registering a new connection and moving
+                        // into OpenSent (upon Open send success) or Idle (upon
+                        // Open send error), there isn't a chance for Messages
+                        // from a new connection to be read while in Connect.
                         //
                         // If/when we implement DelayOpen, this is where we
-                        // need to add handling for Open messages while
-                        // DelayOpenTimer is running (enabled && !expired).
+                        // need to handle Open messages while DelayOpenTimer
+                        // is running (enabled && !expired). We'll also need to
+                        // hang onto the new connection between new connection
+                        // and DelayOpenExpires events.
+                        //
+                        // Note: Connection ID validation is not performed here
+                        // because we don't expect Messages for any connections,
+                        // so we always transition to Idle on any message. When
+                        // DelayOpen is added, we'll need to validate conn_id
+                        // against the connection before processing it.
                         ConnectionEvent::Message { msg, ref conn_id } => {
                             let title = msg.title();
 
@@ -2345,7 +2356,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         let new_creator = new.creator();
                         if new_creator == conn.creator() {
                             collision_log!(self, error, new, conn,
-                                "rejected new {} connection for {}: has same creator as existing connection {}",
+                                "rejected new {} connection with {}: has same creator as existing connection {}",
                                 new_creator.direction(),
                                 new.id().short(),
                                 conn.id().short();
@@ -2356,7 +2367,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         match new_creator {
                             ConnectionCreator::Dispatcher => {
                                 collision_log!(self, info, new, conn,
-                                    "new inbound connection from {} (conn_id: {})",
+                                    "collision detected: new inbound connection from {} (conn_id: {})",
                                     new.peer(), new.id().short();
                                 );
                                 self.counters
@@ -2365,7 +2376,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             }
                             ConnectionCreator::Connector => {
                                 collision_log!(self, info, new, conn,
-                                    "outbound connection to {} (conn_id: {}) completed",
+                                    "collision detected: outbound connection to {} (conn_id: {}) completed",
                                     new.peer(), new.id().short();
                                 );
                                 self.counters
@@ -3000,7 +3011,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let new_creator = new.creator();
                     if new_creator == pc.conn.creator() {
                         collision_log!(self, error, new, pc.conn,
-                            "rejected new {} connection for {}: has same creator as existing connection {}",
+                            "rejected new {} connection with {}: has same creator as existing connection {}",
                             new_creator.direction(),
                             new.id().short(),
                             pc.conn.id().short();
@@ -3011,7 +3022,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     match new_creator {
                         ConnectionCreator::Dispatcher => {
                             collision_log!(self, info, new, pc.conn,
-                                "new inbound connection from {} (conn_id: {})",
+                                "collision detected: new inbound connection from {} (conn_id: {})",
                                 new.peer(), new.id().short();
                             );
                             self.counters
@@ -3020,7 +3031,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
                         ConnectionCreator::Connector => {
                             collision_log!(self, info, new, pc.conn,
-                                "outbound connection to {} (conn_id: {}) completed",
+                                "collision detected: outbound connection to {} (conn_id: {}) completed",
                                 new.peer(), new.id().short();
                             );
                             self.counters
@@ -3039,11 +3050,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     self.register_conn(&new);
 
-                    conn_timer!(new, hold).restart();
+                    let bgp_id = pc.id;
 
-                    FsmState::ConnectionCollision(CollisionPair::OpenConfirm(
-                        pc, new,
-                    ))
+                    self.resolve_collision(
+                        ConnectionKind::Full(pc),
+                        ConnectionKind::Partial(new),
+                        bgp_id,
+                    )
                 }
             },
         }
@@ -3691,9 +3704,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         exist: Cnx,
         new: Cnx,
     ) -> FsmState<Cnx> {
-        let mut new_open: Option<OpenMessage> = None;
-        let mut exist_open: Option<OpenMessage> = None;
-        let (om_new, om_exist) = loop {
+        loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
                 return FsmState::Idle;
@@ -3904,262 +3915,64 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             om.clone().into(),
                                             Some(*conn_id),
                                         );
-                                        match exist_open {
-                                            /*
-                                             * OpenSent:
-                                             *
-                                             * [..]
-                                             *
-                                             * When an OPEN message is received, all fields are checked for
-                                             * correctness.  If there are no errors in the OPEN message (Event
-                                             * 19), the local system:
-                                             *
-                                             *   - resets the DelayOpenTimer to zero,
-                                             *
-                                             *   - sets the BGP ConnectRetryTimer to zero,
-                                             *
-                                             *   - sends a KEEPALIVE message, and
-                                             *
-                                             *   - sets a KeepaliveTimer (via the text below)
-                                             *
-                                             *   - sets the HoldTimer according to the negotiated value (see
-                                             *     Section 4.2),
-                                             *
-                                             *   - changes its state to OpenConfirm.
-                                             */
-                                            None => {
-                                                self.bump_msg_counter(msg_kind, false);
 
-                                                if let Err(e) = self.handle_open(&exist, &om)
-                                                {
-                                                    collision_log!(self, warn, new, exist,
-                                                        "existing conn failed to handle {msg_kind} ({e}), fallback to new conn";
-                                                        "error" => format!("{e}")
-                                                    );
+                                        self.bump_msg_counter(msg_kind, false);
 
-                                                    // notification sent by handle_open(), nothing to do here
-                                                    self.connect_retry_counter
-                                                        .fetch_add(1, Ordering::Relaxed);
-                                                    self.counters
-                                                        .connection_retries
-                                                        .fetch_add(1, Ordering::Relaxed);
-                                                    // peer oscillation damping happens in idle, nothing to do here
+                                        if let Err(e) = self.handle_open(&exist, &om) {
+                                            collision_log!(self, warn, new, exist,
+                                                "existing conn failed to handle {msg_kind} ({e}), fallback to new conn";
+                                                "error" => format!("{e}")
+                                            );
 
-                                                    match new_open {
-                                                        // If `new` has received an Open, it is now in OpenConfirm
-                                                        Some(o) => {
-                                                            let pc = PeerConnection {
-                                                                conn: new,
-                                                                id: o.id,
-                                                                asn: o.asn(),
-                                                                caps: o.get_capabilities()
-                                                            };
-                                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                                            return FsmState::OpenConfirm(pc);
-                                                        }
-                                                        // If `new` has not received an Open, it is still in OpenSent
-                                                        None => {
-                                                            return FsmState::OpenSent(new);
-                                                        }
-                                                    }
-                                                }
-
-                                                self.send_keepalive(&exist);
-
-                                                if let Some(o_new) = new_open {
-                                                    break (o_new, om);
-                                                } else {
-                                                    exist_open = Some(om);
-                                                    continue;
-                                                }
-                                            }
-                                            // `exist` is in OpenConfirm.
-                                            // In OpenConfirm, an Open is
-                                            // indicative of a collision.
-                                            // We already know we're in a
-                                            // collision, so treat this as an
-                                            // FSM error.
-                                            Some(_) => {
-                                                collision_log!(self, warn, new, exist,
-                                                    "existing conn rx unexpected {msg_kind} (conn_id: {}), fallback to new conn",
-                                                    conn_id.short();
-                                                    "message" => "open",
-                                                    "message_contents" => format!("{om}").as_str()
-                                                );
-
-                                                self.bump_msg_counter(msg_kind, true);
-                                                self.stop(Some(&exist), None, StopReason::FsmError);
-
-                                                // RFC 4271 says there's an FSM for
-                                                // each configured peer + each
-                                                // inbound TCP connection that
-                                                // hasn't yet been identified. So in
-                                                // theory, an FSM error would only
-                                                // affect one connection. We are
-                                                // emulating two FSMs for the
-                                                // lifetime of a collision, so an
-                                                // FSM error on one connection
-                                                // would presumably have a blast
-                                                // radius of just the errored
-                                                // connection and we can attempt
-                                                // recovery via the other connection
-                                                match new_open {
-                                                    // If `new` has received an Open, it is now in OpenConfirm
-                                                    Some(o) => {
-                                                        let pc = PeerConnection {
-                                                            conn: new,
-                                                            id: o.id,
-                                                            asn: o.asn(),
-                                                            caps: o.get_capabilities()
-                                                        };
-                                                        self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                                        return FsmState::OpenConfirm(pc);
-                                                    }
-                                                    // If `new` has not received an Open, it is still in OpenSent
-                                                    None => {
-                                                        return FsmState::OpenSent(new);
-                                                    }
-                                                }
-                                            }
+                                            // notification sent by handle_open(), nothing to do here
+                                            self.connect_retry_counter
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            self.counters
+                                                .connection_retries
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            self.stop(Some(&exist), None, StopReason::FsmError);
+                                            self.set_primary_conn(Some(ConnectionKind::Partial(new.clone())));
+                                            return FsmState::OpenSent(new);
                                         }
-                                    } else if let Message::KeepAlive = msg {
-                                        // Event 26
-                                        match exist_open {
-                                            /*
-                                             * OpenConfirm state:
-                                             *
-                                             * [..]
-                                             *
-                                             * If the local system receives a KEEPALIVE message (KeepAliveMsg
-                                             * (Event 26)), the local system:
-                                             *
-                                             *   - restarts the HoldTimer and
-                                             *
-                                             *   - changes its state to Established.
-                                             */
-                                            Some(o) => {
-                                                self.bump_msg_counter(msg_kind, false);
-                                                conn_timer!(exist, hold).restart();
-                                                conn_timer!(exist, keepalive).restart();
-                                                self.counters
-                                                    .keepalives_received
-                                                    .fetch_add(1, Ordering::Relaxed);
-                                                let pc = PeerConnection {
-                                                    conn: exist,
-                                                    id: o.id,
-                                                    asn: o.asn(),
-                                                    caps: o.get_capabilities()
-                                                };
-                                                self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                                // Stop the losing connection before transitioning
-                                                self.stop(
-                                                    Some(&new),
-                                                    None,
-                                                    StopReason::CollisionResolution,
-                                                );
-                                                return FsmState::SessionSetup(pc);
-                                            }
-                                            /*
-                                             * OpenSent:
-                                             *
-                                             * [..]
-                                             *
-                                             *  In response to any other event (Events 9, 11-13, 20, 25-28), the
-                                             *  local system:
-                                             *
-                                             *    - sends the NOTIFICATION with the Error Code Finite State
-                                             *      Machine Error,
-                                             *
-                                             *    - sets the ConnectRetryTimer to zero,
-                                             *
-                                             *    - releases all BGP resources,
-                                             *
-                                             *    - drops the TCP connection,
-                                             *
-                                             *    - increments the ConnectRetryCounter by 1,
-                                             *
-                                             *    - (optionally) performs peer oscillation damping if the
-                                             *      DampPeerOscillations attribute is set to TRUE, and
-                                             *
-                                             *    - changes its state to Idle.
-                                             */
-                                            None => {
-                                                self.bump_msg_counter(msg_kind, true);
-                                                collision_log!(self, warn, new, exist,
-                                                    "existing rx unexpected {msg_kind} message (conn_id: {}), fallback to new conn",
-                                                    conn_id.short();
-                                                    "message" => msg_kind
-                                                );
 
-                                                self.stop(
-                                                    Some(&exist),
-                                                    None,
-                                                    StopReason::FsmError,
-                                                );
+                                        // Resolve collision on first Open - don't wait for both
+                                        collision_log!(self, info, exist, new,
+                                            "exist conn received Open (conn_id: {}), resolving collision immediately",
+                                            conn_id.short();
+                                        );
 
-                                                session_timer!(self, connect_retry).stop();
-                                                self.connect_retry_counter
-                                                    .fetch_add(1, Ordering::Relaxed);
+                                        // Wrap connections according to their state:
+                                        // - exist has received an Open, so it's Full
+                                        // - new hasn't received an Open, so it's Partial
+                                        let exist_kind = ConnectionKind::Full(PeerConnection {
+                                            conn: exist.clone(),
+                                            id: om.id,
+                                            asn: om.asn(),
+                                            caps: om.get_capabilities(),
+                                        });
+                                        let new_kind = ConnectionKind::Partial(new.clone());
 
-                                                // RFC 4271 says there's an FSM for
-                                                // each configured peer + each
-                                                // inbound TCP connection that
-                                                // hasn't yet been identified. So in
-                                                // theory, an FSM error would only
-                                                // affect one connection. We are
-                                                // emulating two FSMs for the
-                                                // lifetime of a collision, so an
-                                                // FSM error on one connection
-                                                // would presumably have a blast
-                                                // radius of just the errored
-                                                // connection and we can attempt
-                                                // recovery via the other connection
-                                                match new_open {
-                                                    None => {
-                                                        return FsmState::OpenSent(new);
-                                                    }
-                                                    Some(o) => {
-                                                        let pc = PeerConnection {
-                                                            conn: new,
-                                                            id: o.id,
-                                                            asn: o.asn(),
-                                                            caps: o.get_capabilities()
-                                                        };
-                                                        self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                                        return FsmState::SessionSetup(pc);
-                                                    }
-                                                }
-                                            }
-                                        }
+                                        return self.resolve_collision(
+                                            exist_kind,
+                                            new_kind,
+                                            om.id,
+                                        );
                                     } else {
-                                        // Any Message other than Open or Keepalive
+                                        // Any message other than Open is an FSM error for OpenSent
                                         self.bump_msg_counter(msg_kind, true);
-                                        self.connect_retry_counter
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        session_timer!(self, connect_retry).stop();
                                         collision_log!(self, warn, new, exist,
                                             "existing conn rx unexpected {msg_kind} (conn_id: {}), fallback to new conn",
                                             conn_id.short();
-                                            "message" => "open",
-                                            "message_contents" => format!("{msg}").as_str()
+                                            "message" => msg_kind
                                         );
-                                        match new_open {
-                                            // If `new` has received an Open, it is now in OpenConfirm
-                                            Some(o) => {
-                                                let pc = PeerConnection {
-                                                    conn: new,
-                                                    id: o.id,
-                                                    asn: o.asn(),
-                                                    caps: o.get_capabilities()
-                                                };
-                                                self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                                return FsmState::OpenConfirm(pc);
-                                            }
-                                            // If `new` has not received an Open, it is still in OpenSent
-                                            None => {
-                                                return FsmState::OpenSent(new);
-                                            }
-                                        }
+
+                                        self.stop(Some(&exist), None, StopReason::FsmError);
+                                        session_timer!(self, connect_retry).stop();
+                                        self.connect_retry_counter
+                                            .fetch_add(1, Ordering::Relaxed);
+
+                                        self.set_primary_conn(Some(ConnectionKind::Partial(new.clone())));
+                                        return FsmState::OpenSent(new);
                                     }
                                 },
 
@@ -4170,251 +3983,66 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             om.clone().into(),
                                             Some(*conn_id),
                                         );
-                                        match new_open {
-                                            /*
-                                             * OpenSent:
-                                             *
-                                             * [..]
-                                             *
-                                             * When an OPEN message is received, all fields are checked for
-                                             * correctness.  If there are no errors in the OPEN message (Event
-                                             * 19), the local system:
-                                             *
-                                             *   - resets the DelayOpenTimer to zero,
-                                             *
-                                             *   - sets the BGP ConnectRetryTimer to zero,
-                                             *
-                                             *   - sends a KEEPALIVE message, and
-                                             *
-                                             *   - sets a KeepaliveTimer (via the text below)
-                                             *
-                                             *   - sets the HoldTimer according to the negotiated value (see
-                                             *     Section 4.2),
-                                             *
-                                             *   - changes its state to OpenConfirm.
-                                             */
-                                            None => {
-                                                self.bump_msg_counter(msg_kind, false);
 
-                                                if let Err(e) = self.handle_open(&new, &om)
-                                                {
-                                                    collision_log!(self, warn, new, exist,
-                                                        "new conn failed to handle open ({e}), fallback to existing conn";
-                                                        "error" => format!("{e}")
-                                                    );
+                                        self.bump_msg_counter(msg_kind, false);
 
-                                                    // notification sent by handle_open(), nothing to do here
-                                                    self.connect_retry_counter
-                                                        .fetch_add(1, Ordering::Relaxed);
-                                                    self.counters
-                                                        .connection_retries
-                                                        .fetch_add(1, Ordering::Relaxed);
-                                                    // peer oscillation damping happens in idle, nothing to do here
+                                        if let Err(e) = self.handle_open(&new, &om) {
+                                            collision_log!(self, warn, new, exist,
+                                                "new conn failed to handle {msg_kind} ({e}), fallback to existing conn";
+                                                "error" => format!("{e}")
+                                            );
 
-                                                    match exist_open {
-                                                        // `exist` is in OpenConfirm
-                                                        Some(o) => {
-                                                            let pc = PeerConnection {
-                                                                conn: exist,
-                                                                id: o.id,
-                                                                asn: o.asn(),
-                                                                caps: o.get_capabilities()
-                                                            };
-                                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                                            return FsmState::OpenConfirm(pc);
-                                                        }
-                                                        // `exist` is in OpenSent
-                                                        None => {
-                                                            return FsmState::OpenSent(exist);
-                                                        }
-                                                    }
-                                                }
-
-                                                self.send_keepalive(&new);
-
-                                                if let Some(o_exist) = exist_open {
-                                                    break(om, o_exist);
-                                                } else {
-                                                    new_open = Some(om);
-                                                    continue;
-                                                }
-                                            }
-                                            /*
-                                             * OpenConfirm state:
-                                             *
-                                             * [..]
-                                             *
-                                             * If the local system receives a KEEPALIVE message (KeepAliveMsg
-                                             * (Event 26)), the local system:
-                                             *
-                                             *   - restarts the HoldTimer and
-                                             *
-                                             *   - changes its state to Established.
-                                             */
-                                            Some(_) => {
-                                                self.bump_msg_counter(msg_kind, true);
-                                                self.connect_retry_counter
-                                                    .fetch_add(1, Ordering::Relaxed);
-                                                session_timer!(self, connect_retry).stop();
-                                                collision_log!(self, warn, new, exist,
-                                                    "new conn rx unexpected {msg_kind} (conn_id: {}), fallback to existing conn",
-                                                    conn_id.short();
-                                                    "message" => "open",
-                                                    "message_contents" => format!("{om}").as_str()
-                                                );
-                                                match exist_open {
-                                                    // If `exist` has received an Open, it is now in OpenConfirm
-                                                    Some(o) => {
-                                                        let pc = PeerConnection {
-                                                            conn: exist,
-                                                            id: o.id,
-                                                            asn: o.asn(),
-                                                            caps: o.get_capabilities()
-                                                        };
-                                                        self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                                        return FsmState::OpenConfirm(pc);
-                                                    }
-                                                    // If `exist` has not received an Open, it is still in OpenSent
-                                                    None => {
-                                                        return FsmState::OpenSent(exist);
-                                                    }
-                                                }
-                                            }
+                                            // notification sent by handle_open(), nothing to do here
+                                            self.connect_retry_counter
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            self.counters
+                                                .connection_retries
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            self.stop(Some(&new), None, StopReason::FsmError);
+                                            self.set_primary_conn(Some(ConnectionKind::Partial(exist.clone())));
+                                            return FsmState::OpenSent(exist);
                                         }
-                                    } else if let Message::KeepAlive = msg {
-                                        // Event 26
-                                        match new_open {
-                                            /*
-                                             * If the local system receives a KEEPALIVE message (KeepAliveMsg
-                                             * (Event 26)), the local system:
-                                             *
-                                             *   - restarts the HoldTimer and
-                                             *
-                                             *   - changes its state to Established.
-                                             */
-                                            Some(o) => {
-                                                self.bump_msg_counter(msg_kind, false);
-                                                conn_timer!(new, hold).restart();
-                                                conn_timer!(new, keepalive).restart();
-                                                self.counters
-                                                    .keepalives_received
-                                                    .fetch_add(1, Ordering::Relaxed);
-                                                let pc = PeerConnection {
-                                                    conn: new,
-                                                    id: o.id,
-                                                    asn: o.asn(),
-                                                    caps: o.get_capabilities()
-                                                };
-                                                self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                                // Stop the losing connection before transitioning
-                                                self.stop(
-                                                    Some(&exist),
-                                                    None,
-                                                    StopReason::CollisionResolution,
-                                                );
-                                                return FsmState::SessionSetup(pc);
-                                            }
-                                            /*
-                                             * OpenSent:
-                                             *
-                                             * [..]
-                                             *
-                                             *  In response to any other event (Events 9, 11-13, 20, 25-28), the
-                                             *  local system:
-                                             *
-                                             *    - sends the NOTIFICATION with the Error Code Finite State
-                                             *      Machine Error,
-                                             *
-                                             *    - sets the ConnectRetryTimer to zero,
-                                             *
-                                             *    - releases all BGP resources,
-                                             *
-                                             *    - drops the TCP connection,
-                                             *
-                                             *    - increments the ConnectRetryCounter by 1,
-                                             *
-                                             *    - (optionally) performs peer oscillation damping if the
-                                             *      DampPeerOscillations attribute is set to TRUE, and
-                                             *
-                                             *    - changes its state to Idle.
-                                             */
-                                            None => {
-                                                self.bump_msg_counter(msg_kind, true);
-                                                collision_log!(self, warn, new, exist,
-                                                    "new conn rx unexpected {msg_kind} message (conn_id: {}), fallback to existing conn",
-                                                    conn_id.short();
-                                                    "message" => msg_kind
-                                                );
 
-                                                self.stop(
-                                                    Some(&new),
-                                                    None,
-                                                    StopReason::FsmError,
-                                                );
+                                        self.send_keepalive(&new);
 
-                                                session_timer!(self, connect_retry).stop();
-                                                self.connect_retry_counter
-                                                    .fetch_add(1, Ordering::Relaxed);
+                                        // Resolve collision on first Open - don't wait for both
+                                        collision_log!(self, info, new, exist,
+                                            "new conn received Open (conn_id: {}), resolving collision immediately",
+                                            conn_id.short();
+                                        );
 
-                                                // RFC 4271 says there's an FSM for
-                                                // each configured peer + each
-                                                // inbound TCP connection that
-                                                // hasn't yet been identified. So in
-                                                // theory, an FSM error would only
-                                                // affect one connection. We are
-                                                // emulating two FSMs for the
-                                                // lifetime of a collision, so an
-                                                // FSM error on one connection
-                                                // would presumably have a blast
-                                                // radius of just the errored
-                                                // connection and we can attempt
-                                                // recovery via the other connection
-                                                match exist_open {
-                                                    None => {
-                                                        return FsmState::OpenSent(exist);
-                                                    }
-                                                    Some(o) => {
-                                                        let pc = PeerConnection {
-                                                            conn: exist,
-                                                            id: o.id,
-                                                            asn: o.asn(),
-                                                            caps: o.get_capabilities()
-                                                        };
-                                                        self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                                        return FsmState::SessionSetup(pc);
-                                                    }
-                                                }
-                                            }
-                                        }
+                                        // Wrap connections according to their state:
+                                        // - new has received an Open, so it's Full
+                                        // - exist hasn't received an Open, so it's Partial
+                                        let exist_kind = ConnectionKind::Partial(exist.clone());
+                                        let new_kind = ConnectionKind::Full(PeerConnection {
+                                            conn: new.clone(),
+                                            id: om.id,
+                                            asn: om.asn(),
+                                            caps: om.get_capabilities(),
+                                        });
+
+                                        return self.resolve_collision(
+                                            exist_kind,
+                                            new_kind,
+                                            om.id,
+                                        );
                                     } else {
-                                        // Any Message other than Open or Keepalive
+                                        // Any message other than Open is an FSM error for OpenSent
                                         self.bump_msg_counter(msg_kind, true);
-                                        self.connect_retry_counter
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        session_timer!(self, connect_retry).stop();
                                         collision_log!(self, warn, new, exist,
                                             "new conn rx unexpected {msg_kind} (conn_id: {}), fallback to existing conn",
                                             conn_id.short();
-                                            "message" => "open",
-                                            "message_contents" => format!("{msg}").as_str()
+                                            "message" => msg_kind
                                         );
-                                        match exist_open {
-                                            // If `exist` has received an Open, it is now in OpenConfirm
-                                            Some(o) => {
-                                                let pc = PeerConnection {
-                                                    conn: exist,
-                                                    id: o.id,
-                                                    asn: o.asn(),
-                                                    caps: o.get_capabilities()
-                                                };
-                                                self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                                return FsmState::OpenConfirm(pc);
-                                            }
-                                            // If `exist` has not received an Open, it is still in OpenSent
-                                            None => {
-                                                return FsmState::OpenSent(exist);
-                                            }
-                                        }
+
+                                        self.stop(Some(&new), None, StopReason::FsmError);
+                                        session_timer!(self, connect_retry).stop();
+                                        self.connect_retry_counter
+                                            .fetch_add(1, Ordering::Relaxed);
+
+                                        self.set_primary_conn(Some(ConnectionKind::Partial(exist.clone())));
+                                        return FsmState::OpenSent(exist);
                                     }
                                 },
                             }
@@ -4453,21 +4081,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "event" => title
                                     );
                                     self.stop(Some(&new), None, StopReason::HoldTimeExpired);
-                                    match exist_open {
-                                        None => {
-                                            return FsmState::OpenSent(exist);
-                                        }
-                                        Some(o) => {
-                                            let pc = PeerConnection {
-                                                conn: exist,
-                                                id: o.id,
-                                                asn: o.asn(),
-                                                caps: o.get_capabilities()
-                                            };
-                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                            return FsmState::SessionSetup(pc);
-                                        }
-                                    }
+                                    self.set_primary_conn(Some(ConnectionKind::Partial(exist.clone())));
+                                    return FsmState::OpenSent(exist);
                                 },
 
                                 CollisionConnectionKind::Exist => {
@@ -4480,21 +4095,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "event" => title
                                     );
                                     self.stop(Some(&exist), None, StopReason::HoldTimeExpired);
-                                    match new_open {
-                                        None => {
-                                            return FsmState::OpenSent(new);
-                                        }
-                                        Some(o) => {
-                                            let pc = PeerConnection {
-                                                conn: new,
-                                                id: o.id,
-                                                asn: o.asn(),
-                                                caps: o.get_capabilities()
-                                            };
-                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                            return FsmState::SessionSetup(pc);
-                                        }
-                                    }
+                                    self.set_primary_conn(Some(ConnectionKind::Partial(new.clone())));
+                                    return FsmState::OpenSent(new);
                                 },
 
                                 CollisionConnectionKind::Unexpected(unknown) => {
@@ -4536,21 +4138,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "event" => title
                                     );
                                     self.stop(Some(&new), None, StopReason::FsmError);
-                                    match exist_open {
-                                        None => {
-                                            return FsmState::OpenSent(exist);
-                                        }
-                                        Some(o) => {
-                                            let pc = PeerConnection {
-                                                conn: exist,
-                                                id: o.id,
-                                                asn: o.asn(),
-                                                caps: o.get_capabilities()
-                                            };
-                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                            return FsmState::SessionSetup(pc);
-                                        }
-                                    }
+                                    self.set_primary_conn(Some(ConnectionKind::Partial(exist.clone())));
+                                    return FsmState::OpenSent(exist);
                                 },
 
                                 CollisionConnectionKind::Exist => {
@@ -4559,21 +4148,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "event" => title
                                     );
                                     self.stop(Some(&exist), None, StopReason::FsmError);
-                                    match new_open {
-                                        None => {
-                                            return FsmState::OpenSent(new);
-                                        }
-                                        Some(o) => {
-                                            let pc = PeerConnection {
-                                                conn: new,
-                                                id: o.id,
-                                                asn: o.asn(),
-                                                caps: o.get_capabilities()
-                                            };
-                                            self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
-                                            return FsmState::SessionSetup(pc);
-                                        }
-                                    }
+                                    self.set_primary_conn(Some(ConnectionKind::Partial(new.clone())));
+                                    return FsmState::OpenSent(new);
                                 },
 
                                 CollisionConnectionKind::Unexpected(unknown) => {
@@ -4599,30 +4175,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 }
             }
-        };
-
-        self.resolve_collision(
-            ConnectionKind::Full(PeerConnection {
-                conn: exist,
-                id: om_exist.id,
-                asn: om_exist.asn(),
-                caps: om_exist.get_capabilities(),
-            }),
-            ConnectionKind::Full(PeerConnection {
-                conn: new,
-                id: om_new.id,
-                asn: om_new.asn(),
-                caps: om_new.get_capabilities(),
-            }),
-            om_exist.id,
-        )
+        }
     }
 
     /// Collision Resolution logic.
     ///
-    /// Expects two PeerConnections (two connections in OpenConfirm) since
-    /// they both know the peer's BGP-ID and ASN from a received (and valid)
-    /// OpenMessage.
+    /// Performs Connection Collision Resolution per RFC 4271 6.8.
+    ///
+    /// The winning connection is returned to the FSM state that aligns with
+    /// the messages received by the connection. We send Full connections to
+    /// OpenConfirm instead of SessionSetup because they haven't received a
+    /// Keepalive yet. We know this because a Full connection either:
+    ///  - Came directly from OpenConfirm (waiting for Keepalive)
+    ///  - Came from OpenSent and just received an Open (no Keepalive yet)
     fn resolve_collision(
         &self,
         exist: ConnectionKind<Cnx>,
@@ -4722,10 +4287,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             self.set_primary_conn(Some(ours.clone()));
 
-            // Return to the FSM state that aligns with the connection's state
             match ours {
                 ConnectionKind::Partial(cnx) => return FsmState::OpenSent(cnx),
-                ConnectionKind::Full(pc) => return FsmState::SessionSetup(pc),
+                ConnectionKind::Full(pc) => {
+                    // XXX: should we do this unconditionally?
+                    //      If this connection came from OpenConfirm, then it's
+                    //      already had an initial Keepalive sent right before
+                    //      moving into OpenSent... But it's also a Keepalive,
+                    //      so it shouldn't cause any harm.
+                    self.send_keepalive(&pc.conn);
+                    return FsmState::OpenConfirm(pc);
+                }
             }
         }
 
@@ -4749,7 +4321,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         match theirs {
             ConnectionKind::Partial(cnx) => FsmState::OpenSent(cnx),
-            ConnectionKind::Full(pc) => FsmState::OpenConfirm(pc),
+            ConnectionKind::Full(pc) => {
+                // XXX: should we do this unconditionally?
+                //      If this connection came from OpenConfirm, then it's
+                //      already had an initial Keepalive sent right before
+                //      moving into OpenSent... But it's also a Keepalive,
+                //      so it shouldn't cause any harm.
+                self.send_keepalive(&pc.conn);
+                FsmState::OpenConfirm(pc)
+            }
         }
     }
 
