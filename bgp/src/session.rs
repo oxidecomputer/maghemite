@@ -2886,6 +2886,38 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 ConnectionEvent::Message { msg, conn_id } => {
+                    // Validate that the message is from the active connection.
+                    // During collision resolution, messages can arrive from
+                    // the dying connection after it's been closed. We must
+                    // ignore messages from unknown/inactive connections.
+                    if conn_id != *pc.conn.id() {
+                        match self.get_conn(&conn_id) {
+                            Some(conn) => {
+                                session_log!(self, warn, pc.conn,
+                                    "unexpected {} message from known but inactive conn (conn_id: {}), closing..",
+                                    msg.title(), conn_id.short();
+                                    "message" => msg.title(),
+                                    "message_contents" => format!("{msg}")
+                                );
+                                self.stop(
+                                    Some(&conn),
+                                    None,
+                                    StopReason::ConnectionRejected,
+                                );
+                            }
+                            None => {
+                                session_log!(self, warn, pc.conn,
+                                    "unexpected {} message from unknown conn (conn_id: {}), ignoring",
+                                    msg.title(), conn_id.short();
+                                    "message" => msg.title(),
+                                    "message_contents" => format!("{msg}")
+                                );
+                            }
+                        }
+                        self.bump_msg_counter(msg.kind(), true);
+                        return FsmState::OpenConfirm(pc);
+                    }
+
                     lock!(self.message_history)
                         .receive(msg.clone(), Some(conn_id));
 
