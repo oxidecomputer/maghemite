@@ -9,10 +9,6 @@
 #:   "=/out/mg.p5p.sha256",
 #: ]
 #:
-#: access_repos = [
-#:   "oxidecomputer/dendrite",
-#: ]
-#:
 #: [[publish]]
 #: series = "repo"
 #: name = "mg.p5p"
@@ -28,6 +24,7 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
+pfexec pkg install clang-15
 cargo --version
 rustc --version
 

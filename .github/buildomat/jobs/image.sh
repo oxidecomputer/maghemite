@@ -7,9 +7,6 @@
 #: output_rules = [
 #:   "/out/*",
 #: ]
-#: access_repos = [
-#:   "oxidecomputer/dendrite",
-#: ]
 #:
 #: [[publish]]
 #: series = "image"
@@ -46,6 +43,7 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
+pfexec pkg install clang-15
 cargo --version
 rustc --version
 

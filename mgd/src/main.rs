@@ -14,7 +14,7 @@ use mg_common::stats::MgLowerStats;
 use rand::Fill;
 use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use signal::handle_signals;
-use slog::{error, Logger};
+use slog::{Logger, error};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex};
@@ -24,7 +24,6 @@ use uuid::Uuid;
 mod admin;
 mod bfd_admin;
 mod bgp_admin;
-mod bgp_param;
 mod error;
 mod oxstats;
 mod signal;
@@ -42,8 +41,6 @@ struct Cli {
 enum Commands {
     /// Run the mgd routing daemon.
     Run(RunArgs),
-    /// Generate the OpenAPI spec for this router.
-    Apigen,
 }
 
 #[derive(Parser, Debug)]
@@ -89,7 +86,6 @@ fn main() {
     let args = Cli::parse();
     match args.command {
         Commands::Run(run_args) => oxide_tokio_rt::run(run(run_args)),
-        Commands::Apigen => admin::apigen(),
     }
 }
 
@@ -113,7 +109,6 @@ async fn run(args: RunArgs) {
         log: log.clone(),
         bgp,
         bfd,
-        data_dir: args.data_dir.clone(),
         mg_lower_stats: Arc::new(MgLowerStats::default()),
         db: db.clone(),
         stats_server_running: Mutex::new(false),
@@ -157,22 +152,21 @@ async fn run(args: RunArgs) {
         .to_string_lossy()
         .to_string();
 
-    if args.with_stats {
-        if let (Some(rack_uuid), Some(sled_uuid)) =
+    if args.with_stats
+        && let (Some(rack_uuid), Some(sled_uuid)) =
             (args.rack_uuid, args.sled_uuid)
-        {
-            let mut is_running = lock!(context.stats_server_running);
-            if !*is_running {
-                match oxstats::start_server(
-                    context.clone(),
-                    hostname,
-                    rack_uuid,
-                    sled_uuid,
-                    log.clone(),
-                ) {
-                    Ok(_) => *is_running = true,
-                    Err(e) => error!(log, "failed to start stats server: {e}"),
-                }
+    {
+        let mut is_running = lock!(context.stats_server_running);
+        if !*is_running {
+            match oxstats::start_server(
+                context.clone(),
+                hostname,
+                rack_uuid,
+                sled_uuid,
+                log.clone(),
+            ) {
+                Ok(_) => *is_running = true,
+                Err(e) => error!(log, "failed to start stats server: {e}"),
             }
         }
     }
@@ -212,7 +206,7 @@ fn start_bgp_routers(
     for (asn, info) in routers {
         bgp_admin::helpers::add_router(
             context.clone(),
-            bgp_param::Router {
+            bgp::params::Router {
                 asn,
                 id: info.id,
                 listen: info.listen.clone(),
@@ -227,7 +221,7 @@ fn start_bgp_routers(
     for nbr in neighbors {
         bgp_admin::helpers::add_neighbor(
             context.clone(),
-            bgp_param::Neighbor {
+            bgp::params::Neighbor {
                 asn: nbr.asn,
                 remote_asn: nbr.remote_asn,
                 min_ttl: nbr.min_ttl,

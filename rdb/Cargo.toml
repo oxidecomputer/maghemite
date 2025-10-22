@@ -1,7 +1,7 @@
 [package]
 name = "rdb"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 sled.workspace = true
@@ -17,3 +17,4 @@ slog-async.workspace = true
 mg-common.workspace = true
 itertools.workspace = true
 chrono.workspace = true
+oxnet.workspace = true

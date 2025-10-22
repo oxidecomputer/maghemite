@@ -6,8 +6,8 @@ use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 use colored::Colorize;
 use mg_admin_client::{
-    types::{BfdPeerConfig, SessionMode},
     Client,
+    types::{BfdPeerConfig, SessionMode},
 };
 use std::io::Write;
 use std::net::IpAddr;

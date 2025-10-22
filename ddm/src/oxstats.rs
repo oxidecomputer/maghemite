@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use mg_common::nexus::{local_underlay_address, run_oximeter};
 use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
 use oximeter::{
-    types::{Cumulative, ProducerRegistry},
     MetricsError, Producer, Sample,
+    types::{Cumulative, ProducerRegistry},
 };
 use oximeter_producer::{ConfigLogging, ConfigLoggingLevel, LogConfig};
 use slog::Logger;

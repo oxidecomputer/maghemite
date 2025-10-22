@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::{db::Rib, types::Path, Prefix};
+use crate::{Prefix, db::Rib, types::Path};
 use itertools::Itertools;
 
 /// The bestpath algorithm chooses the best set of up to `max` paths for a
@@ -137,8 +137,8 @@ mod test {
 
     use super::bestpaths;
     use crate::{
-        db::Rib, BgpPathProperties, Path, Prefix, Prefix4,
-        DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+        BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
+        DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4, db::Rib,
     };
 
     #[test]

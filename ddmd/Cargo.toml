@@ -1,13 +1,14 @@
 [package]
 name = "ddmd"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 ddm = { path = "../ddm" }
 mg-common = { path = "../mg-common" }
 anyhow.workspace = true
 clap.workspace = true
+ddm-types.workspace = true
 libnet.workspace = true
 oxide-tokio-rt.workspace = true
 slog.workspace = true

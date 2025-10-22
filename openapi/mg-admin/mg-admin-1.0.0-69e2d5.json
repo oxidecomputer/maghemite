@@ -2,7 +2,11 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Maghemite Admin",
-    "version": "0.1.0"
+    "contact": {
+      "url": "https://oxide.computer",
+      "email": "api@oxide.computer"
+    },
+    "version": "1.0.0"
   },
   "paths": {
     "/bestpath/config/fanout": {

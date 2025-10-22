@@ -5,11 +5,11 @@
 use crate::connection::BgpConnection;
 use crate::session::FsmEvent;
 use mg_common::lock;
-use slog::{error, Logger};
+use slog::{Logger, error};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::thread::{sleep, spawn, JoinHandle};
+use std::thread::{JoinHandle, sleep, spawn};
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -91,12 +91,19 @@ impl Clock {
         shutdown: Arc<AtomicBool>,
         log: Logger,
     ) -> JoinHandle<()> {
-        spawn(move || loop {
-            if shutdown.load(Ordering::Relaxed) {
-                return;
+        spawn(move || {
+            loop {
+                if shutdown.load(Ordering::Relaxed) {
+                    return;
+                }
+                Self::step_all(
+                    resolution,
+                    timers.clone(),
+                    s.clone(),
+                    log.clone(),
+                );
+                sleep(resolution);
             }
-            Self::step_all(resolution, timers.clone(), s.clone(), log.clone());
-            sleep(resolution);
         })
     }
 

@@ -6,32 +6,39 @@
 //! synchronizing information in a routing information base onto an underlying
 //! routing platform. The only platform currently supported is Dendrite.
 
+#![allow(clippy::result_large_err)]
+
 use crate::dendrite::{
-    get_routes_for_prefix, new_dpd_client, update_dendrite, RouteHash,
+    RouteHash, get_routes_for_prefix, new_dpd_client, update_dendrite,
 };
 use crate::error::Error;
 use ddm::{
-    add_tunnel_routes, new_ddm_client, remove_tunnel_routes,
-    BOUNDARY_SERVICES_VNI,
+    BOUNDARY_SERVICES_VNI, add_tunnel_routes, new_ddm_client,
+    remove_tunnel_routes,
 };
 use ddm_admin_client::types::TunnelOrigin;
-use ddm_admin_client::Client as DdmClient;
 use dendrite::{ensure_tep_addr, link_is_up};
-use dpd_client::Client as DpdClient;
 use mg_common::stats::MgLowerStats as Stats;
+use platform::{
+    Ddm, Dpd, ProductionDdm, ProductionDpd, ProductionSwitchZone, SwitchZone,
+};
 use rdb::db::Rib;
-use rdb::{Db, Prefix, PrefixChangeNotification, DEFAULT_ROUTE_PRIORITY};
-use slog::{error, info, warn, Logger};
+use rdb::{DEFAULT_ROUTE_PRIORITY, Db, Prefix, PrefixChangeNotification};
+use slog::{Logger, error, info, warn};
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
-use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::sync::Arc;
+use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::thread::sleep;
 use std::time::Duration;
 
 mod ddm;
 mod dendrite;
 mod error;
+mod platform;
+
+#[cfg(test)]
+mod test;
 
 /// Tag used for managing both dpd and rdb elements.
 const MG_LOWER_TAG: &str = "mg-lower";
@@ -58,10 +65,15 @@ pub fn run(
         db.watch(MG_LOWER_TAG.into(), tx);
 
         // initialize the underlying router with the current state
-        let dpd = new_dpd_client(&log);
-        let ddm = new_ddm_client(&log);
+        let dpd = ProductionDpd {
+            client: new_dpd_client(&log),
+        };
+        let ddm = ProductionDdm {
+            client: new_ddm_client(&log),
+        };
+        let sw = ProductionSwitchZone {};
         if let Err(e) =
-            full_sync(tep, &db, &log, &dpd, &ddm, &stats, rt.clone())
+            full_sync(tep, &db, &log, &dpd, &ddm, &sw, &stats, rt.clone())
         {
             error!(log, "initializing failed: {e}");
             info!(log, "restarting sync loop in one second");
@@ -80,6 +92,7 @@ pub fn run(
                         &log,
                         &dpd,
                         &ddm,
+                        &sw,
                         rt.clone(),
                     ) {
                         error!(log, "handling change failed: {e}");
@@ -96,6 +109,7 @@ pub fn run(
                         &log,
                         &dpd,
                         &ddm,
+                        &sw,
                         &stats,
                         rt.clone(),
                     ) {
@@ -116,12 +130,14 @@ pub fn run(
 
 /// Synchronize the underlying platforms with a complete set of routes from the
 /// RIB.
+#[allow(clippy::too_many_arguments)]
 fn full_sync(
     tep: Ipv6Addr, // tunnel endpoint address
     db: &Db,
     log: &Logger,
-    dpd: &DpdClient,
-    ddm: &DdmClient,
+    dpd: &impl Dpd,
+    ddm: &impl Ddm,
+    sw: &impl SwitchZone,
     _stats: &Arc<Stats>, //TODO(ry)
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
@@ -132,36 +148,42 @@ fn full_sync(
 
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
+    let loc_rib = db.loc_rib();
     for (prefix, _paths) in rib.iter() {
-        sync_prefix(tep, &db.loc_rib(), prefix, dpd, ddm, log, &rt)?;
+        sync_prefix(tep, &loc_rib, prefix, dpd, ddm, sw, log, &rt)?;
     }
 
     Ok(())
 }
 
 /// Synchronize a change set from the RIB to the underlying platform.
+#[allow(clippy::too_many_arguments)]
 fn handle_change(
     tep: Ipv6Addr, // tunnel endpoint address
     db: &Db,
     notification: PrefixChangeNotification,
     log: &Logger,
-    dpd: &DpdClient,
-    ddm: &DdmClient,
+    dpd: &impl Dpd,
+    ddm: &impl Ddm,
+    sw: &impl SwitchZone,
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
+    let loc_rib = db.loc_rib();
     for prefix in notification.changed.iter() {
-        sync_prefix(tep, &db.loc_rib(), prefix, dpd, ddm, log, &rt)?;
+        sync_prefix(tep, &loc_rib, prefix, dpd, ddm, sw, log, &rt)?;
     }
 
     Ok(())
 }
 
-fn sync_prefix(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sync_prefix(
     tep: Ipv6Addr,
     rib_loc: &Rib,
     prefix: &Prefix,
-    dpd: &DpdClient,
-    ddm: &DdmClient,
+    dpd: &impl Dpd,
+    ddm: &impl Ddm,
+    sw: &impl SwitchZone,
     log: &Logger,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
@@ -174,13 +196,14 @@ fn sync_prefix(
         .block_on(async { ddm.get_originated_tunnel_endpoints().await })?
         .into_inner()
         .into_iter()
+        .filter(|x| x.overlay_prefix == prefix)
         .collect::<HashSet<_>>();
 
     // The best routes in the RIB
     let mut best: HashSet<RouteHash> = HashSet::new();
     if let Some(paths) = rib_loc.get(prefix) {
         for path in paths {
-            best.insert(RouteHash::for_prefix_path(*prefix, path.clone())?);
+            best.insert(RouteHash::for_prefix_path(sw, *prefix, path.clone())?);
         }
     }
 
