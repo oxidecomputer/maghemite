@@ -4,13 +4,16 @@
 
 // Copyright 2021 Oxide Computer Company
 
+use libfalcon::Runner;
 use libfalcon::cli::run;
 use libfalcon::error::Error;
 use libfalcon::unit::gb;
-use libfalcon::Runner;
 
-#[tokio::main]
-async fn main() -> Result<(), Error> {
+fn main() -> Result<(), Error> {
+    oxide_tokio_rt::run(main_impl())
+}
+
+async fn main_impl() -> Result<(), Error> {
     let mut d = Runner::new("mg2x2");
 
     // routers

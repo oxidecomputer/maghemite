@@ -21,4 +21,7 @@ pub enum Error {
 
     #[error("Conflict {0}")]
     Conflict(String),
+
+    #[error("Parsing error {0}")]
+    Parsing(String),
 }

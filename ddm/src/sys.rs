@@ -2,12 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::db::TunnelRoute;
 use crate::sm::{Config, DpdConfig};
 use crate::{dbg, err, inf, wrn};
-use dpd_client::types;
+use ddm_types::db::TunnelRoute;
 use dpd_client::Client;
 use dpd_client::ClientState;
+use dpd_client::types;
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -219,9 +219,9 @@ pub fn add_routes_dendrite(
             tgt_ip: gw,
             vlan_id: None,
         };
-        let route_set = types::RouteSet {
-            cidr: IpNet::V6(cidr),
-            target: target.into(),
+        let route_set = types::Ipv6RouteUpdate {
+            cidr,
+            target,
             replace: false,
         };
 
@@ -461,24 +461,15 @@ pub fn get_routes_dendrite(
     let mut result = Vec::new();
 
     for r in routes {
-        let (dest, prefix_len) = match r.cidr {
-            IpNet::V6(cidr) => (cidr.prefix().into(), cidr.width()),
-            _ => continue,
-        };
-
         for target in r.targets {
-            let t = match target {
-                types::RouteTarget::V6(route) => route,
-                _ => continue,
-            };
-            let egress_port = match &t.port_id {
+            let egress_port = match &target.port_id {
                 PortId::Rear(rear) => match rear.parse::<u16>() {
                     Ok(p) => p,
                     Err(e) => {
                         slog::warn!(
                             log,
                             "Found invalid rear port ({}): {:?}",
-                            t.port_id,
+                            target.port_id,
                             e
                         );
                         continue;
@@ -488,9 +479,9 @@ pub fn get_routes_dendrite(
             };
 
             result.push(Route {
-                dest,
-                prefix_len,
-                gw: t.tgt_ip.into(),
+                dest: r.cidr.prefix().into(),
+                prefix_len: r.cidr.width(),
+                gw: target.tgt_ip.into(),
                 egress_port,
                 ifname: String::new(),
             });

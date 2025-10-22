@@ -2,8 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use bgp::config::PeerConfig;
-use bgp::session::{FsmStateKind, MessageHistory};
+use crate::config::PeerConfig;
+use crate::session::FsmStateKind;
 use rdb::{ImportExportPolicy, Path, PolicyAction, Prefix4};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -29,30 +29,11 @@ pub struct Router {
     pub graceful_shutdown: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DeleteRouterRequest {
-    /// Autonomous system number for the router to remove
-    pub asn: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct NeighborSelector {
-    pub asn: u32,
-    pub addr: IpAddr,
-}
-
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub enum NeighborResetOp {
     Hard,
     SoftInbound,
     SoftOutbound,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct NeighborResetRequest {
-    pub asn: u32,
-    pub addr: IpAddr,
-    pub op: NeighborResetOp,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
@@ -154,12 +135,6 @@ impl Neighbor {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DeleteNeighborRequest {
-    pub asn: u32,
-    pub addr: IpAddr,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct AddExportPolicyRequest {
     /// ASN of the router to apply the export policy to.
     pub asn: u32,
@@ -193,12 +168,6 @@ pub struct Withdraw4Request {
 
     /// Set of prefixes to originate.
     pub prefixes: Vec<Prefix4>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct AsnSelector {
-    /// ASN of the router to get imported prefixes from.
-    pub asn: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -248,6 +217,18 @@ pub struct PeerInfo {
     pub asn: Option<u32>,
     pub duration_millis: u64,
     pub timers: PeerTimers,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct CheckerSource {
+    pub asn: u32,
+    pub code: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct ShaperSource {
+    pub asn: u32,
+    pub code: String,
 }
 
 /// Apply changes to an ASN.
@@ -301,30 +282,8 @@ pub struct BgpPeerConfig {
     pub vlan_id: Option<u16>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema, Clone)]
-pub struct MessageHistoryRequest {
-    pub asn: u32,
-}
-
-#[derive(Debug, Serialize, JsonSchema, Clone)]
-pub struct MessageHistoryResponse {
-    pub by_peer: HashMap<IpAddr, MessageHistory>,
-}
-
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct Rib(BTreeMap<String, BTreeSet<Path>>);
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct CheckerSource {
-    pub asn: u32,
-    pub code: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct ShaperSource {
-    pub asn: u32,
-    pub code: String,
-}
 
 pub enum PolicySource {
     Checker(String),

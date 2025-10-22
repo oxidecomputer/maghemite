@@ -8,9 +8,6 @@
 #:   "/work/debug/*",
 #:   "/work/release/*",
 #: ]
-#: access_repos = [
-#:   "oxidecomputer/dendrite",
-#: ]
 #:
 #: [[publish]]
 #: series = "release"
@@ -37,6 +34,7 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
+pfexec pkg install clang-15
 cargo --version
 rustc --version
 

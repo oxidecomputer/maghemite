@@ -12,6 +12,7 @@ use slog::Drain;
 use slog::Logger;
 use std::net::{IpAddr, SocketAddr};
 
+mod bestpath;
 mod bfd;
 mod bgp;
 mod static_routing;
@@ -50,10 +51,17 @@ enum Commands {
     /// Bidirectional forwarding detection protocol management
     #[command(subcommand)]
     Bfd(bfd::Commands),
+
+    /// Bestpath configuration commands.
+    #[command(subcommand)]
+    Bestpath(bestpath::Commands),
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    oxide_tokio_rt::run(run())
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
     let log = init_logger();
 
@@ -68,6 +76,9 @@ async fn main() -> Result<()> {
             static_routing::commands(command, client).await?
         }
         Commands::Bfd(command) => bfd::commands(command, client).await?,
+        Commands::Bestpath(command) => {
+            bestpath::commands(command, client).await?
+        }
     }
     Ok(())
 }

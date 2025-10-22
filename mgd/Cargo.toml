@@ -1,9 +1,10 @@
 [package]
 name = "mgd"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
+mg-api.workspace = true
 mg-lower = { path = "../mg-lower", optional = true }
 mg-common = { path = "../mg-common", default-features = false}
 bfd = { path = "../bfd" }
@@ -22,6 +23,7 @@ tokio.workspace = true
 http.workspace = true
 thiserror.workspace = true
 rand.workspace = true
+oxide-tokio-rt.workspace = true
 oximeter.workspace = true
 oximeter-producer.workspace = true
 chrono.workspace = true
@@ -29,7 +31,6 @@ omicron-common.workspace = true
 hostname.workspace = true
 uuid.workspace = true
 smf.workspace = true
-semver.workspace = true
 
 [features]
 default = ["mg-lower"]

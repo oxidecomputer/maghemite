@@ -4,9 +4,9 @@
 
 use crate::smf::smf_refresh;
 use ddm::admin::HandlerContext;
-use slog::{error, info, Logger};
+use slog::{Logger, error, info};
 use std::sync::{Arc, Mutex};
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::Receiver;
 
 pub(crate) async fn handle_signals(

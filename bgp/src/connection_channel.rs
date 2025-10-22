@@ -12,9 +12,9 @@ use crate::error::Error;
 use crate::messages::Message;
 use crate::session::FsmEvent;
 use mg_common::lock;
+use slog::Logger;
 use slog::debug;
 use slog::error;
-use slog::Logger;
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::mpsc::RecvTimeoutError;
@@ -257,20 +257,22 @@ impl BgpConnectionChannel {
         log: Logger,
     ) {
         slog::info!(log, "spawning recv loop");
-        spawn(move || loop {
-            match rx.recv() {
-                Ok(msg) => {
-                    debug!(log, "[{peer}] recv: {msg:#?}");
-                    if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
-                        error!(
-                            log,
-                            "[{peer}] failed to send fsm message to sm: {e}"
-                        );
+        spawn(move || {
+            loop {
+                match rx.recv() {
+                    Ok(msg) => {
+                        debug!(log, "[{peer}] recv: {msg:#?}");
+                        if let Err(e) = event_tx.send(FsmEvent::Message(msg)) {
+                            error!(
+                                log,
+                                "[{peer}] failed to send fsm message to sm: {e}"
+                            );
+                        }
                     }
-                }
-                Err(_e) => {
-                    //TODO this goes a bit nuts .... sort out why
-                    //error!(log, "recv: {e}");
+                    Err(_e) => {
+                        //TODO this goes a bit nuts .... sort out why
+                        //error!(log, "recv: {e}");
+                    }
                 }
             }
         });

@@ -5,11 +5,11 @@
 use anyhow::Result;
 use clap::Parser;
 use colored::*;
-use ddm_admin_client::{types, Client};
+use ddm_admin_client::{Client, types};
 use mg_common::cli::oxide_cli_style;
 use oxnet::{IpNet, Ipv6Net};
 use slog::{Drain, Logger};
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use tabwriter::TabWriter;
 
@@ -89,9 +89,8 @@ struct Peer {
     addr: Ipv6Addr,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    run().await
+fn main() -> Result<()> {
+    oxide_tokio_rt::run(run())
 }
 
 async fn run() -> Result<()> {

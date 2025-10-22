@@ -5,15 +5,15 @@
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
+use mg_admin_client::Client;
 use mg_admin_client::types::NeighborResetOp as MgdNeighborResetOp;
 use mg_admin_client::types::{
     self, ImportExportPolicy, NeighborResetRequest, Path, Rib,
 };
-use mg_admin_client::Client;
 use rdb::types::{PolicyAction, Prefix, Prefix4};
 use std::collections::BTreeMap;
 use std::fs::read_to_string;
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tabwriter::TabWriter;

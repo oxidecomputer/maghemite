@@ -1,12 +1,13 @@
 [package]
 name = "lab"
 version = "0.1.0"
-edition = "2018"
+edition = "2024"
 
 [dependencies]
 libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anyhow.workspace = true
 tokio.workspace = true
+oxide-tokio-rt.workspace = true
 
 [[bin]]
 name = "solo"

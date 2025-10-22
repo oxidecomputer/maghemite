@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::BfdPeerState;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 // Control packet flags.
 const POLL: u8 = 1 << 5;

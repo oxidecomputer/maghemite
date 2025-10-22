@@ -14,10 +14,11 @@ use crate::error::Error;
 use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
-use slog::{error, Logger};
+use slog::{Logger, error};
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
+use std::num::NonZeroU8;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
@@ -49,8 +50,11 @@ const TEP_KEY: &str = "tep";
 /// information.
 const BFD_NEIGHBOR: &str = "bfd_neighbor";
 
-//TODO as parameter
-const BESTPATH_FANOUT: usize = 1;
+/// Key used in settings tree for bestpath fanout setting
+const BESTPATH_FANOUT: &str = "bestpath_fanout";
+
+/// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
+const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
 pub type Rib = BTreeMap<Prefix, BTreeSet<Path>>;
 
@@ -388,14 +392,41 @@ impl Db {
         }
     }
 
-    pub fn update_loc_rib(rib_in: &Rib, rib_loc: &mut Rib, prefix: Prefix) {
-        let bp = bestpaths(prefix, rib_in, BESTPATH_FANOUT);
+    pub fn update_loc_rib(
+        &self,
+        rib_in: &Rib,
+        rib_loc: &mut Rib,
+        prefix: Prefix,
+    ) {
+        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
+            error!(self.log, "failed to get bestpath fanout: {e}");
+            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
+        });
+        let bp = bestpaths(prefix, rib_in, fanout.get() as usize);
         match bp {
             Some(bp) => {
                 rib_loc.insert(prefix, bp.clone());
             }
             None => {
                 rib_loc.remove(&prefix);
+            }
+        }
+    }
+
+    // generic helper function to kick off a bestpath run for some
+    // subset of prefixes in rib_in. the caller chooses which prefixes
+    // bestpath is run against via the bestpath_needed closure
+    pub fn trigger_bestpath_when<F>(&self, bestpath_needed: F)
+    where
+        F: Fn(&Prefix, &BTreeSet<Path>) -> bool,
+    {
+        for (prefix, paths) in self.full_rib().iter() {
+            if bestpath_needed(prefix, paths) {
+                self.update_loc_rib(
+                    &lock!(self.rib_in),
+                    &mut lock!(self.rib_loc),
+                    *prefix,
+                );
             }
         }
     }
@@ -410,7 +441,7 @@ impl Db {
                 rib.insert(prefix, BTreeSet::from([path.clone()]));
             }
         }
-        Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
+        self.update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
     }
 
     pub fn add_static_routes(
@@ -513,7 +544,7 @@ impl Db {
         }
 
         for prefix in pcn.changed.iter() {
-            Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
+            self.update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
         }
         self.notify(pcn);
     }
@@ -530,7 +561,7 @@ impl Db {
             }
         }
 
-        Self::update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
+        self.update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
     }
 
     pub fn remove_static_routes(
@@ -617,18 +648,46 @@ impl Db {
         Ok(())
     }
 
+    pub fn get_bestpath_fanout(&self) -> Result<NonZeroU8, Error> {
+        let tree = self.persistent.open_tree(SETTINGS)?;
+        let fan = match tree.get(BESTPATH_FANOUT)? {
+            // fanout was not in db
+            None => DEFAULT_BESTPATH_FANOUT,
+            Some(value) => {
+                let value: [u8; 1] = (*value).try_into().map_err(|_| {
+                    Error::DbKey("invalid bestpath_fanout value in db".into())
+                })?;
+                value[0]
+            }
+        };
+
+        Ok(match NonZeroU8::new(fan) {
+            // fanout was in db but was 0 (unexpected)
+            None => NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap(),
+            Some(fanout) => fanout,
+        })
+    }
+
+    pub fn set_bestpath_fanout(&self, fanout: NonZeroU8) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(SETTINGS)?;
+        tree.insert(BESTPATH_FANOUT, &[fanout.get()])?;
+        tree.flush()?;
+        self.trigger_bestpath_when(|_pfx, _paths| true);
+        Ok(())
+    }
+
     pub fn mark_bgp_peer_stale(&self, peer: IpAddr) {
         let mut rib = lock!(self.rib_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
                 .iter()
                 .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref() {
-                        if bgp.peer == peer {
-                            let mut marked = p.clone();
-                            marked.bgp = Some(bgp.as_stale());
-                            return Some(marked);
-                        }
+                    if let Some(bgp) = p.bgp.as_ref()
+                        && bgp.peer == peer
+                    {
+                        let mut marked = p.clone();
+                        marked.bgp = Some(bgp.as_stale());
+                        return Some(marked);
                     }
                     None
                 })
@@ -659,9 +718,11 @@ impl Reaper {
 
     fn run(self: &Arc<Self>) {
         let s = self.clone();
-        spawn(move || loop {
-            s.reap();
-            sleep(*lock!(s.interval));
+        spawn(move || {
+            loop {
+                s.reap();
+                sleep(*lock!(s.interval));
+            }
         });
     }
 
@@ -690,7 +751,7 @@ impl Reaper {
 
 #[cfg(test)]
 mod test {
-    use crate::{db::Db, Path, Prefix};
+    use crate::{Path, Prefix, db::Db};
     use mg_common::log::*;
     use std::net::IpAddr;
     use std::str::FromStr;
@@ -721,8 +782,8 @@ mod test {
     fn test_rib() {
         use crate::StaticRouteKey;
         use crate::{
-            db::Db, BgpPathProperties, Path, Prefix, Prefix4,
-            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
+            DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4, db::Db,
         };
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());

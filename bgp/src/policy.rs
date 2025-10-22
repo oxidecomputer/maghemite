@@ -31,10 +31,10 @@ use crate::messages::{
 };
 use crate::rhai_integration::*;
 use rhai::{
-    Dynamic, Engine, EvalAltResult, FnPtr, NativeCallContext, ParseError,
-    Scope, AST,
+    AST, Dynamic, Engine, EvalAltResult, FnPtr, NativeCallContext, ParseError,
+    Scope,
 };
-use slog::{debug, info, Logger};
+use slog::{Logger, debug, info};
 use std::collections::HashSet;
 use std::net::IpAddr;
 
@@ -262,7 +262,7 @@ fn set_engine_logger(
     });
 }
 
-fn new_rhai_scope(ctx: &PolicyContext) -> Scope {
+fn new_rhai_scope(ctx: &PolicyContext) -> Scope<'_> {
     let mut scope = Scope::new();
     scope.push("direction", ctx.direction);
     scope.push("message", ctx.message.clone());

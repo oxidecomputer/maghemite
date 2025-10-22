@@ -29,9 +29,9 @@ with support for the lower-half data planes listed below.
 
 ## APIs
 
-- [x] [DDM OpenAPI](openapi/ddm-admin.json)
+- [x] [DDM OpenAPI](openapi/ddm-admin/ddm-admin-latest.json)
 - [x] [DDM Rust Client Library](ddm-admin-client)
-- [x] [MGD OpenAPI](openapi/mg-admin.json)
+- [x] [MGD OpenAPI](openapi/mg-admin/mg-admin-latest.json)
 - [x] [MGD Rust Client Library](mg-admin-client)
 
 ## Delay Driven Multipath (DDM)
