@@ -2046,7 +2046,7 @@ impl Display for CeaseErrorSubcode {
                 write!(f, "{val} (Other Configuration Rejected)")
             }
             CeaseErrorSubcode::ConnectionCollisionResolution => {
-                write!(f, "{val} (Connection Collition Resolution)")
+                write!(f, "{val} (Connection Collision Resolution)")
             }
             CeaseErrorSubcode::OutOfResources => {
                 write!(f, "{val} (Out of Resources)")

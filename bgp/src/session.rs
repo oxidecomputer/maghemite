@@ -302,6 +302,7 @@ pub enum StopReason {
     HoldTimeExpired,
     ConnectionRejected,
     CollisionResolution,
+    IoError,
 }
 
 /// FsmEvents pertaining to a specific Connection
@@ -963,6 +964,74 @@ pub struct SessionRunner<Cnx: BgpConnection> {
 unsafe impl<Cnx: BgpConnection> Send for SessionRunner<Cnx> {}
 unsafe impl<Cnx: BgpConnection> Sync for SessionRunner<Cnx> {}
 
+/// Result of collision resolution indicating which connection won per RFC 4271 §6.8.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CollisionResolution {
+    /// The "existing" connection wins
+    ExistWins,
+    /// The "new" connection wins
+    NewWins,
+}
+
+/// Pure function to determine which connection wins in a collision.
+///
+///    RFC 4271 Section 6.8
+///
+///    1) The BGP Identifier of the local system is compared to the BGP
+///       Identifier of the remote system (as specified in the OPEN
+///       message).  Comparing BGP Identifiers is done by converting them
+///       to host byte order and treating them as 4-octet unsigned
+///       integers.
+///
+///    2) If the value of the local BGP Identifier is less than the
+///       remote one, the local system closes the BGP connection that
+///       already exists (the one that is already in the OpenConfirm
+///       state), and accepts the BGP connection initiated by the remote
+///       system.
+///
+///    3) Otherwise, the local system closes the newly created BGP
+///       connection (the one associated with the newly received OPEN
+///       message), and continues to use the existing one (the one that
+///       is already in the OpenConfirm state).
+///
+///       Unless allowed via configuration, a connection collision with an
+///       existing BGP connection that is in the Established state causes
+///       closing of the newly created connection.
+///
+///       Note that a connection collision cannot be detected with connections
+///       that are in Idle, Connect, or Active states.
+///
+///       Closing the BGP connection (that results from the collision
+///       resolution procedure) is accomplished by sending the NOTIFICATION
+///       message with the Error Code Cease.
+///
+/// # Arguments
+/// * `exist_creator` - Creator of the existing connection (Connector or Dispatcher)
+/// * `local_bgp_id`  - Our BGP Identifier
+/// * `remote_bgp_id` - Peer's BGP Identifier
+///
+/// # Returns
+/// `CollisionResolution` indicating whether exist or new connection wins
+pub fn collision_resolution(
+    exist_creator: ConnectionCreator,
+    local_bgp_id: u32,
+    remote_bgp_id: u32,
+) -> CollisionResolution {
+    if local_bgp_id < remote_bgp_id {
+        // The peer has a higher RID, keep the connection they initiated
+        match exist_creator {
+            ConnectionCreator::Dispatcher => CollisionResolution::ExistWins,
+            ConnectionCreator::Connector => CollisionResolution::NewWins,
+        }
+    } else {
+        // The local system has a higher RID, keep the connection we initiated
+        match exist_creator {
+            ConnectionCreator::Dispatcher => CollisionResolution::NewWins,
+            ConnectionCreator::Connector => CollisionResolution::ExistWins,
+        }
+    }
+}
+
 impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Create a new BGP session runner. Only creates the session runner
     /// object. Must call `start` to begin the peering state machine.
@@ -1460,15 +1529,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             }
                         }
 
-                        if let Some(conn) = self.get_conn(new.id()) {
-                            self.stop(
-                                Some(&conn),
-                                None,
-                                StopReason::ConnectionRejected,
-                            );
-                        }
-
-                        // `new` is never registered so unregister is not needed
+                        // Silently drop the rejected connection without
+                        // sending notification. RFC 4271 says Idle "refuses
+                        // all incoming BGP connections" but doesn't mandate
+                        // sending notifications. Sending Connection Rejected
+                        // Notifications can contribute to death spirals when
+                        // peers have unsynchronized startup timing. The peer
+                        // will detect the connection closure via TCP/channel
+                        // and handle it appropriately.
 
                         continue;
                     }
@@ -1506,7 +1574,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     self.stop(
                                         Some(&conn),
                                         None,
-                                        StopReason::ConnectionRejected,
+                                        StopReason::FsmError,
                                     );
                                 }
                                 // We should never hit this path, because we
@@ -1724,8 +1792,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 }
                             }
 
-                            self.register_conn(&accepted);
-
                             // DelayOpen can be configured for a peer, but its functionality
                             // is not implemented.  Follow DelayOpen == false instructions.
 
@@ -1738,6 +1804,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 );
                                 return FsmState::Idle;
                             }
+
+                            self.register_conn(&accepted);
 
                             conn_timer!(accepted, hold).restart();
 
@@ -2159,8 +2227,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             .passive_connections_accepted
                             .fetch_add(1, Ordering::Relaxed);
 
-                        self.register_conn(&accepted);
-
                         session_timer!(self, connect_retry).stop();
 
                         if let Err(e) = self.send_open(&accepted) {
@@ -2170,6 +2236,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             );
                             return FsmState::Idle;
                         }
+
+                        self.register_conn(&accepted);
 
                         conn_timer!(accepted, hold).restart();
 
@@ -2390,6 +2458,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "error sending open to new conn, continue with open conn";
                                 "error" => format!("{e}")
                             );
+                            // Stop the new connection since it failed to
+                            // send Open. This unregisters the connection
+                            // and prevents future attempts to send on the
+                            // already-closed connection.
+                            self.stop(Some(&new), None, StopReason::IoError);
                             continue;
                         }
 
@@ -2441,7 +2514,103 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     .opens_received
                                     .fetch_add(1, Ordering::Relaxed);
                                 break om;
+                            } else if let Message::Notification(ref n) = msg {
+                                // Note: This does NOT align with RFC 4271.
+                                //
+                                // We move into Active instead of Idle to
+                                // avoid getting stuck in a death spiral where
+                                // both peers are stuck trying to open new
+                                // connections that get dropped by the peer.
+                                // This can happen if our peer both detects and
+                                // resolves a collision before we ever detect
+                                // the second connection.
+                                // i.e.
+                                //
+                                // Peer FSM sees:
+                                // 1. Outbound connection initated
+                                //    -> Connect
+                                // 2. Inbound connection completes
+                                // 3. Tx Open via Inbound connection
+                                //    -> OpenSent
+                                // 4. Outbound connection completes
+                                // 5. Tx Open via Outbound connection
+                                //    -> ConnectionCollision
+                                // 6. Rx Open via Inbound connection
+                                //    -> OpenConfirm
+                                // 7. Collision Resolution
+                                //    (Peer RID > Local RID)
+                                // 7. Tx Notification via Inbound
+                                //    -> OpenSent
+                                // 8. Rx Notification via Outbound
+                                //    -> Idle
+                                //
+                                // Our FSM sees:
+                                // 1. Outbound connection initated
+                                //    -> Connect
+                                // 2. Outbound connection completes
+                                //    -> OpenSent
+                                // 3. Rx Open
+                                //    -> OpenConfirm
+                                // 4. Rx Notification
+                                //    -> Idle
+                                // 5. Inbound connection completes
+                                //    (rejected in Idle)
+                                // 6. Tx Notification via Inbound connection
+                                //    (ConnectionRejected)
+                                //
+                                // Moving to Active gives us a chance to catch
+                                // the in-flight inbound connection (Our FSM @
+                                // Step 5) instead of rejecting it, which allows
+                                // us to get out of the spiral. If an inbound
+                                // connection never arrives, we'll be in Active
+                                // and won't initiate a new outbound connection
+                                // until ConnectRetryTimer expires. This move
+                                // to Active rather than Idle is done only for
+                                // Collision Resolution Notifications to reduce
+                                // the surface area of this non-standard change.
+                                if matches!(n.error_subcode,
+                                    ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionCollisionResolution)) {
+
+                                    session_log!(self, info, conn,
+                                        "rx collision resolution notification (conn_id: {}), fsm transition to active",
+                                        conn_id.short();
+                                        "message" => msg.title(),
+                                        "message_contents" => format!("{msg}")
+                                    );
+
+                                    self.bump_msg_counter(msg.kind(), false);
+
+                                    // Clean up connection WITHOUT sending
+                                    // Notification. We don't send Notifications
+                                    // in response to Notifications.
+                                    self.unregister_conn(conn.id());
+
+                                    // Restart ConnectRetryTimer if peer is not
+                                    // passive This provides fallback if peer's
+                                    // connection never arrives
+                                    if !lock!(self.session).passive_tcp_establishment {
+                                        session_timer!(self, connect_retry).restart();
+                                    } else {
+                                        session_timer!(self, connect_retry).stop();
+                                    }
+
+                                    return FsmState::Active;
+                                } else {
+                                    session_log!(self, warn, conn,
+                                        "rx {} message (conn_id: {}), fsm transition to idle",
+                                        msg.title(), conn_id.short();
+                                        "message" => msg.title(),
+                                        "message_contents" => format!("{msg}")
+                                    );
+                                    self.bump_msg_counter(msg.kind(), false);
+                                    self.unregister_conn(conn.id());
+                                    return FsmState::Idle;
+                                }
                             }
+
+                            session_timer!(self, connect_retry).stop();
+                            self.connect_retry_counter
+                                .fetch_add(1, Ordering::Relaxed);
 
                             session_log!(self, warn, conn,
                                 "rx unexpected {} message (conn_id: {}), fsm transition to idle",
@@ -2449,23 +2618,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message" => msg.title(),
                                 "message_contents" => format!("{msg}")
                             );
-
+                            self.bump_msg_counter(msg.kind(), true);
                             self.stop(Some(&conn), None, StopReason::FsmError);
-
-                            session_timer!(self, connect_retry).stop();
-                            self.connect_retry_counter
-                                .fetch_add(1, Ordering::Relaxed);
-
-                            match msg {
-                                // Events 25-28 + Route Refresh
-                                Message::Open(_) => {}
-                                Message::Update(_)
-                                | Message::Notification(_)
-                                | Message::KeepAlive
-                                | Message::RouteRefresh(_) => {
-                                    self.bump_msg_counter(msg.kind(), true)
-                                }
-                            }
 
                             return FsmState::Idle;
                         }
@@ -2932,41 +3086,128 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     lock!(self.message_history)
                         .receive(msg.clone(), Some(conn_id));
 
-                    // The peer has ACK'd our open message with a keepalive. Start the
-                    // session timers and enter session setup.
-                    if let Message::KeepAlive = msg {
-                        conn_timer!(pc.conn, hold).restart();
-                        conn_timer!(pc.conn, keepalive).restart();
-                        self.bump_msg_counter(msg.kind(), false);
-                        FsmState::SessionSetup(pc)
-                    } else {
-                        /*
-                         * If the local system receives a TcpConnectionFails event (Event 18)
-                         * from the underlying TCP or a NOTIFICATION message (Event 25), the
-                         * local system:
-                         *
-                         *   - sets the ConnectRetryTimer to zero,
-                         *
-                         *   - releases all BGP resources,
-                         *
-                         *   - drops the TCP connection,
-                         *
-                         *   - increments the ConnectRetryCounter by 1,
-                         *
-                         *   - (optionally) performs peer oscillation damping if the
-                         *     DampPeerOscillations attribute is set to TRUE, and
-                         *
-                         *   - changes its state to Idle.
-                         */
-                        session_log!(self, warn, pc.conn,
-                            "unexpected {} received (conn_id: {}), fsm transition to idle",
-                            msg.title(), conn_id.short();
-                            "message" => "notification",
-                            "message_contents" => format!("{msg}")
-                        );
-                        self.bump_msg_counter(msg.kind(), true);
-                        session_timer!(self, connect_retry).stop();
-                        FsmState::Idle
+                    /*
+                     * The peer has ACK'd our open message with a keepalive. Start the
+                     * session timers and enter session setup.
+                     *
+                     * If the local system receives a TcpConnectionFails event (Event 18)
+                     * from the underlying TCP or a NOTIFICATION message (Event 25), the
+                     * local system:
+                     *
+                     *   - sets the ConnectRetryTimer to zero,
+                     *
+                     *   - releases all BGP resources,
+                     *
+                     *   - drops the TCP connection,
+                     *
+                     *   - increments the ConnectRetryCounter by 1,
+                     *
+                     *   - (optionally) performs peer oscillation damping if the
+                     *     DampPeerOscillations attribute is set to TRUE, and
+                     *
+                     *   - changes its state to Idle.
+                     */
+                    match msg {
+                        Message::KeepAlive => {
+                            conn_timer!(pc.conn, hold).restart();
+                            conn_timer!(pc.conn, keepalive).restart();
+                            self.bump_msg_counter(MessageKind::KeepAlive, false);
+                            FsmState::SessionSetup(pc)
+                        }
+
+                        Message::Notification(ref n)
+                            if matches!(n.error_subcode,
+                                ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionCollisionResolution)) =>
+                        {
+                            // Note: This does NOT align with RFC 4271.
+                            //
+                            // We move into Active instead of Idle to avoid
+                            // getting stuck in a death spiral where both peers
+                            // are stuck trying to open new connections that get
+                            // dropped by the peer. This can happen if our peer
+                            // both detects and resolves a collision before we
+                            // ever detect the second connection.
+                            // i.e.
+                            //
+                            // Peer FSM sees:
+                            // 1. Outbound connection initated
+                            //    -> Connect
+                            // 2. Inbound connection completes
+                            // 3. Tx Open via Inbound connection
+                            //    -> OpenSent
+                            // 4. Outbound connection completes
+                            // 5. Tx Open via Outbound connection
+                            //    -> ConnectionCollision
+                            // 6. Rx Open via Inbound connection
+                            //    -> OpenConfirm
+                            // 7. Collision Resolution
+                            //    (Peer RID > Local RID)
+                            // 7. Tx Notification via Inbound
+                            //    -> OpenSent
+                            // 8. Rx Notification via Outbound
+                            //    -> Idle
+                            //
+                            // Our FSM sees:
+                            // 1. Outbound connection initated
+                            //    -> Connect
+                            // 2. Outbound connection completes
+                            //    -> OpenSent
+                            // 3. Rx Open
+                            //    -> OpenConfirm
+                            // 4. Rx Notification
+                            //    -> Idle
+                            // 5. Inbound connection completes
+                            //    (rejected in Idle)
+                            // 6. Tx Notification via Inbound connection
+                            //    (ConnectionRejected)
+                            //
+                            // Moving to Active gives us a chance to catch the
+                            // in-flight inbound connection (Our FSM @ Step 5)
+                            // instead of rejecting it, which allows us to get
+                            // out of the spiral. If an inbound connection never
+                            // arrives, we'll be in Active and won't initiate a
+                            // new outbound connection until ConnectRetryTimer
+                            // expires. This move to Active rather than Idle is
+                            // done only for Collision Resolution Notifications
+                            // to reduce the surface area of this non-standard
+                            // change.
+
+                            session_log!(self, info, pc.conn,
+                                "rx collision resolution notification (conn_id: {}), fsm transition to active",
+                                conn_id.short();
+                                "message" => msg.title(),
+                                "message_contents" => format!("{msg}")
+                            );
+
+                            self.bump_msg_counter(MessageKind::Notification, false);
+
+                            // Clean up connection WITHOUT sending Notification.
+                            // We don't send Notifications in response to
+                            // Notifications.
+                            self.unregister_conn(pc.conn.id());
+
+                            // Restart ConnectRetryTimer if peer is not passive
+                            if !lock!(self.session).passive_tcp_establishment {
+                                session_timer!(self, connect_retry).restart();
+                            } else {
+                                session_timer!(self, connect_retry).stop();
+                            }
+
+                            FsmState::Active
+                        }
+
+                        // All other unexpected messages → Idle (existing behavior)
+                        _ => {
+                            session_log!(self, warn, pc.conn,
+                                "unexpected {} received (conn_id: {}), fsm transition to idle",
+                                msg.title(), conn_id.short();
+                                "message" => msg.title(),
+                                "message_contents" => format!("{msg}")
+                            );
+                            self.bump_msg_counter(msg.kind(), true);
+                            session_timer!(self, connect_retry).stop();
+                            FsmState::Idle
+                        }
                     }
                 }
             },
@@ -3045,18 +3286,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             "error sending open to new conn, continue with open conn";
                             "error" => format!("{e}")
                         );
+                        // Stop the new connection since it failed to send Open.
+                        // This unregisters the connection and prevents future
+                        // attempts to send on the already-closed connection.
+                        self.stop(Some(&new), None, StopReason::IoError);
                         return FsmState::OpenConfirm(pc);
                     }
 
                     self.register_conn(&new);
 
-                    let bgp_id = pc.id;
+                    conn_timer!(new, hold).restart();
 
-                    self.resolve_collision(
-                        ConnectionKind::Full(pc),
-                        ConnectionKind::Partial(new),
-                        bgp_id,
-                    )
+                    FsmState::ConnectionCollision(CollisionPair::OpenConfirm(
+                        pc, new,
+                    ))
                 }
             },
         }
@@ -3655,16 +3898,67 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        self.resolve_collision(
-            ConnectionKind::Full(exist),
-            ConnectionKind::Full(PeerConnection {
-                conn: new,
-                id: om.id,
-                asn: om.asn(),
-                caps: om.get_capabilities(),
-            }),
-            om.id,
-        )
+        collision_log!(self, info, &exist.conn, &new,
+            "collision detected: local id {}, remote id {}",
+            self.id, om.id;
+        );
+
+        match collision_resolution(exist.conn.creator(), self.id, om.id) {
+            CollisionResolution::ExistWins => {
+                // Existing connection wins
+                collision_log!(self, info, &exist.conn, &new,
+                    "collision resolution: local system wins with higher RID ({} > {})",
+                    self.id, om.id;
+                );
+
+                self.stop(Some(&new), None, StopReason::CollisionResolution);
+
+                conn_timer!(exist.conn, hold).restart();
+                conn_timer!(exist.conn, keepalive).restart();
+                self.send_keepalive(&exist.conn);
+
+                self.set_primary_conn(Some(ConnectionKind::Full(
+                    exist.clone(),
+                )));
+
+                FsmState::OpenConfirm(exist)
+            }
+            CollisionResolution::NewWins => {
+                // New connection wins
+                collision_log!(self, info, &exist.conn, &new,
+                    "collision resolution: peer wins with higher RID ({} >= {})",
+                    om.id, self.id;
+                );
+
+                self.stop(
+                    Some(&exist.conn),
+                    None,
+                    StopReason::CollisionResolution,
+                );
+
+                session_timer!(self, connect_retry).stop();
+                self.counters
+                    .connection_retries
+                    .fetch_add(1, Ordering::Relaxed);
+
+                let new_pc = PeerConnection {
+                    conn: new,
+                    id: om.id,
+                    asn: om.asn(),
+                    caps: om.get_capabilities(),
+                };
+
+                conn_timer!(new_pc.conn, hold).restart();
+                conn_timer!(new_pc.conn, keepalive).restart();
+                self.send_keepalive(&new_pc.conn);
+
+                self.set_primary_conn(Some(ConnectionKind::Full(
+                    new_pc.clone(),
+                )));
+
+                FsmState::OpenConfirm(new_pc)
+            }
+        }
     }
 
     /// Handler for collisions when existing connection was in OpenSent state
@@ -3941,22 +4235,50 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             conn_id.short();
                                         );
 
-                                        // Wrap connections according to their state:
-                                        // - exist has received an Open, so it's Full
-                                        // - new hasn't received an Open, so it's Partial
-                                        let exist_kind = ConnectionKind::Full(PeerConnection {
-                                            conn: exist.clone(),
-                                            id: om.id,
-                                            asn: om.asn(),
-                                            caps: om.get_capabilities(),
-                                        });
-                                        let new_kind = ConnectionKind::Partial(new.clone());
-
-                                        return self.resolve_collision(
-                                            exist_kind,
-                                            new_kind,
+                                        match collision_resolution(
+                                            exist.creator(),
+                                            self.id,
                                             om.id,
-                                        );
+                                        ) {
+                                            CollisionResolution::ExistWins => {
+                                                // Existing connection wins
+                                                collision_log!(self, info, exist, new,
+                                                    "exist conn wins collision, close new conn",
+                                                );
+
+                                                self.stop(Some(&new), None, StopReason::CollisionResolution);
+
+                                                conn_timer!(exist, hold).restart();
+                                                conn_timer!(exist, keepalive).restart();
+
+                                                let exist_pc = PeerConnection {
+                                                    conn: exist.clone(),
+                                                    id: om.id,
+                                                    asn: om.asn(),
+                                                    caps: om.get_capabilities(),
+                                                };
+
+                                                self.set_primary_conn(Some(ConnectionKind::Full(exist_pc.clone())));
+
+                                                self.send_keepalive(&exist_pc.conn);
+                                                return FsmState::OpenConfirm(exist_pc);
+                                            }
+                                            CollisionResolution::NewWins => {
+                                                // New connection wins
+                                                collision_log!(self, info, exist, new,
+                                                    "new conn wins collision, close new conn",
+                                                );
+
+                                                self.stop(Some(&exist), None, StopReason::CollisionResolution);
+                                                session_timer!(self, connect_retry).stop();
+                                                self.counters
+                                                    .connection_retries
+                                                    .fetch_add(1, Ordering::Relaxed);
+
+                                                self.set_primary_conn(Some(ConnectionKind::Partial(new.clone())));
+                                                return FsmState::OpenSent(new);
+                                            }
+                                        }
                                     } else {
                                         // Any message other than Open is an FSM error for OpenSent
                                         self.bump_msg_counter(msg_kind, true);
@@ -4011,22 +4333,50 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             conn_id.short();
                                         );
 
-                                        // Wrap connections according to their state:
-                                        // - new has received an Open, so it's Full
-                                        // - exist hasn't received an Open, so it's Partial
-                                        let exist_kind = ConnectionKind::Partial(exist.clone());
-                                        let new_kind = ConnectionKind::Full(PeerConnection {
-                                            conn: new.clone(),
-                                            id: om.id,
-                                            asn: om.asn(),
-                                            caps: om.get_capabilities(),
-                                        });
-
-                                        return self.resolve_collision(
-                                            exist_kind,
-                                            new_kind,
+                                        match collision_resolution(
+                                            exist.creator(),
+                                            self.id,
                                             om.id,
-                                        );
+                                        ) {
+                                            CollisionResolution::ExistWins => {
+                                                // Existing connection wins
+                                                collision_log!(self, info, new, exist,
+                                                    "exist conn wins collision, closing new",
+                                                );
+
+                                                self.stop(Some(&new), None, StopReason::CollisionResolution);
+                                                session_timer!(self, connect_retry).stop();
+                                                self.counters
+                                                    .connection_retries
+                                                    .fetch_add(1, Ordering::Relaxed);
+
+                                                self.set_primary_conn(Some(ConnectionKind::Partial(exist.clone())));
+                                                return FsmState::OpenSent(exist);
+                                            }
+                                            CollisionResolution::NewWins => {
+                                                // New connection wins
+                                                collision_log!(self, info, new, exist,
+                                                    "new conn wins collision, closing exist",
+                                                );
+
+                                                self.stop(Some(&exist), None, StopReason::CollisionResolution);
+
+                                                let new_pc = PeerConnection {
+                                                    conn: new.clone(),
+                                                    id: om.id,
+                                                    asn: om.asn(),
+                                                    caps: om.get_capabilities(),
+                                                };
+                                                conn_timer!(new, hold).restart();
+                                                conn_timer!(new, keepalive).restart();
+
+                                                self.set_primary_conn(Some(ConnectionKind::Full(new_pc.clone())));
+
+                                                self.send_keepalive(&new_pc.conn);
+
+                                                return FsmState::OpenConfirm(new_pc);
+                                            }
+                                        }
                                     } else {
                                         // Any message other than Open is an FSM error for OpenSent
                                         self.bump_msg_counter(msg_kind, true);
@@ -4188,151 +4538,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Keepalive yet. We know this because a Full connection either:
     ///  - Came directly from OpenConfirm (waiting for Keepalive)
     ///  - Came from OpenSent and just received an Open (no Keepalive yet)
-    fn resolve_collision(
-        &self,
-        exist: ConnectionKind<Cnx>,
-        new: ConnectionKind<Cnx>,
-        bgp_id: u32,
-    ) -> FsmState<Cnx> {
-        /*
-         * 1) The BGP Identifier of the local system is compared to the BGP
-         *    Identifier of the remote system (as specified in the OPEN
-         *    message).  Comparing BGP Identifiers is done by converting them
-         *    to host byte order and treating them as 4-octet unsigned
-         *    integers.
-         *
-         * 2) If the value of the local BGP Identifier is less than the
-         *    remote one, the local system closes the BGP connection that
-         *    already exists (the one that is already in the OpenConfirm
-         *    state), and accepts the BGP connection initiated by the remote
-         *    system.
-         *
-         * 3) Otherwise, the local system closes the newly created BGP
-         *    connection (the one associated with the newly received OPEN
-         *    message), and continues to use the existing one (the one that
-         *    is already in the OpenConfirm state).
-         *
-         *    Unless allowed via configuration, a connection collision with an
-         *    existing BGP connection that is in the Established state causes
-         *    closing of the newly created connection.
-         *
-         *    Note that a connection collision cannot be detected with connections
-         *    that are in Idle, Connect, or Active states.
-         *
-         *    Closing the BGP connection (that results from the collision
-         *    resolution procedure) is accomplished by sending the NOTIFICATION
-         *    message with the Error Code Cease.
-         */
-
-        // Classify connections by initiator:
-        //  - Dispatcher is inbound
-        //  - Connector is outbound
-        let (ours, theirs) = match exist {
-            ConnectionKind::Partial(ref cnx) => match cnx.creator() {
-                ConnectionCreator::Dispatcher => (new, exist),
-                ConnectionCreator::Connector => (exist, new),
-            },
-            ConnectionKind::Full(ref pc) => match pc.conn.creator() {
-                ConnectionCreator::Dispatcher => (new, exist),
-                ConnectionCreator::Connector => (exist, new),
-            },
-        };
-
-        // Create conn handles to reduce pattern matching
-        let our_conn = match ours {
-            ConnectionKind::Partial(ref cnx) => cnx,
-            ConnectionKind::Full(ref pc) => &pc.conn,
-        };
-        let their_conn = match theirs {
-            ConnectionKind::Partial(ref cnx) => cnx,
-            ConnectionKind::Full(ref pc) => &pc.conn,
-        };
-
-        collision_log!(self, info, our_conn, their_conn,
-            "collision detected: local id {}, remote id {bgp_id}",
-            self.id;
-        );
-
-        /*
-         *  If this connection is to be dropped due to connection collision,
-         *  the local system:
-         *
-         *   - sends a NOTIFICATION with a Cease,
-         *
-         *   - sets the ConnectRetryTimer to zero,
-         *
-         *   - releases all BGP resources,
-         *
-         *   - drops the TCP connection,
-         *
-         *   - increments the ConnectRetryCounter by 1,
-         *
-         *   - (optionally) performs peer oscillation damping if the
-         *     DampPeerOscillations attribute is set to TRUE, and
-         *
-         *   - changes its state to Idle.
-         */
-
-        if self.id > bgp_id {
-            // Our RID is higher, we win. Kill the peer's connection to death.
-            collision_log!(self, info, our_conn, their_conn,
-                "collision resolution: local system wins with higher RID ({} > {bgp_id})",
-                self.id;
-            );
-
-            self.stop(Some(their_conn), None, StopReason::CollisionResolution);
-
-            conn_timer!(our_conn, hold).restart();
-            conn_timer!(our_conn, keepalive).restart();
-
-            self.set_primary_conn(Some(ours.clone()));
-
-            match ours {
-                ConnectionKind::Partial(cnx) => return FsmState::OpenSent(cnx),
-                ConnectionKind::Full(pc) => {
-                    // XXX: should we do this unconditionally?
-                    //      If this connection came from OpenConfirm, then it's
-                    //      already had an initial Keepalive sent right before
-                    //      moving into OpenSent... But it's also a Keepalive,
-                    //      so it shouldn't cause any harm.
-                    self.send_keepalive(&pc.conn);
-                    return FsmState::OpenConfirm(pc);
-                }
-            }
-        }
-
-        // Our RID is lower, we lose. Throw our connection to the wolves
-        collision_log!(self, info, our_conn, their_conn,
-            "collision resolution: peer wins with higher RID ({bgp_id} >= {})",
-            self.id;
-        );
-
-        self.stop(Some(our_conn), None, StopReason::CollisionResolution);
-
-        session_timer!(self, connect_retry).stop();
-        self.counters
-            .connection_retries
-            .fetch_add(1, Ordering::Relaxed);
-
-        conn_timer!(their_conn, hold).restart();
-        conn_timer!(their_conn, keepalive).restart();
-
-        self.set_primary_conn(Some(theirs.clone()));
-
-        match theirs {
-            ConnectionKind::Partial(cnx) => FsmState::OpenSent(cnx),
-            ConnectionKind::Full(pc) => {
-                // XXX: should we do this unconditionally?
-                //      If this connection came from OpenConfirm, then it's
-                //      already had an initial Keepalive sent right before
-                //      moving into OpenSent... But it's also a Keepalive,
-                //      so it shouldn't cause any harm.
-                self.send_keepalive(&pc.conn);
-                FsmState::OpenConfirm(pc)
-            }
-        }
-    }
-
     fn collision_conn_kind(
         &self,
         rx: &ConnectionId,
@@ -4804,15 +5009,146 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 ConnectionEvent::Message { msg, ref conn_id } => {
                     let msg_kind = msg.kind();
 
+                    // ** Special Handling **
+                    // An Open message meant for a known (registered) connection
+                    // other than the connection owned by this FSM state (`pc`)
+                    // is expected if we have gotten here via the OpenConfirm
+                    // path of ConnectionCollision. Specifically, if `exist`
+                    // gets a Keepalive before `new` gets an Open, `exist`
+                    // progresses into Established and is now known as `pc`.
+                    // When `new` gets its Open here (now an unnamed known
+                    // connection), we need to resolve the collision.
                     if *conn_id != *pc.conn.id() {
-                        if let Some(conn) = self.get_conn(conn_id) {
-                            session_log!(self, warn, pc.conn,
-                                "rx {msg_kind} for unexpected known connection (conn_id: {}). closing..",
-                                conn_id.short();
-                                "message" => msg_kind,
-                                "message_contents" => format!("{msg}")
-                            );
-                            self.stop(Some(&conn), None, StopReason::FsmError);
+                        if let Some(incoming_conn) = self.get_conn(conn_id) {
+                            /*
+                             *  If a valid OPEN message (BGPOpen (Event 19)) is received, and if
+                             *  the CollisionDetectEstablishedState optional attribute is TRUE,
+                             *  the OPEN message will be checked to see if it collides (Section
+                             *  6.8) with any other connection.  If the BGP implementation
+                             *  determines that this connection needs to be terminated, it will
+                             *  process an OpenCollisionDump event (Event 23).  If this connection
+                             *  needs to be terminated, the local system:
+                             *
+                             *    - sends a NOTIFICATION with a Cease,
+                             *
+                             *    - sets the ConnectRetryTimer to zero,
+                             *
+                             *    - deletes all routes associated with this connection,
+                             *
+                             *    - releases all BGP resources,
+                             *
+                             *    - drops the TCP connection,
+                             *
+                             *    - increments the ConnectRetryCounter by 1,
+                             *
+                             *    - (optionally) performs peer oscillation damping if the
+                             *      DampPeerOscillations is set to TRUE, and
+                             *
+                             *    - changes its state to Idle.
+                             */
+                            if let Message::Open(om) = &msg {
+                                // RFC 4271 CollisionDetectEstablishedState prototype
+                                // Set to false for current behavior (Established always wins)
+                                // Set to true to enable collision resolution in Established state
+                                let collision_detect_established_state = true;
+
+                                if collision_detect_established_state {
+                                    // Determine which connection wins using pure function
+                                    let resolution = collision_resolution(
+                                        pc.conn.creator(),
+                                        om.id,
+                                        self.id,
+                                    );
+
+                                    session_log!(self, info, pc.conn,
+                                        "collision detected in established state (conn_id: {}), collision_detect_established_state enabled",
+                                        conn_id.short();
+                                        "message" => "open",
+                                        "message_contents" => format!("{om}").as_str(),
+                                        "resolution" => format!("{:?}", resolution)
+                                    );
+
+                                    match resolution {
+                                        CollisionResolution::ExistWins => {
+                                            // pc wins: close incoming_conn, stay Established
+                                            self.bump_msg_counter(
+                                                msg_kind, true,
+                                            );
+                                            self.stop(
+                                                Some(&incoming_conn),
+                                                None,
+                                                StopReason::CollisionResolution,
+                                            );
+                                            return FsmState::Established(pc);
+                                        }
+                                        CollisionResolution::NewWins => {
+                                            // incoming_conn wins: close pc, transition to SessionSetup
+                                            self.bump_msg_counter(
+                                                msg_kind, false,
+                                            );
+
+                                            let new_pc = PeerConnection {
+                                                conn: incoming_conn.clone(),
+                                                id: om.id,
+                                                asn: om.asn(),
+                                                caps: om.get_capabilities(),
+                                            };
+
+                                            // Clean up the old established connection
+                                            self.stop(
+                                                Some(&pc.conn),
+                                                None,
+                                                StopReason::CollisionResolution,
+                                            );
+
+                                            // Prepare the winning connection
+                                            conn_timer!(new_pc.conn, hold)
+                                                .restart();
+                                            conn_timer!(new_pc.conn, keepalive)
+                                                .restart();
+                                            self.send_keepalive(&new_pc.conn);
+                                            self.set_primary_conn(Some(
+                                                ConnectionKind::Full(
+                                                    new_pc.clone(),
+                                                ),
+                                            ));
+
+                                            return FsmState::SessionSetup(
+                                                new_pc,
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    // collision_detect_established_state=false:
+                                    // Established always wins
+                                    session_log!(self, info, pc.conn,
+                                        "collision detected in established state (conn_id: {}), resolving",
+                                        conn_id.short();
+                                        "message" => "open",
+                                        "message_contents" => format!("{om}").as_str()
+                                    );
+                                    self.bump_msg_counter(msg_kind, true);
+                                    self.stop(
+                                        Some(&incoming_conn),
+                                        None,
+                                        StopReason::ConnectionRejected,
+                                    );
+                                    return FsmState::Established(pc);
+                                }
+                            } else {
+                                // No special case for anything other than Open
+                                session_log!(self, warn, pc.conn,
+                                    "rx {msg_kind} for unexpected known connection (conn_id: {}). closing..",
+                                    conn_id.short();
+                                    "message" => msg_kind,
+                                    "message_contents" => format!("{msg}")
+                                );
+                                self.stop(
+                                    Some(&incoming_conn),
+                                    None,
+                                    StopReason::FsmError,
+                                );
+                            }
                         } else {
                             session_log!(self, warn, pc.conn,
                                 "rx {msg_kind} for unknown connection (conn_id: {}). ignoring..",
@@ -4825,46 +5161,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
 
                     match msg {
-                        /*
-                         *  If a valid OPEN message (BGPOpen (Event 19)) is received, and if
-                         *  the CollisionDetectEstablishedState optional attribute is TRUE,
-                         *  the OPEN message will be checked to see if it collides (Section
-                         *  6.8) with any other connection.  If the BGP implementation
-                         *  determines that this connection needs to be terminated, it will
-                         *  process an OpenCollisionDump event (Event 23).  If this connection
-                         *  needs to be terminated, the local system:
-                         *
-                         *    - sends a NOTIFICATION with a Cease,
-                         *
-                         *    - sets the ConnectRetryTimer to zero,
-                         *
-                         *    - deletes all routes associated with this connection,
-                         *
-                         *    - releases all BGP resources,
-                         *
-                         *    - drops the TCP connection,
-                         *
-                         *    - increments the ConnectRetryCounter by 1,
-                         *
-                         *    - (optionally) performs peer oscillation damping if the
-                         *      DampPeerOscillations is set to TRUE, and
-                         *
-                         *    - changes its state to Idle.
-                         */
                         Message::Open(om) => {
+                            // Unexpected Open on the active connection while in Established.
+                            // All collision cases (Open from non-active connections) are
+                            // handled above before reaching this match block.
                             session_log!(self, warn, pc.conn,
-                                "unexpected {msg_kind} (conn_id {}), fsm transition to idle",
-                                conn_id.short();
+                                "unexpected {msg_kind} on active connection, fsm transition to idle";
                                 "message" => "open",
                                 "message_contents" => format!("{om}").as_str()
                             );
                             self.bump_msg_counter(msg_kind, true);
-                            // The above RFC excerpt explains proper Open
-                            // handling if CollisionDetectEstablishedState is
-                            // enabled, but doesn't explain proper handling if
-                            // it is NOT enabled (and we don't support this
-                            // option). So instead of sending a Cease as if we
-                            // were resolving a collision, we send an FSM Error.
                             self.stop(
                                 Some(&pc.conn),
                                 None,
@@ -4914,7 +5220,66 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          *
                          *    - changes its state to Idle.
                          */
-                        Message::Notification(m) => {
+                        Message::Notification(ref m) => {
+                            // Note: This does NOT align with RFC 4271.
+                            //
+                            // We move into Active instead of Idle to avoid
+                            // getting stuck in a death spiral where both peers
+                            // are stuck trying to open new connections that get
+                            // dropped by the peer. This can happen if our peer
+                            // both detects and resolves a collision before we
+                            // ever detect the second connection.
+                            // i.e.
+                            // Our FSM sees:
+                            // 1. Outbound connection completes
+                            // 2. Rx Open
+                            // 3. Rx Keepalive
+                            // 4. Rx Notification (collision resolution)
+                            // 5. Transition to Idle
+                            // 6. Inbound connection completes
+                            // 7. Inbound connection dropped (in Idle)
+                            //
+                            // Moving to Active gives us a chance to catch the
+                            // in-flight inbound connection instead of dropping
+                            // it, which allows us to get out of the spiral.
+                            // If an inbound connection never arrives, we'll
+                            // be in Active and won't initiate a new outbound
+                            // connection connection until ConnectRetryTimer
+                            // expires. This move to Active rather than Idle is
+                            // done only for Collision Resolution Notifications
+                            // to reduce the surface area of this non-standard
+                            // change.
+                            if matches!(m.error_subcode,
+                                ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionCollisionResolution)) {
+
+                                session_log!(self, info, pc.conn,
+                                    "rx collision resolution notification (conn_id: {}), fsm transition to active",
+                                    conn_id.short();
+                                    "message" => msg.title(),
+                                    "message_contents" => format!("{msg}")
+                                );
+
+                                lock!(self.message_history).receive(m.clone().into(), None);
+                                self.bump_msg_counter(msg_kind, false);
+
+                                // Clean up connection WITHOUT sending
+                                // notification. We don't send Notifications in
+                                // response to Notifications.
+                                self.unregister_conn(pc.conn.id());
+
+                                // Restart ConnectRetryTimer if peer is not
+                                // passive This provides fallback if peer's
+                                // connection never arrives
+                                if !lock!(self.session).passive_tcp_establishment {
+                                    session_timer!(self, connect_retry).restart();
+                                } else {
+                                    session_timer!(self, connect_retry).stop();
+                                }
+
+                                return self.exit_established_active(pc);
+                            }
+
+                            // All other notifications → exit_established (existing behavior)
                             // We've received a notification from the peer. They are
                             // displeased with us. Exit established and restart from
                             // the idle state.
@@ -4924,7 +5289,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message" => "notification",
                                 "message_contents" => format!("{m}")
                             );
-                            lock!(self.message_history).receive(m.into(), None);
+                            lock!(self.message_history)
+                                .receive(m.clone().into(), None);
                             self.bump_msg_counter(msg_kind, false);
                             self.exit_established(pc)
                         }
@@ -5467,10 +5833,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
-    /// Exit the established state. Remove prefixes received from the session
-    /// peer from our RIB. Issue a withdraw to the peer and transition to back
-    /// to the idle state.
-    fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
+    fn do_exit_established(
+        &self,
+        pc: PeerConnection<Cnx>,
+        fsm_state: FsmState<Cnx>,
+    ) -> FsmState<Cnx> {
         conn_timer!(pc.conn, hold).disable();
         conn_timer!(pc.conn, keepalive).disable();
         session_timer!(self, connect_retry).stop();
@@ -5481,7 +5848,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // remove peer prefixes from db
         self.db.remove_bgp_prefixes_from_peer(&pc.conn.peer().ip());
 
-        FsmState::Idle
+        fsm_state
+    }
+
+    /// Exit the established state into Idle. Remove prefixes received from the
+    /// session peer from our RIB. Issue a withdraw to the peer and transition
+    /// to back to the idle state.
+    fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
+        self.do_exit_established(pc, FsmState::Idle)
+    }
+
+    /// Exit the established state into Active. Remove prefixes received
+    /// from the session peer from our RIB. Issue a withdraw to the peer and
+    /// transition to back to the idle state.
+    fn exit_established_active(
+        &self,
+        pc: PeerConnection<Cnx>,
+    ) -> FsmState<Cnx> {
+        self.do_exit_established(pc, FsmState::Active)
     }
 
     fn bump_msg_counter(&self, msg: MessageKind, unexpected: bool) {
@@ -5649,6 +6033,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.send_collision_resolution_notification(c2);
                 }
             }
+            StopReason::IoError => {}
         }
 
         if let Some(c1) = conn1 {
@@ -6157,5 +6542,65 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         Ok(reset_needed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_collision_decision() {
+        use crate::connection::ConnectionCreator;
+        use crate::session::collision_resolution;
+
+        // Case 1: Local wins (higher BGP ID), Connector (ours) is exist
+        // Local BGP ID (100) > Remote (50), exist is Connector (ours)
+        // Expected: ExistWins
+        assert_eq!(
+            collision_resolution(
+                ConnectionCreator::Connector,
+                100, // local
+                50,  // remote
+            ),
+            CollisionResolution::ExistWins
+        );
+
+        // Case 2: Local wins, Dispatcher (theirs) is exist
+        // Local BGP ID (100) > Remote (50), exist is Dispatcher (theirs), so new is Connector (ours)
+        // Our connection wins, so NewWins
+        // Expected: NewWins
+        assert_eq!(
+            collision_resolution(
+                ConnectionCreator::Dispatcher,
+                100, // local
+                50,  // remote
+            ),
+            CollisionResolution::NewWins
+        );
+
+        // Case 3: Remote wins (higher BGP ID), Dispatcher (theirs) is exist
+        // Local BGP ID (50) < Remote (100), exist is Dispatcher (theirs)
+        // Expected: ExistWins
+        assert_eq!(
+            collision_resolution(
+                ConnectionCreator::Dispatcher,
+                50,  // local
+                100, // remote
+            ),
+            CollisionResolution::ExistWins
+        );
+
+        // Case 4: Remote wins, Connector (theirs) is exist
+        // Local BGP ID (50) < Remote (100), exist is Connector (theirs)
+        // Expected: NewWins
+        assert_eq!(
+            collision_resolution(
+                ConnectionCreator::Connector,
+                50,  // local
+                100, // remote
+            ),
+            CollisionResolution::NewWins
+        );
     }
 }
