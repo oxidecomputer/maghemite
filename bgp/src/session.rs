@@ -1383,22 +1383,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // popped, preventing the connection from flapping. The interval is
         // supplied via PeerConfig as an unsigned int, and is always set to
         // something valid. DampPeerOscillation is disabled if interval == 0.
+        //
+        // Note: There is no special handling here for the first trip through
+        //       Idle. If IdleHoldTime is zero we move out of Idle without
+        //       waiting for a ManualStart or Reset, else we wait for
+        //       IdleHoldtimeExpires to pop before moving out of Idle.
         {
             let ihl = session_timer!(self, idle_hold);
             if ihl.interval.is_zero() {
-                // If IdleHoldTimer is not configured, send IdleHoldTimerExpires
-                // so we immediately move into the next state.
+                // IdleHoldTimer is not configured.
+                // Immediately move into the next state.
                 ihl.stop();
-                if let Err(e) = self
-                    .event_tx
-                    .send(FsmEvent::Session(SessionEvent::IdleHoldTimerExpires))
-                {
-                    session_log_lite!(self,
-                        error,
-                        "failed to send IdleHoldTimerExpires event: {e}";
-                        "error" => format!("{e}")
-                    );
-                }
+                drop(ihl);
+                return self.transition_from_idle();
             } else {
                 // If IdleHoldTimer is configured (non-zero), start the timer.
                 // No events will move the FSM out of Idle until this timer pops
@@ -1443,19 +1440,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     AdminEvent::ManualStart | AdminEvent::Reset => {
                         session_timer!(self, idle_hold).stop();
 
-                        // peer is passive
-                        if lock!(self.session).passive_tcp_establishment {
-                            session_timer!(self, connect_retry).stop();
-                            return FsmState::Active;
-                        }
-
-                        // peer is active
-                        session_timer!(self, connect_retry).restart();
-                        session_log_lite!(self, debug, "starting connect attempt";);
-                        // Evaluate timeout before calling to avoid holding timer lock
-                        let timeout = connect_timeout!(self);
-                        self.initiate_connection(timeout);
-                        return FsmState::Connect;
+                        return self.transition_from_idle();
                     }
 
                     // We are already in Idle, so ManualStop is a no-op.
@@ -1490,20 +1475,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             .idle_hold_timer_expirations
                             .fetch_add(1, Ordering::Relaxed);
 
-                        // peer is passive
-                        if lock!(self.session).passive_tcp_establishment {
-                            session_timer!(self, connect_retry).stop();
-                            return FsmState::Active;
-                        }
-
-                        // peer is active
-                        session_timer!(self, connect_retry).restart();
-                        session_log_lite!(self, debug, "starting connect attempt";);
-                        // Evaluate timeout before calling to avoid holding timer lock
-                        let timeout = connect_timeout!(self);
-                        self.initiate_connection(timeout);
-
-                        return FsmState::Connect;
+                        return self.transition_from_idle();
                     }
 
                     SessionEvent::TcpConnectionAcked(new)
@@ -5831,6 +5803,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         } else {
             Ok(())
         }
+    }
+
+    fn transition_from_idle(&self) -> FsmState<Cnx> {
+        // peer is passive
+        if lock!(self.session).passive_tcp_establishment {
+            session_timer!(self, connect_retry).stop();
+            return FsmState::Active;
+        }
+
+        // peer is active
+        session_timer!(self, connect_retry).restart();
+        session_log_lite!(self, debug, "starting connect attempt";);
+        // Evaluate timeout before calling to avoid holding timer lock
+        let timeout = connect_timeout!(self);
+        self.initiate_connection(timeout);
+        FsmState::Connect
     }
 
     fn do_exit_established(
