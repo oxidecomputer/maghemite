@@ -6153,7 +6153,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             update
                 .withdrawn
                 .iter()
-                .map(|w| rdb::Prefix::from(w.as_prefix4()))
+                .filter_map(|w| match w {
+                    rdb::Prefix::V4(_) => Some(*w),
+                    rdb::Prefix::V6(_) => None,
+                })
                 .collect(),
             &pc.conn.peer().ip(),
         );
@@ -6242,9 +6245,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 update
                     .nlri
                     .iter()
-                    .filter(|p| !originated.contains(&p.as_prefix4()))
-                    .filter(|p| !self.is_v4_martian(&p.as_prefix4()))
-                    .map(|n| rdb::Prefix::from(n.as_prefix4()))
+                    .filter_map(|p| match p {
+                        rdb::Prefix::V4(p4) => {
+                            if !originated.contains(p4)
+                                && !self.is_v4_martian(p4)
+                            {
+                                Some(*p)
+                            } else {
+                                None
+                            }
+                        }
+                        rdb::Prefix::V6(_) => None,
+                    })
                     .collect(),
                 path.clone(),
             );
@@ -6331,9 +6343,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             None => return Err(Error::MissingNexthop),
         };
         for prefix in &update.nlri {
-            let prefix = prefix.as_prefix4();
-            if prefix.length == 32 && prefix.value == nexthop {
-                return Err(Error::NexthopSelf(prefix.value.into()));
+            if let rdb::Prefix::V4(p4) = prefix {
+                if p4.length == 32 && p4.value == nexthop {
+                    return Err(Error::NexthopSelf(p4.value.into()));
+                }
             }
         }
         Ok(())

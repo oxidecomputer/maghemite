@@ -219,7 +219,7 @@ pub fn new_rhai_engine() -> Engine {
                 let fp = args[1].take().cast::<FnPtr>();
                 let mut msg = args[0].write_lock::<UpdateMessage>().unwrap();
                 msg.prefix_filter(|p| {
-                    fp.call_raw(&context, None, [Dynamic::from(p.clone())])
+                    fp.call_raw(&context, None, [Dynamic::from(*p)])
                         .unwrap()
                         .cast::<bool>()
                 });
@@ -229,7 +229,7 @@ pub fn new_rhai_engine() -> Engine {
 
     engine
         .register_type_with_name::<Prefix>("Prefix")
-        .register_fn("within", Prefix::within_rhai);
+        .register_fn("within", prefix_within_rhai);
 
     #[cfg(debug_assertions)]
     {

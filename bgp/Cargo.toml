@@ -29,6 +29,7 @@ rand.workspace = true
 pretty-hex.workspace = true
 pretty_assertions.workspace = true
 lazy_static.workspace = true
+proptest.workspace = true
 
 [features]
 default = ["libnet"]

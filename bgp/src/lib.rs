@@ -18,6 +18,9 @@ pub mod session;
 mod rhai_integration;
 
 #[cfg(test)]
+mod proptest;
+
+#[cfg(test)]
 #[macro_use]
 extern crate lazy_static;
 

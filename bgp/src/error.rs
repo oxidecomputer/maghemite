@@ -5,7 +5,6 @@
 use std::{fmt::Display, net::IpAddr};
 
 use num_enum::TryFromPrimitiveError;
-use rdb::Prefix4;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -170,8 +169,11 @@ pub enum Error {
     #[error("Hold time too small")]
     HoldTimeTooSmall,
 
-    #[error("Invalid NLRI prefix")]
-    InvalidNlriPrefix(Prefix4),
+    #[error("Invalid NLRI prefix: {0:?}")]
+    InvalidNlriPrefix(Vec<u8>),
+
+    #[error("Invalid prefix length {0}, max is {1}")]
+    InvalidPrefixLength(u8, u8),
 
     #[error("Nexthop cannot equal prefix")]
     NexthopSelf(IpAddr),

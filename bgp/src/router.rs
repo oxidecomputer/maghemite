@@ -304,8 +304,14 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn create_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        let prefix4: Vec<Prefix4> =
-            prefixes.iter().cloned().map(|x| x.as_prefix4()).collect();
+        let prefix4: Vec<Prefix4> = prefixes
+            .iter()
+            .cloned()
+            .filter_map(|x| match x {
+                Prefix::V4(p4) => Some(p4),
+                Prefix::V6(_) => None,
+            })
+            .collect();
         self.db.create_origin4(&prefix4)?;
         self.announce_origin4(&prefixes);
         Ok(())
@@ -315,8 +321,14 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let origin4 = self.db.get_origin4()?;
         let current: BTreeSet<&Prefix4> = origin4.iter().collect();
 
-        let prefix4: Vec<Prefix4> =
-            prefixes.iter().cloned().map(|x| x.as_prefix4()).collect();
+        let prefix4: Vec<Prefix4> = prefixes
+            .iter()
+            .cloned()
+            .filter_map(|x| match x {
+                Prefix::V4(p4) => Some(p4),
+                Prefix::V6(_) => None,
+            })
+            .collect();
 
         let new: BTreeSet<&Prefix4> = prefix4.iter().collect();
 
@@ -349,7 +361,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         };
 
         for p in prefixes {
-            update.nlri.push(p.clone());
+            update.nlri.push(*p);
         }
 
         if !update.nlri.is_empty() {
@@ -364,7 +376,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         };
 
         for p in prefixes {
-            update.withdrawn.push(p.clone());
+            update.withdrawn.push(*p);
         }
 
         if !update.withdrawn.is_empty() {
@@ -373,8 +385,14 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn create_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        let prefix6: Vec<Prefix6> =
-            prefixes.iter().cloned().map(|x| x.as_prefix6()).collect();
+        let prefix6: Vec<Prefix6> = prefixes
+            .iter()
+            .cloned()
+            .filter_map(|x| match x {
+                Prefix::V6(p6) => Some(p6),
+                Prefix::V4(_) => None,
+            })
+            .collect();
         self.db.create_origin6(&prefix6)?;
         self.announce_origin6(&prefixes);
         Ok(())
@@ -384,8 +402,14 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let origin6 = self.db.get_origin6()?;
         let current: BTreeSet<&Prefix6> = origin6.iter().collect();
 
-        let prefix6: Vec<Prefix6> =
-            prefixes.iter().cloned().map(|x| x.as_prefix6()).collect();
+        let prefix6: Vec<Prefix6> = prefixes
+            .iter()
+            .cloned()
+            .filter_map(|x| match x {
+                Prefix::V6(p6) => Some(p6),
+                Prefix::V4(_) => None,
+            })
+            .collect();
 
         let new: BTreeSet<&Prefix6> = prefix6.iter().collect();
 
@@ -418,7 +442,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         };
 
         for p in prefixes {
-            update.nlri.push(p.clone());
+            update.nlri.push(*p);
         }
 
         if !update.nlri.is_empty() {
@@ -433,7 +457,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         };
 
         for p in prefixes {
-            update.withdrawn.push(p.clone());
+            update.withdrawn.push(*p);
         }
 
         if !update.withdrawn.is_empty() {

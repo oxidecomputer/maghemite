@@ -9,12 +9,14 @@ use nom::{
 };
 use num_enum::FromPrimitive;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+pub use rdb::types::Prefix;
+use rdb::types::{AddressFamily, BgpWireFormat, Prefix4, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     fmt::{Display, Formatter},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr},
 };
 
 pub const MAX_MESSAGE_SIZE: usize = 4096;
@@ -581,7 +583,7 @@ impl UpdateMessage {
 
                 // Check NLRI prefixes
                 for prefix in &self.nlri {
-                    let prefix_is_v4 = prefix.value.len() <= 4;
+                    let prefix_is_v4 = prefix.is_v4();
                     if prefix_is_v4 != nh_is_v4 {
                         return Err(Error::UnsupportedOperation(format!(
                             "Address family mismatch: {} NLRI with {} next-hop",
@@ -593,7 +595,7 @@ impl UpdateMessage {
 
                 // Check withdrawn prefixes
                 for prefix in &self.withdrawn {
-                    let prefix_is_v4 = prefix.value.len() <= 4;
+                    let prefix_is_v4 = prefix.is_v4();
                     if prefix_is_v4 != nh_is_v4 {
                         return Err(Error::UnsupportedOperation(format!(
                             "Address family mismatch: {} withdrawn with {} next-hop",
@@ -672,13 +674,14 @@ impl UpdateMessage {
     pub fn from_wire(input: &[u8]) -> Result<UpdateMessage, Error> {
         let (input, len) = be_u16(input)?;
         let (input, withdrawn_input) = take(len)(input)?;
-        let withdrawn = Self::prefixes_from_wire(withdrawn_input)?;
+        let withdrawn =
+            Self::prefixes_from_wire(withdrawn_input, AddressFamily::Ipv4)?;
 
         let (input, len) = be_u16(input)?;
         let (input, attrs_input) = take(len)(input)?;
         let path_attributes = Self::path_attrs_from_wire(attrs_input)?;
 
-        let nlri = Self::prefixes_from_wire(input)?;
+        let nlri = Self::prefixes_from_wire(input, AddressFamily::Ipv4)?;
 
         let update = UpdateMessage {
             withdrawn,
@@ -701,7 +704,7 @@ impl UpdateMessage {
 
                 // Check NLRI prefixes
                 for prefix in &update.nlri {
-                    let prefix_is_v4 = prefix.value.len() <= 4;
+                    let prefix_is_v4 = prefix.is_v4();
                     if prefix_is_v4 != nh_is_v4 {
                         return Err(Error::UnsupportedOperation(format!(
                             "Received UPDATE with address family mismatch: {} NLRI with {} next-hop",
@@ -713,7 +716,7 @@ impl UpdateMessage {
 
                 // Check withdrawn prefixes
                 for prefix in &update.withdrawn {
-                    let prefix_is_v4 = prefix.value.len() <= 4;
+                    let prefix_is_v4 = prefix.is_v4();
                     if prefix_is_v4 != nh_is_v4 {
                         return Err(Error::UnsupportedOperation(format!(
                             "Received UPDATE with address family mismatch: {} withdrawn with {} next-hop",
@@ -728,11 +731,14 @@ impl UpdateMessage {
         Ok(update)
     }
 
-    fn prefixes_from_wire(mut buf: &[u8]) -> Result<Vec<Prefix>, Error> {
+    fn prefixes_from_wire(
+        mut buf: &[u8],
+        afi: AddressFamily,
+    ) -> Result<Vec<Prefix>, Error> {
         let mut result = Vec::new();
         while !buf.is_empty() {
             // XXX: handle error for individual prefix?
-            let (out, pfx) = Prefix::from_wire(buf)?;
+            let (out, pfx) = prefix_from_wire(buf, afi)?;
             result.push(pfx);
             buf = out;
         }
@@ -849,12 +855,12 @@ impl Display for UpdateMessage {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let mut w_str = String::new();
         for w in self.withdrawn.iter() {
-            w_str.push_str(&format!("{} ", w.as_prefix4()));
+            w_str.push_str(&format!("{} ", w));
         }
 
         let mut n_str = String::new();
         for n in self.nlri.iter() {
-            n_str.push_str(&format!("{} ", n.as_prefix4()));
+            n_str.push_str(&format!("{} ", n));
         }
 
         let mut p_str = String::new();
@@ -868,159 +874,6 @@ impl Display for UpdateMessage {
             if !w_str.is_empty() { &w_str } else { "empty" },
             if !n_str.is_empty() { &n_str } else { "empty" }
         )
-    }
-}
-
-/// This data structure captures a network prefix as it's laid out in a BGP
-/// message. There is a prefix length followed by a variable number of bytes.
-/// Just enough bytes to express the prefix.
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    Clone,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-    Ord,
-    PartialOrd,
-)]
-pub struct Prefix {
-    pub length: u8,
-    pub value: Vec<u8>,
-}
-
-impl Prefix {
-    fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        if self.value.len() > u8::MAX as usize {
-            return Err(Error::TooLarge("prefix too long".into()));
-        }
-        let mut buf = vec![self.length];
-        let n = (self.length as usize).div_ceil(8);
-        buf.extend_from_slice(&self.value[..n]);
-        Ok(buf)
-    }
-
-    fn from_wire(input: &[u8]) -> Result<(&[u8], Prefix), Error> {
-        // XXX: length validation?
-        let (input, len) = parse_u8(input)?;
-        let (input, value) = take(len.div_ceil(8))(input)?;
-        Ok((
-            input,
-            Prefix {
-                value: value.to_owned(),
-                length: len,
-            },
-        ))
-    }
-
-    pub fn as_prefix4(&self) -> rdb::Prefix4 {
-        let mut bytes = [0u8; 4];
-        let len = std::cmp::min(self.value.len(), 4);
-        bytes[..len].copy_from_slice(&self.value[..len]);
-        let addr = Ipv4Addr::from(bytes);
-        rdb::Prefix4::new(addr, self.length)
-    }
-
-    pub fn as_prefix6(&self) -> rdb::Prefix6 {
-        let mut bytes = [0u8; 16];
-        let len = std::cmp::min(self.value.len(), 16);
-        bytes[..len].copy_from_slice(&self.value[..len]);
-        let addr = Ipv6Addr::from(bytes);
-        rdb::Prefix6::new(addr, self.length)
-    }
-
-    pub fn within(&self, x: &Prefix) -> bool {
-        if self.length > 128 || x.length > 128 {
-            return false;
-        }
-        if self.length < x.length {
-            return false;
-        }
-        if self.value.len() > 16 || x.value.len() > 16 {
-            return false;
-        }
-
-        // Check address family compatibility
-        let self_is_ipv4 = self.value.len() <= 4;
-        let x_is_ipv4 = x.value.len() <= 4;
-
-        // Cross-family comparisons should return false
-        if self_is_ipv4 != x_is_ipv4 {
-            return false;
-        }
-
-        let mut a = self.value.clone();
-        a.resize(16, 0);
-        let mut a = u128::from_be_bytes(a.try_into().unwrap());
-
-        let mut b = x.value.clone();
-        b.resize(16, 0);
-        let mut b = u128::from_be_bytes(b.try_into().unwrap());
-
-        if x.length == 128 {
-            return a == b; // For /128, no masking needed
-        }
-
-        // Handle /0 case - everything is within the default route
-        if x.length == 0 {
-            return true;
-        }
-
-        // Prevent overflow when shift amount is >= 128
-        let shift_amount = 128 - x.length;
-        if shift_amount >= 128 {
-            return false; // Invalid case
-        }
-
-        let mask = !0u128 << shift_amount;
-        a &= mask;
-        b &= mask;
-
-        a == b
-    }
-}
-
-impl std::str::FromStr for Prefix {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (addr, len) = match s.split_once('/') {
-            Some(split) => split,
-            None => return Err("invalid prefix".to_owned()),
-        };
-        let addr: IpAddr = match addr.parse() {
-            Ok(addr) => addr,
-            Err(_) => return Err("invalid addr".to_owned()),
-        };
-        let length: u8 = match len.parse() {
-            Ok(len) => len,
-            Err(_) => return Err("invalid length".to_owned()),
-        };
-        let value = match addr {
-            IpAddr::V4(a) => a.octets().to_vec(),
-            IpAddr::V6(a) => a.octets().to_vec(),
-        };
-        Ok(Self { value, length })
-    }
-}
-
-impl From<rdb::Prefix4> for Prefix {
-    fn from(p: rdb::Prefix4) -> Self {
-        Self {
-            value: p.value.octets().into(),
-            length: p.length,
-        }
-    }
-}
-
-impl From<rdb::Prefix6> for Prefix {
-    fn from(p: rdb::Prefix6) -> Self {
-        Self {
-            value: p.value.octets().into(),
-            length: p.length,
-        }
     }
 }
 
@@ -3060,6 +2913,38 @@ pub enum Safi {
     NlriUnicast = 1,
 }
 
+/// Decode prefix from BGP wire format with explicit address family.
+///
+/// The address family parameter must match the AFI/SAFI context where this
+/// prefix was encoded. This is required because prefixes <= 32 bits long (e.g.
+/// default routes) encode identically for both IPv4 and IPv6, so external
+/// context is needed to disambiguate.
+///
+/// Returns (remaining_bytes, prefix)
+fn prefix_from_wire(
+    input: &[u8],
+    afi: AddressFamily,
+) -> Result<(&[u8], Prefix), Error> {
+    match afi {
+        AddressFamily::Ipv4 => {
+            let (remaining, prefix4) = Prefix4::from_wire(input)
+                .map_err(|_| Error::InvalidNlriPrefix(input.to_vec()))?;
+            Ok((remaining, prefix4.into()))
+        }
+        AddressFamily::Ipv6 => {
+            let (remaining, prefix6) = Prefix6::from_wire(input)
+                .map_err(|_| Error::InvalidNlriPrefix(input.to_vec()))?;
+            Ok((remaining, prefix6.into()))
+        }
+        AddressFamily::All => {
+            Err(Error::UnsupportedOperation(
+                "Cannot decode Prefix with AddressFamily::All - must specify Ipv4 or Ipv6"
+                    .into(),
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3154,10 +3039,10 @@ mod tests {
     #[test]
     fn update_round_trip() {
         let um0 = UpdateMessage {
-            withdrawn: vec![Prefix {
-                value: vec![0x00, 0x17, 0x01, 0xc],
-                length: 32,
-            }],
+            withdrawn: vec![rdb::Prefix::V4(rdb::Prefix4::new(
+                std::net::Ipv4Addr::new(0, 23, 1, 12),
+                32,
+            ))],
             path_attributes: vec![PathAttribute {
                 typ: PathAttributeType {
                     flags: path_attribute_flags::OPTIONAL
@@ -3170,14 +3055,14 @@ mod tests {
                 }]),
             }],
             nlri: vec![
-                Prefix {
-                    value: vec![0x00, 0x17, 0x01, 0xd],
-                    length: 32,
-                },
-                Prefix {
-                    value: vec![0x00, 0x17, 0x01, 0xe],
-                    length: 32,
-                },
+                rdb::Prefix::V4(rdb::Prefix4::new(
+                    std::net::Ipv4Addr::new(0, 23, 1, 13),
+                    32,
+                )),
+                rdb::Prefix::V4(rdb::Prefix4::new(
+                    std::net::Ipv4Addr::new(0, 23, 1, 14),
+                    32,
+                )),
             ],
         };
 
@@ -3376,53 +3261,75 @@ mod tests {
         ];
 
         for test_case in test_cases {
-            let prefix = Prefix {
-                length: test_case.prefix_length,
-                value: test_case.input_bytes,
+            let prefix = match test_case.address_family {
+                AddressFamily::IPv4 => {
+                    let mut octets = [0u8; 4];
+                    octets.copy_from_slice(&test_case.input_bytes);
+                    rdb::Prefix::V4(rdb::Prefix4::new(
+                        Ipv4Addr::from(octets),
+                        test_case.prefix_length,
+                    ))
+                }
+                AddressFamily::IPv6 => {
+                    let mut octets = [0u8; 16];
+                    octets.copy_from_slice(&test_case.input_bytes);
+                    rdb::Prefix::V6(rdb::Prefix6::new(
+                        Ipv6Addr::from(octets),
+                        test_case.prefix_length,
+                    ))
+                }
             };
 
             match test_case.address_family {
                 AddressFamily::IPv4 => {
-                    let rdb_prefix4 = prefix.as_prefix4();
-                    assert_eq!(
-                        rdb_prefix4.length, test_case.prefix_length,
-                        "IPv4 length mismatch for {}",
-                        test_case.description
-                    );
-                    assert_eq!(
-                        rdb_prefix4.value,
-                        Ipv4Addr::from_str(test_case.expected_address).unwrap(),
-                        "IPv4 address mismatch for {}: expected {}, got {}",
-                        test_case.description,
-                        test_case.expected_address,
-                        rdb_prefix4.value
-                    );
-                    assert!(
-                        rdb_prefix4.host_bits_are_unset(),
-                        "IPv4 host bits not properly zeroed for {}",
-                        test_case.description
-                    );
+                    if let rdb::Prefix::V4(rdb_prefix4) = prefix {
+                        assert_eq!(
+                            rdb_prefix4.length, test_case.prefix_length,
+                            "IPv4 length mismatch for {}",
+                            test_case.description
+                        );
+                        assert_eq!(
+                            rdb_prefix4.value,
+                            Ipv4Addr::from_str(test_case.expected_address)
+                                .unwrap(),
+                            "IPv4 address mismatch for {}: expected {}, got {}",
+                            test_case.description,
+                            test_case.expected_address,
+                            rdb_prefix4.value
+                        );
+                        assert!(
+                            rdb_prefix4.host_bits_are_unset(),
+                            "IPv4 host bits not properly zeroed for {}",
+                            test_case.description
+                        );
+                    } else {
+                        panic!("Expected IPv4 prefix");
+                    }
                 }
                 AddressFamily::IPv6 => {
-                    let rdb_prefix6 = prefix.as_prefix6();
-                    assert_eq!(
-                        rdb_prefix6.length, test_case.prefix_length,
-                        "IPv6 length mismatch for {}",
-                        test_case.description
-                    );
-                    assert_eq!(
-                        rdb_prefix6.value,
-                        Ipv6Addr::from_str(test_case.expected_address).unwrap(),
-                        "IPv6 address mismatch for {}: expected {}, got {}",
-                        test_case.description,
-                        test_case.expected_address,
-                        rdb_prefix6.value
-                    );
-                    assert!(
-                        rdb_prefix6.host_bits_are_unset(),
-                        "IPv6 host bits not properly zeroed for {}",
-                        test_case.description
-                    );
+                    if let rdb::Prefix::V6(rdb_prefix6) = prefix {
+                        assert_eq!(
+                            rdb_prefix6.length, test_case.prefix_length,
+                            "IPv6 length mismatch for {}",
+                            test_case.description
+                        );
+                        assert_eq!(
+                            rdb_prefix6.value,
+                            Ipv6Addr::from_str(test_case.expected_address)
+                                .unwrap(),
+                            "IPv6 address mismatch for {}: expected {}, got {}",
+                            test_case.description,
+                            test_case.expected_address,
+                            rdb_prefix6.value
+                        );
+                        assert!(
+                            rdb_prefix6.host_bits_are_unset(),
+                            "IPv6 host bits not properly zeroed for {}",
+                            test_case.description
+                        );
+                    } else {
+                        panic!("Expected IPv6 prefix");
+                    }
                 }
             }
         }

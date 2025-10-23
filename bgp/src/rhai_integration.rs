@@ -181,13 +181,11 @@ pub mod shaper_result_module {
     }
 }
 
-impl Prefix {
-    pub fn within_rhai(&mut self, x: &str) -> bool {
-        let x: Prefix = match x.parse() {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-        let s = self.clone();
-        s.within(&x)
-    }
+pub fn prefix_within_rhai(prefix: &mut Prefix, x: &str) -> bool {
+    let x: Prefix = match x.parse() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let s = *prefix;
+    s.within(&x)
 }

@@ -11,6 +11,9 @@ pub mod bestpath;
 pub mod error;
 pub mod log;
 
+#[cfg(test)]
+mod types_proptest;
+
 /// The priority routes default to.
 pub const DEFAULT_ROUTE_PRIORITY: u64 = u64::MAX;
 

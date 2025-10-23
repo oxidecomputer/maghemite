@@ -19,5 +19,8 @@ itertools.workspace = true
 chrono.workspace = true
 clap = { workspace = true, optional = true }
 
+[dev-dependencies]
+proptest.workspace = true
+
 [features]
 clap = ["dep:clap"]
