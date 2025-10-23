@@ -290,7 +290,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "crossbeam-channel",
  "itertools 0.13.0",
  "lazy_static",
  "libc",
@@ -2889,7 +2888,6 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
- "crossbeam-channel",
  "dropshot",
  "hostname 0.3.1",
  "http",

@@ -31,7 +31,6 @@ hostname.workspace = true
 uuid.workspace = true
 smf.workspace = true
 semver.workspace = true
-crossbeam-channel.workspace = true
 
 [features]
 default = ["mg-lower"]

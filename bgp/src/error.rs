@@ -47,9 +47,6 @@ pub enum Error {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("channel recv: {0}")]
-    ChannelRecv(#[from] crossbeam_channel::RecvError),
-
     #[error("timeout")]
     Timeout,
 

@@ -92,7 +92,6 @@ libc = "0.2"
 itertools = "0.13"
 rhai = { version = "1", features = ["metadata", "sync"] }
 semver = "1.0"
-crossbeam-channel = "0.5.15"
 proptest = "1.4"
 
 [workspace.dependencies.opte-ioctl]

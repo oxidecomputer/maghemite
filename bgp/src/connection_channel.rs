@@ -532,7 +532,7 @@ impl<T> Endpoint<T> {
     }
 }
 
-/// Analagous to crossbeam_channel::unbounded for bidirectional endpoints.
+/// Creates a bidirectional channel pair with both sender and receiver.
 #[allow(dead_code)]
 pub fn channel<T>() -> (Endpoint<T>, Endpoint<T>) {
     let (tx_a, rx_b) = mpsc_channel();
