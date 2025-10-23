@@ -2486,98 +2486,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     .opens_received
                                     .fetch_add(1, Ordering::Relaxed);
                                 break om;
-                            } else if let Message::Notification(ref n) = msg {
-                                // Note: This does NOT align with RFC 4271.
-                                //
-                                // We move into Active instead of Idle to
-                                // avoid getting stuck in a death spiral where
-                                // both peers are stuck trying to open new
-                                // connections that get dropped by the peer.
-                                // This can happen if our peer both detects and
-                                // resolves a collision before we ever detect
-                                // the second connection.
-                                // i.e.
-                                //
-                                // Peer FSM sees:
-                                // 1. Outbound connection initated
-                                //    -> Connect
-                                // 2. Inbound connection completes
-                                // 3. Tx Open via Inbound connection
-                                //    -> OpenSent
-                                // 4. Outbound connection completes
-                                // 5. Tx Open via Outbound connection
-                                //    -> ConnectionCollision
-                                // 6. Rx Open via Inbound connection
-                                //    -> OpenConfirm
-                                // 7. Collision Resolution
-                                //    (Peer RID > Local RID)
-                                // 7. Tx Notification via Inbound
-                                //    -> OpenSent
-                                // 8. Rx Notification via Outbound
-                                //    -> Idle
-                                //
-                                // Our FSM sees:
-                                // 1. Outbound connection initated
-                                //    -> Connect
-                                // 2. Outbound connection completes
-                                //    -> OpenSent
-                                // 3. Rx Open
-                                //    -> OpenConfirm
-                                // 4. Rx Notification
-                                //    -> Idle
-                                // 5. Inbound connection completes
-                                //    (rejected in Idle)
-                                // 6. Tx Notification via Inbound connection
-                                //    (ConnectionRejected)
-                                //
-                                // Moving to Active gives us a chance to catch
-                                // the in-flight inbound connection (Our FSM @
-                                // Step 5) instead of rejecting it, which allows
-                                // us to get out of the spiral. If an inbound
-                                // connection never arrives, we'll be in Active
-                                // and won't initiate a new outbound connection
-                                // until ConnectRetryTimer expires. This move
-                                // to Active rather than Idle is done only for
-                                // Collision Resolution Notifications to reduce
-                                // the surface area of this non-standard change.
-                                if matches!(n.error_subcode,
-                                    ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionCollisionResolution)) {
-
-                                    session_log!(self, info, conn,
-                                        "rx collision resolution notification (conn_id: {}), fsm transition to active",
-                                        conn_id.short();
-                                        "message" => msg.title(),
-                                        "message_contents" => format!("{msg}")
-                                    );
-
-                                    self.bump_msg_counter(msg.kind(), false);
-
-                                    // Clean up connection WITHOUT sending
-                                    // Notification. We don't send Notifications
-                                    // in response to Notifications.
-                                    self.unregister_conn(conn.id());
-
-                                    // Restart ConnectRetryTimer if peer is not
-                                    // passive This provides fallback if peer's
-                                    // connection never arrives
-                                    if !lock!(self.session).passive_tcp_establishment {
-                                        session_timer!(self, connect_retry).restart();
-                                    } else {
-                                        session_timer!(self, connect_retry).stop();
-                                    }
-
-                                    return FsmState::Active;
-                                } else {
-                                    session_log!(self, warn, conn,
-                                        "rx {} message (conn_id: {}), fsm transition to idle",
-                                        msg.title(), conn_id.short();
-                                        "message" => msg.title(),
-                                        "message_contents" => format!("{msg}")
-                                    );
-                                    self.bump_msg_counter(msg.kind(), false);
-                                    self.unregister_conn(conn.id());
-                                    return FsmState::Idle;
-                                }
                             }
 
                             session_timer!(self, connect_retry).stop();
@@ -3058,128 +2966,41 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     lock!(self.message_history)
                         .receive(msg.clone(), Some(conn_id));
 
-                    /*
-                     * The peer has ACK'd our open message with a keepalive. Start the
-                     * session timers and enter session setup.
-                     *
-                     * If the local system receives a TcpConnectionFails event (Event 18)
-                     * from the underlying TCP or a NOTIFICATION message (Event 25), the
-                     * local system:
-                     *
-                     *   - sets the ConnectRetryTimer to zero,
-                     *
-                     *   - releases all BGP resources,
-                     *
-                     *   - drops the TCP connection,
-                     *
-                     *   - increments the ConnectRetryCounter by 1,
-                     *
-                     *   - (optionally) performs peer oscillation damping if the
-                     *     DampPeerOscillations attribute is set to TRUE, and
-                     *
-                     *   - changes its state to Idle.
-                     */
-                    match msg {
-                        Message::KeepAlive => {
-                            conn_timer!(pc.conn, hold).restart();
-                            conn_timer!(pc.conn, keepalive).restart();
-                            self.bump_msg_counter(MessageKind::KeepAlive, false);
-                            FsmState::SessionSetup(pc)
-                        }
-
-                        Message::Notification(ref n)
-                            if matches!(n.error_subcode,
-                                ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionCollisionResolution)) =>
-                        {
-                            // Note: This does NOT align with RFC 4271.
-                            //
-                            // We move into Active instead of Idle to avoid
-                            // getting stuck in a death spiral where both peers
-                            // are stuck trying to open new connections that get
-                            // dropped by the peer. This can happen if our peer
-                            // both detects and resolves a collision before we
-                            // ever detect the second connection.
-                            // i.e.
-                            //
-                            // Peer FSM sees:
-                            // 1. Outbound connection initated
-                            //    -> Connect
-                            // 2. Inbound connection completes
-                            // 3. Tx Open via Inbound connection
-                            //    -> OpenSent
-                            // 4. Outbound connection completes
-                            // 5. Tx Open via Outbound connection
-                            //    -> ConnectionCollision
-                            // 6. Rx Open via Inbound connection
-                            //    -> OpenConfirm
-                            // 7. Collision Resolution
-                            //    (Peer RID > Local RID)
-                            // 7. Tx Notification via Inbound
-                            //    -> OpenSent
-                            // 8. Rx Notification via Outbound
-                            //    -> Idle
-                            //
-                            // Our FSM sees:
-                            // 1. Outbound connection initated
-                            //    -> Connect
-                            // 2. Outbound connection completes
-                            //    -> OpenSent
-                            // 3. Rx Open
-                            //    -> OpenConfirm
-                            // 4. Rx Notification
-                            //    -> Idle
-                            // 5. Inbound connection completes
-                            //    (rejected in Idle)
-                            // 6. Tx Notification via Inbound connection
-                            //    (ConnectionRejected)
-                            //
-                            // Moving to Active gives us a chance to catch the
-                            // in-flight inbound connection (Our FSM @ Step 5)
-                            // instead of rejecting it, which allows us to get
-                            // out of the spiral. If an inbound connection never
-                            // arrives, we'll be in Active and won't initiate a
-                            // new outbound connection until ConnectRetryTimer
-                            // expires. This move to Active rather than Idle is
-                            // done only for Collision Resolution Notifications
-                            // to reduce the surface area of this non-standard
-                            // change.
-
-                            session_log!(self, info, pc.conn,
-                                "rx collision resolution notification (conn_id: {}), fsm transition to active",
-                                conn_id.short();
-                                "message" => msg.title(),
-                                "message_contents" => format!("{msg}")
-                            );
-
-                            self.bump_msg_counter(MessageKind::Notification, false);
-
-                            // Clean up connection WITHOUT sending Notification.
-                            // We don't send Notifications in response to
-                            // Notifications.
-                            self.unregister_conn(pc.conn.id());
-
-                            // Restart ConnectRetryTimer if peer is not passive
-                            if !lock!(self.session).passive_tcp_establishment {
-                                session_timer!(self, connect_retry).restart();
-                            } else {
-                                session_timer!(self, connect_retry).stop();
-                            }
-
-                            FsmState::Active
-                        }
-
-                        // All other unexpected messages → Idle (existing behavior)
-                        _ => {
-                            session_log!(self, warn, pc.conn,
-                                "unexpected {} received (conn_id: {}), fsm transition to idle",
-                                msg.title(), conn_id.short();
-                                "message" => msg.title(),
-                                "message_contents" => format!("{msg}")
-                            );
-                            self.bump_msg_counter(msg.kind(), true);
-                            session_timer!(self, connect_retry).stop();
-                            FsmState::Idle
-                        }
+                    // The peer has ACK'd our open message with a keepalive. Start the
+                    // session timers and enter session setup.
+                    if let Message::KeepAlive = msg {
+                        conn_timer!(pc.conn, hold).restart();
+                        conn_timer!(pc.conn, keepalive).restart();
+                        self.bump_msg_counter(msg.kind(), false);
+                        FsmState::SessionSetup(pc)
+                    } else {
+                        /*
+                         * If the local system receives a TcpConnectionFails event (Event 18)
+                         * from the underlying TCP or a NOTIFICATION message (Event 25), the
+                         * local system:
+                         *
+                         *   - sets the ConnectRetryTimer to zero,
+                         *
+                         *   - releases all BGP resources,
+                         *
+                         *   - drops the TCP connection,
+                         *
+                         *   - increments the ConnectRetryCounter by 1,
+                         *
+                         *   - (optionally) performs peer oscillation damping if the
+                         *     DampPeerOscillations attribute is set to TRUE, and
+                         *
+                         *   - changes its state to Idle.
+                         */
+                        session_log!(self, warn, pc.conn,
+                            "unexpected {} received (conn_id: {}), fsm transition to idle",
+                            msg.title(), conn_id.short();
+                            "message" => "notification",
+                            "message_contents" => format!("{msg}")
+                        );
+                        self.bump_msg_counter(msg.kind(), true);
+                        session_timer!(self, connect_retry).stop();
+                        FsmState::Idle
                     }
                 }
             },
@@ -5248,7 +5069,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     session_timer!(self, connect_retry).stop();
                                 }
 
-                                return self.exit_established_active(pc);
+                                return self.exit_established(pc);
                             }
 
                             // All other notifications → exit_established (existing behavior)
@@ -5821,11 +5642,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         FsmState::Connect
     }
 
-    fn do_exit_established(
-        &self,
-        pc: PeerConnection<Cnx>,
-        fsm_state: FsmState<Cnx>,
-    ) -> FsmState<Cnx> {
+    /// Exit the established state into Idle. Remove prefixes received from the
+    /// session peer from our RIB. Issue a withdraw to the peer and transition
+    /// to back to the idle state.
+    fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         conn_timer!(pc.conn, hold).disable();
         conn_timer!(pc.conn, keepalive).disable();
         session_timer!(self, connect_retry).stop();
@@ -5836,24 +5656,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // remove peer prefixes from db
         self.db.remove_bgp_prefixes_from_peer(&pc.conn.peer().ip());
 
-        fsm_state
-    }
-
-    /// Exit the established state into Idle. Remove prefixes received from the
-    /// session peer from our RIB. Issue a withdraw to the peer and transition
-    /// to back to the idle state.
-    fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
-        self.do_exit_established(pc, FsmState::Idle)
-    }
-
-    /// Exit the established state into Active. Remove prefixes received
-    /// from the session peer from our RIB. Issue a withdraw to the peer and
-    /// transition to back to the idle state.
-    fn exit_established_active(
-        &self,
-        pc: PeerConnection<Cnx>,
-    ) -> FsmState<Cnx> {
-        self.do_exit_established(pc, FsmState::Active)
+        FsmState::Idle
     }
 
     fn bump_msg_counter(&self, msg: MessageKind, unexpected: bool) {
