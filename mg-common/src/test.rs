@@ -16,6 +16,10 @@ use std::sync::{Arc, Mutex};
 pub const DEFAULT_INTERVAL: u64 = 1;
 pub const DEFAULT_ITERATIONS: u64 = 30;
 
+// Note: get_test_db has been moved to rdb::test::get_test_db
+// to break the circular dependency between mg-common and rdb.
+// Tests should now use rdb::test::get_test_db directly.
+
 /// Cross-platform file locking trait using libc's flock(2)
 trait FileLockExt {
     fn lock_exclusive(&self) -> std::io::Result<()>;

@@ -320,9 +320,10 @@ mod test {
 
     #[test]
     fn test_new_daemon() -> anyhow::Result<()> {
-        let db = rdb::Db::new("/tmp/bfd_new_daemon.db", test_logger()).unwrap();
+        let log = test_logger();
+        let db = rdb::test::get_test_db("bfd_new_daemon", log.clone()).unwrap();
 
-        let mut daemon = Daemon::new(test_logger());
+        let mut daemon = Daemon::new(log);
         assert_eq!(daemon.sessions.len(), 0);
 
         let (a, _b) = bidi::channel();
@@ -342,7 +343,8 @@ mod test {
 
     #[test]
     fn test_protocol_basics() -> anyhow::Result<()> {
-        let db = rdb::Db::new("/tmp/bfd_new_daemon.db", test_logger()).unwrap();
+        let log = test_logger();
+        let db = rdb::test::get_test_db("bfd_protocol_basics", log.clone()).unwrap();
 
         let mut net = Network::default();
 

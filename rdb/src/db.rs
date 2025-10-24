@@ -1415,18 +1415,8 @@ mod test {
     use std::str::FromStr;
 
     fn get_test_db() -> Db {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        std::fs::create_dir_all("/tmp").expect("create tmp dir");
         let log = init_file_logger("rib.log");
-        let db_path = format!(
-            "/tmp/rib_test_{}_{}.db",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::SeqCst)
-        );
-        let _ = std::fs::remove_dir_all(&db_path);
-        Db::new(&db_path, log.clone()).expect("create db")
+        crate::test::get_test_db("rib_test", log).expect("create db")
     }
 
     pub fn check_prefix_path(

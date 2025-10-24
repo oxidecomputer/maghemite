@@ -25,3 +25,6 @@ pub const DEFAULT_RIB_PRIORITY_STATIC: u8 = 1;
 
 pub const COMPONENT_RDB: &str = "rdb";
 pub const MOD_DB: &str = "database";
+
+/// Test utilities for creating unique test databases
+pub mod test;
