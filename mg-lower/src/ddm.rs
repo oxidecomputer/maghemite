@@ -3,17 +3,19 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::log::ddm_log;
-use ddm_admin_client::types::TunnelOrigin;
 use ddm_admin_client::Client;
+use ddm_admin_client::types::TunnelOrigin;
 use oxnet::Ipv6Net;
 use slog::Logger;
 use std::{net::Ipv6Addr, sync::Arc};
+
+use crate::platform::Ddm;
 
 pub(crate) const BOUNDARY_SERVICES_VNI: u32 = 99;
 const UNIT_DDM: &str = "ddm";
 
 fn ensure_tep_underlay_origin(
-    client: &Client,
+    client: &impl Ddm,
     tep: Ipv6Addr,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
@@ -56,7 +58,7 @@ fn ensure_tep_underlay_origin(
 
 pub(crate) fn add_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     tep: Ipv6Addr, // tunnel endpoint address
-    client: &Client,
+    client: &impl Ddm,
     routes: I,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,
@@ -79,7 +81,7 @@ pub(crate) fn add_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
 }
 
 pub(crate) fn remove_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
-    client: &Client,
+    client: &impl Ddm,
     routes: I,
     rt: &Arc<tokio::runtime::Handle>,
     log: &Logger,

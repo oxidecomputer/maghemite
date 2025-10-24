@@ -15,10 +15,12 @@
 //! of a ddm router is defined in the state machine implementation in sm.rs.
 //!
 
-use crate::db::{effective_route_set, Route, RouterKind, TunnelRoute};
+use crate::db::{Route, effective_route_set};
 use crate::discovery::Version;
 use crate::sm::{Config, Event, PeerEvent, SmContext};
 use crate::{dbg, err, inf, wrn};
+use ddm_types::db::{RouterKind, TunnelRoute};
+use ddm_types::exchange::{PathVector, PathVectorV2};
 use dropshot::ApiDescription;
 use dropshot::ConfigDropshot;
 use dropshot::ConfigLogging;
@@ -29,20 +31,19 @@ use dropshot::HttpResponseUpdatedNoContent;
 use dropshot::HttpServerStarter;
 use dropshot::RequestContext;
 use dropshot::TypedBody;
-use dropshot::{endpoint, ApiDescriptionRegisterError};
+use dropshot::{ApiDescriptionRegisterError, endpoint};
 use http_body_util::BodyExt;
 use hyper::body::Bytes;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use mg_common::net::{TunnelOrigin, TunnelOriginV2};
-use oxnet::Ipv6Net;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::collections::HashSet;
 use std::net::{Ipv6Addr, SocketAddrV6};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -170,40 +171,6 @@ impl From<HashSet<PathVector>> for PullResponse {
         PullResponse {
             underlay: Some(value),
             tunnel: None,
-        }
-    }
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
-)]
-pub struct PathVector {
-    pub destination: Ipv6Net,
-    pub path: Vec<String>,
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
-)]
-pub struct PathVectorV2 {
-    pub destination: Ipv6Net,
-    pub path: Vec<String>,
-}
-
-impl From<PathVectorV2> for PathVector {
-    fn from(value: PathVectorV2) -> Self {
-        PathVector {
-            destination: value.destination,
-            path: value.path,
-        }
-    }
-}
-
-impl From<PathVector> for PathVectorV2 {
-    fn from(value: PathVector) -> Self {
-        PathVectorV2 {
-            destination: value.destination,
-            path: value.path,
         }
     }
 }

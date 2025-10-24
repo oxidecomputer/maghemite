@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
-use ddm::exchange::PathVector;
+use ddm_types::exchange::PathVector;
 use oxnet::Ipv6Net;
 use serde::Deserialize;
 use std::collections::HashMap;

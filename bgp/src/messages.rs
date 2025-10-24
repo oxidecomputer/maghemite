@@ -5,7 +5,7 @@
 use crate::error::Error;
 use nom::{
     bytes::complete::{tag, take},
-    number::complete::{be_u16, be_u32, be_u8, u8 as parse_u8},
+    number::complete::{be_u8, be_u16, be_u32, u8 as parse_u8},
 };
 use num_enum::FromPrimitive;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -839,9 +839,7 @@ impl UpdateMessage {
 
     pub fn add_community(&mut self, community: Community) {
         for a in &mut self.path_attributes {
-            if let PathAttributeValue::Communities(ref mut communities) =
-                &mut a.value
-            {
+            if let PathAttributeValue::Communities(communities) = &mut a.value {
                 communities.push(community);
                 return;
             }
@@ -2344,7 +2342,7 @@ impl Capability {
         let code = match CapabilityCode::try_from(code) {
             Ok(code) => code,
             Err(_) => {
-                return Ok((&input[len..], Capability::Unassigned { code }))
+                return Ok((&input[len..], Capability::Unassigned { code }));
             }
         };
         let mut input = input;

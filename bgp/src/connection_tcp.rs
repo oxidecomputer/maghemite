@@ -6,7 +6,7 @@ use crate::{
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionCreator,
-        ConnectionId, MAX_MD5SIG_KEYLEN,
+        ConnectionId,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -18,7 +18,6 @@ use crate::{
         ConnectionEvent, FsmEvent, SessionEndpoint, SessionEvent, SessionInfo,
     },
 };
-use libc::{c_int, sockaddr_storage};
 use mg_common::lock;
 use slog::Logger;
 use std::{
@@ -27,15 +26,19 @@ use std::{
     io::Write,
     net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::atomic::AtomicBool,
-    sync::{mpsc::Sender, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc::Sender},
     thread::spawn,
     time::Duration,
 };
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
+#[cfg(target_os = "illumos")]
+use itertools::Itertools;
 #[cfg(target_os = "linux")]
-use libc::{IP_MINTTL, TCP_MD5SIG};
+use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
+#[cfg(any(target_os = "linux", target_os = "illumos"))]
+use libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_int, c_void};
 #[cfg(target_os = "illumos")]
 use {
     itertools::Itertools,
@@ -43,7 +46,7 @@ use {
 };
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
 use {
-    libc::{c_void, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP},
+    libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_void},
     std::os::fd::AsRawFd,
 };
 
@@ -350,17 +353,17 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
             };
 
             // Apply TTL if specified
-            if let Some(ttl) = config.min_ttl {
-                if let Err(e) = apply_min_ttl(&new_conn, ttl, peer) {
-                    connection_log_lite!(log,
-                        warn,
-                        "failed to apply min TTL for {peer}: {e}";
-                        "creator" => ConnectionCreator::Connector.as_str(),
-                        "peer" => format!("{peer}"),
-                        "error" => format!("{e}")
-                    );
-                    return;
-                }
+            if let Some(ttl) = config.min_ttl
+                && let Err(e) = apply_min_ttl(&new_conn, ttl, peer)
+            {
+                connection_log_lite!(log,
+                    warn,
+                    "failed to apply min TTL for {peer}: {e}";
+                    "creator" => ConnectionCreator::Connector.as_str(),
+                    "peer" => format!("{peer}"),
+                    "error" => format!("{e}")
+                );
+                return;
             }
 
             // Determine the actual source address
@@ -674,20 +677,20 @@ impl BgpConnectionTcp {
         creator: ConnectionCreator,
         conn_id: ConnectionId,
     ) {
-        if !timeout.is_zero() {
-            if let Err(e) = conn.set_read_timeout(Some(timeout)) {
-                connection_log_lite!(log,
-                    error,
-                    "failed to set read timeout in recv loop for {peer} (conn_id: {}): {e}",
-                    conn_id.short();
-                    "creator" => creator.as_str(),
-                    "connection" => format!("{conn:?}"),
-                    "connection_peer" => format!("{peer}"),
-                    "connection_id" => conn_id.short(),
-                    "error" => format!("{e}")
-                );
-                return;
-            }
+        if !timeout.is_zero()
+            && let Err(e) = conn.set_read_timeout(Some(timeout))
+        {
+            connection_log_lite!(log,
+                error,
+                "failed to set read timeout in recv loop for {peer} (conn_id: {}): {e}",
+                conn_id.short();
+                "creator" => creator.as_str(),
+                "connection" => format!("{conn:?}"),
+                "connection_peer" => format!("{peer}"),
+                "connection_id" => conn_id.short(),
+                "error" => format!("{e}")
+            );
+            return;
         }
 
         let l = log.clone();
@@ -771,10 +774,7 @@ impl BgpConnectionTcp {
         let mut i = 0;
         loop {
             if dropped.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "shutting down",
-                ));
+                return Err(std::io::Error::other("shutting down"));
             }
             let n = match stream.read(&mut buf[i..]) {
                 Ok(n) => Ok(n),
@@ -856,29 +856,22 @@ impl BgpConnectionTcp {
                             "error" => format!("{e}")
                         );
                     }
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "open message error",
-                    ));
+                    return Err(std::io::Error::other("open message error"));
                 }
             },
             MessageType::Update => match UpdateMessage::from_wire(&msgbuf) {
                 Ok(m) => m.into(),
                 Err(_) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "update message error",
-                    ))
+                    return Err(std::io::Error::other("update message error"));
                 }
             },
             MessageType::Notification => {
                 match NotificationMessage::from_wire(&msgbuf) {
                     Ok(m) => m.into(),
                     Err(_) => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
+                        return Err(std::io::Error::other(
                             "notification message error",
-                        ))
+                        ));
                     }
                 }
             }
@@ -887,10 +880,9 @@ impl BgpConnectionTcp {
                 match RouteRefreshMessage::from_wire(&msgbuf) {
                     Ok(m) => m.into(),
                     Err(_) => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
+                        return Err(std::io::Error::other(
                             "route refresh message error",
-                        ))
+                        ));
                     }
                 }
             }
@@ -1054,12 +1046,14 @@ impl BgpConnectionTcp {
         let log = self.log.clone();
         let sas = self.sas.clone();
         let conn = self.conn();
-        spawn(move || loop {
-            sleep(PFKEY_KEEPALIVE);
-            if dropped.load(std::sync::atomic::Ordering::Relaxed) {
-                break;
+        spawn(move || {
+            loop {
+                sleep(PFKEY_KEEPALIVE);
+                if dropped.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                Self::do_sa_keepalive(&sas, &log, conn);
             }
-            Self::do_sa_keepalive(&sas, &log, conn);
         });
     }
 
@@ -1149,6 +1143,7 @@ fn set_md5_sig(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 #[repr(C)]
 struct TcpMd5Sig {
     tcpm_addr: sockaddr_storage,
@@ -1159,6 +1154,7 @@ struct TcpMd5Sig {
     tcpm_key: [u8; MAX_MD5SIG_KEYLEN],
 }
 
+#[cfg(target_os = "linux")]
 impl Default for TcpMd5Sig {
     fn default() -> Self {
         unsafe { std::mem::zeroed() }

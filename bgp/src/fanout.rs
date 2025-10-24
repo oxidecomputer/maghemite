@@ -63,20 +63,19 @@ impl<Cnx: BgpConnection> Fanout<Cnx> {
 
 impl<Cnx: BgpConnection> Egress<Cnx> {
     fn send(&self, update: &UpdateMessage) {
-        if let Some(tx) = self.event_tx.as_ref() {
-            if let Err(e) =
+        if let Some(tx) = self.event_tx.as_ref()
+            && let Err(e) =
                 tx.send(FsmEvent::Admin(AdminEvent::Announce(update.clone())))
-            {
-                slog::error!(self.log,
-                    "failed to send update to egress fanout: {e}";
-                    "component" => COMPONENT_BGP,
-                    "module" => MOD_NEIGHBOR,
-                    "unit" => UNIT_FANOUT,
-                    "message" => "update",
-                    "message_contents" => format!("{update}"),
-                    "error" => format!("{e}")
-                );
-            }
+        {
+            slog::error!(self.log,
+                "failed to send update to egress fanout: {e}";
+                "component" => COMPONENT_BGP,
+                "module" => MOD_NEIGHBOR,
+                "unit" => UNIT_FANOUT,
+                "message" => "update",
+                "message_contents" => format!("{update}"),
+                "error" => format!("{e}")
+            );
         }
     }
 }

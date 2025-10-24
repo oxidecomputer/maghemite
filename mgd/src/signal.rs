@@ -7,7 +7,7 @@ use crate::log::sig_log;
 use crate::smf::smf_refresh;
 use slog::Logger;
 use std::sync::Arc;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::Receiver;
 
 const UNIT_SIG: &str = "signal";

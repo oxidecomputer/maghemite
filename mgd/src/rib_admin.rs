@@ -2,46 +2,18 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{admin::HandlerContext, register};
+use crate::admin::HandlerContext;
 use dropshot::{
-    endpoint, ApiDescription, HttpError, HttpResponseOk, Query, RequestContext,
+    HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Query,
+    RequestContext, TypedBody,
 };
-use rdb::{
-    types::{AddressFamily, ProtocolFilter},
-    Path, Prefix,
+use mg_api::{
+    BestpathFanoutRequest, BestpathFanoutResponse, Rib, RibQuery,
+    filter_rib_by_protocol,
 };
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::sync::Arc;
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct RibQuery {
-    /// Filter by address family
-    #[serde(default)]
-    pub address_family: AddressFamily,
-    /// Filter by protocol (optional)
-    pub protocol: Option<ProtocolFilter>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct Rib(BTreeMap<String, BTreeSet<Path>>);
-
-impl From<rdb::db::Rib> for Rib {
-    fn from(value: rdb::db::Rib) -> Self {
-        Rib(value.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
-    }
-}
-
-pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
-    register!(api, get_imported);
-    register!(api, get_selected);
-}
-
-#[endpoint { method = GET, path = "/rib/status/imported" }]
-pub async fn get_imported(
+pub async fn get_rib_imported(
     ctx: RequestContext<Arc<HandlerContext>>,
     query: Query<RibQuery>,
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
@@ -52,8 +24,7 @@ pub async fn get_imported(
     Ok(HttpResponseOk(filtered.into()))
 }
 
-#[endpoint { method = GET, path = "/rib/status/selected" }]
-pub async fn get_selected(
+pub async fn get_rib_selected(
     ctx: RequestContext<Arc<HandlerContext>>,
     query: Query<RibQuery>,
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
@@ -64,30 +35,28 @@ pub async fn get_selected(
     Ok(HttpResponseOk(filtered.into()))
 }
 
-fn filter_rib_by_protocol(
-    rib: BTreeMap<Prefix, BTreeSet<Path>>,
-    protocol_filter: Option<ProtocolFilter>,
-) -> BTreeMap<Prefix, BTreeSet<Path>> {
-    match protocol_filter {
-        None => rib,
-        Some(filter) => {
-            let mut filtered = BTreeMap::new();
+pub async fn read_rib_bestpath_fanout(
+    ctx: RequestContext<Arc<HandlerContext>>,
+) -> Result<HttpResponseOk<BestpathFanoutResponse>, HttpError> {
+    let ctx = ctx.context();
+    let fanout = ctx
+        .db
+        .get_bestpath_fanout()
+        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
 
-            for (prefix, paths) in rib {
-                let filtered_paths: BTreeSet<Path> = paths
-                    .into_iter()
-                    .filter(|path| match filter {
-                        ProtocolFilter::Bgp => path.bgp.is_some(),
-                        ProtocolFilter::Static => path.bgp.is_none(),
-                    })
-                    .collect();
+    Ok(HttpResponseOk(BestpathFanoutResponse { fanout }))
+}
 
-                if !filtered_paths.is_empty() {
-                    filtered.insert(prefix, filtered_paths);
-                }
-            }
+pub async fn update_rib_bestpath_fanout(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<BestpathFanoutRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let ctx = ctx.context();
+    let rq = request.into_inner();
 
-            filtered
-        }
-    }
+    ctx.db
+        .set_bestpath_fanout(rq.fanout)
+        .map_err(|e| HttpError::for_internal_error(format!("{e}")))?;
+
+    Ok(HttpResponseUpdatedNoContent())
 }

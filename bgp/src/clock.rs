@@ -5,12 +5,12 @@
 use crate::connection::{BgpConnection, ConnectionId};
 use crate::session::{ConnectionEvent, FsmEvent, SessionEvent};
 use mg_common::lock;
-use slog::{error, Logger};
+use slog::{Logger, error};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::thread::{sleep, spawn, JoinHandle};
+use std::thread::{JoinHandle, sleep, spawn};
 use std::time::Duration;
 
 const UNIT_TIMER: &str = "timer";
@@ -249,31 +249,33 @@ impl SessionClock {
         shutdown: Arc<AtomicBool>,
         log: Logger,
     ) -> JoinHandle<()> {
-        spawn(move || loop {
-            if shutdown.load(Ordering::Relaxed) {
-                break;
+        spawn(move || {
+            loop {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                sleep(resolution);
+
+                Self::step(
+                    resolution,
+                    &lock!(timers.connect_retry),
+                    FsmEvent::Session(SessionEvent::ConnectRetryTimerExpires),
+                    event_tx.clone(),
+                    &log,
+                );
+
+                Self::step(
+                    resolution,
+                    &lock!(timers.idle_hold),
+                    FsmEvent::Session(SessionEvent::IdleHoldTimerExpires),
+                    event_tx.clone(),
+                    &log,
+                );
             }
-            sleep(resolution);
-
-            Self::check_timer(
-                resolution,
-                &lock!(timers.connect_retry),
-                FsmEvent::Session(SessionEvent::ConnectRetryTimerExpires),
-                event_tx.clone(),
-                &log,
-            );
-
-            Self::check_timer(
-                resolution,
-                &lock!(timers.idle_hold),
-                FsmEvent::Session(SessionEvent::IdleHoldTimerExpires),
-                event_tx.clone(),
-                &log,
-            );
         })
     }
 
-    fn check_timer<Cnx: BgpConnection + 'static>(
+    fn step<Cnx: BgpConnection + 'static>(
         resolution: Duration,
         timer: &Timer,
         event: FsmEvent<Cnx>,
@@ -281,15 +283,13 @@ impl SessionClock {
         log: &Logger,
     ) {
         timer.tick(resolution);
-        if timer.expired() {
-            if let Err(e) = event_tx.send(event) {
-                error!(
-                    log,
-                    "{} send {:?} error: {e}",
-                    UNIT_TIMER,
-                    "session_timer_event"
-                );
-            }
+        if timer.expired()
+            && let Err(e) = event_tx.send(event)
+        {
+            error!(
+                log,
+                "{} send {:?} error: {e}", UNIT_TIMER, "session_timer_event"
+            );
         }
     }
 
@@ -379,45 +379,47 @@ impl ConnectionClock {
         shutdown: Arc<AtomicBool>,
         log: Logger,
     ) -> JoinHandle<()> {
-        spawn(move || loop {
-            if shutdown.load(Ordering::Relaxed) {
-                break;
+        spawn(move || {
+            loop {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                sleep(resolution);
+
+                Self::step(
+                    resolution,
+                    &lock!(timers.keepalive),
+                    FsmEvent::Connection(
+                        ConnectionEvent::KeepaliveTimerExpires(conn_id),
+                    ),
+                    event_tx.clone(),
+                    &log,
+                );
+
+                Self::step(
+                    resolution,
+                    &lock!(timers.hold),
+                    FsmEvent::Connection(ConnectionEvent::HoldTimerExpires(
+                        conn_id,
+                    )),
+                    event_tx.clone(),
+                    &log,
+                );
+
+                Self::step(
+                    resolution,
+                    &lock!(timers.delay_open),
+                    FsmEvent::Connection(
+                        ConnectionEvent::DelayOpenTimerExpires(conn_id),
+                    ),
+                    event_tx.clone(),
+                    &log,
+                );
             }
-            sleep(resolution);
-
-            Self::check_timer(
-                resolution,
-                &lock!(timers.keepalive),
-                FsmEvent::Connection(ConnectionEvent::KeepaliveTimerExpires(
-                    conn_id,
-                )),
-                event_tx.clone(),
-                &log,
-            );
-
-            Self::check_timer(
-                resolution,
-                &lock!(timers.hold),
-                FsmEvent::Connection(ConnectionEvent::HoldTimerExpires(
-                    conn_id,
-                )),
-                event_tx.clone(),
-                &log,
-            );
-
-            Self::check_timer(
-                resolution,
-                &lock!(timers.delay_open),
-                FsmEvent::Connection(ConnectionEvent::DelayOpenTimerExpires(
-                    conn_id,
-                )),
-                event_tx.clone(),
-                &log,
-            );
         })
     }
 
-    fn check_timer<Cnx: BgpConnection + 'static>(
+    fn step<Cnx: BgpConnection + 'static>(
         resolution: Duration,
         timer: &Timer,
         event: FsmEvent<Cnx>,
@@ -425,15 +427,13 @@ impl ConnectionClock {
         log: &Logger,
     ) {
         timer.tick(resolution);
-        if timer.expired() {
-            if let Err(e) = event_tx.send(event) {
-                error!(
-                    log,
-                    "{} send {:?} error: {e}",
-                    UNIT_TIMER,
-                    "connection_timer_event"
-                );
-            }
+        if timer.expired()
+            && let Err(e) = event_tx.send(event)
+        {
+            error!(
+                log,
+                "{} send {:?} error: {e}", UNIT_TIMER, "connection_timer_event"
+            );
         }
     }
 

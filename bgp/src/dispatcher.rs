@@ -3,10 +3,10 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{
+    IO_TIMEOUT,
     connection::{BgpConnection, BgpListener},
     log::dispatcher_log,
     session::{FsmEvent, SessionEndpoint, SessionEvent},
-    IO_TIMEOUT,
 };
 use mg_common::lock;
 use slog::Logger;

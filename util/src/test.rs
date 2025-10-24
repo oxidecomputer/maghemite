@@ -6,13 +6,13 @@ use std::net::IpAddr;
 use std::net::Ipv6Addr;
 
 use anyhow::Result;
+use libnet::DropIp;
+use libnet::DropLink;
+use libnet::LinkFlags;
 use libnet::connect_simnet_peers;
 use libnet::create_simnet_link;
 use libnet::enable_v6_link_local;
 use libnet::get_ipaddr_info;
-use libnet::DropIp;
-use libnet::DropLink;
-use libnet::LinkFlags;
 use slog::Drain;
 use slog::Logger;
 

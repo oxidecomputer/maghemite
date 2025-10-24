@@ -1,10 +1,10 @@
 [package]
 name = "mg-package"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-omicron-zone-package = "0.12.1"
+omicron-zone-package = "0.12"
 anyhow.workspace = true
 tokio.workspace = true
 camino = "1.1"

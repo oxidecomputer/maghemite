@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 progenitor::generate_api!(
-    spec = "../openapi/mg-admin.json",
+    spec = "../openapi/mg-admin/mg-admin-latest.json",
     inner_type = slog::Logger,
     pre_hook = (|log: &slog::Logger, request: &reqwest::Request| {
         slog::trace!(log, "client request";
@@ -26,10 +26,10 @@ progenitor::generate_api!(
 );
 
 use colored::*;
-use rdb::types::{AddressFamily, ProtocolFilter};
 use rdb::Prefix;
+use rdb::types::{AddressFamily, ProtocolFilter};
 use std::collections::BTreeMap;
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use std::net::Ipv4Addr;
 use tabwriter::TabWriter;
 use types::{Path, Rib};

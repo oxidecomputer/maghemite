@@ -1317,12 +1317,12 @@ impl Db {
             let targets: Vec<Path> = path
                 .iter()
                 .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref() {
-                        if bgp.peer == peer {
-                            let mut marked = p.clone();
-                            marked.bgp = Some(bgp.as_stale());
-                            return Some(marked);
-                        }
+                    if let Some(bgp) = p.bgp.as_ref()
+                        && bgp.peer == peer
+                    {
+                        let mut marked = p.clone();
+                        marked.bgp = Some(bgp.as_stale());
+                        return Some(marked);
                     }
                     None
                 })
@@ -1337,12 +1337,12 @@ impl Db {
             let targets: Vec<Path> = path
                 .iter()
                 .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref() {
-                        if bgp.peer == peer {
-                            let mut marked = p.clone();
-                            marked.bgp = Some(bgp.as_stale());
-                            return Some(marked);
-                        }
+                    if let Some(bgp) = p.bgp.as_ref()
+                        && bgp.peer == peer
+                    {
+                        let mut marked = p.clone();
+                        marked.bgp = Some(bgp.as_stale());
+                        return Some(marked);
                     }
                     None
                 })
@@ -1373,9 +1373,11 @@ impl Reaper {
 
     fn run(self: &Arc<Self>) {
         let s = self.clone();
-        spawn(move || loop {
-            s.reap();
-            sleep(*lock!(s.interval));
+        spawn(move || {
+            loop {
+                s.reap();
+                sleep(*lock!(s.interval));
+            }
         });
     }
 
@@ -1405,8 +1407,8 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        db::Db, AddressFamily, Path, Prefix, Prefix4, Prefix6, StaticRouteKey,
-        DEFAULT_RIB_PRIORITY_STATIC,
+        AddressFamily, DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4,
+        Prefix6, StaticRouteKey, db::Db,
     };
     use mg_common::log::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -1453,8 +1455,8 @@ mod test {
     fn test_rib() {
         use crate::StaticRouteKey;
         use crate::{
-            db::Db, AddressFamily, BgpPathProperties, Path, Prefix, Prefix4,
-            DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC,
+            AddressFamily, BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
+            DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4, db::Db,
         };
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());

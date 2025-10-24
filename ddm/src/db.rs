@@ -2,13 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use ddm_types::db::{PeerInfo, TunnelRoute};
 use mg_common::lock;
 use mg_common::net::TunnelOrigin;
 use oxnet::{IpNet, Ipv6Net};
-use schemars::{JsonSchema, JsonSchema_repr};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_repr::{Deserialize_repr, Serialize_repr};
-use slog::{error, Logger};
+use slog::{Logger, error};
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv6Addr;
 use std::sync::{Arc, Mutex};
@@ -280,75 +280,6 @@ impl Db {
 }
 
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema,
-)]
-pub enum PeerStatus {
-    NoContact,
-    Active,
-    Expired,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
-pub struct PeerInfo {
-    pub status: PeerStatus,
-    pub addr: Ipv6Addr,
-    pub host: String,
-    pub kind: RouterKind,
-}
-
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Clone,
-    Copy,
-    Serialize_repr,
-    Deserialize_repr,
-    JsonSchema_repr,
-)]
-#[repr(u8)]
-pub enum RouterKind {
-    Server,
-    Transit,
-}
-
-impl std::fmt::Display for RouterKind {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> Result<(), std::fmt::Error> {
-        match self {
-            Self::Server => write!(f, "server"),
-            Self::Transit => write!(f, "transit"),
-        }
-    }
-}
-
-impl std::str::FromStr for RouterKind {
-    type Err = &'static str;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "server" => Ok(Self::Server),
-            "transit" => Ok(Self::Transit),
-            _ => Err(r#"Router kind must be "server" or "transit""#),
-        }
-    }
-}
-
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
-pub struct TunnelRoute {
-    pub origin: TunnelOrigin,
-
-    // The nexthop is only used to associate the route with a peer allowing us
-    // to remove the route if the peer expires. It does not influence what goes
-    // into the underlaying underlay routing platform. Tunnel routes only
-    // influence the state of the underlying encapsulation service.
-    pub nexthop: Ipv6Addr,
-}
-
-#[derive(
     Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
 pub struct Route {
@@ -473,17 +404,6 @@ impl DbKey for Ipv6Net {
                 v[16],
             )
             .map_err(|e| Error::DbKey(e.to_string()))
-        }
-    }
-}
-
-impl From<crate::db::TunnelRoute> for TunnelOrigin {
-    fn from(x: crate::db::TunnelRoute) -> Self {
-        Self {
-            overlay_prefix: x.origin.overlay_prefix,
-            boundary_addr: x.origin.boundary_addr,
-            vni: x.origin.vni,
-            metric: x.origin.metric,
         }
     }
 }

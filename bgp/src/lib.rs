@@ -11,6 +11,7 @@ pub mod error;
 pub mod fanout;
 pub mod log;
 pub mod messages;
+pub mod params;
 pub mod policy;
 pub mod router;
 pub mod session;

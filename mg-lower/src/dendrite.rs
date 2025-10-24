@@ -2,23 +2,22 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{log::dpd_log, Error, MG_LOWER_TAG};
-use dpd_client::types;
-use dpd_client::types::LinkState;
-use dpd_client::Client as DpdClient;
-use libnet::get_route;
-use oxnet::IpNet;
-use oxnet::Ipv4Net;
-use oxnet::Ipv6Net;
-use rdb::Path;
-use rdb::Prefix;
+use crate::{
+    Error, MG_LOWER_TAG,
+    log::dpd_log,
+    platform::{Dpd, SwitchZone},
+};
+use dpd_client::{Client as DpdClient, types, types::LinkState};
+use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+use rdb::{Path, Prefix};
 use slog::Logger;
-use std::collections::BTreeSet;
-use std::collections::HashSet;
-use std::hash::Hash;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    collections::{BTreeSet, HashSet},
+    hash::Hash,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    sync::Arc,
+    time::Duration,
+};
 
 const TFPORT_QSFP_DEVICE_PREFIX: &str = "tfportqsfp";
 const UNIT_DPD: &str = "dpd";
@@ -55,10 +54,11 @@ impl RouteHash {
     }
 
     pub fn for_prefix_path(
+        sw: &impl SwitchZone,
         prefix: Prefix,
         path: Path,
     ) -> Result<RouteHash, Error> {
-        let (port_id, link_id) = get_port_and_link(path.nexthop)?;
+        let (port_id, link_id) = get_port_and_link(sw, path.nexthop)?;
 
         let rh = RouteHash {
             cidr: match prefix {
@@ -77,7 +77,7 @@ impl RouteHash {
 
 pub(crate) fn ensure_tep_addr(
     tep: Ipv6Addr,
-    dpd: &DpdClient,
+    dpd: &impl Dpd,
     rt: Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) {
@@ -87,21 +87,20 @@ pub(crate) fn ensure_tep_addr(
             addr: tep,
         })
         .await
-    }) {
-        if e.status() != Some(reqwest::StatusCode::CONFLICT) {
-            dpd_log!(
-                log,
-                warn,
-                "failed to ensure TEP address {tep} on ASIC: {e}";
-                "error" => format!("{e}"),
-                "prefix" => format!("{tep}")
-            );
-        }
+    }) && e.status() != Some(reqwest::StatusCode::CONFLICT)
+    {
+        dpd_log!(
+            log,
+            warn,
+            "failed to ensure TEP address {tep} on ASIC: {e}";
+            "error" => format!("{e}"),
+            "prefix" => format!("{tep}")
+        );
     }
 }
 
 pub(crate) fn link_is_up(
-    dpd: &DpdClient,
+    dpd: &impl Dpd,
     port_id: &types::PortId,
     link_id: &types::LinkId,
     rt: &Arc<tokio::runtime::Handle>,
@@ -113,7 +112,7 @@ pub(crate) fn link_is_up(
 }
 
 fn get_local_addrs(
-    dpd: &DpdClient,
+    dpd: &impl Dpd,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<(BTreeSet<Ipv4Addr>, BTreeSet<Ipv6Addr>), Error> {
     let links = rt
@@ -150,7 +149,7 @@ fn get_local_addrs(
 pub(crate) fn update_dendrite<'a, I>(
     to_add: I,
     to_del: I,
-    dpd: &DpdClient,
+    dpd: &impl Dpd,
     rt: Arc<tokio::runtime::Handle>,
     log: &Logger,
 ) -> Result<(), Error>
@@ -160,13 +159,12 @@ where
     let (local_v4_addrs, local_v6_addrs) = get_local_addrs(dpd, &rt)?;
 
     for r in to_add {
-        let cidr = r.cidr;
-        let tag = dpd.inner().tag.clone();
+        let tag = dpd.tag();
         let port_id = r.port_id.clone();
         let link_id = r.link_id;
         let vlan_id = r.vlan_id;
 
-        let target = match (r.cidr, r.nexthop) {
+        match (r.cidr, r.nexthop) {
             (IpNet::V4(c), IpAddr::V4(tgt_ip)) => {
                 if c.width() == 32 && local_v4_addrs.contains(&c.prefix()) {
                     dpd_log!(log,
@@ -185,14 +183,29 @@ where
                     continue;
                 }
 
-                types::Ipv4Route {
+                let target = types::Ipv4Route {
                     tag,
                     port_id,
                     link_id,
                     tgt_ip,
                     vlan_id,
+                };
+
+                let update = types::Ipv4RouteUpdate {
+                    cidr: c,
+                    target,
+                    replace: false,
+                };
+                if let Err(e) =
+                    rt.block_on(async { dpd.route_ipv4_add(&update).await })
+                {
+                    dpd_log!(log,
+                        error,
+                        "failed to create route {r:?} {e}";
+                        "error" => format!("{e}")
+                    );
+                    return Err(e.into());
                 }
-                .into()
             }
             (IpNet::V6(c), IpAddr::V6(tgt_ip)) => {
                 if c.width() == 128 && local_v6_addrs.contains(&c.prefix()) {
@@ -212,14 +225,29 @@ where
                     continue;
                 }
 
-                types::Ipv6Route {
+                let target = types::Ipv6Route {
                     tag,
                     port_id,
                     link_id,
                     tgt_ip,
                     vlan_id,
+                };
+
+                let update = types::Ipv6RouteUpdate {
+                    cidr: c,
+                    target,
+                    replace: false,
+                };
+                if let Err(e) =
+                    rt.block_on(async { dpd.route_ipv6_add(&update).await })
+                {
+                    dpd_log!(log,
+                        error,
+                        "failed to create route {r:?} {e}";
+                        "error" => format!("{e}")
+                    );
+                    return Err(e.into());
                 }
-                .into()
             }
             _ => {
                 // XXX: re-evaluate for RFC 8950 (BGP unnumbered) support
@@ -232,18 +260,6 @@ where
                 continue;
             }
         };
-
-        let add = types::RouteAdd { cidr, target };
-        if let Err(e) = rt.block_on(async { dpd.route_ipv4_add(&add).await }) {
-            dpd_log!(log,
-                error,
-                "failed to create route in ASIC {r:?} via {}: {e}", r.nexthop;
-                "error" => format!("{e}"),
-                "prefix" => format!("r:?"),
-                "nexthop" => format!("{}", r.nexthop)
-            );
-            Err(e)?;
-        }
     }
     for r in to_del {
         let port_id = r.port_id.clone();
@@ -339,10 +355,11 @@ fn test_tfport_parser() {
 }
 
 fn get_port_and_link(
+    sw: &impl SwitchZone,
     nexthop: IpAddr,
 ) -> Result<(types::PortId, types::LinkId), Error> {
     let prefix = IpNet::host_net(nexthop);
-    let sys_route = get_route(prefix, Some(Duration::from_secs(1)))?;
+    let sys_route = sw.get_route(prefix, Some(Duration::from_secs(1)))?;
 
     let ifname = match sys_route.ifx {
         Some(name) => name,
@@ -370,7 +387,7 @@ fn get_port_and_link(
 }
 
 pub(crate) fn get_routes_for_prefix(
-    dpd: &DpdClient,
+    dpd: &impl Dpd,
     prefix: &Prefix,
     rt: Arc<tokio::runtime::Handle>,
     log: Logger,

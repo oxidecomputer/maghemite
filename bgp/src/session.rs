@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{
+    IO_TIMEOUT,
     clock::SessionClock,
     config::PeerConfig,
     connection::{
@@ -19,7 +20,6 @@ use crate::{
     },
     policy::{CheckerResult, ShaperResult},
     router::Router,
-    IO_TIMEOUT,
 };
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
@@ -33,9 +33,9 @@ use std::{
     fmt::{self, Display, Formatter},
     net::SocketAddr,
     sync::{
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::RecvTimeoutError,
-        Arc, Mutex, RwLock,
     },
     time::{Duration, Instant},
 };
@@ -1207,10 +1207,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // If this was the primary connection, either promote another connection
         // or reset it to None
-        if let Some(primary_id) = self.get_primary_conn_id() {
-            if primary_id == *conn_id {
-                self.set_primary_conn(None);
-            }
+        if let Some(primary_id) = self.get_primary_conn_id()
+            && primary_id == *conn_id
+        {
+            self.set_primary_conn(None);
         }
     }
 
@@ -1228,8 +1228,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     pub fn get_primary_conn_id(&self) -> Option<ConnectionId> {
         if let Some(ref primary) = *lock!(self.primary) {
             match primary {
-                ConnectionKind::Partial(ref p) => Some(*p.id()),
-                ConnectionKind::Full(ref pc) => Some(*pc.conn.id()),
+                ConnectionKind::Partial(p) => Some(*p.id()),
+                ConnectionKind::Full(pc) => Some(*pc.conn.id()),
             }
         } else {
             None
@@ -2125,10 +2125,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
 
                         ConnectionEvent::DelayOpenTimerExpires(ref conn_id) => {
-                            if let Some(conn) = self.get_conn(conn_id) {
-                                if !conn_timer!(conn, delay_open).enabled() {
-                                    continue;
-                                }
+                            if let Some(conn) = self.get_conn(conn_id)
+                                && !conn_timer!(conn, delay_open).enabled()
+                            {
+                                continue;
                             }
                             session_log_lite!(self, warn,
                                 "rx connection fsm event {} (conn_id: {}), but not allowed in this state. ignoring..",
@@ -5197,21 +5197,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Handle an open message
     fn handle_open(&self, conn: &Cnx, om: &OpenMessage) -> Result<(), Error> {
         let remote_asn = om.asn();
-        if let Some(expected_remote_asn) = lock!(self.session).remote_asn {
-            if remote_asn != expected_remote_asn {
-                self.send_notification(
-                    conn,
-                    ErrorCode::Open,
-                    ErrorSubcode::Open(
-                        crate::messages::OpenErrorSubcode::BadPeerAS,
-                    ),
-                );
-                self.unregister_conn(conn.id());
-                return Err(Error::UnexpectedAsn(ExpectationMismatch {
-                    expected: expected_remote_asn,
-                    got: remote_asn,
-                }));
-            }
+        if let Some(expected_remote_asn) = lock!(self.session).remote_asn
+            && remote_asn != expected_remote_asn
+        {
+            self.send_notification(
+                conn,
+                ErrorCode::Open,
+                ErrorSubcode::Open(
+                    crate::messages::OpenErrorSubcode::BadPeerAS,
+                ),
+            );
+            self.unregister_conn(conn.id());
+            return Err(Error::UnexpectedAsn(ExpectationMismatch {
+                expected: expected_remote_asn,
+                got: remote_asn,
+            }));
         }
         if let Some(checker) = read_lock!(self.router.policy.checker).as_ref() {
             match crate::policy::check_incoming_open(
@@ -5559,15 +5559,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .push(PathAttributeValue::MultiExitDisc(med).into());
         }
 
-        if let Some(ibgp) = self.is_ibgp() {
-            if ibgp {
-                update.path_attributes.push(
-                    PathAttributeValue::LocalPref(
-                        lock!(self.session).local_pref.unwrap_or(0),
-                    )
-                    .into(),
-                );
-            }
+        if let Some(ibgp) = self.is_ibgp()
+            && ibgp
+        {
+            update.path_attributes.push(
+                PathAttributeValue::LocalPref(
+                    lock!(self.session).local_pref.unwrap_or(0),
+                )
+                .into(),
+            );
         }
 
         let cs: Vec<Community> = lock!(self.session)
@@ -6072,10 +6072,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn apply_static_update_policy(&self, update: &mut UpdateMessage) {
-        if let Some(ebgp) = self.is_ebgp() {
-            if ebgp {
-                update.clear_local_pref()
-            }
+        if let Some(ebgp) = self.is_ebgp()
+            && ebgp
+        {
+            update.clear_local_pref()
         }
         if let Some(pref) = lock!(self.session).local_pref {
             update.set_local_pref(pref);
@@ -6134,10 +6134,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             None => return Err(Error::MissingNexthop),
         };
         for prefix in &update.nlri {
-            if let rdb::Prefix::V4(p4) = prefix {
-                if p4.length == 32 && p4.value == nexthop {
-                    return Err(Error::NexthopSelf(p4.value.into()));
-                }
+            if let rdb::Prefix::V4(p4) = prefix
+                && p4.length == 32
+                && p4.value == nexthop
+            {
+                return Err(Error::NexthopSelf(p4.value.into()));
             }
         }
         Ok(())

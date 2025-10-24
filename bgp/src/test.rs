@@ -21,7 +21,7 @@ use rdb::{Asn, Prefix};
 use std::{
     collections::BTreeMap,
     net::{IpAddr, SocketAddr},
-    sync::{mpsc::channel, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc::channel},
     thread::spawn,
 };
 

@@ -5,12 +5,16 @@
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
-use mg_admin_client::types::NeighborResetOp as MgdNeighborResetOp;
-use mg_admin_client::types::{self, ImportExportPolicy, NeighborResetRequest};
-use mg_admin_client::Client;
+use mg_admin_client::{
+    Client,
+    types::{
+        self, ImportExportPolicy, NeighborResetOp as MgdNeighborResetOp,
+        NeighborResetRequest,
+    },
+};
 use rdb::types::{PolicyAction, Prefix, Prefix4, Prefix6};
 use std::fs::read_to_string;
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use tabwriter::TabWriter;

@@ -2,98 +2,18 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{admin::HandlerContext, register};
+use crate::admin::HandlerContext;
 use dropshot::{
-    endpoint, ApiDescription, HttpError, HttpResponseDeleted, HttpResponseOk,
+    HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use rdb::{AddressFamily, Path, Prefix4, Prefix6, StaticRouteKey};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    net::{Ipv4Addr, Ipv6Addr},
-    sync::Arc,
+use mg_api::{
+    AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
+    DeleteStaticRoute6Request, GetRibResult,
 };
+use rdb::{AddressFamily, StaticRouteKey};
+use std::{collections::BTreeMap, sync::Arc};
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct AddStaticRoute4Request {
-    routes: StaticRoute4List,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DeleteStaticRoute4Request {
-    routes: StaticRoute4List,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct StaticRoute4List {
-    list: Vec<StaticRoute4>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct StaticRoute4 {
-    pub prefix: Prefix4,
-    pub nexthop: Ipv4Addr,
-    pub vlan_id: Option<u16>,
-    pub rib_priority: u8,
-}
-
-impl From<StaticRoute4> for StaticRouteKey {
-    fn from(val: StaticRoute4) -> Self {
-        StaticRouteKey {
-            prefix: Prefix4::new(val.prefix.value, val.prefix.length).into(),
-            nexthop: val.nexthop.into(),
-            vlan_id: val.vlan_id,
-            rib_priority: val.rib_priority,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct AddStaticRoute6Request {
-    routes: StaticRoute6List,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct DeleteStaticRoute6Request {
-    routes: StaticRoute6List,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct StaticRoute6List {
-    list: Vec<StaticRoute6>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct StaticRoute6 {
-    pub prefix: Prefix6,
-    pub nexthop: Ipv6Addr,
-    pub vlan_id: Option<u16>,
-    pub rib_priority: u8,
-}
-
-impl From<StaticRoute6> for StaticRouteKey {
-    fn from(val: StaticRoute6) -> Self {
-        StaticRouteKey {
-            prefix: Prefix6::new(val.prefix.value, val.prefix.length).into(),
-            nexthop: val.nexthop.into(),
-            vlan_id: val.vlan_id,
-            rib_priority: val.rib_priority,
-        }
-    }
-}
-
-pub(crate) fn api_description(api: &mut ApiDescription<Arc<HandlerContext>>) {
-    register!(api, static_add_v4_route);
-    register!(api, static_remove_v4_route);
-    register!(api, static_list_v4_routes);
-    register!(api, static_add_v6_route);
-    register!(api, static_remove_v6_route);
-    register!(api, static_list_v6_routes);
-}
-
-#[endpoint { method = PUT, path = "/static/route4" }]
 pub async fn static_add_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddStaticRoute4Request>,
@@ -112,7 +32,6 @@ pub async fn static_add_v4_route(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-#[endpoint { method = DELETE, path = "/static/route4" }]
 pub async fn static_remove_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<DeleteStaticRoute4Request>,
@@ -131,9 +50,6 @@ pub async fn static_remove_v4_route(
     Ok(HttpResponseDeleted())
 }
 
-pub type GetRibResult = BTreeMap<String, BTreeSet<Path>>;
-
-#[endpoint { method = GET, path = "/static/route4" }]
 pub async fn static_list_v4_routes(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
@@ -153,7 +69,6 @@ pub async fn static_list_v4_routes(
     Ok(HttpResponseOk(static_rib))
 }
 
-#[endpoint { method = PUT, path = "/static/route6" }]
 pub async fn static_add_v6_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AddStaticRoute6Request>,
@@ -172,7 +87,6 @@ pub async fn static_add_v6_route(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-#[endpoint { method = DELETE, path = "/static/route6" }]
 pub async fn static_remove_v6_route(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<DeleteStaticRoute6Request>,
@@ -191,7 +105,6 @@ pub async fn static_remove_v6_route(
     Ok(HttpResponseDeleted())
 }
 
-#[endpoint { method = GET, path = "/static/route6" }]
 pub async fn static_list_v6_routes(
     ctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {

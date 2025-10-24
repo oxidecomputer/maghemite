@@ -24,9 +24,9 @@ use std::{
     collections::{BTreeMap, HashMap},
     net::{IpAddr, SocketAddr, ToSocketAddrs},
     sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc::{channel as mpsc_channel, Receiver, RecvTimeoutError, Sender},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{Receiver, RecvTimeoutError, Sender, channel as mpsc_channel},
     },
     thread::spawn,
     time::Duration,
@@ -388,48 +388,50 @@ impl BgpConnectionChannel {
         conn_id: ConnectionId,
         channel_id: u64,
     ) {
-        spawn(move || loop {
-            match rx.recv_timeout(timeout) {
-                Ok(msg) => {
-                    connection_log_lite!(log,
-                        debug,
-                        "recv {} msg from {peer} (conn_id: {}, channel_id: {})",
-                        msg.title(), conn_id.short(), channel_id;
-                        "creator" => creator.as_str(),
-                        "peer" => format!("{peer}"),
-                        "message" => msg.title(),
-                        "message_contents" => format!("{msg}"),
-                        "channel_id" => channel_id
-                    );
-                    if let Err(e) = event_tx.send(FsmEvent::Connection(
-                        ConnectionEvent::Message { msg, conn_id },
-                    )) {
+        spawn(move || {
+            loop {
+                match rx.recv_timeout(timeout) {
+                    Ok(msg) => {
                         connection_log_lite!(log,
-                            error,
-                            "error sending event to {peer}: {e}";
+                            debug,
+                            "recv {} msg from {peer} (conn_id: {}, channel_id: {})",
+                            msg.title(), conn_id.short(), channel_id;
                             "creator" => creator.as_str(),
                             "peer" => format!("{peer}"),
-                            "error" => format!("{e}"),
+                            "message" => msg.title(),
+                            "message_contents" => format!("{msg}"),
                             "channel_id" => channel_id
                         );
+                        if let Err(e) = event_tx.send(FsmEvent::Connection(
+                            ConnectionEvent::Message { msg, conn_id },
+                        )) {
+                            connection_log_lite!(log,
+                                error,
+                                "error sending event to {peer}: {e}";
+                                "creator" => creator.as_str(),
+                                "peer" => format!("{peer}"),
+                                "error" => format!("{e}"),
+                                "channel_id" => channel_id
+                            );
+                        }
                     }
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    // Normal timeout, continue waiting for messages
-                    continue;
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    // Peer closed connection, exit recv loop cleanly
-                    connection_log_lite!(log,
-                        debug,
-                        "peer {peer} disconnected (conn_id: {}, channel_id: {}), terminating recv loop",
-                        conn_id.short(), channel_id;
-                        "creator" => creator.as_str(),
-                        "peer" => format!("{peer}"),
-                        "connection_id" => conn_id.short(),
-                        "channel_id" => channel_id
-                    );
-                    break;
+                    Err(RecvTimeoutError::Timeout) => {
+                        // Normal timeout, continue waiting for messages
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        // Peer closed connection, exit recv loop cleanly
+                        connection_log_lite!(log,
+                            debug,
+                            "peer {peer} disconnected (conn_id: {}, channel_id: {}), terminating recv loop",
+                            conn_id.short(), channel_id;
+                            "creator" => creator.as_str(),
+                            "peer" => format!("{peer}"),
+                            "connection_id" => conn_id.short(),
+                            "channel_id" => channel_id
+                        );
+                        break;
+                    }
                 }
             }
         });

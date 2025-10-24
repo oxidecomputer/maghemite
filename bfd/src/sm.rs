@@ -3,14 +3,10 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{
-    bidi,
-    log::*,
-    packet,
-    packet::{Control, State as PacketState},
+    BfdPeerState, PeerInfo, SessionCounters, bidi, log::*, packet,
     util::update_peer_info,
-    BfdPeerState, PeerInfo, SessionCounters,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use mg_common::lock;
 use slog::Logger;
 use std::net::IpAddr;
@@ -135,46 +131,48 @@ impl StateMachine {
         let kill_switch = self.kill_switch.clone();
         let log = self.log.clone();
         let counters = self.counters.clone();
-        spawn(move || loop {
-            let prev = state.read().unwrap().state();
-            let (st, ep) = match state.read().unwrap().run(
-                endpoint,
-                local,
-                remote.clone(),
-                kill_switch.clone(),
-                db.clone(),
-                counters.clone(),
-            ) {
-                Ok(result) => result,
-                Err(_) => break,
-            };
-            *state.write().unwrap() = st;
-            endpoint = ep;
-            let new = state.read().unwrap().state();
+        spawn(move || {
+            loop {
+                let prev = state.read().unwrap().state();
+                let (st, ep) = match state.read().unwrap().run(
+                    endpoint,
+                    local,
+                    remote.clone(),
+                    kill_switch.clone(),
+                    db.clone(),
+                    counters.clone(),
+                ) {
+                    Ok(result) => result,
+                    Err(_) => break,
+                };
+                *state.write().unwrap() = st;
+                endpoint = ep;
+                let new = state.read().unwrap().state();
 
-            if kill_switch.load(Ordering::Relaxed) {
-                break;
-            }
-
-            if prev != new {
-                match new {
-                    BfdPeerState::AdminDown | BfdPeerState::Down => {
-                        counters
-                            .transition_to_down
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    BfdPeerState::Init => {
-                        counters
-                            .transition_to_init
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
-                    BfdPeerState::Up => {
-                        counters
-                            .transition_to_up
-                            .fetch_add(1, Ordering::Relaxed);
-                    }
+                if kill_switch.load(Ordering::Relaxed) {
+                    break;
                 }
-                sm_log!(log, info, "transition -> {:?}", new; prev, peer);
+
+                if prev != new {
+                    match new {
+                        BfdPeerState::AdminDown | BfdPeerState::Down => {
+                            counters
+                                .transition_to_down
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        BfdPeerState::Init => {
+                            counters
+                                .transition_to_init
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        BfdPeerState::Up => {
+                            counters
+                                .transition_to_up
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    sm_log!(log, info, "transition -> {:?}", new; prev, peer);
+                }
             }
         });
     }
@@ -198,50 +196,52 @@ impl StateMachine {
         // just copy it out of self for sending into the spawned thread. The
         // reason this is a dynamic method at all is to get runtime polymorphic
         // behavior over `State` trait implementors.
-        spawn(move || loop {
-            if stop.load(Ordering::Relaxed) {
-                break;
-            };
+        spawn(move || {
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                };
 
-            // Get what we need from peer info, holding the lock a briefly as
-            // possible.
-            let (_delay, demand_mode, your_discriminator) = {
-                let r = lock!(remote);
-                (
-                    DeferredDelay(r.required_min_rx),
-                    r.demand_mode,
-                    r.discriminator,
-                )
-            };
+                // Get what we need from peer info, holding the lock a briefly as
+                // possible.
+                let (_delay, demand_mode, your_discriminator) = {
+                    let r = lock!(remote);
+                    (
+                        DeferredDelay(r.required_min_rx),
+                        r.demand_mode,
+                        r.discriminator,
+                    )
+                };
 
-            // Unsolicited packets are not sent in demand mode.
-            //
-            // TODO we could probably just park this thread on a signal waiting
-            // to leave demand mode instead of continuing to iterate.
-            if demand_mode {
-                continue;
-            }
+                // Unsolicited packets are not sent in demand mode.
+                //
+                // TODO we could probably just park this thread on a signal waiting
+                // to leave demand mode instead of continuing to iterate.
+                if demand_mode {
+                    continue;
+                }
 
-            let mut pkt = packet::Control {
-                desired_min_tx: local.desired_min_tx.as_micros() as u32,
-                required_min_rx: local.required_min_rx.as_micros() as u32,
-                my_discriminator: local.discriminator,
-                your_discriminator,
-                ..Default::default()
-            };
+                let mut pkt = packet::Control {
+                    desired_min_tx: local.desired_min_tx.as_micros() as u32,
+                    required_min_rx: local.required_min_rx.as_micros() as u32,
+                    my_discriminator: local.discriminator,
+                    your_discriminator,
+                    ..Default::default()
+                };
 
-            let st = state.read().unwrap().state();
-            pkt.set_state(st);
+                let st = state.read().unwrap().state();
+                pkt.set_state(st);
 
-            if let Err(e) = sender.send((peer, pkt)) {
-                sm_log!(log, warn, "send error: {e}"; st, peer);
-                counters
-                    .control_packet_send_failures
-                    .fetch_add(1, Ordering::Relaxed);
-            } else {
-                counters
-                    .control_packets_sent
-                    .fetch_add(1, Ordering::Relaxed);
+                if let Err(e) = sender.send((peer, pkt)) {
+                    sm_log!(log, warn, "send error: {e}"; st, peer);
+                    counters
+                        .control_packet_send_failures
+                        .fetch_add(1, Ordering::Relaxed);
+                } else {
+                    counters
+                        .control_packets_sent
+                        .fetch_add(1, Ordering::Relaxed);
+                }
             }
         });
     }
@@ -271,7 +271,7 @@ impl Drop for DeferredDelay {
 }
 
 pub enum RecvResult {
-    MessageFrom((IpAddr, Control)),
+    MessageFrom((IpAddr, packet::Control)),
     TransitionTo(Box<dyn State>),
 }
 
@@ -352,27 +352,27 @@ pub(crate) trait State: Sync + Send {
                 );
 
                 match msg.state() {
-                    PacketState::Peer(BfdPeerState::AdminDown) => {
+                    packet::State::Peer(BfdPeerState::AdminDown) => {
                         counters
                             .admin_down_status_received
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    PacketState::Peer(BfdPeerState::Down) => {
+                    packet::State::Peer(BfdPeerState::Down) => {
                         counters
                             .down_status_received
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    PacketState::Peer(BfdPeerState::Init) => {
+                    packet::State::Peer(BfdPeerState::Init) => {
                         counters
                             .init_status_received
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    PacketState::Peer(BfdPeerState::Up) => {
+                    packet::State::Peer(BfdPeerState::Up) => {
                         counters
                             .up_status_received
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    PacketState::Unknown(_) => {
+                    packet::State::Unknown(_) => {
                         counters
                             .unknown_status_received
                             .fetch_add(1, Ordering::Relaxed);
@@ -472,7 +472,7 @@ impl State for Down {
             )? {
                 RecvResult::MessageFrom((addr, control)) => (addr, control),
                 RecvResult::TransitionTo(state) => {
-                    return Ok((state, endpoint))
+                    return Ok((state, endpoint));
                 }
             };
 
@@ -552,7 +552,7 @@ impl State for Init {
             )? {
                 RecvResult::MessageFrom((addr, control)) => (addr, control),
                 RecvResult::TransitionTo(state) => {
-                    return Ok((state, endpoint))
+                    return Ok((state, endpoint));
                 }
             };
 
@@ -631,7 +631,7 @@ impl State for Up {
             )? {
                 RecvResult::MessageFrom((addr, control)) => (addr, control),
                 RecvResult::TransitionTo(state) => {
-                    return Ok((state, endpoint))
+                    return Ok((state, endpoint));
                 }
             };
 

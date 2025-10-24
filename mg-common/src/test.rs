@@ -5,7 +5,7 @@
 //! Test utilities and macros for use across multiple crates.
 
 use crate::lock;
-use slog::{error, info, Logger};
+use slog::{Logger, error, info};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::IpAddr;
@@ -347,10 +347,10 @@ impl LoopbackIpManager {
             // "Address already exists/assigned" is ok - another process beat us to it
             if !stderr.to_lowercase().contains("already") {
                 error!(log, "failed to install {}: {stderr}", ip.address);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("failed to install {}", ip.address),
-                ));
+                return Err(std::io::Error::other(format!(
+                    "failed to install {}",
+                    ip.address
+                )));
             }
         }
 

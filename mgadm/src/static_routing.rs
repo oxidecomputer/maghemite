@@ -4,10 +4,9 @@
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use mg_admin_client::types;
-use mg_admin_client::Client;
+use mg_admin_client::{Client, types};
 use oxnet::{Ipv4Net, Ipv6Net};
-use rdb::{Prefix4, Prefix6, DEFAULT_RIB_PRIORITY_STATIC};
+use rdb::{DEFAULT_RIB_PRIORITY_STATIC, Prefix4, Prefix6};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Subcommand, Debug)]
