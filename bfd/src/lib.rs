@@ -344,7 +344,8 @@ mod test {
     #[test]
     fn test_protocol_basics() -> anyhow::Result<()> {
         let log = test_logger();
-        let db = rdb::test::get_test_db("bfd_protocol_basics", log.clone()).unwrap();
+        let db =
+            rdb::test::get_test_db("bfd_protocol_basics", log.clone()).unwrap();
 
         let mut net = Network::default();
 
