@@ -5,6 +5,7 @@
 use crate::admin::HandlerContext;
 use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
+use crate::log::dlog;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
@@ -12,20 +13,26 @@ use mg_common::lock;
 use mg_common::log::init_logger;
 use mg_common::stats::MgLowerStats;
 use rand::Fill;
-use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
+use rdb::{AddressFamily, BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use signal::handle_signals;
-use slog::{Logger, error};
+use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 use uuid::Uuid;
 
+pub const COMPONENT_MGD: &str = "mgd";
+pub const MOD_ADMIN: &str = "admin";
+const UNIT_DAEMON: &str = "daemon";
+
 mod admin;
 mod bfd_admin;
 mod bgp_admin;
 mod error;
+mod log;
 mod oxstats;
+mod rib_admin;
 mod signal;
 mod smf;
 mod static_admin;
@@ -116,7 +123,12 @@ async fn run(args: RunArgs) {
     });
 
     if let Err(e) = sig_tx.send(context.clone()).await {
-        error!(log, "send context to signal handler {e}");
+        dlog!(log, error, "error sending handler context to signal handler: {e}";
+            "params" => format!("tep {tep_ula}, dir {}, oximeter_port {}",
+                args.data_dir.clone(), args.oximeter_port
+            ),
+            "error" => format!("{e}")
+        );
     }
 
     #[cfg(feature = "mg-lower")]
@@ -160,13 +172,18 @@ async fn run(args: RunArgs) {
         if !*is_running {
             match oxstats::start_server(
                 context.clone(),
-                hostname,
+                &hostname,
                 rack_uuid,
                 sled_uuid,
                 log.clone(),
             ) {
                 Ok(_) => *is_running = true,
-                Err(e) => error!(log, "failed to start stats server: {e}"),
+                Err(e) => {
+                    dlog!(log, error, "failed to start stats server: {e}";
+                        "params" => format!("hostname {hostname}, rack {rack_uuid}, sled {sled_uuid}"),
+                        "error" => format!("{e}")
+                    )
+                }
             }
         }
     }
@@ -201,7 +218,7 @@ fn start_bgp_routers(
     routers: BTreeMap<u32, BgpRouterInfo>,
     neighbors: Vec<BgpNeighborInfo>,
 ) {
-    slog::info!(context.log, "bgp routers: {:#?}", routers);
+    dlog!(context.log, info, "starting bgp routers: {routers:#?}");
     let mut guard = context.bgp.router.lock().expect("lock bgp routers");
     for (asn, info) in routers {
         bgp_admin::helpers::add_router(
@@ -254,20 +271,37 @@ fn start_bfd_sessions(
     context: Arc<HandlerContext>,
     configs: Vec<BfdPeerConfig>,
 ) {
-    slog::info!(context.log, "bfd peers: {:#?}", configs);
+    dlog!(context.log, info, "starting bfd sessions: {configs:#?}");
     for config in configs {
         bfd_admin::add_peer(context.clone(), config)
             .unwrap_or_else(|e| panic!("failed to add bfd peer {e}"));
     }
 }
 
+// Read static routes from disk, filter out invalid entries, and
+// re-add them to the db (updating both the on-disk db and the rib)
 fn initialize_static_routes(db: &rdb::Db) {
     let routes = db
-        .get_static4()
+        .get_static(AddressFamily::All)
         .expect("failed to get static routes from db");
-    db.add_static_routes(&routes).unwrap_or_else(|e| {
-        panic!("failed to initialize static routes {routes:#?}: {e}")
-    })
+
+    let (good, bad) = routes.into_iter().fold(
+        (Vec::new(), Vec::new()),
+        |(mut good, mut bad), srk| {
+            match srk.prefix.host_bits_are_unset() {
+                true => good.push(srk),
+                false => bad.push(srk),
+            }
+            (good, bad)
+        },
+    );
+
+    db.remove_static_routes(&bad).unwrap_or_else(|e| {
+        panic!("failed to remove invalid static routes {bad:#?}: {e}")
+    });
+    db.add_static_routes(&good).unwrap_or_else(|e| {
+        panic!("failed to initialize valid static routes {good:#?}: {e}")
+    });
 }
 
 fn get_tunnel_endpoint_ula(db: &rdb::Db) -> Ipv6Addr {

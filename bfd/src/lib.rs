@@ -15,9 +15,16 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 pub mod bidi;
+pub mod log;
 pub mod packet;
 mod sm;
 mod util;
+
+pub const COMPONENT_BFD: &str = "bfd";
+pub const MOD_DAEMON: &str = "daemon";
+pub const MOD_SM: &str = "state_machine";
+
+pub const UNIT_PEER: &str = "peer";
 
 /// A `Daemon` is a collection of BFD sessions.
 pub struct Daemon {
@@ -49,7 +56,10 @@ impl Daemon {
     ) {
         if self.sessions.contains_key(&peer) {
             warn!(self.log, "attempt to add peer that already exists";
-                "peer" => format!("{:#?}", peer)
+                "component" => COMPONENT_BFD,
+                "module" => MOD_DAEMON,
+                "unit" => UNIT_PEER,
+                "peer" => format!("{peer}")
             );
             return;
         }
@@ -310,9 +320,10 @@ mod test {
 
     #[test]
     fn test_new_daemon() -> anyhow::Result<()> {
-        let db = rdb::Db::new("/tmp/bfd_new_daemon.db", test_logger()).unwrap();
+        let log = test_logger();
+        let db = rdb::test::get_test_db("bfd_new_daemon", log.clone()).unwrap();
 
-        let mut daemon = Daemon::new(test_logger());
+        let mut daemon = Daemon::new(log);
         assert_eq!(daemon.sessions.len(), 0);
 
         let (a, _b) = bidi::channel();
@@ -332,7 +343,9 @@ mod test {
 
     #[test]
     fn test_protocol_basics() -> anyhow::Result<()> {
-        let db = rdb::Db::new("/tmp/bfd_new_daemon.db", test_logger()).unwrap();
+        let log = test_logger();
+        let db =
+            rdb::test::get_test_db("bfd_protocol_basics", log.clone()).unwrap();
 
         let mut net = Network::default();
 

@@ -556,6 +556,117 @@
         }
       }
     },
+    "/bgp/config/origin6": {
+      "get": {
+        "operationId": "read_origin6",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Origin6"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "create_origin6",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Origin6"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "update_origin6",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Origin6"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_origin6",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/config/router": {
       "get": {
         "operationId": "read_router",
@@ -904,39 +1015,6 @@
         }
       }
     },
-    "/bgp/status/imported": {
-      "get": {
-        "operationId": "get_imported",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AsnSelector"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Rib"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/bgp/status/neighbors": {
       "get": {
         "operationId": "get_neighbors",
@@ -977,19 +1055,68 @@
         }
       }
     },
-    "/bgp/status/selected": {
+    "/rib/status/imported": {
       "get": {
-        "operationId": "get_selected",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AsnSelector"
+        "operationId": "get_imported",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "protocol",
+            "description": "Filter by protocol (optional)",
+            "schema": {
+              "$ref": "#/components/schemas/ProtocolFilter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rib"
+                }
               }
             }
           },
-          "required": true
-        },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/rib/status/selected": {
+      "get": {
+        "operationId": "get_selected",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "protocol",
+            "description": "Filter by protocol (optional)",
+            "schema": {
+              "$ref": "#/components/schemas/ProtocolFilter"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "successful operation",
@@ -1088,6 +1215,85 @@
           }
         }
       }
+    },
+    "/static/route6": {
+      "get": {
+        "operationId": "static_list_v6_routes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_Set_of_Path",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Path"
+                    },
+                    "uniqueItems": true
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "static_add_v6_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddStaticRoute6Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "static_remove_v6_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteStaticRoute6Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1126,6 +1332,17 @@
         "properties": {
           "routes": {
             "$ref": "#/components/schemas/StaticRoute4List"
+          }
+        },
+        "required": [
+          "routes"
+        ]
+      },
+      "AddStaticRoute6Request": {
+        "type": "object",
+        "properties": {
+          "routes": {
+            "$ref": "#/components/schemas/StaticRoute6List"
           }
         },
         "required": [
@@ -2017,11 +2234,46 @@
           }
         ]
       },
+      "ConnectionId": {
+        "description": "Unique identifier for a BGP connection instance",
+        "type": "object",
+        "properties": {
+          "local": {
+            "description": "Local socket address for this connection",
+            "type": "string"
+          },
+          "remote": {
+            "description": "Remote socket address for this connection",
+            "type": "string"
+          },
+          "uuid": {
+            "description": "Unique identifier for this connection instance",
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "local",
+          "remote",
+          "uuid"
+        ]
+      },
       "DeleteStaticRoute4Request": {
         "type": "object",
         "properties": {
           "routes": {
             "$ref": "#/components/schemas/StaticRoute4List"
+          }
+        },
+        "required": [
+          "routes"
+        ]
+      },
+      "DeleteStaticRoute6Request": {
+        "type": "object",
+        "properties": {
+          "routes": {
+            "$ref": "#/components/schemas/StaticRoute6List"
           }
         },
         "required": [
@@ -2213,6 +2465,13 @@
             ]
           },
           {
+            "description": "Handler for Connection Collisions (RFC 4271 6.8)",
+            "type": "string",
+            "enum": [
+              "ConnectionCollision"
+            ]
+          },
+          {
             "description": "Sync up with peers.",
             "type": "string",
             "enum": [
@@ -2381,6 +2640,14 @@
         "description": "A message history entry is a BGP message with an associated timestamp",
         "type": "object",
         "properties": {
+          "connection_id": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConnectionId"
+              }
+            ]
+          },
           "message": {
             "$ref": "#/components/schemas/Message"
           },
@@ -2766,6 +3033,28 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Prefix4"
+            }
+          }
+        },
+        "required": [
+          "asn",
+          "prefixes"
+        ]
+      },
+      "Origin6": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "ASN of the router to originate from.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "prefixes": {
+            "description": "Set of prefixes to originate.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prefix6"
             }
           }
         },
@@ -3325,6 +3614,48 @@
           "list"
         ]
       },
+      "StaticRoute6": {
+        "type": "object",
+        "properties": {
+          "nexthop": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "prefix": {
+            "$ref": "#/components/schemas/Prefix6"
+          },
+          "rib_priority": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "nexthop",
+          "prefix",
+          "rib_priority"
+        ]
+      },
+      "StaticRoute6List": {
+        "type": "object",
+        "properties": {
+          "list": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaticRoute6"
+            }
+          }
+        },
+        "required": [
+          "list"
+        ]
+      },
       "UpdateErrorSubcode": {
         "description": "Update message error subcode types",
         "type": "string",
@@ -3370,6 +3701,42 @@
           "nlri",
           "path_attributes",
           "withdrawn"
+        ]
+      },
+      "AddressFamily": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "Ipv4",
+              "Ipv6"
+            ]
+          },
+          {
+            "description": "All routes (IPv4 and IPv6)",
+            "type": "string",
+            "enum": [
+              "All"
+            ]
+          }
+        ]
+      },
+      "ProtocolFilter": {
+        "oneOf": [
+          {
+            "description": "BGP routes only",
+            "type": "string",
+            "enum": [
+              "Bgp"
+            ]
+          },
+          {
+            "description": "Static routes only",
+            "type": "string",
+            "enum": [
+              "Static"
+            ]
+          }
         ]
       }
     },

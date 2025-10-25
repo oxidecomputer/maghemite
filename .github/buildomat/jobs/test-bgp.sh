@@ -14,11 +14,11 @@ set -e
 
 source .github/buildomat/test-common.sh
 pushd bgp
-cargo nextest run
+pfexec cargo nextest run
 cp *.log /work/
 popd
 
 pushd mgd
-cargo nextest run
+pfexec cargo nextest run
 cp *.log /work/
 popd

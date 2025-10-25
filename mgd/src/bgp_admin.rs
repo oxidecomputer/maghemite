@@ -3,18 +3,17 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #![allow(clippy::type_complexity)]
-use crate::{admin::HandlerContext, error::Error};
+use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::params::*;
 use bgp::router::LoadPolicyError;
-use bgp::session::FsmStateKind;
+use bgp::session::{ConnectionKind, FsmStateKind};
 use bgp::{
     BGP_PORT,
     config::RouterConfig,
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
-    messages::{Afi, Message, RouteRefreshMessage, Safi},
     router::Router,
-    session::{FsmEvent, SessionInfo},
+    session::{AdminEvent, FsmEvent, SessionEndpoint, SessionInfo},
 };
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseDeleted, HttpResponseOk,
@@ -23,11 +22,10 @@ use dropshot::{
 use mg_api::{
     AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse,
     MessageHistoryRequest, MessageHistoryResponse, NeighborResetRequest,
-    NeighborSelector,
+    NeighborSelector, Rib,
 };
 use mg_common::lock;
-use rdb::{Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
-use slog::info;
+use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -36,6 +34,7 @@ use std::sync::{
     mpsc::{Sender, channel},
 };
 
+const UNIT_BGP: &str = "bgp";
 const DEFAULT_BGP_LISTEN: SocketAddr =
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, BGP_PORT, 0, 0));
 
@@ -43,13 +42,13 @@ const DEFAULT_BGP_LISTEN: SocketAddr =
 pub struct BgpContext {
     pub(crate) router: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
     addr_to_session:
-        Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionTcp>>>>>,
+        Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionTcp>>>>,
 }
 
 impl BgpContext {
     pub fn new(
         addr_to_session: Arc<
-            Mutex<BTreeMap<IpAddr, Sender<FsmEvent<BgpConnectionTcp>>>>,
+            Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionTcp>>>,
         >,
     ) -> Self {
         Self {
@@ -163,7 +162,7 @@ pub async fn delete_router(
 pub async fn read_neighbors(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<bgp::params::Neighbor>>, HttpError> {
+) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -175,7 +174,7 @@ pub async fn read_neighbors(
     let result = nbrs
         .into_iter()
         .filter(|x| x.asn == rq.asn)
-        .map(|x| bgp::params::Neighbor::from_rdb_neighbor_info(rq.asn, &x))
+        .map(|x| Neighbor::from_rdb_neighbor_info(rq.asn, &x))
         .collect();
 
     Ok(HttpResponseOk(result))
@@ -183,7 +182,7 @@ pub async fn read_neighbors(
 
 pub async fn create_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<bgp::params::Neighbor>,
+    request: TypedBody<Neighbor>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -194,7 +193,7 @@ pub async fn create_neighbor(
 pub async fn read_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<NeighborSelector>,
-) -> Result<HttpResponseOk<bgp::params::Neighbor>, HttpError> {
+) -> Result<HttpResponseOk<Neighbor>, HttpError> {
     let rq = request.into_inner();
     let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
         HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
@@ -207,14 +206,13 @@ pub async fn read_neighbor(
             format!("neighbor {} not found in db", rq.addr),
         ))?;
 
-    let result =
-        bgp::params::Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+    let result = Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
     Ok(HttpResponseOk(result))
 }
 
 pub async fn update_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<bgp::params::Neighbor>,
+    request: TypedBody<Neighbor>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -242,7 +240,7 @@ pub async fn clear_neighbor(
 
 pub async fn create_origin4(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<bgp::params::Origin4>,
+    request: TypedBody<Origin4>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
@@ -258,7 +256,7 @@ pub async fn create_origin4(
 pub async fn read_origin4(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<bgp::params::Origin4>, HttpError> {
+) -> Result<HttpResponseOk<Origin4>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     let mut originated = get_router!(ctx, rq.asn)?
@@ -269,7 +267,7 @@ pub async fn read_origin4(
     // stable output order for clients
     originated.sort();
 
-    Ok(HttpResponseOk(bgp::params::Origin4 {
+    Ok(HttpResponseOk(Origin4 {
         asn: rq.asn,
         prefixes: originated,
     }))
@@ -277,7 +275,7 @@ pub async fn read_origin4(
 
 pub async fn update_origin4(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<bgp::params::Origin4>,
+    request: TypedBody<Origin4>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
@@ -299,6 +297,70 @@ pub async fn delete_origin4(
 
     get_router!(ctx, rq.asn)?
         .clear_origin4()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    Ok(HttpResponseDeleted())
+}
+
+pub async fn create_origin6(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<Origin6>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
+    let ctx = ctx.context();
+
+    get_router!(ctx, rq.asn)?
+        .create_origin6(prefixes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn read_origin6(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<Origin6>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    let mut originated = get_router!(ctx, rq.asn)?
+        .db
+        .get_origin6()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    // stable output order for clients
+    originated.sort();
+
+    Ok(HttpResponseOk(Origin6 {
+        asn: rq.asn,
+        prefixes: originated,
+    }))
+}
+
+pub async fn update_origin6(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<Origin6>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
+    let ctx = ctx.context();
+
+    get_router!(ctx, rq.asn)?
+        .set_origin6(prefixes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn delete_origin6(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    get_router!(ctx, rq.asn)?
+        .clear_origin6()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseDeleted())
@@ -355,7 +417,7 @@ pub async fn get_imported(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let imported = get_router!(ctx, rq.asn)?.db.full_rib();
+    let imported = get_router!(ctx, rq.asn)?.db.full_rib(AddressFamily::Ipv4);
     Ok(HttpResponseOk(imported.into()))
 }
 
@@ -365,7 +427,7 @@ pub async fn get_selected(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let selected = get_router!(ctx, rq.asn)?.db.loc_rib();
+    let selected = get_router!(ctx, rq.asn)?.db.loc_rib(AddressFamily::Ipv4);
     Ok(HttpResponseOk(selected.into()))
 }
 
@@ -384,6 +446,32 @@ pub async fn get_neighbors(
 
     for s in lock!(r.sessions).values() {
         let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
+
+        let conf_holdtime;
+        let neg_holdtime;
+        let conf_keepalive;
+        let neg_keepalive;
+
+        // If the session runner has a primary connection, pull the config and
+        // runtime state from it. If not, just use the config owned by the
+        // session runner as both the config and runtime state.
+        if let Some(ref primary) = *lock!(s.primary) {
+            let clock = match primary {
+                ConnectionKind::Partial(p) => p.clock(),
+                ConnectionKind::Full(pc) => pc.conn.clock(),
+            };
+            conf_holdtime = clock.timers.config_hold_time;
+            neg_holdtime = lock!(clock.timers.hold).interval;
+            conf_keepalive = clock.timers.config_keepalive_time;
+            neg_keepalive = lock!(clock.timers.keepalive).interval;
+        } else {
+            let session_info = lock!(s.session);
+            conf_holdtime = session_info.hold_time;
+            neg_holdtime = session_info.hold_time;
+            conf_keepalive = session_info.keepalive_time;
+            neg_keepalive = session_info.keepalive_time;
+        }
+
         peers.insert(
             s.neighbor.host.ip(),
             PeerInfo {
@@ -392,34 +480,12 @@ pub async fn get_neighbors(
                 duration_millis: dur as u64,
                 timers: PeerTimers {
                     hold: DynamicTimerInfo {
-                        configured: *s
-                            .clock
-                            .timers
-                            .hold_configured_interval
-                            .lock()
-                            .unwrap(),
-                        negotiated: s
-                            .clock
-                            .timers
-                            .hold_timer
-                            .lock()
-                            .unwrap()
-                            .interval,
+                        configured: conf_holdtime,
+                        negotiated: neg_holdtime,
                     },
                     keepalive: DynamicTimerInfo {
-                        configured: *s
-                            .clock
-                            .timers
-                            .keepalive_configured_interval
-                            .lock()
-                            .unwrap(),
-                        negotiated: s
-                            .clock
-                            .timers
-                            .keepalive_timer
-                            .lock()
-                            .unwrap()
-                            .interval,
+                        configured: conf_keepalive,
+                        negotiated: neg_keepalive,
                     },
                 },
             },
@@ -442,7 +508,9 @@ async fn do_bgp_apply(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let log = ctx.log.clone();
 
-    info!(log, "apply: {rq:#?}");
+    bgp_log!(log, info, "bgp apply: {rq:#?}";
+        "params" => format!("{rq:?}")
+    );
 
     #[derive(Debug, Eq)]
     struct Nbr {
@@ -509,9 +577,9 @@ async fn do_bgp_apply(
         let to_add = specified_nbr_addrs.difference(&current_nbr_addrs);
         let to_modify = current_nbr_addrs.intersection(&specified_nbr_addrs);
 
-        info!(log, "nbr: current {current:#?}");
-        info!(log, "nbr: adding {to_add:#?}");
-        info!(log, "nbr: removing {to_delete:#?}");
+        bgp_log!(log, info, "nbr: current {current:#?}");
+        bgp_log!(log, info, "nbr: adding {to_add:#?}");
+        bgp_log!(log, info, "nbr: removing {to_delete:#?}");
 
         let mut nbr_config = Vec::new();
         for nbr in to_add {
@@ -528,13 +596,13 @@ async fn do_bgp_apply(
                 .find(|x| x.host.ip() == nbr.addr)
                 .ok_or(Error::NotFound(nbr.addr.to_string()))?;
 
-            let tgt = bgp::params::Neighbor::from_bgp_peer_config(
+            let tgt = Neighbor::from_bgp_peer_config(
                 nbr.asn,
                 group.clone(),
                 spec.clone(),
             );
 
-            let curr = bgp::params::Neighbor::from_rdb_neighbor_info(
+            let curr = Neighbor::from_rdb_neighbor_info(
                 nbr.asn,
                 current
                     .iter()
@@ -564,7 +632,7 @@ async fn do_bgp_apply(
         for (nbr, cfg) in nbr_config {
             helpers::add_neighbor(
                 ctx.clone(),
-                bgp::params::Neighbor::from_bgp_peer_config(
+                Neighbor::from_bgp_peer_config(
                     nbr.asn,
                     group.clone(),
                     cfg.clone(),
@@ -764,9 +832,9 @@ pub(crate) mod helpers {
         asn: u32,
         addr: IpAddr,
     ) -> Result<HttpResponseDeleted, Error> {
-        info!(ctx.log, "remove neighbor: {}", addr);
+        bgp_log!(ctx.log, info, "remove neighbor (addr {addr}, asn {asn})");
 
-        ctx.db.remove_bgp_peer_prefixes(&addr);
+        ctx.db.remove_bgp_prefixes_from_peer(&addr);
         ctx.db.remove_bgp_neighbor(addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 
@@ -775,14 +843,18 @@ pub(crate) mod helpers {
 
     pub(crate) fn add_neighbor(
         ctx: Arc<HandlerContext>,
-        rq: bgp::params::Neighbor,
+        rq: Neighbor,
         ensure: bool,
     ) -> Result<(), Error> {
         let log = &ctx.log;
-        info!(log, "add neighbor: {:#?}", rq);
+        bgp_log!(log, info, "add neighbor {}", rq.host.ip();
+            "params" => format!("{rq:#?}")
+        );
 
         let (event_tx, event_rx) = channel();
 
+        // XXX: Do we really want both rq and info?
+        //      SessionInfo and Neighbor types could probably be merged.
         let info = SessionInfo {
             passive_tcp_establishment: rq.passive,
             remote_asn: rq.remote_asn,
@@ -801,7 +873,7 @@ pub(crate) mod helpers {
         let start_session = if ensure {
             match get_router!(&ctx, rq.asn)?.ensure_session(
                 rq.clone().into(),
-                DEFAULT_BGP_LISTEN,
+                None,
                 event_tx.clone(),
                 event_rx,
                 info,
@@ -812,7 +884,7 @@ pub(crate) mod helpers {
         } else {
             get_router!(&ctx, rq.asn)?.new_session(
                 rq.clone().into(),
-                DEFAULT_BGP_LISTEN,
+                None,
                 event_tx.clone(),
                 event_rx,
                 info,
@@ -855,38 +927,39 @@ pub(crate) mod helpers {
         ctx: Arc<HandlerContext>,
         asn: u32,
         addr: IpAddr,
-        op: bgp::params::NeighborResetOp,
+        op: NeighborResetOp,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
-        info!(ctx.log, "clear neighbor: {}", addr);
+        bgp_log!(ctx.log, info, "clear neighbor {addr}, asn {asn}";
+            "op" => format!("{op:?}")
+        );
 
         let session = get_router!(ctx, asn)?
             .get_session(addr)
             .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
 
         match op {
-            bgp::params::NeighborResetOp::Hard => {
-                session.event_tx.send(FsmEvent::Reset).map_err(|e| {
+            NeighborResetOp::Hard => session
+                .event_tx
+                .send(FsmEvent::Admin(AdminEvent::Reset))
+                .map_err(|e| {
                     Error::InternalCommunication(format!(
                         "failed to reset bgp session {e}",
                     ))
-                })?
-            }
-            bgp::params::NeighborResetOp::SoftInbound => session
-                .event_tx
-                .send(FsmEvent::RouteRefreshNeeded)
-                .map_err(|e| {
-                    Error::InternalCommunication(format!(
-                        "failed to generate route refresh {e}"
-                    ))
                 })?,
-            bgp::params::NeighborResetOp::SoftOutbound => session
+            NeighborResetOp::SoftInbound => {
+                // XXX: check if neighbor has negotiated route refresh cap
+                session
+                    .event_tx
+                    .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh))
+                    .map_err(|e| {
+                        Error::InternalCommunication(format!(
+                            "failed to generate route refresh {e}"
+                        ))
+                    })?
+            }
+            NeighborResetOp::SoftOutbound => session
                 .event_tx
-                .send(FsmEvent::Message(Message::RouteRefresh(
-                    RouteRefreshMessage {
-                        afi: Afi::Ipv4 as u16,
-                        safi: Safi::NlriUnicast as u8,
-                    },
-                )))
+                .send(FsmEvent::Admin(AdminEvent::ReAdvertiseRoutes))
                 .map_err(|e| {
                     Error::InternalCommunication(format!(
                         "failed to trigger outbound update {e}"
@@ -934,11 +1007,13 @@ pub(crate) mod helpers {
     fn start_bgp_session<Cnx: BgpConnection>(
         event_tx: &Sender<FsmEvent<Cnx>>,
     ) -> Result<(), Error> {
-        event_tx.send(FsmEvent::ManualStart).map_err(|e| {
-            Error::InternalCommunication(format!(
-                "failed to start bgp session {e}",
-            ))
-        })
+        event_tx
+            .send(FsmEvent::Admin(AdminEvent::ManualStart))
+            .map_err(|e| {
+                Error::InternalCommunication(format!(
+                    "failed to start bgp session {e}",
+                ))
+            })
     }
 
     pub async fn load_policy(
@@ -980,16 +1055,20 @@ pub(crate) mod helpers {
                     }
                     Ok(previous) => match &policy {
                         PolicySource::Checker(_) => {
-                            rtr.send_event(FsmEvent::CheckerChanged(previous))
-                                .map_err(|e| {
-                                    HttpError::for_internal_error(format!(
-                                        "send event: {e}"
-                                    ))
-                                })?;
+                            rtr.send_admin_event(AdminEvent::CheckerChanged(
+                                previous,
+                            ))
+                            .map_err(|e| {
+                                HttpError::for_internal_error(format!(
+                                    "send event: {e}"
+                                ))
+                            })?;
                         }
                         PolicySource::Shaper(_) => {
-                            rtr.send_event(FsmEvent::ShaperChanged(previous))
-                                .map_err(|e| {
+                            rtr.send_admin_event(AdminEvent::ShaperChanged(
+                                previous,
+                            ))
+                            .map_err(|e| {
                                 HttpError::for_internal_error(format!(
                                     "send event: {e}"
                                 ))
@@ -1027,12 +1106,14 @@ pub(crate) mod helpers {
                         ));
                     }
                     Ok(previous) => {
-                        rtr.send_event(FsmEvent::ShaperChanged(Some(previous)))
-                            .map_err(|e| {
-                                HttpError::for_internal_error(format!(
-                                    "send event: {e}"
-                                ))
-                            })?;
+                        rtr.send_admin_event(AdminEvent::ShaperChanged(Some(
+                            previous,
+                        )))
+                        .map_err(|e| {
+                            HttpError::for_internal_error(format!(
+                                "send event: {e}"
+                            ))
+                        })?;
                     }
                 }
             }

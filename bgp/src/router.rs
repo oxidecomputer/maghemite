@@ -14,10 +14,13 @@ use crate::messages::{
 };
 use crate::policy::load_checker;
 use crate::policy::load_shaper;
-use crate::session::{FsmEvent, NeighborInfo, SessionInfo, SessionRunner};
+use crate::session::{
+    AdminEvent, FsmEvent, NeighborInfo, SessionEndpoint, SessionInfo,
+    SessionRunner,
+};
 use mg_common::{lock, read_lock, write_lock};
-use rdb::Prefix4;
 use rdb::{Asn, Db};
+use rdb::{Prefix4, Prefix6};
 use rhai::AST;
 use slog::Logger;
 use std::collections::BTreeMap;
@@ -26,11 +29,12 @@ use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::spawn;
 use std::time::Duration;
+
+const UNIT_SESSION_RUNNER: &str = "session_runner";
 
 pub struct Router<Cnx: BgpConnection> {
     /// The underlying routing information base (RIB) databse this router
@@ -59,7 +63,7 @@ pub struct Router<Cnx: BgpConnection> {
 
     /// A set of event channels indexed by peer IP address. These channels
     /// are used for cross-peer session communications.
-    addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
+    addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
 
     /// A fanout is used to distribute originated prefixes to all peer
     /// sessions. In the event that redistribution becomes supported this
@@ -77,7 +81,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         config: RouterConfig,
         log: Logger,
         db: Db,
-        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>>,
+        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
     ) -> Router<Cnx> {
         Self {
             config,
@@ -97,6 +101,16 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn shutdown(&self) {
+        slog::info!(
+            self.log,
+            "router (asn: {}, id: {}) received shutdown request, stopping sessions",
+            self.config.asn, self.config.id;
+            slog::o!(
+                "component" => crate::COMPONENT_BGP,
+                "module" => crate::MOD_ROUTER,
+                "unit" => UNIT_SESSION_RUNNER,
+            )
+        );
         for (addr, s) in lock!(self.sessions).iter() {
             lock!(self.addr_to_session).remove(addr);
             s.shutdown();
@@ -107,9 +121,18 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     pub fn run(&self) {
         for s in lock!(self.sessions).values() {
             let session = s.clone();
-            slog::info!(self.log, "spawning session");
+            slog::info!(
+                self.log,
+                "spawning session for {}",
+                lock!(session.neighbor.name);
+                slog::o!(
+                    "component" => crate::COMPONENT_BGP,
+                    "module" => crate::MOD_ROUTER,
+                    "unit" => UNIT_SESSION_RUNNER,
+                )
+            );
             spawn(move || {
-                session.start();
+                session.fsm_start();
             });
         }
     }
@@ -133,7 +156,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     pub fn ensure_session(
         self: &Arc<Self>,
         peer: PeerConfig,
-        bind_addr: SocketAddr,
+        bind_addr: Option<SocketAddr>,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
@@ -153,7 +176,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     pub fn new_session(
         self: &Arc<Self>,
         peer: PeerConfig,
-        bind_addr: SocketAddr,
+        bind_addr: Option<SocketAddr>,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
@@ -170,14 +193,33 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
     pub fn new_session_locked(
         self: &Arc<Self>,
-        mut a2s: MutexGuard<BTreeMap<IpAddr, Sender<FsmEvent<Cnx>>>>,
+        mut a2s: MutexGuard<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>,
         peer: PeerConfig,
-        bind_addr: SocketAddr,
+        bind_addr: Option<SocketAddr>,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        a2s.insert(peer.host.ip(), event_tx.clone());
+        // Update the SessionInfo with timer values from peer config
+        let mut session_info = info.clone();
+        session_info.connect_retry_time =
+            Duration::from_secs(peer.connect_retry);
+        session_info.keepalive_time = Duration::from_secs(peer.keepalive);
+        session_info.hold_time = Duration::from_secs(peer.hold_time);
+        session_info.idle_hold_time = Duration::from_secs(peer.idle_hold_time);
+        session_info.delay_open_time = Duration::from_secs(peer.delay_open);
+        session_info.resolution = Duration::from_millis(peer.resolution);
+        session_info.bind_addr = bind_addr;
+
+        let session = Arc::new(Mutex::new(session_info));
+
+        a2s.insert(
+            peer.host.ip(),
+            SessionEndpoint {
+                event_tx: event_tx.clone(),
+                config: session.clone(),
+            },
+        );
         drop(a2s);
 
         let neighbor = NeighborInfo {
@@ -186,19 +228,12 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         };
 
         let runner = Arc::new(SessionRunner::new(
-            Duration::from_secs(peer.connect_retry),
-            Duration::from_secs(peer.keepalive),
-            Duration::from_secs(peer.hold_time),
-            Duration::from_secs(peer.idle_hold_time),
-            Duration::from_secs(peer.delay_open),
-            Arc::new(Mutex::new(info.clone())),
+            session,
             event_rx,
             event_tx.clone(),
             neighbor.clone(),
             self.config.asn,
             self.config.id,
-            Duration::from_millis(peer.resolution),
-            Some(bind_addr),
             self.db.clone(),
             self.fanout.clone(),
             //TODO remove all the other self properties in favor just passing
@@ -208,9 +243,18 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         ));
 
         let r = runner.clone();
-        slog::info!(self.log, "spawning new session");
+        slog::info!(
+            self.log,
+            "spawning session for {}",
+            lock!(runner.neighbor.name);
+            slog::o!(
+                "component" => crate::COMPONENT_BGP,
+                "module" => crate::MOD_ROUTER,
+                "unit" => UNIT_SESSION_RUNNER,
+            )
+        );
         spawn(move || {
-            r.start();
+            r.fsm_start();
         });
 
         self.add_fanout(neighbor.host.ip(), event_tx);
@@ -242,16 +286,32 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
     }
 
-    pub fn send_event(&self, e: FsmEvent<Cnx>) -> Result<(), Error> {
+    pub fn replace_session_event_tx(
+        self: &Arc<Self>,
+        peer: IpAddr,
+        tx: Sender<FsmEvent<Cnx>>,
+    ) {
+        if let Some(endpoint) = lock!(self.addr_to_session).get_mut(&peer) {
+            endpoint.event_tx = tx;
+        }
+    }
+
+    pub fn send_admin_event(&self, e: AdminEvent) -> Result<(), Error> {
         for s in lock!(self.sessions).values() {
-            s.send_event(e.clone())?;
+            s.send_event(FsmEvent::Admin(e.clone()))?;
         }
         Ok(())
     }
 
     pub fn create_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        let prefix4: Vec<Prefix4> =
-            prefixes.iter().cloned().map(|x| x.as_prefix4()).collect();
+        let prefix4: Vec<Prefix4> = prefixes
+            .iter()
+            .cloned()
+            .filter_map(|x| match x {
+                Prefix::V4(p4) => Some(p4),
+                Prefix::V6(_) => None,
+            })
+            .collect();
         self.db.create_origin4(&prefix4)?;
         self.announce_origin4(&prefixes);
         Ok(())
@@ -261,8 +321,14 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let origin4 = self.db.get_origin4()?;
         let current: BTreeSet<&Prefix4> = origin4.iter().collect();
 
-        let prefix4: Vec<Prefix4> =
-            prefixes.iter().cloned().map(|x| x.as_prefix4()).collect();
+        let prefix4: Vec<Prefix4> = prefixes
+            .iter()
+            .cloned()
+            .filter_map(|x| match x {
+                Prefix::V4(p4) => Some(p4),
+                Prefix::V6(_) => None,
+            })
+            .collect();
 
         let new: BTreeSet<&Prefix4> = prefix4.iter().collect();
 
@@ -295,7 +361,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         };
 
         for p in prefixes {
-            update.nlri.push(p.clone());
+            update.nlri.push(*p);
         }
 
         if !update.nlri.is_empty() {
@@ -310,7 +376,88 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         };
 
         for p in prefixes {
-            update.withdrawn.push(p.clone());
+            update.withdrawn.push(*p);
+        }
+
+        if !update.withdrawn.is_empty() {
+            read_lock!(self.fanout).send_all(&update);
+        }
+    }
+
+    pub fn create_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+        let prefix6: Vec<Prefix6> = prefixes
+            .iter()
+            .cloned()
+            .filter_map(|x| match x {
+                Prefix::V6(p6) => Some(p6),
+                Prefix::V4(_) => None,
+            })
+            .collect();
+        self.db.create_origin6(&prefix6)?;
+        self.announce_origin6(&prefixes);
+        Ok(())
+    }
+
+    pub fn set_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
+        let origin6 = self.db.get_origin6()?;
+        let current: BTreeSet<&Prefix6> = origin6.iter().collect();
+
+        let prefix6: Vec<Prefix6> = prefixes
+            .iter()
+            .cloned()
+            .filter_map(|x| match x {
+                Prefix::V6(p6) => Some(p6),
+                Prefix::V4(_) => None,
+            })
+            .collect();
+
+        let new: BTreeSet<&Prefix6> = prefix6.iter().collect();
+
+        let to_withdraw: Vec<_> =
+            current.difference(&new).map(|x| (**x).into()).collect();
+
+        let to_announce: Vec<_> =
+            new.difference(&current).map(|x| (**x).into()).collect();
+
+        self.db.set_origin6(&prefix6)?;
+
+        self.withdraw_origin6(&to_withdraw);
+        self.announce_origin6(&to_announce);
+        Ok(())
+    }
+
+    pub fn clear_origin6(&self) -> Result<(), Error> {
+        let current = self.db.get_origin6()?;
+        let prefix: Vec<Prefix> =
+            current.iter().cloned().map(Into::into).collect();
+        self.withdraw_origin6(&prefix);
+        self.db.clear_origin6()?;
+        Ok(())
+    }
+
+    fn announce_origin6(&self, prefixes: &Vec<Prefix>) {
+        let mut update = UpdateMessage {
+            path_attributes: self.base_attributes(),
+            ..Default::default()
+        };
+
+        for p in prefixes {
+            update.nlri.push(*p);
+        }
+
+        if !update.nlri.is_empty() {
+            read_lock!(self.fanout).send_all(&update);
+        }
+    }
+
+    pub fn withdraw_origin6(&self, prefixes: &Vec<Prefix>) {
+        let mut update = UpdateMessage {
+            path_attributes: self.base_attributes(),
+            ..Default::default()
+        };
+
+        for p in prefixes {
+            update.withdrawn.push(*p);
         }
 
         if !update.withdrawn.is_empty() {

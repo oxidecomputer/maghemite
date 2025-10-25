@@ -4,10 +4,10 @@
 
 use crate::config::PeerConfig;
 use crate::session::FsmStateKind;
-use rdb::{ImportExportPolicy, Path, PolicyAction, Prefix4};
+use rdb::{ImportExportPolicy, PolicyAction, Prefix4, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::time::Duration;
 use std::{
     collections::BTreeMap,
@@ -162,6 +162,15 @@ pub struct Origin4 {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Origin6 {
+    /// ASN of the router to originate from.
+    pub asn: u32,
+
+    /// Set of prefixes to originate.
+    pub prefixes: Vec<Prefix6>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Withdraw4Request {
     /// ASN of the router to originate from.
     pub asn: u32,
@@ -282,9 +291,6 @@ pub struct BgpPeerConfig {
     pub vlan_id: Option<u16>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct Rib(BTreeMap<String, BTreeSet<Path>>);
-
 pub enum PolicySource {
     Checker(String),
     Shaper(String),
@@ -293,10 +299,4 @@ pub enum PolicySource {
 pub enum PolicyKind {
     Checker,
     Shaper,
-}
-
-impl From<rdb::db::Rib> for Rib {
-    fn from(value: rdb::db::Rib) -> Self {
-        Rib(value.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
-    }
 }

@@ -38,6 +38,8 @@ use slog::{Logger, debug, info};
 use std::collections::HashSet;
 use std::net::IpAddr;
 
+const UNIT_CHECKER: &str = "checker";
+
 #[derive(Debug, Clone, Copy)]
 pub enum Direction {
     Incoming,
@@ -217,7 +219,7 @@ pub fn new_rhai_engine() -> Engine {
                 let fp = args[1].take().cast::<FnPtr>();
                 let mut msg = args[0].write_lock::<UpdateMessage>().unwrap();
                 msg.prefix_filter(|p| {
-                    fp.call_raw(&context, None, [Dynamic::from(p.clone())])
+                    fp.call_raw(&context, None, [Dynamic::from(*p)])
                         .unwrap()
                         .cast::<bool>()
                 });
@@ -227,7 +229,7 @@ pub fn new_rhai_engine() -> Engine {
 
     engine
         .register_type_with_name::<Prefix>("Prefix")
-        .register_fn("within", Prefix::within_rhai);
+        .register_fn("within", prefix_within_rhai);
 
     #[cfg(debug_assertions)]
     {
@@ -242,21 +244,22 @@ pub fn new_rhai_engine() -> Engine {
     engine
 }
 
-fn set_engine_logger(
-    engine: &mut Engine,
-    log: Logger,
-    component: &str,
-    asn: u32,
-) {
+fn set_engine_logger(engine: &mut Engine, log: Logger, unit: &str, asn: u32) {
     //TODO have a log scraper ship these to somewhere the user can get at them
-    let info_log =
-        log.new(slog::o!("component" => component.to_string(), "asn" => asn));
+    let info_log = log.new(slog::o!(
+            "asn" => asn,
+            "unit" => unit.to_string(),
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_POLICY));
     engine.on_print(move |s| {
         info!(info_log, "{}", s);
     });
 
-    let debug_log =
-        log.new(slog::o!("component" => component.to_string(), "asn" => asn));
+    let debug_log = log.new(slog::o!(
+            "asn" => asn,
+            "unit" => unit.to_string(),
+            "component" => crate::COMPONENT_BGP,
+            "module" => crate::MOD_POLICY));
     engine.on_debug(move |s, src, pos| {
         debug!(debug_log, "[{src:?}:{pos}] {}", s);
     });
@@ -285,7 +288,7 @@ pub fn check_incoming_open(
 
     let mut scope = new_rhai_scope(&ctx);
     let mut engine = new_rhai_engine();
-    set_engine_logger(&mut engine, log, "checker", asn);
+    set_engine_logger(&mut engine, log, UNIT_CHECKER, asn);
 
     Ok(engine.call_fn::<CheckerResult>(
         &mut scope,
@@ -310,7 +313,7 @@ pub fn check_incoming_update(
 
     let mut scope = new_rhai_scope(&ctx);
     let mut engine = new_rhai_engine();
-    set_engine_logger(&mut engine, log, "checker", asn);
+    set_engine_logger(&mut engine, log, UNIT_CHECKER, asn);
 
     Ok(engine.call_fn::<CheckerResult>(
         &mut scope,
@@ -323,25 +326,28 @@ pub fn check_incoming_update(
 pub fn shape_outgoing_open(
     m: OpenMessage,
     shaper: &AST,
-    asn: u32,
+    expected_asn: u32,
     address: IpAddr,
     log: Logger,
 ) -> Result<ShaperResult, Error> {
     let ctx = PolicyContext {
         direction: Direction::Incoming,
         message: m.clone().into(),
-        peer: PeerInfo { asn, address },
+        peer: PeerInfo {
+            asn: expected_asn,
+            address,
+        },
     };
 
     let mut scope = new_rhai_scope(&ctx);
     let mut engine = new_rhai_engine();
-    set_engine_logger(&mut engine, log, "checker", asn);
+    set_engine_logger(&mut engine, log, UNIT_CHECKER, expected_asn);
 
     Ok(engine.call_fn::<ShaperResult>(
         &mut scope,
         shaper,
         "open",
-        (m.clone(), asn as i64, address),
+        (m.clone(), expected_asn as i64, address),
     )?)
 }
 
@@ -360,7 +366,7 @@ pub fn shape_outgoing_update(
 
     let mut scope = new_rhai_scope(&ctx);
     let mut engine = new_rhai_engine();
-    set_engine_logger(&mut engine, log, "checker", asn);
+    set_engine_logger(&mut engine, log, UNIT_CHECKER, asn);
 
     Ok(engine.call_fn::<ShaperResult>(
         &mut scope,

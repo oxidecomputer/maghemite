@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::{Prefix, db::Rib, types::Path};
+use crate::types::Path;
 use itertools::Itertools;
 
 /// The bestpath algorithm chooses the best set of up to `max` paths for a
@@ -29,22 +29,16 @@ use itertools::Itertools;
 /// is larger than `max`, return the first `max` entries. This is a set,
 /// so "first" has no semantic meaning, consider it to be random. If the
 /// selection group is smaller than `max`, the entire group is returned.
-pub fn bestpaths(
-    prefix: Prefix,
-    rib: &Rib,
-    max: usize,
-) -> Option<BTreeSet<Path>> {
-    let candidates = rib.get(&prefix)?;
-
+pub fn bestpaths(paths: &BTreeSet<Path>, max: usize) -> Option<BTreeSet<Path>> {
     // Short-circuit: if there's only 1 candidate, then it is the best
-    if candidates.len() == 1 {
-        return Some(candidates.clone());
+    if paths.len() == 1 {
+        return Some(paths.clone());
     }
 
     // Partition the choice space on whether routes are shutdown or not. If we
     // only have shutdown routes then use those. Otherwise use active routes
     let (active, shutdown): (BTreeSet<&Path>, BTreeSet<&Path>) =
-        candidates.iter().partition(|path| path.shutdown);
+        paths.iter().partition(|x| x.shutdown);
     let candidates = if active.is_empty() { shutdown } else { active };
 
     // Filter down to paths with the best (lowest) RIB priority. This is a
@@ -138,22 +132,19 @@ mod test {
     use super::bestpaths;
     use crate::{
         BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-        DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4, db::Rib,
+        DEFAULT_RIB_PRIORITY_STATIC, Path,
     };
 
+    // Bestpaths is purely a function of the path info itself, so we don't
+    // need a Rib or Prefix, just a set of candidate paths and a set of
+    // expected paths.
     #[test]
     fn test_bestpath() {
-        let mut rib = Rib::default();
-        let target: Prefix4 = "198.51.100.0/24".parse().unwrap();
+        let mut max: usize = 2;
         let remote_ip1 = IpAddr::from_str("203.0.113.1").unwrap();
         let remote_ip2 = IpAddr::from_str("203.0.113.2").unwrap();
         let remote_ip3 = IpAddr::from_str("203.0.113.3").unwrap();
         let remote_ip4 = IpAddr::from_str("203.0.113.4").unwrap();
-
-        // The best path for an empty RIB should be empty
-        const MAX_ECMP_FANOUT: usize = 2;
-        let result = bestpaths(target.into(), &rib, MAX_ECMP_FANOUT);
-        assert!(result.is_none());
 
         // Add one path and make sure we get it back
         let path1 = Path {
@@ -166,18 +157,20 @@ mod test {
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
-                as_path: vec![64500, 64501, 64502],
+                as_path: vec![470, 64501, 64502],
                 stale: None,
             }),
             vlan_id: None,
         };
-        rib.insert(target.into(), BTreeSet::from([path1.clone()]));
 
-        let result = bestpaths(target.into(), &rib, MAX_ECMP_FANOUT).unwrap();
+        let mut candidates = BTreeSet::<Path>::new();
+        candidates.insert(path1.clone());
+
+        let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result, BTreeSet::from([path1.clone()]));
 
-        // Add another path to the same prefix and make sure bestpath returns both
+        // Add path2:
         let mut path2 = Path {
             nexthop: remote_ip2,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
@@ -188,21 +181,26 @@ mod test {
                 id: 48,
                 med: Some(75),
                 local_pref: Some(100),
-                as_path: vec![64500, 64501, 64502],
+                as_path: vec![480, 64501, 64502],
                 stale: None,
             }),
             vlan_id: None,
         };
-        rib.get_mut(&Prefix::V4(target))
-            .unwrap()
-            .insert(path2.clone());
-        let result = bestpaths(target.into(), &rib, MAX_ECMP_FANOUT).unwrap();
+
+        candidates.insert(path2.clone());
+        let result = bestpaths(&candidates, max).unwrap();
+
+        // we expect both paths to be selected because path1 and path2 have:
+        // - matching local-pref
+        // - matching as-path-len
+        // - matching med
         assert_eq!(result.len(), 2);
         assert_eq!(result, BTreeSet::from([path1.clone(), path2.clone()]));
 
-        // Add a third path and make sure that
-        //   - results are limited to 2 paths when max is 2
-        //   - we get all three paths back wihen max is 3
+        // Add path3 with:
+        // - matching local-pref
+        // - matching as-path-len
+        // - worse (higher) med
         let mut path3 = Path {
             nexthop: remote_ip3,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
@@ -213,42 +211,41 @@ mod test {
                 id: 49,
                 med: Some(100),
                 local_pref: Some(100),
-                as_path: vec![64500, 64501, 64502],
+                as_path: vec![490, 64501, 64502],
                 stale: None,
             }),
             vlan_id: None,
         };
-        rib.get_mut(&Prefix::V4(target))
-            .unwrap()
-            .insert(path3.clone());
-        let result = bestpaths(target.into(), &rib, MAX_ECMP_FANOUT).unwrap();
+        let mut candidates = result.clone();
+        candidates.insert(path3.clone());
+        let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 2);
         // paths 1 and 2 should always be selected since they have the lowest MED
         assert_eq!(result, BTreeSet::from([path1.clone(), path2.clone()]));
 
-        // set the med to 75 to get an ecmp group of size 3
-        rib.get_mut(&Prefix::V4(target)).unwrap().remove(&path3);
+        // increase max paths to 3
+        max = 3;
+
+        // set the med to 75 (matching path1/path2) and re-run bestpath w/
+        // max paths set to 3. path3 should now be part of the ecmp group returned.
+        let mut candidates = result.clone();
+        candidates.remove(&path3);
         path3.bgp.as_mut().unwrap().med = Some(75);
-        rib.get_mut(&Prefix::V4(target))
-            .unwrap()
-            .insert(path3.clone());
-        let result =
-            bestpaths(target.into(), &rib, MAX_ECMP_FANOUT + 1).unwrap();
+        candidates.insert(path3.clone());
+        let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 3);
         assert_eq!(
             result,
             BTreeSet::from([path1.clone(), path2.clone(), path3.clone()])
         );
 
-        // bump the local_pref on route 2, this should make it the singular
-        // best path
-        rib.get_mut(&Prefix::V4(target)).unwrap().remove(&path2);
+        // bump the local_pref on path2, this should make it the singular
+        // best path regardless of max paths
+        let mut candidates = result.clone();
+        candidates.remove(&path2);
         path2.bgp.as_mut().unwrap().local_pref = Some(125);
-        rib.get_mut(&Prefix::V4(target))
-            .unwrap()
-            .insert(path2.clone());
-        let result =
-            bestpaths(target.into(), &rib, MAX_ECMP_FANOUT + 1).unwrap();
+        candidates.insert(path2.clone());
+        let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result, BTreeSet::from([path2.clone()]));
 
@@ -256,6 +253,7 @@ mod test {
         // - path 4 loses to BGP paths with higher RIB priority
         // - path 4 wins over BGP paths with lower RIB priority
         // - path 4 wins over BGP paths with equal RIB priority
+        //   > static is preferred over bgp when RIB priority matches
         let mut path4 = Path {
             nexthop: remote_ip4,
             rib_priority: u8::MAX,
@@ -263,33 +261,33 @@ mod test {
             bgp: None,
             vlan_id: None,
         };
-        rib.get_mut(&Prefix::V4(target))
-            .unwrap()
-            .insert(path4.clone());
-        let result = bestpaths(target.into(), &rib, MAX_ECMP_FANOUT).unwrap();
+        let mut candidates = result.clone();
+        candidates.insert(path4.clone());
+        let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 1);
+        // path4 (static) has worse rib priority, path2 should win because it
+        // has the best (highest) local-pref among bgp paths (paths 1-3)
         assert_eq!(result, BTreeSet::from([path2.clone()]));
 
-        // Lower the RIB Priority to beat BGP
-        rib.get_mut(&Prefix::V4(target)).unwrap().remove(&path4);
+        // Lower the RIB Priority (better)
+        let mut candidates = result.clone();
+        candidates.remove(&path4);
         path4.rib_priority = DEFAULT_RIB_PRIORITY_STATIC;
-        rib.get_mut(&Prefix::V4(target))
-            .unwrap()
-            .insert(path4.clone());
-        let result =
-            bestpaths(target.into(), &rib, MAX_ECMP_FANOUT + 1).unwrap();
+        candidates.insert(path4.clone());
+        let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 1);
+        // path4 (static) has the best (lower) rib priority
         assert_eq!(result, BTreeSet::from([path4.clone()]));
 
-        // Raise the RIB Priority to match BGP
-        rib.get_mut(&Prefix::V4(target)).unwrap().remove(&path4);
+        // Raise the RIB Priority equal to BGP (paths 1-3)
+        let mut candidates = result.clone();
+        candidates.remove(&path4);
         path4.rib_priority = DEFAULT_RIB_PRIORITY_BGP;
-        rib.get_mut(&Prefix::V4(target))
-            .unwrap()
-            .insert(path4.clone());
-        let result =
-            bestpaths(target.into(), &rib, MAX_ECMP_FANOUT + 1).unwrap();
+        candidates.insert(path4.clone());
+        let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 1);
+        // path4 (static) wins due to protocol preference
+        // i.e. static > bgp when rib priority matches
         assert_eq!(result, BTreeSet::from([path4.clone()]));
     }
 }

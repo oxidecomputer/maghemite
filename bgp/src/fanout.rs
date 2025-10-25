@@ -4,11 +4,14 @@
 
 use crate::connection::BgpConnection;
 use crate::messages::UpdateMessage;
-use crate::session::FsmEvent;
+use crate::session::{AdminEvent, FsmEvent};
+use crate::{COMPONENT_BGP, MOD_NEIGHBOR};
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::mpsc::Sender;
+
+const UNIT_FANOUT: &str = "fanout";
 
 pub struct Fanout<Cnx: BgpConnection> {
     /// Indexed neighbor address
@@ -61,9 +64,18 @@ impl<Cnx: BgpConnection> Fanout<Cnx> {
 impl<Cnx: BgpConnection> Egress<Cnx> {
     fn send(&self, update: &UpdateMessage) {
         if let Some(tx) = self.event_tx.as_ref()
-            && let Err(e) = tx.send(FsmEvent::Announce(update.clone()))
+            && let Err(e) =
+                tx.send(FsmEvent::Admin(AdminEvent::Announce(update.clone())))
         {
-            slog::error!(self.log, "egress fanout failed: {e}");
+            slog::error!(self.log,
+                "failed to send update to egress fanout: {e}";
+                "component" => COMPONENT_BGP,
+                "module" => MOD_NEIGHBOR,
+                "unit" => UNIT_FANOUT,
+                "message" => "update",
+                "message_contents" => format!("{update}"),
+                "error" => format!("{e}")
+            );
         }
     }
 }

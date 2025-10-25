@@ -21,11 +21,14 @@ rhai.workspace = true
 libnet = { workspace = true, optional = true }
 itertools.workspace = true
 oxnet.workspace = true
+uuid.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 pretty-hex.workspace = true
 pretty_assertions.workspace = true
 lazy_static.workspace = true
+proptest.workspace = true
 
 [features]
 default = ["libnet"]
