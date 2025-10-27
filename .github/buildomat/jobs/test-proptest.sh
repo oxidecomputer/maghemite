@@ -26,6 +26,8 @@ cargo --version
 rustc --version
 curl -sSfL --retry 10 https://get.nexte.st/"$NEXTEST_VERSION"/"$PLATFORM" | gunzip | tar -xvf - -C ~/.cargo/bin
 
+source .github/buildomat/test-common.sh
+
 # Run property-based tests with high intensity (default is 256)
 
 # RDB proptest suite
