@@ -35,8 +35,6 @@ const UNIT_CONNECTION: &str = "connection_tcp";
 
 #[cfg(target_os = "linux")]
 use crate::connection::MAX_MD5SIG_KEYLEN;
-#[cfg(target_os = "illumos")]
-use itertools::Itertools;
 #[cfg(target_os = "linux")]
 use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
 #[cfg(target_os = "illumos")]
