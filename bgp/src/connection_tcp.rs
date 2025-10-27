@@ -33,12 +33,12 @@ use std::{
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
+#[cfg(target_os = "linux")]
+use crate::connection::MAX_MD5SIG_KEYLEN;
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;
 #[cfg(target_os = "linux")]
 use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
-#[cfg(any(target_os = "linux", target_os = "illumos"))]
-use libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_int, c_void};
 #[cfg(target_os = "illumos")]
 use {
     itertools::Itertools,
@@ -46,7 +46,7 @@ use {
 };
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
 use {
-    libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_void},
+    libc::{c_int, c_void},
     std::os::fd::AsRawFd,
 };
 
