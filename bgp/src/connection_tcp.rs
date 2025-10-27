@@ -44,7 +44,7 @@ use {
 };
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
 use {
-    libc::{c_int, c_void},
+    libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_int, c_void},
     std::os::fd::AsRawFd,
 };
 
