@@ -512,9 +512,9 @@ impl From<StaticRoute6> for StaticRouteKey {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RibQuery {
-    /// Filter by address family
+    /// Filter by address family (None means all families)
     #[serde(default)]
-    pub address_family: AddressFamily,
+    pub address_family: Option<AddressFamily>,
     /// Filter by protocol (optional)
     pub protocol: Option<ProtocolFilter>,
 }

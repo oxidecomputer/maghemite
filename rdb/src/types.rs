@@ -5,6 +5,8 @@
 use crate::error::Error;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+#[cfg(feature = "clap")]
+use clap::ValueEnum;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -717,14 +719,11 @@ impl Display for PrefixChangeNotification {
     Serialize,
     Deserialize,
     JsonSchema,
-    Default,
 )]
+#[cfg_attr(feature = "clap", derive(ValueEnum))]
 pub enum AddressFamily {
     Ipv4,
     Ipv6,
-    /// All routes (IPv4 and IPv6)
-    #[default]
-    All,
 }
 
 /// Trait for encoding/decoding prefixes to/from BGP wire format

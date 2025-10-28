@@ -162,22 +162,16 @@ fn full_sync(
     _stats: &Arc<Stats>, //TODO(ry)
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
-    let rib4_in = db.full_rib(rdb::AddressFamily::Ipv4);
-    let rib4_loc = db.loc_rib(rdb::AddressFamily::Ipv4);
-    let rib6_in = db.full_rib(rdb::AddressFamily::Ipv6);
-    let rib6_loc = db.loc_rib(rdb::AddressFamily::Ipv6);
+    let rib_in = db.full_rib(None);
+    let rib_loc = db.loc_rib(None);
 
     // Make sure our tunnel endpoint address is on the switch ASIC
     ensure_tep_addr(tep, dpd, rt.clone(), log);
 
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
-    for (prefix, _paths) in rib4_in.iter() {
-        sync_prefix(tep, &rib4_loc, prefix, dpd, ddm, sw, log, &rt)?;
-    }
-
-    for (prefix, _paths) in rib6_in.iter() {
-        sync_prefix(tep, &rib6_loc, prefix, dpd, ddm, sw, log, &rt)?;
+    for (prefix, _paths) in rib_in.iter() {
+        sync_prefix(tep, &rib_loc, prefix, dpd, ddm, sw, log, &rt)?;
     }
 
     Ok(())
@@ -195,18 +189,10 @@ fn handle_change(
     sw: &impl SwitchZone,
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
-    let rib4_loc = db.loc_rib(rdb::AddressFamily::Ipv4);
-    let rib6_loc = db.loc_rib(rdb::AddressFamily::Ipv6);
+    let rib_loc = db.loc_rib(None);
 
     for prefix in notification.changed.iter() {
-        match prefix {
-            Prefix::V4(_) => {
-                sync_prefix(tep, &rib4_loc, prefix, dpd, ddm, sw, log, &rt)?
-            }
-            Prefix::V6(_) => {
-                sync_prefix(tep, &rib6_loc, prefix, dpd, ddm, sw, log, &rt)?
-            }
-        }
+        sync_prefix(tep, &rib_loc, prefix, dpd, ddm, sw, log, &rt)?
     }
 
     Ok(())

@@ -724,8 +724,7 @@ impl Stats {
         let mut samples = Vec::new();
 
         let mut count = 0usize;
-        for (_prefix, paths) in self.db.full_rib(rdb::AddressFamily::All).iter()
-        {
+        for (_prefix, paths) in self.db.full_rib(None).iter() {
             count += paths.len();
         }
         samples.push(rib_quantity!(

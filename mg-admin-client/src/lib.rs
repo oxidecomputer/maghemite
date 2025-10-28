@@ -36,7 +36,7 @@ use types::{Path, Rib};
 
 pub fn print_rib(
     rib: Rib,
-    address_family: AddressFamily,
+    address_family: Option<AddressFamily>,
     protocol_filter: Option<ProtocolFilter>,
 ) {
     type CliRib = BTreeMap<Prefix, Vec<Path>>;
@@ -80,10 +80,8 @@ pub fn print_rib(
         }
     }
 
-    let show_ipv4 =
-        matches!(address_family, AddressFamily::All | AddressFamily::Ipv4);
-    let show_ipv6 =
-        matches!(address_family, AddressFamily::All | AddressFamily::Ipv6);
+    let show_ipv4 = matches!(address_family, None | Some(AddressFamily::Ipv4));
+    let show_ipv6 = matches!(address_family, None | Some(AddressFamily::Ipv6));
     let show_static =
         matches!(protocol_filter, None | Some(ProtocolFilter::Static));
     let show_bgp = matches!(protocol_filter, None | Some(ProtocolFilter::Bgp));

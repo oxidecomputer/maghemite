@@ -2934,12 +2934,6 @@ fn prefix_from_wire(
                 .map_err(|_| Error::InvalidNlriPrefix(input.to_vec()))?;
             Ok((remaining, prefix6.into()))
         }
-        AddressFamily::All => {
-            Err(Error::UnsupportedOperation(
-                "Cannot decode Prefix with AddressFamily::All - must specify Ipv4 or Ipv6"
-                    .into(),
-            ))
-        }
     }
 }
 

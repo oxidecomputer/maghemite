@@ -56,7 +56,7 @@ pub async fn static_list_v4_routes(
     let static_db = ctx
         .context()
         .db
-        .get_static(AddressFamily::Ipv4)
+        .get_static(Some(AddressFamily::Ipv4))
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     let mut static_rib: GetRibResult = BTreeMap::new();
@@ -111,7 +111,7 @@ pub async fn static_list_v6_routes(
     let static_db = ctx
         .context()
         .db
-        .get_static(AddressFamily::Ipv6)
+        .get_static(Some(AddressFamily::Ipv6))
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     let mut static_rib: GetRibResult = BTreeMap::new();

@@ -5,7 +5,7 @@
 use std::num::NonZeroU8;
 
 use anyhow::Result;
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 use mg_admin_client::types::BestpathFanoutRequest;
 use mg_admin_client::{Client, print_rib};
 use rdb::types::{AddressFamily, ProtocolFilter};
@@ -25,34 +25,14 @@ pub struct StatusCommand {
     command: StatusCmd,
 }
 
-#[derive(Copy, Clone, Debug, ValueEnum)]
-pub enum AddressFamilyArg {
-    /// IPv4 routes only
-    Ipv4,
-    /// IPv6 routes only
-    Ipv6,
-    /// All routes (IPv4 and IPv6)
-    All,
-}
-
-impl From<AddressFamilyArg> for AddressFamily {
-    fn from(arg: AddressFamilyArg) -> Self {
-        match arg {
-            AddressFamilyArg::Ipv4 => AddressFamily::Ipv4,
-            AddressFamilyArg::Ipv6 => AddressFamily::Ipv6,
-            AddressFamilyArg::All => AddressFamily::All,
-        }
-    }
-}
-
 #[derive(Subcommand, Debug)]
 pub enum StatusCmd {
     /// Get the unified adj-rib-in table. Contains routes from all
     /// protocols (e.g. BGP and static routing).
     Imported {
         /// Address family to filter by
-        #[arg(value_enum, default_value_t = AddressFamilyArg::All)]
-        address_family: AddressFamilyArg,
+        #[arg(value_enum)]
+        address_family: Option<AddressFamily>,
         /// Protocol filter (optional)
         #[arg(value_enum)]
         protocol: Option<ProtocolFilter>,
@@ -62,8 +42,8 @@ pub enum StatusCmd {
     /// best paths.
     Selected {
         /// Address family to filter by
-        #[arg(value_enum, default_value_t = AddressFamilyArg::All)]
-        address_family: AddressFamilyArg,
+        #[arg(value_enum)]
+        address_family: Option<AddressFamily>,
         /// Protocol filter (optional)
         #[arg(value_enum)]
         protocol: Option<ProtocolFilter>,
@@ -100,11 +80,11 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             StatusCmd::Imported {
                 address_family,
                 protocol,
-            } => get_imported(c, address_family.into(), protocol).await?,
+            } => get_imported(c, address_family, protocol).await?,
             StatusCmd::Selected {
                 address_family,
                 protocol,
-            } => get_selected(c, address_family.into(), protocol).await?,
+            } => get_selected(c, address_family, protocol).await?,
         },
     }
     Ok(())
@@ -112,11 +92,11 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
 
 async fn get_imported(
     c: Client,
-    address_family: AddressFamily,
+    address_family: Option<AddressFamily>,
     protocol: Option<ProtocolFilter>,
 ) -> Result<()> {
     let imported = c
-        .get_rib_imported(Some(&address_family), protocol.as_ref())
+        .get_rib_imported(address_family.as_ref(), protocol.as_ref())
         .await?
         .into_inner();
 
@@ -126,11 +106,11 @@ async fn get_imported(
 
 async fn get_selected(
     c: Client,
-    address_family: AddressFamily,
+    address_family: Option<AddressFamily>,
     protocol: Option<ProtocolFilter>,
 ) -> Result<()> {
     let selected = c
-        .get_rib_selected(Some(&address_family), protocol.as_ref())
+        .get_rib_selected(address_family.as_ref(), protocol.as_ref())
         .await?
         .into_inner();
 

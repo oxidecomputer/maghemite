@@ -170,21 +170,21 @@ impl Db {
         lock!(self.rib6_loc).clone()
     }
 
-    pub fn loc_rib(&self, af: AddressFamily) -> Rib {
+    pub fn loc_rib(&self, af: Option<AddressFamily>) -> Rib {
         match af {
-            AddressFamily::Ipv4 => self
+            Some(AddressFamily::Ipv4) => self
                 .loc_rib4()
                 .into_iter()
                 .map(|(p4, paths)| (Prefix::from(p4), paths))
                 .collect(),
 
-            AddressFamily::Ipv6 => self
+            Some(AddressFamily::Ipv6) => self
                 .loc_rib6()
                 .into_iter()
                 .map(|(p6, paths)| (Prefix::from(p6), paths))
                 .collect(),
 
-            AddressFamily::All => {
+            None => {
                 let mut rib: Rib = self
                     .loc_rib4()
                     .into_iter()
@@ -208,19 +208,19 @@ impl Db {
         lock!(self.rib6_in).clone()
     }
 
-    pub fn full_rib(&self, af: AddressFamily) -> Rib {
+    pub fn full_rib(&self, af: Option<AddressFamily>) -> Rib {
         match af {
-            AddressFamily::Ipv4 => self
+            Some(AddressFamily::Ipv4) => self
                 .full_rib4()
                 .into_iter()
                 .map(|(p4, paths)| (Prefix::from(p4), paths))
                 .collect(),
-            AddressFamily::Ipv6 => self
+            Some(AddressFamily::Ipv6) => self
                 .full_rib6()
                 .into_iter()
                 .map(|(p6, paths)| (Prefix::from(p6), paths))
                 .collect(),
-            AddressFamily::All => {
+            None => {
                 let mut rib: Rib = self
                     .full_rib4()
                     .into_iter()
@@ -252,19 +252,19 @@ impl Db {
         rib
     }
 
-    pub fn static_rib(&self, af: AddressFamily) -> Rib {
+    pub fn static_rib(&self, af: Option<AddressFamily>) -> Rib {
         match af {
-            AddressFamily::Ipv4 => self
+            Some(AddressFamily::Ipv4) => self
                 .static_rib4()
                 .into_iter()
                 .map(|(p4, paths)| (Prefix::from(p4), paths))
                 .collect(),
-            AddressFamily::Ipv6 => self
+            Some(AddressFamily::Ipv6) => self
                 .static_rib6()
                 .into_iter()
                 .map(|(p6, paths)| (Prefix::from(p6), paths))
                 .collect(),
-            AddressFamily::All => {
+            None => {
                 let mut rib: Rib = self
                     .static_rib4()
                     .into_iter()
@@ -299,19 +299,19 @@ impl Db {
     }
 
     #[allow(dead_code)]
-    fn bgp_rib(&self, af: AddressFamily) -> Rib {
+    fn bgp_rib(&self, af: Option<AddressFamily>) -> Rib {
         match af {
-            AddressFamily::Ipv4 => self
+            Some(AddressFamily::Ipv4) => self
                 .bgp_rib4()
                 .into_iter()
                 .map(|(p4, paths)| (Prefix::from(p4), paths))
                 .collect(),
-            AddressFamily::Ipv6 => self
+            Some(AddressFamily::Ipv6) => self
                 .bgp_rib6()
                 .into_iter()
                 .map(|(p6, paths)| (Prefix::from(p6), paths))
                 .collect(),
-            AddressFamily::All => {
+            None => {
                 let mut rib: Rib = self
                     .bgp_rib4()
                     .into_iter()
@@ -931,18 +931,18 @@ impl Db {
 
     pub fn get_static(
         &self,
-        af: AddressFamily,
+        af: Option<AddressFamily>,
     ) -> Result<Vec<StaticRouteKey>, Error> {
         match af {
-            AddressFamily::Ipv4 => {
+            Some(AddressFamily::Ipv4) => {
                 let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
                 self.get_static_from_tree(tree)
             }
-            AddressFamily::Ipv6 => {
+            Some(AddressFamily::Ipv6) => {
                 let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
                 self.get_static_from_tree(tree)
             }
-            AddressFamily::All => {
+            None => {
                 let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
                 let mut routes = self.get_static_from_tree(tree)?;
                 let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
@@ -958,7 +958,7 @@ impl Db {
     }
 
     pub fn get_static_nexthop4_count(&self) -> Result<usize, Error> {
-        let entries = self.get_static(AddressFamily::Ipv4)?;
+        let entries = self.get_static(Some(AddressFamily::Ipv4))?;
         let mut nexthops = BTreeSet::new();
         for e in entries {
             nexthops.insert(e.nexthop);
@@ -972,7 +972,7 @@ impl Db {
     }
 
     pub fn get_static_nexthop6_count(&self) -> Result<usize, Error> {
-        let entries = self.get_static(AddressFamily::Ipv6)?;
+        let entries = self.get_static(Some(AddressFamily::Ipv6))?;
         let mut nexthops = BTreeSet::new();
         for e in entries {
             nexthops.insert(e.nexthop);
@@ -1243,11 +1243,17 @@ impl Db {
         // TODO(ipv6): call this just for enabled address-families.
         // no need to walk the full rib for an AF that isn't affected
         self.remove_bgp_prefixes(
-            self.full_rib(AddressFamily::Ipv4).keys().copied().collect(),
+            self.full_rib(Some(AddressFamily::Ipv4))
+                .keys()
+                .copied()
+                .collect(),
             peer,
         );
         self.remove_bgp_prefixes(
-            self.full_rib(AddressFamily::Ipv6).keys().copied().collect(),
+            self.full_rib(Some(AddressFamily::Ipv6))
+                .keys()
+                .copied()
+                .collect(),
             peer,
         );
     }
@@ -1445,7 +1451,7 @@ mod test {
     fn test_rib() {
         use crate::StaticRouteKey;
         use crate::{
-            AddressFamily, BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
+            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
             DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4, db::Db,
         };
         // init test vars
@@ -1531,8 +1537,8 @@ mod test {
         // Start test cases
 
         // start from empty rib
-        assert!(db.full_rib(AddressFamily::All).is_empty());
-        assert!(db.loc_rib(AddressFamily::All).is_empty());
+        assert!(db.full_rib(None).is_empty());
+        assert!(db.loc_rib(None).is_empty());
 
         // both paths have the same next-hop, but not all fields
         // from StaticRouteKey match (rib_priority is different).
@@ -1681,8 +1687,8 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // rib should be empty again
-        assert!(db.full_rib(AddressFamily::All).is_empty());
-        assert!(db.loc_rib(AddressFamily::All).is_empty());
+        assert!(db.full_rib(None).is_empty());
+        assert!(db.loc_rib(None).is_empty());
     }
 
     #[test]
@@ -1704,12 +1710,12 @@ mod test {
         db.add_static_routes(&[static_route]).unwrap();
 
         // Verify route was added
-        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0], static_route);
 
         // Check that it appears in RIB
-        let rib_routes = db.full_rib(AddressFamily::Ipv4);
+        let rib_routes = db.full_rib(Some(AddressFamily::Ipv4));
         assert_eq!(rib_routes.len(), 1);
         assert!(rib_routes.contains_key(&Prefix::V4(prefix4)));
 
@@ -1717,11 +1723,11 @@ mod test {
         db.remove_static_routes(&[static_route]).unwrap();
 
         // Verify route was removed
-        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
         assert!(routes.is_empty());
 
         // Check that RIB is empty
-        let rib_routes = db.full_rib(AddressFamily::Ipv4);
+        let rib_routes = db.full_rib(Some(AddressFamily::Ipv4));
         assert!(rib_routes.is_empty());
     }
 
@@ -1744,12 +1750,12 @@ mod test {
         db.add_static_routes(&[static_route]).unwrap();
 
         // Verify route was added
-        let routes = db.get_static(AddressFamily::Ipv6).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0], static_route);
 
         // Check that it appears in RIB
-        let rib_routes = db.full_rib(AddressFamily::Ipv6);
+        let rib_routes = db.full_rib(Some(AddressFamily::Ipv6));
         assert_eq!(rib_routes.len(), 1);
         assert!(rib_routes.contains_key(&Prefix::V6(prefix6)));
 
@@ -1757,11 +1763,11 @@ mod test {
         db.remove_static_routes(&[static_route]).unwrap();
 
         // Verify route was removed
-        let routes = db.get_static(AddressFamily::Ipv6).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
         assert!(routes.is_empty());
 
         // Check that RIB is empty
-        let rib_routes = db.full_rib(AddressFamily::Ipv6);
+        let rib_routes = db.full_rib(Some(AddressFamily::Ipv6));
         assert!(rib_routes.is_empty());
     }
 
@@ -1792,7 +1798,7 @@ mod test {
             .unwrap();
 
         // Verify both routes were added correctly
-        let routes = db.get_static(AddressFamily::Ipv6).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
         assert_eq!(routes.len(), 2);
 
         let no_vlan_route =
@@ -1833,17 +1839,17 @@ mod test {
         db.add_static_routes(&[route4, route6]).unwrap();
 
         // Test IPv4-only retrieval
-        let ipv4_routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        let ipv4_routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
         assert_eq!(ipv4_routes.len(), 1);
         assert_eq!(ipv4_routes[0], route4);
 
         // Test IPv6-only retrieval
-        let ipv6_routes = db.get_static(AddressFamily::Ipv6).unwrap();
+        let ipv6_routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
         assert_eq!(ipv6_routes.len(), 1);
         assert_eq!(ipv6_routes[0], route6);
 
         // Test all address families retrieval
-        let all_routes = db.get_static(AddressFamily::All).unwrap();
+        let all_routes = db.get_static(None).unwrap();
         assert_eq!(all_routes.len(), 2);
         assert!(all_routes.contains(&route4));
         assert!(all_routes.contains(&route6));
@@ -1883,20 +1889,20 @@ mod test {
         db.add_static_routes(&[route1, route2]).unwrap();
 
         // Verify both routes were added
-        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
         assert_eq!(routes.len(), 2);
         assert!(routes.contains(&route1));
         assert!(routes.contains(&route2));
 
         // Remove one route, other should remain
         db.remove_static_routes(&[route1]).unwrap();
-        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0], route2);
 
         // Remove final route
         db.remove_static_routes(&[route2]).unwrap();
-        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
         assert!(routes.is_empty());
     }
 
@@ -1927,7 +1933,7 @@ mod test {
             .unwrap();
 
         // Verify both routes were added correctly
-        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
         assert_eq!(routes.len(), 2);
 
         let no_vlan_route =
@@ -1973,7 +1979,7 @@ mod test {
         };
 
         db.add_static_routes(&[route]).unwrap();
-        let routes = db.get_static(AddressFamily::Ipv4).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
         assert_eq!(routes.len(), 1);
 
         // Verify the stored route has normalized prefix

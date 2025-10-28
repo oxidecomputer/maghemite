@@ -1062,7 +1062,7 @@
           {
             "in": "query",
             "name": "address_family",
-            "description": "Filter by address family",
+            "description": "Filter by address family (None means all families)",
             "schema": {
               "$ref": "#/components/schemas/AddressFamily"
             }
@@ -1103,7 +1103,7 @@
           {
             "in": "query",
             "name": "address_family",
-            "description": "Filter by address family",
+            "description": "Filter by address family (None means all families)",
             "schema": {
               "$ref": "#/components/schemas/AddressFamily"
             }
@@ -3677,21 +3677,10 @@
         ]
       },
       "AddressFamily": {
-        "oneOf": [
-          {
-            "type": "string",
-            "enum": [
-              "Ipv4",
-              "Ipv6"
-            ]
-          },
-          {
-            "description": "All routes (IPv4 and IPv6)",
-            "type": "string",
-            "enum": [
-              "All"
-            ]
-          }
+        "type": "string",
+        "enum": [
+          "Ipv4",
+          "Ipv6"
         ]
       },
       "ProtocolFilter": {

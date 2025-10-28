@@ -419,7 +419,9 @@ pub async fn get_imported(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let imported = get_router!(ctx, rq.asn)?.db.full_rib(AddressFamily::Ipv4);
+    let imported = get_router!(ctx, rq.asn)?
+        .db
+        .full_rib(Some(AddressFamily::Ipv4));
     Ok(HttpResponseOk(imported.into()))
 }
 
@@ -429,7 +431,9 @@ pub async fn get_selected(
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let selected = get_router!(ctx, rq.asn)?.db.loc_rib(AddressFamily::Ipv4);
+    let selected = get_router!(ctx, rq.asn)?
+        .db
+        .loc_rib(Some(AddressFamily::Ipv4));
     Ok(HttpResponseOk(selected.into()))
 }
 
