@@ -6,56 +6,9 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "1.0.0"
+    "version": "2.0.0"
   },
   "paths": {
-    "/bestpath/config/fanout": {
-      "get": {
-        "operationId": "read_bestpath_fanout",
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BestpathFanoutResponse"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "post": {
-        "operationId": "update_bestpath_fanout",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BestpathFanoutRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/bfd/peers": {
       "get": {
         "summary": "Get all the peers and their associated BFD state. Peers are identified by IP",
@@ -556,6 +509,117 @@
         }
       }
     },
+    "/bgp/config/origin6": {
+      "get": {
+        "operationId": "read_origin6",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Origin6"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "create_origin6",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Origin6"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "update_origin6",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Origin6"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_origin6",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/config/router": {
       "get": {
         "operationId": "read_router",
@@ -807,7 +871,7 @@
     },
     "/bgp/message-history": {
       "get": {
-        "operationId": "message_history",
+        "operationId": "message_history_v2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -904,42 +968,9 @@
         }
       }
     },
-    "/bgp/status/imported": {
-      "get": {
-        "operationId": "get_imported",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AsnSelector"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Rib"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/bgp/status/neighbors": {
       "get": {
-        "operationId": "get_neighbors",
+        "operationId": "get_neighbors_v2",
         "parameters": [
           {
             "in": "query",
@@ -977,19 +1008,115 @@
         }
       }
     },
-    "/bgp/status/selected": {
+    "/rib/config/bestpath/fanout": {
       "get": {
-        "operationId": "get_selected",
+        "operationId": "read_rib_bestpath_fanout",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BestpathFanoutResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "update_rib_bestpath_fanout",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AsnSelector"
+                "$ref": "#/components/schemas/BestpathFanoutRequest"
               }
             }
           },
           "required": true
         },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/rib/status/imported": {
+      "get": {
+        "operationId": "get_rib_imported",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "protocol",
+            "description": "Filter by protocol (optional)",
+            "schema": {
+              "$ref": "#/components/schemas/ProtocolFilter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rib"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/rib/status/selected": {
+      "get": {
+        "operationId": "get_rib_selected",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address_family",
+            "description": "Filter by address family",
+            "schema": {
+              "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "protocol",
+            "description": "Filter by protocol (optional)",
+            "schema": {
+              "$ref": "#/components/schemas/ProtocolFilter"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "successful operation",
@@ -1088,6 +1215,85 @@
           }
         }
       }
+    },
+    "/static/route6": {
+      "get": {
+        "operationId": "static_list_v6_routes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Map_of_Set_of_Path",
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Path"
+                    },
+                    "uniqueItems": true
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "static_add_v6_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddStaticRoute6Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "static_remove_v6_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteStaticRoute6Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1126,6 +1332,17 @@
         "properties": {
           "routes": {
             "$ref": "#/components/schemas/StaticRoute4List"
+          }
+        },
+        "required": [
+          "routes"
+        ]
+      },
+      "AddStaticRoute6Request": {
+        "type": "object",
+        "properties": {
+          "routes": {
+            "$ref": "#/components/schemas/StaticRoute6List"
           }
         },
         "required": [
@@ -2017,11 +2234,46 @@
           }
         ]
       },
+      "ConnectionId": {
+        "description": "Unique identifier for a BGP connection instance",
+        "type": "object",
+        "properties": {
+          "local": {
+            "description": "Local socket address for this connection",
+            "type": "string"
+          },
+          "remote": {
+            "description": "Remote socket address for this connection",
+            "type": "string"
+          },
+          "uuid": {
+            "description": "Unique identifier for this connection instance",
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "local",
+          "remote",
+          "uuid"
+        ]
+      },
       "DeleteStaticRoute4Request": {
         "type": "object",
         "properties": {
           "routes": {
             "$ref": "#/components/schemas/StaticRoute4List"
+          }
+        },
+        "required": [
+          "routes"
+        ]
+      },
+      "DeleteStaticRoute6Request": {
+        "type": "object",
+        "properties": {
+          "routes": {
+            "$ref": "#/components/schemas/StaticRoute6List"
           }
         },
         "required": [
@@ -2213,6 +2465,13 @@
             ]
           },
           {
+            "description": "Handler for Connection Collisions (RFC 4271 6.8)",
+            "type": "string",
+            "enum": [
+              "ConnectionCollision"
+            ]
+          },
+          {
             "description": "Sync up with peers.",
             "type": "string",
             "enum": [
@@ -2378,9 +2637,12 @@
         ]
       },
       "MessageHistoryEntry": {
-        "description": "A message history entry is a BGP message with an associated timestamp",
+        "description": "A message history entry is a BGP message with an associated timestamp and connection ID",
         "type": "object",
         "properties": {
+          "connection_id": {
+            "$ref": "#/components/schemas/ConnectionId"
+          },
           "message": {
             "$ref": "#/components/schemas/Message"
           },
@@ -2390,6 +2652,7 @@
           }
         },
         "required": [
+          "connection_id",
           "message",
           "timestamp"
         ]
@@ -2774,6 +3037,28 @@
           "prefixes"
         ]
       },
+      "Origin6": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "ASN of the router to originate from.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "prefixes": {
+            "description": "Set of prefixes to originate.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prefix6"
+            }
+          }
+        },
+        "required": [
+          "asn",
+          "prefixes"
+        ]
+      },
       "Path": {
         "type": "object",
         "properties": {
@@ -3138,29 +3423,6 @@
           }
         ]
       },
-      "Prefix2": {
-        "description": "This data structure captures a network prefix as it's laid out in a BGP message. There is a prefix length followed by a variable number of bytes. Just enough bytes to express the prefix.",
-        "type": "object",
-        "properties": {
-          "length": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0
-          },
-          "value": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint8",
-              "minimum": 0
-            }
-          }
-        },
-        "required": [
-          "length",
-          "value"
-        ]
-      },
       "Prefix4": {
         "type": "object",
         "properties": {
@@ -3325,6 +3587,48 @@
           "list"
         ]
       },
+      "StaticRoute6": {
+        "type": "object",
+        "properties": {
+          "nexthop": {
+            "type": "string",
+            "format": "ipv6"
+          },
+          "prefix": {
+            "$ref": "#/components/schemas/Prefix6"
+          },
+          "rib_priority": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "nexthop",
+          "prefix",
+          "rib_priority"
+        ]
+      },
+      "StaticRoute6List": {
+        "type": "object",
+        "properties": {
+          "list": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaticRoute6"
+            }
+          }
+        },
+        "required": [
+          "list"
+        ]
+      },
       "UpdateErrorSubcode": {
         "description": "Update message error subcode types",
         "type": "string",
@@ -3350,7 +3654,7 @@
           "nlri": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix2"
+              "$ref": "#/components/schemas/Prefix"
             }
           },
           "path_attributes": {
@@ -3362,7 +3666,7 @@
           "withdrawn": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix2"
+              "$ref": "#/components/schemas/Prefix"
             }
           }
         },
@@ -3370,6 +3674,42 @@
           "nlri",
           "path_attributes",
           "withdrawn"
+        ]
+      },
+      "AddressFamily": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "Ipv4",
+              "Ipv6"
+            ]
+          },
+          {
+            "description": "All routes (IPv4 and IPv6)",
+            "type": "string",
+            "enum": [
+              "All"
+            ]
+          }
+        ]
+      },
+      "ProtocolFilter": {
+        "oneOf": [
+          {
+            "description": "BGP routes only",
+            "type": "string",
+            "enum": [
+              "Bgp"
+            ]
+          },
+          {
+            "description": "Static routes only",
+            "type": "string",
+            "enum": [
+              "Static"
+            ]
+          }
         ]
       }
     },
