@@ -678,7 +678,7 @@ async fn delete_router(asn: u32, c: Client) -> Result<()> {
 }
 
 async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
-    let result = c.get_neighbors(asn).await?;
+    let result = c.get_neighbors_v2(asn).await?;
     //println!("{result:#?}");
     let mut tw = TabWriter::new(stdout());
     writeln!(

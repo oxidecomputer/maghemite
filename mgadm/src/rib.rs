@@ -116,7 +116,7 @@ async fn get_imported(
     protocol: Option<ProtocolFilter>,
 ) -> Result<()> {
     let imported = c
-        .get_imported(Some(&address_family), protocol.as_ref())
+        .get_rib_imported(Some(&address_family), protocol.as_ref())
         .await?
         .into_inner();
 
@@ -130,7 +130,7 @@ async fn get_selected(
     protocol: Option<ProtocolFilter>,
 ) -> Result<()> {
     let selected = c
-        .get_selected(Some(&address_family), protocol.as_ref())
+        .get_rib_selected(Some(&address_family), protocol.as_ref())
         .await?
         .into_inner();
 
@@ -139,13 +139,13 @@ async fn get_selected(
 }
 
 async fn read_bestpath_fanout(c: Client) -> Result<()> {
-    let result = c.read_bestpath_fanout().await?;
+    let result = c.read_rib_bestpath_fanout().await?;
     println!("{}", result.into_inner().fanout);
     Ok(())
 }
 
 async fn update_bestpath_fanout(fanout: NonZeroU8, c: Client) -> Result<()> {
-    c.update_bestpath_fanout(&BestpathFanoutRequest { fanout })
+    c.update_rib_bestpath_fanout(&BestpathFanoutRequest { fanout })
         .await?;
     println!("Updated bestpath fanout to: {}", fanout);
     Ok(())
