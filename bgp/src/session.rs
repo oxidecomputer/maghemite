@@ -711,7 +711,15 @@ pub const MAX_MESSAGE_HISTORY: usize = 1024;
 pub struct MessageHistoryEntry {
     timestamp: chrono::DateTime<chrono::Utc>,
     message: Message,
-    connection_id: Option<ConnectionId>,
+}
+
+impl From<MessageHistoryEntryV2> for MessageHistoryEntry {
+    fn from(entry: MessageHistoryEntryV2) -> Self {
+        Self {
+            timestamp: entry.timestamp,
+            message: entry.message,
+        }
+    }
 }
 
 /// Message history for a BGP session
@@ -721,23 +729,55 @@ pub struct MessageHistory {
     pub sent: VecDeque<MessageHistoryEntry>,
 }
 
-impl MessageHistory {
-    fn receive(&mut self, msg: Message, connection_id: Option<ConnectionId>) {
+impl From<MessageHistoryV2> for MessageHistory {
+    fn from(history: MessageHistoryV2) -> Self {
+        Self {
+            received: history
+                .received
+                .into_iter()
+                .map(MessageHistoryEntry::from)
+                .collect(),
+            sent: history
+                .sent
+                .into_iter()
+                .map(MessageHistoryEntry::from)
+                .collect(),
+        }
+    }
+}
+
+/// A message history entry is a BGP message with an associated timestamp
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MessageHistoryEntryV2 {
+    timestamp: chrono::DateTime<chrono::Utc>,
+    message: Message,
+    connection_id: ConnectionId,
+}
+
+/// Message history for a BGP session
+#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MessageHistoryV2 {
+    pub received: VecDeque<MessageHistoryEntryV2>,
+    pub sent: VecDeque<MessageHistoryEntryV2>,
+}
+
+impl MessageHistoryV2 {
+    fn receive(&mut self, msg: Message, connection_id: ConnectionId) {
         if self.received.len() >= MAX_MESSAGE_HISTORY {
             self.received.pop_back();
         }
-        self.received.push_front(MessageHistoryEntry {
+        self.received.push_front(MessageHistoryEntryV2 {
             message: msg,
             timestamp: chrono::Utc::now(),
             connection_id,
         });
     }
 
-    fn send(&mut self, msg: Message, connection_id: Option<ConnectionId>) {
+    fn send(&mut self, msg: Message, connection_id: ConnectionId) {
         if self.sent.len() >= MAX_MESSAGE_HISTORY {
             self.sent.pop_back();
         }
-        self.sent.push_front(MessageHistoryEntry {
+        self.sent.push_front(MessageHistoryEntryV2 {
             message: msg,
             timestamp: chrono::Utc::now(),
             connection_id,
@@ -915,7 +955,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
 
     /// A log of the last `MAX_MESSAGE_HISTORY` messages. Keepalives are not
     /// included in message history.
-    pub message_history: Arc<Mutex<MessageHistory>>,
+    pub message_history: Arc<Mutex<MessageHistoryV2>>,
 
     /// Counters for message types sent and received, state transitions, etc.
     pub counters: Arc<SessionCounters>,
@@ -1073,7 +1113,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             running: AtomicBool::new(false),
             fanout,
             router,
-            message_history: Arc::new(Mutex::new(MessageHistory::default())),
+            message_history: Arc::new(Mutex::new(MessageHistoryV2::default())),
             counters: Arc::new(SessionCounters::default()),
             db,
             caps_tx: Arc::new(Mutex::new(BTreeSet::new())),
@@ -2481,7 +2521,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             if let Message::Open(om) = msg {
                                 // Event 20 (BGPOpen with DelayOpenTimer running)
                                 lock!(self.message_history)
-                                    .receive(om.clone().into(), Some(*conn_id));
+                                    .receive(om.clone().into(), *conn_id);
                                 self.counters
                                     .opens_received
                                     .fetch_add(1, Ordering::Relaxed);
@@ -2963,8 +3003,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::OpenConfirm(pc);
                     }
 
-                    lock!(self.message_history)
-                        .receive(msg.clone(), Some(conn_id));
+                    lock!(self.message_history).receive(msg.clone(), conn_id);
 
                     // The peer has ACK'd our open message with a keepalive. Start the
                     // session timers and enter session setup.
@@ -3549,7 +3588,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     if let Message::Open(om) = msg {
                                         lock!(self.message_history).receive(
                                             om.clone().into(),
-                                            Some(*conn_id),
+                                            *conn_id,
                                         );
 
                                         self.bump_msg_counter(msg_kind, false);
@@ -4000,7 +4039,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         // Event 19
                                         lock!(self.message_history).receive(
                                             om.clone().into(),
-                                            Some(*conn_id),
+                                            *conn_id,
                                         );
 
                                         self.bump_msg_counter(msg_kind, false);
@@ -4096,7 +4135,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         // Event 19
                                         lock!(self.message_history).receive(
                                             om.clone().into(),
-                                            Some(*conn_id),
+                                            *conn_id,
                                         );
 
                                         self.bump_msg_counter(msg_kind, false);
@@ -4991,7 +5030,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message_contents" => format!("{m}").as_str()
                             );
                             self.apply_update(m.clone(), &pc);
-                            lock!(self.message_history).receive(m.into(), None);
+                            lock!(self.message_history)
+                                .receive(m.into(), *conn_id);
                             self.bump_msg_counter(msg_kind, false);
                             FsmState::Established(pc)
                         }
@@ -5052,7 +5092,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     "message_contents" => format!("{msg}")
                                 );
 
-                                lock!(self.message_history).receive(m.clone().into(), None);
+                                lock!(self.message_history).receive(m.clone().into(), *conn_id);
                                 self.bump_msg_counter(msg_kind, false);
 
                                 // Clean up connection WITHOUT sending
@@ -5083,7 +5123,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message_contents" => format!("{m}")
                             );
                             lock!(self.message_history)
-                                .receive(m.clone().into(), None);
+                                .receive(m.clone().into(), *conn_id);
                             self.bump_msg_counter(msg_kind, false);
                             self.exit_established(pc)
                         }
@@ -5126,7 +5166,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 "message_contents" => format!("{m}").as_str()
                             );
                             lock!(self.message_history)
-                                .receive(m.clone().into(), None);
+                                .receive(m.clone().into(), *conn_id);
                             self.bump_msg_counter(msg_kind, false);
                             if let Err(e) = self.handle_refresh(m, &pc) {
                                 session_log!(self, error, pc.conn,
@@ -5387,7 +5427,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         );
 
         let msg = Message::Notification(notification);
-        lock!(self.message_history).send(msg.clone(), None);
+        lock!(self.message_history).send(msg.clone(), *conn.id());
 
         if let Err(e) = conn.send(msg) {
             session_log!(self, error, conn,
@@ -5447,7 +5487,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
         drop(msg);
-        lock!(self.message_history).send(out.clone(), None);
+        lock!(self.message_history).send(out.clone(), *conn.id());
 
         self.counters.opens_sent.fetch_add(1, Ordering::Relaxed);
         if let Err(e) = conn.send(out) {
@@ -5603,7 +5643,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             ShaperResult::Drop => return Ok(()),
         };
 
-        lock!(self.message_history).send(out.clone(), None);
+        lock!(self.message_history).send(out.clone(), *pc.conn.id());
 
         self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
 

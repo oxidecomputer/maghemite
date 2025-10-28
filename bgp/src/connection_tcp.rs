@@ -1266,9 +1266,9 @@ fn init_md5_associations(
                 key,
                 PFKEY_DURATION,
             ) {
-                return Err(Error::Io(std::io::Error::other(
-                    format!("failed to add pf_key {a} -> {b}: {e}"),
-                )));
+                return Err(Error::Io(std::io::Error::other(format!(
+                    "failed to add pf_key {a} -> {b}: {e}"
+                ))));
             }
         }
     }

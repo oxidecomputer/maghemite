@@ -13,7 +13,9 @@ use bgp::{
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
     router::Router,
-    session::{AdminEvent, FsmEvent, SessionEndpoint, SessionInfo},
+    session::{
+        AdminEvent, FsmEvent, MessageHistory, SessionEndpoint, SessionInfo,
+    },
 };
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseDeleted, HttpResponseOk,
@@ -21,8 +23,8 @@ use dropshot::{
 };
 use mg_api::{
     AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse,
-    MessageHistoryRequest, MessageHistoryResponse, NeighborResetRequest,
-    NeighborSelector, Rib,
+    MessageHistoryRequest, MessageHistoryResponse, MessageHistoryResponseV2,
+    NeighborResetRequest, NeighborSelector, Rib,
 };
 use mg_common::lock;
 use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
@@ -672,10 +674,27 @@ pub async fn message_history(
     let mut result = HashMap::new();
 
     for (addr, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
-        result.insert(*addr, lock!(session.message_history).clone());
+        let mh = lock!(session.message_history).clone();
+        result.insert(*addr, MessageHistory::from(mh));
     }
 
     Ok(HttpResponseOk(MessageHistoryResponse { by_peer: result }))
+}
+
+pub async fn message_history_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<MessageHistoryRequest>,
+) -> Result<HttpResponseOk<MessageHistoryResponseV2>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let mut result = HashMap::new();
+
+    for (addr, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
+        result.insert(*addr, lock!(session.message_history).clone());
+    }
+
+    Ok(HttpResponseOk(MessageHistoryResponseV2 { by_peer: result }))
 }
 
 pub async fn create_checker(

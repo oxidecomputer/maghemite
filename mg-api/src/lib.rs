@@ -14,7 +14,7 @@ use bgp::{
         ApplyRequest, CheckerSource, Neighbor, NeighborResetOp, Origin4,
         Origin6, PeerInfo, Router, ShaperSource,
     },
-    session::MessageHistory,
+    session::{MessageHistory, MessageHistoryV2},
 };
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
@@ -242,11 +242,19 @@ pub trait MgAdminApi {
         request: TypedBody<ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/message-history" }]
+    // MessageHistory types updated in VERSION_IPV6_BASIC
+    #[endpoint { method = GET, path = "/bgp/message-history", versions = ..VERSION_IPV6_BASIC }]
     async fn message_history(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError>;
+
+    // MessageHistory types updated in VERSION_IPV6_BASIC
+    #[endpoint { method = GET, path = "/bgp/message-history", versions = VERSION_IPV6_BASIC.. }]
+    async fn message_history_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MessageHistoryRequest>,
+    ) -> Result<HttpResponseOk<MessageHistoryResponseV2>, HttpError>;
 
     #[endpoint { method = PUT, path = "/bgp/config/checker" }]
     async fn create_checker(
@@ -407,6 +415,11 @@ pub struct MessageHistoryRequest {
 #[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct MessageHistoryResponse {
     pub by_peer: HashMap<IpAddr, MessageHistory>,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct MessageHistoryResponseV2 {
+    pub by_peer: HashMap<IpAddr, MessageHistoryV2>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
