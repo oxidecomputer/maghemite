@@ -648,6 +648,11 @@ pub struct SessionInfo {
     /// Jitter range for idle_hold timer
     /// (None = disabled, Some((min, max)) = enabled)
     pub idle_hold_jitter: Option<(f64, f64)>,
+    /// Enable deterministic collision resolution in Established state.
+    /// When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision
+    /// resolution even when one connection is already in Established state.
+    /// When false, Established connection always wins (timing-based resolution).
+    pub deterministic_collision_resolution: bool,
 }
 
 impl Default for SessionInfo {
@@ -675,6 +680,7 @@ impl Default for SessionInfo {
             resolution: Duration::from_millis(100), // 100ms timer resolution
             idle_hold_jitter: Some((0.75, 1.0)), // RFC 4271 recommended range
             connect_retry_jitter: None,          // Disabled by default
+            deterministic_collision_resolution: false, // Preserve current behavior by default
         }
     }
 }
@@ -4802,14 +4808,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let msg_kind = msg.kind();
 
                     // ** Special Handling **
-                    // An Open message meant for a known (registered) connection
-                    // other than the connection owned by this FSM state (`pc`)
-                    // is expected if we have gotten here via the OpenConfirm
-                    // path of ConnectionCollision. Specifically, if `exist`
-                    // gets a Keepalive before `new` gets an Open, `exist`
-                    // progresses into Established and is now known as `pc`.
-                    // When `new` gets its Open here (now an unnamed known
-                    // connection), we need to resolve the collision.
                     if *conn_id != *pc.conn.id() {
                         if let Some(incoming_conn) = self.get_conn(conn_id) {
                             /*
@@ -4839,12 +4837,66 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                              *    - changes its state to Idle.
                              */
                             if let Message::Open(om) = &msg {
-                                // RFC 4271 CollisionDetectEstablishedState prototype
-                                // Set to false for current behavior (Established always wins)
-                                // Set to true to enable collision resolution in Established state
-                                let collision_detect_established_state = true;
-
-                                if collision_detect_established_state {
+                                // This applies to situations where we enter
+                                // ConnectionCollision from OpenConfirm and the
+                                // existing connection gets a Keepalive before
+                                // the new/colliding connection got an Open.
+                                //
+                                // In that case, we transition out of
+                                // ConnectionCollision and into Established with
+                                // the existing connection, but we deliberately
+                                // do not close or unregister the new connection
+                                // so we can handle its Open when it arrives.
+                                // This allows us to delay collision resolution
+                                // until receipt of an Open message (aligning
+                                // better with the expectations of RFC 4271)
+                                // even if the existing connection moves into
+                                // Established prior to collision resolution.
+                                //
+                                // If we find ourselves in this situation, the
+                                // RFC specifies an optional boolean attribute
+                                // to influnce the resolution behavior
+                                // (CollisionDetectEstablishedState), which
+                                // effectively boils down to:
+                                // if false:
+                                //   The Established connection always wins.
+                                //   This means timing is _sometimes_ the
+                                //   deciding factor when choosing a connection
+                                //   to retain, but only if an Open isn't
+                                //   received on the new connection until
+                                //   after .
+                                // if true:
+                                //   Collision resolution is performed based
+                                //   on the BGP-ID of each peer as per the
+                                //   procedure outlined in Section 6.8. and the
+                                //   Established connection is not guaranteed
+                                //   to survive (taking timing out of the
+                                //   picture and making collision resolution
+                                //   more deterministic, in an idealistic sort
+                                //   of way).
+                                //
+                                // Note: This is not a full implementation of
+                                //       CollisionDetectEstablishedState.
+                                //
+                                // Rather, it is simply a lever for us to
+                                // choose whether to ensure determinism in
+                                // collision resolution (i.e. by forcing the
+                                // use of BGP-ID as tie-breaker) or not
+                                // (sticking to "first to Established wins")
+                                // for the scenario described above. A full
+                                // implementation would involve registration
+                                // and tracking of new connections that complete
+                                // while in Established (likely warranting
+                                // an additional CollisionPair variant and
+                                // collision_detection_* method) and adding
+                                // full handling for connections to go into
+                                // and out of Established while a collision is
+                                // underway. At the time of writing this, a full
+                                // implementation is not believed to be worth
+                                // the added complexity and maintenance burden.
+                                if lock!(self.session)
+                                    .deterministic_collision_resolution
+                                {
                                     // Determine which connection wins using pure function
                                     let resolution = collision_resolution(
                                         pc.conn.creator(),
@@ -4887,6 +4939,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             };
 
                                             // Clean up the old established connection
+                                            self.cleanup_established(&pc);
                                             self.stop(
                                                 Some(&pc.conn),
                                                 None,
@@ -4911,8 +4964,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         }
                                     }
                                 } else {
-                                    // collision_detect_established_state=false:
-                                    // Established always wins
                                     session_log!(self, info, pc.conn,
                                         "collision detected in established state (conn_id: {}), resolving",
                                         conn_id.short();
@@ -5642,10 +5693,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         FsmState::Connect
     }
 
-    /// Exit the established state into Idle. Remove prefixes received from the
-    /// session peer from our RIB. Issue a withdraw to the peer and transition
-    /// to back to the idle state.
-    fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
+    /// Remove prefixes received from the session peer from our RIB and issue a
+    /// withdraw to the peer.
+    fn cleanup_established(&self, pc: &PeerConnection<Cnx>) {
         conn_timer!(pc.conn, hold).disable();
         conn_timer!(pc.conn, keepalive).disable();
         session_timer!(self, connect_retry).stop();
@@ -5655,7 +5705,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // remove peer prefixes from db
         self.db.remove_bgp_prefixes_from_peer(&pc.conn.peer().ip());
+    }
 
+    /// Exit the established state into Idle.
+    fn exit_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
+        self.cleanup_established(&pc);
         FsmState::Idle
     }
 
