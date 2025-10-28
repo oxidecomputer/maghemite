@@ -10,7 +10,7 @@ use crate::{
     dispatcher::Dispatcher,
     router::Router,
     session::{
-        AdminEvent, FsmEvent, FsmStateKindV2, SessionEndpoint, SessionInfo,
+        AdminEvent, FsmEvent, FsmStateKind, SessionEndpoint, SessionInfo,
     },
 };
 use lazy_static::lazy_static;
@@ -305,14 +305,14 @@ fn basic_peering_helper<
 
     // Give peer sessions a few seconds and ensure we have reached the
     // established state on both sides.
-    wait_for_eq!(r1_session.state(), FsmStateKindV2::Established);
-    wait_for_eq!(r2_session.state(), FsmStateKindV2::Established);
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
     // Shut down r2 and ensure that r2's peer session has gone back to idle.
     r2.shutdown();
     wait_for_eq!(
         r2_session.state(),
-        FsmStateKindV2::Idle,
+        FsmStateKind::Idle,
         "r2 state should be Idle after being shutdown"
     );
 
@@ -323,7 +323,7 @@ fn basic_peering_helper<
         // Idle -> Active when the IdleHoldTimer expires
         wait_for_eq!(
             r1_session.state(),
-            FsmStateKindV2::Active,
+            FsmStateKind::Active,
             "r1 state should move into Active when session uses passive tcp establishment"
         );
     } else {
@@ -331,7 +331,7 @@ fn basic_peering_helper<
         // the FSM moves from Idle -> Connect when the IdleHoldTimer expires
         wait_for_eq!(
             r1_session.state(),
-            FsmStateKindV2::Connect,
+            FsmStateKind::Connect,
             "r1 state should move into Connect when session uses active tcp establishment"
         );
     }
@@ -347,12 +347,12 @@ fn basic_peering_helper<
             println!("r1_session.state(): {state}");
             state
         },
-        FsmStateKindV2::Established,
+        FsmStateKind::Established,
         "r1 state should move to Established after manual start of r2"
     );
     wait_for_eq!(
         r2_session.state(),
-        FsmStateKindV2::Established,
+        FsmStateKind::Established,
         "r2 state should move to Established after manual start"
     );
 
@@ -442,8 +442,8 @@ fn basic_update_helper<
         .router
         .get_session(r1_addr.ip())
         .expect("get session two");
-    wait_for_eq!(r1_session.state(), FsmStateKindV2::Established);
-    wait_for_eq!(r2_session.state(), FsmStateKindV2::Established);
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
     // originate a prefix
     r1.router
@@ -461,12 +461,12 @@ fn basic_update_helper<
     r1.shutdown();
     wait_for_neq!(
         r1_session.state(),
-        FsmStateKindV2::Established,
+        FsmStateKind::Established,
         "r1 state should NOT be established after being shutdown"
     );
     wait_for_neq!(
         r2_session.state(),
-        FsmStateKindV2::Established,
+        FsmStateKind::Established,
         "r2 state should NOT be established after shutdown of r1"
     );
     wait_for!(r2.router.db.get_prefix_paths(&prefix).is_empty());
@@ -679,10 +679,10 @@ fn test_three_router_chain_tcp() {
         .get_session(ip!(r2_addr))
         .expect("get r3->r2 session");
 
-    wait_for_eq!(r1_r2_session.state(), FsmStateKindV2::Established);
-    wait_for_eq!(r2_r1_session.state(), FsmStateKindV2::Established);
-    wait_for_eq!(r2_r3_session.state(), FsmStateKindV2::Established);
-    wait_for_eq!(r3_r2_session.state(), FsmStateKindV2::Established);
+    wait_for_eq!(r1_r2_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_r3_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r3_r2_session.state(), FsmStateKind::Established);
 
     // Clean up
     for router in test_routers.iter() {

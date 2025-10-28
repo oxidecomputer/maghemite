@@ -128,8 +128,8 @@ pub enum FsmState<Cnx: BgpConnection> {
 }
 
 impl<Cnx: BgpConnection> FsmState<Cnx> {
-    fn kind(&self) -> FsmStateKindV2 {
-        FsmStateKindV2::from(self)
+    fn kind(&self) -> FsmStateKind {
+        FsmStateKind::from(self)
     }
 }
 
@@ -144,7 +144,7 @@ impl<Cnx: BgpConnection> Display for FsmState<Cnx> {
 #[derive(
     Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
 )]
-pub enum FsmStateKindV2 {
+pub enum FsmStateKind {
     /// Initial state. Refuse all incomming BGP connections. No resources
     /// allocated to peer.
     Idle,
@@ -171,40 +171,40 @@ pub enum FsmStateKindV2 {
     Established,
 }
 
-impl FsmStateKindV2 {
+impl FsmStateKind {
     fn as_str(&self) -> &str {
         match self {
-            FsmStateKindV2::Idle => "idle",
-            FsmStateKindV2::Connect => "connect",
-            FsmStateKindV2::Active => "active",
-            FsmStateKindV2::OpenSent => "open sent",
-            FsmStateKindV2::OpenConfirm => "open confirm",
-            FsmStateKindV2::ConnectionCollision => "connection collision",
-            FsmStateKindV2::SessionSetup => "session setup",
-            FsmStateKindV2::Established => "established",
+            FsmStateKind::Idle => "idle",
+            FsmStateKind::Connect => "connect",
+            FsmStateKind::Active => "active",
+            FsmStateKind::OpenSent => "open sent",
+            FsmStateKind::OpenConfirm => "open confirm",
+            FsmStateKind::ConnectionCollision => "connection collision",
+            FsmStateKind::SessionSetup => "session setup",
+            FsmStateKind::Established => "established",
         }
     }
 }
 
-impl Display for FsmStateKindV2 {
+impl Display for FsmStateKind {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", self.as_str())
     }
 }
 
-impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKindV2 {
-    fn from(s: &FsmState<Cnx>) -> FsmStateKindV2 {
+impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKind {
+    fn from(s: &FsmState<Cnx>) -> FsmStateKind {
         match s {
-            FsmState::Idle => FsmStateKindV2::Idle,
-            FsmState::Connect => FsmStateKindV2::Connect,
-            FsmState::Active => FsmStateKindV2::Active,
-            FsmState::OpenSent(_) => FsmStateKindV2::OpenSent,
-            FsmState::OpenConfirm(_) => FsmStateKindV2::OpenConfirm,
+            FsmState::Idle => FsmStateKind::Idle,
+            FsmState::Connect => FsmStateKind::Connect,
+            FsmState::Active => FsmStateKind::Active,
+            FsmState::OpenSent(_) => FsmStateKind::OpenSent,
+            FsmState::OpenConfirm(_) => FsmStateKind::OpenConfirm,
             FsmState::ConnectionCollision(_) => {
-                FsmStateKindV2::ConnectionCollision
+                FsmStateKind::ConnectionCollision
             }
-            FsmState::SessionSetup(_) => FsmStateKindV2::SessionSetup,
-            FsmState::Established(_) => FsmStateKindV2::Established,
+            FsmState::SessionSetup(_) => FsmStateKind::SessionSetup,
+            FsmState::Established(_) => FsmStateKind::Established,
         }
     }
 }
@@ -706,20 +706,12 @@ pub struct SessionEndpoint<Cnx: BgpConnection> {
 
 pub const MAX_MESSAGE_HISTORY: usize = 1024;
 
-/// A message history entry is a BGP message with an associated timestamp
+/// A message history entry is a BGP message with an associated timestamp and connection ID
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MessageHistoryEntry {
     timestamp: chrono::DateTime<chrono::Utc>,
     message: Message,
-}
-
-impl From<MessageHistoryEntryV2> for MessageHistoryEntry {
-    fn from(entry: MessageHistoryEntryV2) -> Self {
-        Self {
-            timestamp: entry.timestamp,
-            message: entry.message,
-        }
-    }
+    connection_id: ConnectionId,
 }
 
 /// Message history for a BGP session
@@ -729,44 +721,12 @@ pub struct MessageHistory {
     pub sent: VecDeque<MessageHistoryEntry>,
 }
 
-impl From<MessageHistoryV2> for MessageHistory {
-    fn from(history: MessageHistoryV2) -> Self {
-        Self {
-            received: history
-                .received
-                .into_iter()
-                .map(MessageHistoryEntry::from)
-                .collect(),
-            sent: history
-                .sent
-                .into_iter()
-                .map(MessageHistoryEntry::from)
-                .collect(),
-        }
-    }
-}
-
-/// A message history entry is a BGP message with an associated timestamp
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistoryEntryV2 {
-    timestamp: chrono::DateTime<chrono::Utc>,
-    message: Message,
-    connection_id: ConnectionId,
-}
-
-/// Message history for a BGP session
-#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageHistoryV2 {
-    pub received: VecDeque<MessageHistoryEntryV2>,
-    pub sent: VecDeque<MessageHistoryEntryV2>,
-}
-
-impl MessageHistoryV2 {
+impl MessageHistory {
     fn receive(&mut self, msg: Message, connection_id: ConnectionId) {
         if self.received.len() >= MAX_MESSAGE_HISTORY {
             self.received.pop_back();
         }
-        self.received.push_front(MessageHistoryEntryV2 {
+        self.received.push_front(MessageHistoryEntry {
             message: msg,
             timestamp: chrono::Utc::now(),
             connection_id,
@@ -777,7 +737,7 @@ impl MessageHistoryV2 {
         if self.sent.len() >= MAX_MESSAGE_HISTORY {
             self.sent.pop_back();
         }
-        self.sent.push_front(MessageHistoryEntryV2 {
+        self.sent.push_front(MessageHistoryEntry {
             message: msg,
             timestamp: chrono::Utc::now(),
             connection_id,
@@ -955,7 +915,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
 
     /// A log of the last `MAX_MESSAGE_HISTORY` messages. Keepalives are not
     /// included in message history.
-    pub message_history: Arc<Mutex<MessageHistoryV2>>,
+    pub message_history: Arc<Mutex<MessageHistory>>,
 
     /// Counters for message types sent and received, state transitions, etc.
     pub counters: Arc<SessionCounters>,
@@ -970,7 +930,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     pub connect_retry_counter: AtomicU64,
 
     event_rx: Receiver<FsmEvent<Cnx>>,
-    state: Arc<Mutex<FsmStateKindV2>>,
+    state: Arc<Mutex<FsmStateKind>>,
     last_state_change: Mutex<Instant>,
     asn: Asn,
     id: u32,
@@ -1097,7 +1057,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             asn,
             id,
             neighbor,
-            state: Arc::new(Mutex::new(FsmStateKindV2::Idle)),
+            state: Arc::new(Mutex::new(FsmStateKind::Idle)),
             last_state_change: Mutex::new(Instant::now()),
             clock: Arc::new(SessionClock::new(
                 session_info.resolution,
@@ -1113,7 +1073,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             running: AtomicBool::new(false),
             fanout,
             router,
-            message_history: Arc::new(Mutex::new(MessageHistoryV2::default())),
+            message_history: Arc::new(Mutex::new(MessageHistory::default())),
             counters: Arc::new(SessionCounters::default()),
             db,
             caps_tx: Arc::new(Mutex::new(BTreeSet::new())),
@@ -1346,42 +1306,42 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     current.kind()
                 );
                 match current.kind() {
-                    FsmStateKindV2::Idle => {
+                    FsmStateKind::Idle => {
                         self.counters
                             .transitions_to_idle
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKindV2::Connect => {
+                    FsmStateKind::Connect => {
                         self.counters
                             .transitions_to_connect
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKindV2::Active => {
+                    FsmStateKind::Active => {
                         self.counters
                             .transitions_to_active
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKindV2::OpenSent => {
+                    FsmStateKind::OpenSent => {
                         self.counters
                             .transitions_to_open_sent
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKindV2::OpenConfirm => {
+                    FsmStateKind::OpenConfirm => {
                         self.counters
                             .transitions_to_open_confirm
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKindV2::ConnectionCollision => {
+                    FsmStateKind::ConnectionCollision => {
                         self.counters
                             .transitions_to_connection_collision
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKindV2::SessionSetup => {
+                    FsmStateKind::SessionSetup => {
                         self.counters
                             .transitions_to_session_setup
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKindV2::Established => {
+                    FsmStateKind::Established => {
                         self.counters
                             .transitions_to_established
                             .fetch_add(1, Ordering::Relaxed);
@@ -5206,7 +5166,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.clock.stop_all();
 
         let previous = self.state();
-        let next = FsmStateKindV2::Idle;
+        let next = FsmStateKind::Idle;
         if previous != next {
             session_log_lite!(
                 self,
@@ -6215,7 +6175,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Return the current BGP peer state of this session runner.
-    pub fn state(&self) -> FsmStateKindV2 {
+    pub fn state(&self) -> FsmStateKind {
         *lock!(self.state)
     }
 
@@ -6387,6 +6347,55 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         Ok(reset_needed)
+    }
+}
+
+// ============================================================================
+// API Compatibility Types (VERSION_INITIAL / v1.0.0)
+// ============================================================================
+// These types maintain backward compatibility with the INITIAL API version.
+// They support IPv4-only message history via the /bgp/message-history endpoint (v1).
+// Never used internally - always convert from current types at API boundary.
+//
+// Delete these types when VERSION_INITIAL is retired.
+
+// V1 API compatibility type for message history entry (IPv4-only with MessageV1)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MessageHistoryEntryV1 {
+    timestamp: chrono::DateTime<chrono::Utc>,
+    message: crate::messages::MessageV1,
+}
+
+impl From<MessageHistoryEntry> for MessageHistoryEntryV1 {
+    fn from(entry: MessageHistoryEntry) -> Self {
+        Self {
+            timestamp: entry.timestamp,
+            message: crate::messages::MessageV1::from(entry.message),
+        }
+    }
+}
+
+// V1 API compatibility type for message history collection
+#[derive(Default, Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MessageHistoryV1 {
+    pub received: VecDeque<MessageHistoryEntryV1>,
+    pub sent: VecDeque<MessageHistoryEntryV1>,
+}
+
+impl From<MessageHistory> for MessageHistoryV1 {
+    fn from(history: MessageHistory) -> Self {
+        Self {
+            received: history
+                .received
+                .into_iter()
+                .map(MessageHistoryEntryV1::from)
+                .collect(),
+            sent: history
+                .sent
+                .into_iter()
+                .map(MessageHistoryEntryV1::from)
+                .collect(),
+        }
     }
 }
 

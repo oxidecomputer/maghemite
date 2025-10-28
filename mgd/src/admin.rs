@@ -286,7 +286,7 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn get_neighbors_v2(
         ctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
         bgp_admin::get_neighbors_v2(ctx, request).await
     }
 
@@ -300,14 +300,14 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn message_history(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
+    ) -> Result<HttpResponseOk<MessageHistoryResponseV1>, HttpError> {
         bgp_admin::message_history(ctx, request).await
     }
 
     async fn message_history_v2(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<MessageHistoryResponseV2>, HttpError> {
+    ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
         bgp_admin::message_history_v2(ctx, request).await
     }
 

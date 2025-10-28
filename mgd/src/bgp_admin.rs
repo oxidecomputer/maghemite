@@ -6,7 +6,7 @@
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::params::*;
 use bgp::router::LoadPolicyError;
-use bgp::session::{ConnectionKind, FsmStateKindV2};
+use bgp::session::{ConnectionKind, FsmStateKind};
 use bgp::{
     BGP_PORT,
     config::RouterConfig,
@@ -14,7 +14,7 @@ use bgp::{
     connection_tcp::BgpConnectionTcp,
     router::Router,
     session::{
-        AdminEvent, FsmEvent, MessageHistory, SessionEndpoint, SessionInfo,
+        AdminEvent, FsmEvent, MessageHistoryV1, SessionEndpoint, SessionInfo,
     },
 };
 use dropshot::{
@@ -23,7 +23,7 @@ use dropshot::{
 };
 use mg_api::{
     AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse,
-    MessageHistoryRequest, MessageHistoryResponse, MessageHistoryResponseV2,
+    MessageHistoryRequest, MessageHistoryResponse, MessageHistoryResponseV1,
     NeighborResetRequest, NeighborSelector, Rib,
 };
 use mg_common::lock;
@@ -385,7 +385,7 @@ pub async fn get_exported(
 
     for n in neighs {
         if r.get_session(n.host.ip())
-            .filter(|s| s.state() == FsmStateKindV2::Established)
+            .filter(|s| s.state() == FsmStateKind::Established)
             .is_none()
         {
             continue;
@@ -474,7 +474,7 @@ pub async fn get_neighbors(
             neg_keepalive = session_info.keepalive_time;
         }
 
-        let pi = PeerInfoV2 {
+        let pi = PeerInfo {
             state: s.state(),
             asn: s.remote_asn(),
             duration_millis: dur as u64,
@@ -499,7 +499,7 @@ pub async fn get_neighbors(
 pub async fn get_neighbors_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -539,7 +539,7 @@ pub async fn get_neighbors_v2(
 
         peers.insert(
             s.neighbor.host.ip(),
-            PeerInfoV2 {
+            PeerInfo {
                 state: s.state(),
                 asn: s.remote_asn(),
                 duration_millis: dur as u64,
@@ -730,7 +730,7 @@ async fn do_bgp_apply(
 pub async fn message_history(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MessageHistoryRequest>,
-) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
+) -> Result<HttpResponseOk<MessageHistoryResponseV1>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -738,16 +738,16 @@ pub async fn message_history(
 
     for (addr, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
         let mh = lock!(session.message_history).clone();
-        result.insert(*addr, MessageHistory::from(mh));
+        result.insert(*addr, MessageHistoryV1::from(mh));
     }
 
-    Ok(HttpResponseOk(MessageHistoryResponse { by_peer: result }))
+    Ok(HttpResponseOk(MessageHistoryResponseV1 { by_peer: result }))
 }
 
 pub async fn message_history_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MessageHistoryRequest>,
-) -> Result<HttpResponseOk<MessageHistoryResponseV2>, HttpError> {
+) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -757,7 +757,7 @@ pub async fn message_history_v2(
         result.insert(*addr, lock!(session.message_history).clone());
     }
 
-    Ok(HttpResponseOk(MessageHistoryResponseV2 { by_peer: result }))
+    Ok(HttpResponseOk(MessageHistoryResponse { by_peer: result }))
 }
 
 pub async fn create_checker(

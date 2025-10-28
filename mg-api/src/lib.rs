@@ -12,9 +12,9 @@ use bfd::BfdPeerState;
 use bgp::{
     params::{
         ApplyRequest, CheckerSource, Neighbor, NeighborResetOp, Origin4,
-        Origin6, PeerInfoV1, PeerInfoV2, Router, ShaperSource,
+        Origin6, PeerInfo, PeerInfoV1, Router, ShaperSource,
     },
-    session::{MessageHistory, MessageHistoryV2},
+    session::{MessageHistory, MessageHistoryV1},
 };
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
@@ -240,7 +240,7 @@ pub trait MgAdminApi {
     async fn get_neighbors_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError>;
 
     #[endpoint { method = POST, path = "/bgp/omicron/apply" }]
     async fn bgp_apply(
@@ -253,14 +253,14 @@ pub trait MgAdminApi {
     async fn message_history(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError>;
+    ) -> Result<HttpResponseOk<MessageHistoryResponseV1>, HttpError>;
 
     // MessageHistory types updated in VERSION_IPV6_BASIC
     #[endpoint { method = GET, path = "/bgp/message-history", versions = VERSION_IPV6_BASIC.. }]
     async fn message_history_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
-    ) -> Result<HttpResponseOk<MessageHistoryResponseV2>, HttpError>;
+    ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError>;
 
     #[endpoint { method = PUT, path = "/bgp/config/checker" }]
     async fn create_checker(
@@ -419,13 +419,13 @@ pub struct MessageHistoryRequest {
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]
-pub struct MessageHistoryResponse {
-    pub by_peer: HashMap<IpAddr, MessageHistory>,
+pub struct MessageHistoryResponseV1 {
+    pub by_peer: HashMap<IpAddr, MessageHistoryV1>,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]
-pub struct MessageHistoryResponseV2 {
-    pub by_peer: HashMap<IpAddr, MessageHistoryV2>,
+pub struct MessageHistoryResponse {
+    pub by_peer: HashMap<IpAddr, MessageHistory>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

@@ -2943,6 +2943,104 @@ fn prefix_from_wire(
     }
 }
 
+// ============================================================================
+// API Compatibility Types (VERSION_INITIAL / v1.0.0)
+// ============================================================================
+// These types maintain backward compatibility with the INITIAL API version.
+// They support IPv4-only prefixes as the INITIAL release predates IPv6 support.
+// Used exclusively for API responses via /bgp/message-history endpoint (v1).
+// Never used internally - always convert from current types at API boundary.
+//
+// Delete these types when VERSION_INITIAL is retired (MGD_API_VERSION_INITIAL
+// is no longer supported by dropping support for v1.0.0 API clients).
+
+/// V1 Prefix type for API compatibility (/bgp/message-history)
+/// Maintains the old serialization format: {"length": u8, "value": Vec<u8>}
+#[derive(
+    Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, JsonSchema,
+)]
+pub struct PrefixV1 {
+    pub length: u8,
+    pub value: Vec<u8>,
+}
+
+impl From<Prefix> for PrefixV1 {
+    fn from(prefix: Prefix) -> Self {
+        // Convert new Prefix enum to old struct format
+        // The wire format gives us exactly what we need: length byte + prefix octets
+        match prefix.to_wire() {
+            Ok(wire_bytes) => {
+                if wire_bytes.is_empty() {
+                    // Shouldn't happen, but handle gracefully
+                    Self {
+                        length: 0,
+                        value: Vec::new(),
+                    }
+                } else {
+                    // First byte is length, rest are the address bytes
+                    let length = wire_bytes[0];
+                    let value = wire_bytes[1..].to_vec();
+                    Self { length, value }
+                }
+            }
+            Err(_) => {
+                // Fallback for wire conversion errors
+                Self {
+                    length: 0,
+                    value: Vec::new(),
+                }
+            }
+        }
+    }
+}
+
+/// V1 UpdateMessage type for API compatibility
+/// Uses PrefixV1 for NLRI and withdrawn prefixes
+#[derive(
+    Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
+)]
+pub struct UpdateMessageV1 {
+    pub withdrawn: Vec<PrefixV1>,
+    pub path_attributes: Vec<PathAttribute>,
+    pub nlri: Vec<PrefixV1>,
+}
+
+impl From<UpdateMessage> for UpdateMessageV1 {
+    fn from(msg: UpdateMessage) -> Self {
+        Self {
+            withdrawn: msg.withdrawn.into_iter().map(PrefixV1::from).collect(),
+            path_attributes: msg.path_attributes,
+            nlri: msg.nlri.into_iter().map(PrefixV1::from).collect(),
+        }
+    }
+}
+
+/// V1 Message enum for API compatibility
+/// Uses V1 types for Message variants
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum MessageV1 {
+    Open(OpenMessage),
+    Update(UpdateMessageV1),
+    Notification(NotificationMessage),
+    KeepAlive,
+    RouteRefresh(RouteRefreshMessage),
+}
+
+impl From<Message> for MessageV1 {
+    fn from(msg: Message) -> Self {
+        match msg {
+            Message::Open(open) => Self::Open(open),
+            Message::Update(update) => {
+                Self::Update(UpdateMessageV1::from(update))
+            }
+            Message::Notification(notif) => Self::Notification(notif),
+            Message::KeepAlive => Self::KeepAlive,
+            Message::RouteRefresh(rr) => Self::RouteRefresh(rr),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::config::PeerConfig;
-use crate::session::FsmStateKindV2;
+use crate::session::FsmStateKind;
 use rdb::{ImportExportPolicy, PolicyAction, Prefix4, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -204,7 +204,7 @@ pub struct GetRouersResponse {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RouterInfo {
     pub asn: u32,
-    pub peers: BTreeMap<IpAddr, PeerInfoV1>,
+    pub peers: BTreeMap<IpAddr, PeerInfo>,
     pub graceful_shutdown: bool,
 }
 
@@ -220,79 +220,9 @@ pub struct PeerTimers {
     pub keepalive: DynamicTimerInfo,
 }
 
-/// Simplified representation of a BGP state without having to carry a
-/// connection. This does not include the ConnectionCollision state for
-/// backwards comptability with the initial release of the versioned dropshot
-/// API.
-#[derive(
-    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
-)]
-pub enum FsmStateKindV1 {
-    /// Initial state. Refuse all incomming BGP connections. No resources
-    /// allocated to peer.
-    Idle,
-
-    /// Waiting for the TCP connection to be completed.
-    Connect,
-
-    /// Trying to acquire peer by listening for and accepting a TCP connection.
-    Active,
-
-    /// Waiting for open message from peer.
-    OpenSent,
-
-    /// Waiting for keepaliave or notification from peer.
-    OpenConfirm,
-
-    /// Sync up with peers.
-    SessionSetup,
-
-    /// Able to exchange update, notification and keepliave messages with peers.
-    Established,
-}
-
-impl From<FsmStateKindV2> for FsmStateKindV1 {
-    fn from(kind: FsmStateKindV2) -> Self {
-        match kind {
-            FsmStateKindV2::Idle => FsmStateKindV1::Idle,
-            FsmStateKindV2::Connect => FsmStateKindV1::Connect,
-            FsmStateKindV2::Active => FsmStateKindV1::Active,
-            FsmStateKindV2::OpenSent => FsmStateKindV1::OpenSent,
-            FsmStateKindV2::OpenConfirm => FsmStateKindV1::OpenConfirm,
-            // We convert ConnectionCollision to OpenSent, because one
-            // connection is always in OpenSent for the duration of
-            // the colliison (unless we've already transitioned out of
-            // ConnectionCollision), so this is technically correct, even if
-            // it's only correct from the perspective of just one connection.
-            FsmStateKindV2::ConnectionCollision => FsmStateKindV1::OpenSent,
-            FsmStateKindV2::SessionSetup => FsmStateKindV1::SessionSetup,
-            FsmStateKindV2::Established => FsmStateKindV1::Established,
-        }
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PeerInfoV1 {
-    pub state: FsmStateKindV1,
-    pub asn: Option<u32>,
-    pub duration_millis: u64,
-    pub timers: PeerTimers,
-}
-
-impl From<PeerInfoV2> for PeerInfoV1 {
-    fn from(info: PeerInfoV2) -> Self {
-        Self {
-            state: FsmStateKindV1::from(info.state),
-            asn: info.asn,
-            duration_millis: info.duration_millis,
-            timers: info.timers,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PeerInfoV2 {
-    pub state: FsmStateKindV2,
+pub struct PeerInfo {
+    pub state: FsmStateKind,
     pub asn: Option<u32>,
     pub duration_millis: u64,
     pub timers: PeerTimers,
@@ -369,4 +299,84 @@ pub enum PolicySource {
 pub enum PolicyKind {
     Checker,
     Shaper,
+}
+
+// ============================================================================
+// API Compatibility Types (VERSION_INITIAL / v1.0.0)
+// ============================================================================
+// These types maintain backward compatibility with the INITIAL API version.
+// FsmStateKindV1 lacks the ConnectionCollision state added in VERSION_IPV6_BASIC.
+// Used exclusively for API responses via /bgp/status/neighbors endpoint (v1).
+// Never used internally - always convert from current types at API boundary.
+//
+// Delete these types when VERSION_INITIAL is retired.
+
+/// Simplified representation of a BGP state without having to carry a
+/// connection. This does not include the ConnectionCollision state for
+/// backwards comptability with the initial release of the versioned dropshot
+/// API.
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
+)]
+pub enum FsmStateKindV1 {
+    /// Initial state. Refuse all incomming BGP connections. No resources
+    /// allocated to peer.
+    Idle,
+
+    /// Waiting for the TCP connection to be completed.
+    Connect,
+
+    /// Trying to acquire peer by listening for and accepting a TCP connection.
+    Active,
+
+    /// Waiting for open message from peer.
+    OpenSent,
+
+    /// Waiting for keepaliave or notification from peer.
+    OpenConfirm,
+
+    /// Sync up with peers.
+    SessionSetup,
+
+    /// Able to exchange update, notification and keepliave messages with peers.
+    Established,
+}
+
+impl From<FsmStateKind> for FsmStateKindV1 {
+    fn from(kind: FsmStateKind) -> Self {
+        match kind {
+            FsmStateKind::Idle => FsmStateKindV1::Idle,
+            FsmStateKind::Connect => FsmStateKindV1::Connect,
+            FsmStateKind::Active => FsmStateKindV1::Active,
+            FsmStateKind::OpenSent => FsmStateKindV1::OpenSent,
+            FsmStateKind::OpenConfirm => FsmStateKindV1::OpenConfirm,
+            // We convert ConnectionCollision to OpenSent, because one
+            // connection is always in OpenSent for the duration of
+            // the colliison (unless we've already transitioned out of
+            // ConnectionCollision), so this is technically correct, even if
+            // it's only correct from the perspective of just one connection.
+            FsmStateKind::ConnectionCollision => FsmStateKindV1::OpenSent,
+            FsmStateKind::SessionSetup => FsmStateKindV1::SessionSetup,
+            FsmStateKind::Established => FsmStateKindV1::Established,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerInfoV1 {
+    pub state: FsmStateKindV1,
+    pub asn: Option<u32>,
+    pub duration_millis: u64,
+    pub timers: PeerTimers,
+}
+
+impl From<PeerInfo> for PeerInfoV1 {
+    fn from(info: PeerInfo) -> Self {
+        Self {
+            state: FsmStateKindV1::from(info.state),
+            asn: info.asn,
+            duration_millis: info.duration_millis,
+            timers: info.timers,
+        }
+    }
 }
