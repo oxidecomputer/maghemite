@@ -12,7 +12,7 @@ use bfd::BfdPeerState;
 use bgp::{
     params::{
         ApplyRequest, CheckerSource, Neighbor, NeighborResetOp, Origin4,
-        Origin6, PeerInfo, Router, ShaperSource,
+        Origin6, PeerInfoV1, PeerInfoV2, Router, ShaperSource,
     },
     session::{MessageHistory, MessageHistoryV2},
 };
@@ -230,11 +230,17 @@ pub trait MgAdminApi {
         request: Query<RibQuery>,
     ) -> Result<HttpResponseOk<Rib>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/neighbors" }]
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = ..VERSION_IPV6_BASIC }]
     async fn get_neighbors(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC.. }]
+    async fn get_neighbors_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError>;
 
     #[endpoint { method = POST, path = "/bgp/omicron/apply" }]
     async fn bgp_apply(

@@ -128,8 +128,8 @@ pub enum FsmState<Cnx: BgpConnection> {
 }
 
 impl<Cnx: BgpConnection> FsmState<Cnx> {
-    fn kind(&self) -> FsmStateKind {
-        FsmStateKind::from(self)
+    fn kind(&self) -> FsmStateKindV2 {
+        FsmStateKindV2::from(self)
     }
 }
 
@@ -144,7 +144,7 @@ impl<Cnx: BgpConnection> Display for FsmState<Cnx> {
 #[derive(
     Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
 )]
-pub enum FsmStateKind {
+pub enum FsmStateKindV2 {
     /// Initial state. Refuse all incomming BGP connections. No resources
     /// allocated to peer.
     Idle,
@@ -171,40 +171,40 @@ pub enum FsmStateKind {
     Established,
 }
 
-impl FsmStateKind {
+impl FsmStateKindV2 {
     fn as_str(&self) -> &str {
         match self {
-            FsmStateKind::Idle => "idle",
-            FsmStateKind::Connect => "connect",
-            FsmStateKind::Active => "active",
-            FsmStateKind::OpenSent => "open sent",
-            FsmStateKind::OpenConfirm => "open confirm",
-            FsmStateKind::ConnectionCollision => "connection collision",
-            FsmStateKind::SessionSetup => "session setup",
-            FsmStateKind::Established => "established",
+            FsmStateKindV2::Idle => "idle",
+            FsmStateKindV2::Connect => "connect",
+            FsmStateKindV2::Active => "active",
+            FsmStateKindV2::OpenSent => "open sent",
+            FsmStateKindV2::OpenConfirm => "open confirm",
+            FsmStateKindV2::ConnectionCollision => "connection collision",
+            FsmStateKindV2::SessionSetup => "session setup",
+            FsmStateKindV2::Established => "established",
         }
     }
 }
 
-impl Display for FsmStateKind {
+impl Display for FsmStateKindV2 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", self.as_str())
     }
 }
 
-impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKind {
-    fn from(s: &FsmState<Cnx>) -> FsmStateKind {
+impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKindV2 {
+    fn from(s: &FsmState<Cnx>) -> FsmStateKindV2 {
         match s {
-            FsmState::Idle => FsmStateKind::Idle,
-            FsmState::Connect => FsmStateKind::Connect,
-            FsmState::Active => FsmStateKind::Active,
-            FsmState::OpenSent(_) => FsmStateKind::OpenSent,
-            FsmState::OpenConfirm(_) => FsmStateKind::OpenConfirm,
+            FsmState::Idle => FsmStateKindV2::Idle,
+            FsmState::Connect => FsmStateKindV2::Connect,
+            FsmState::Active => FsmStateKindV2::Active,
+            FsmState::OpenSent(_) => FsmStateKindV2::OpenSent,
+            FsmState::OpenConfirm(_) => FsmStateKindV2::OpenConfirm,
             FsmState::ConnectionCollision(_) => {
-                FsmStateKind::ConnectionCollision
+                FsmStateKindV2::ConnectionCollision
             }
-            FsmState::SessionSetup(_) => FsmStateKind::SessionSetup,
-            FsmState::Established(_) => FsmStateKind::Established,
+            FsmState::SessionSetup(_) => FsmStateKindV2::SessionSetup,
+            FsmState::Established(_) => FsmStateKindV2::Established,
         }
     }
 }
@@ -970,7 +970,7 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     pub connect_retry_counter: AtomicU64,
 
     event_rx: Receiver<FsmEvent<Cnx>>,
-    state: Arc<Mutex<FsmStateKind>>,
+    state: Arc<Mutex<FsmStateKindV2>>,
     last_state_change: Mutex<Instant>,
     asn: Asn,
     id: u32,
@@ -1097,7 +1097,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             asn,
             id,
             neighbor,
-            state: Arc::new(Mutex::new(FsmStateKind::Idle)),
+            state: Arc::new(Mutex::new(FsmStateKindV2::Idle)),
             last_state_change: Mutex::new(Instant::now()),
             clock: Arc::new(SessionClock::new(
                 session_info.resolution,
@@ -1346,42 +1346,42 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     current.kind()
                 );
                 match current.kind() {
-                    FsmStateKind::Idle => {
+                    FsmStateKindV2::Idle => {
                         self.counters
                             .transitions_to_idle
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKind::Connect => {
+                    FsmStateKindV2::Connect => {
                         self.counters
                             .transitions_to_connect
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKind::Active => {
+                    FsmStateKindV2::Active => {
                         self.counters
                             .transitions_to_active
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKind::OpenSent => {
+                    FsmStateKindV2::OpenSent => {
                         self.counters
                             .transitions_to_open_sent
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKind::OpenConfirm => {
+                    FsmStateKindV2::OpenConfirm => {
                         self.counters
                             .transitions_to_open_confirm
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKind::ConnectionCollision => {
+                    FsmStateKindV2::ConnectionCollision => {
                         self.counters
                             .transitions_to_connection_collision
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKind::SessionSetup => {
+                    FsmStateKindV2::SessionSetup => {
                         self.counters
                             .transitions_to_session_setup
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    FsmStateKind::Established => {
+                    FsmStateKindV2::Established => {
                         self.counters
                             .transitions_to_established
                             .fetch_add(1, Ordering::Relaxed);
@@ -5206,7 +5206,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.clock.stop_all();
 
         let previous = self.state();
-        let next = FsmStateKind::Idle;
+        let next = FsmStateKindV2::Idle;
         if previous != next {
             session_log_lite!(
                 self,
@@ -6215,7 +6215,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Return the current BGP peer state of this session runner.
-    pub fn state(&self) -> FsmStateKind {
+    pub fn state(&self) -> FsmStateKindV2 {
         *lock!(self.state)
     }
 

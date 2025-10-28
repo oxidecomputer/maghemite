@@ -279,8 +279,15 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn get_neighbors(
         ctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError> {
         bgp_admin::get_neighbors(ctx, request).await
+    }
+
+    async fn get_neighbors_v2(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
+        bgp_admin::get_neighbors_v2(ctx, request).await
     }
 
     async fn bgp_apply(

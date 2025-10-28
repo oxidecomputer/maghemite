@@ -6,7 +6,7 @@
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::params::*;
 use bgp::router::LoadPolicyError;
-use bgp::session::{ConnectionKind, FsmStateKind};
+use bgp::session::{ConnectionKind, FsmStateKindV2};
 use bgp::{
     BGP_PORT,
     config::RouterConfig,
@@ -385,7 +385,7 @@ pub async fn get_exported(
 
     for n in neighs {
         if r.get_session(n.host.ip())
-            .filter(|s| s.state() == FsmStateKind::Established)
+            .filter(|s| s.state() == FsmStateKindV2::Established)
             .is_none()
         {
             continue;
@@ -436,7 +436,70 @@ pub async fn get_selected(
 pub async fn get_neighbors(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let mut peers = HashMap::new();
+    let routers = lock!(ctx.bgp.router);
+    let r = routers
+        .get(&rq.asn)
+        .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
+
+    for s in lock!(r.sessions).values() {
+        let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
+
+        let conf_holdtime;
+        let neg_holdtime;
+        let conf_keepalive;
+        let neg_keepalive;
+
+        // If the session runner has a primary connection, pull the config and
+        // runtime state from it. If not, just use the config owned by the
+        // session runner as both the config and runtime state.
+        if let Some(ref primary) = *lock!(s.primary) {
+            let clock = match primary {
+                ConnectionKind::Partial(p) => p.clock(),
+                ConnectionKind::Full(pc) => pc.conn.clock(),
+            };
+            conf_holdtime = clock.timers.config_hold_time;
+            neg_holdtime = lock!(clock.timers.hold).interval;
+            conf_keepalive = clock.timers.config_keepalive_time;
+            neg_keepalive = lock!(clock.timers.keepalive).interval;
+        } else {
+            let session_info = lock!(s.session);
+            conf_holdtime = session_info.hold_time;
+            neg_holdtime = session_info.hold_time;
+            conf_keepalive = session_info.keepalive_time;
+            neg_keepalive = session_info.keepalive_time;
+        }
+
+        let pi = PeerInfoV2 {
+            state: s.state(),
+            asn: s.remote_asn(),
+            duration_millis: dur as u64,
+            timers: PeerTimers {
+                hold: DynamicTimerInfo {
+                    configured: conf_holdtime,
+                    negotiated: neg_holdtime,
+                },
+                keepalive: DynamicTimerInfo {
+                    configured: conf_keepalive,
+                    negotiated: neg_keepalive,
+                },
+            },
+        };
+
+        peers.insert(s.neighbor.host.ip(), PeerInfoV1::from(pi));
+    }
+
+    Ok(HttpResponseOk(peers))
+}
+
+pub async fn get_neighbors_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -476,7 +539,7 @@ pub async fn get_neighbors(
 
         peers.insert(
             s.neighbor.host.ip(),
-            PeerInfo {
+            PeerInfoV2 {
                 state: s.state(),
                 asn: s.remote_asn(),
                 duration_millis: dur as u64,
