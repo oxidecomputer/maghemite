@@ -3045,12 +3045,6 @@ mod tests {
     use std::str::FromStr;
 
     #[derive(Debug)]
-    enum AddressFamily {
-        IPv4,
-        IPv6,
-    }
-
-    #[derive(Debug)]
     struct PrefixConversionTestCase {
         description: &'static str,
         address_family: AddressFamily,
@@ -3068,7 +3062,7 @@ mod tests {
         ) -> Self {
             Self {
                 description,
-                address_family: AddressFamily::IPv4,
+                address_family: AddressFamily::Ipv4,
                 prefix_length,
                 input_bytes: input_addr.octets().to_vec(),
                 expected_address,
@@ -3083,7 +3077,7 @@ mod tests {
         ) -> Self {
             Self {
                 description,
-                address_family: AddressFamily::IPv6,
+                address_family: AddressFamily::Ipv6,
                 prefix_length,
                 input_bytes: input_addr.octets().to_vec(),
                 expected_address,
@@ -3352,7 +3346,7 @@ mod tests {
 
         for test_case in test_cases {
             let prefix = match test_case.address_family {
-                AddressFamily::IPv4 => {
+                AddressFamily::Ipv4 => {
                     let mut octets = [0u8; 4];
                     octets.copy_from_slice(&test_case.input_bytes);
                     rdb::Prefix::V4(rdb::Prefix4::new(
@@ -3360,7 +3354,7 @@ mod tests {
                         test_case.prefix_length,
                     ))
                 }
-                AddressFamily::IPv6 => {
+                AddressFamily::Ipv6 => {
                     let mut octets = [0u8; 16];
                     octets.copy_from_slice(&test_case.input_bytes);
                     rdb::Prefix::V6(rdb::Prefix6::new(
@@ -3371,7 +3365,7 @@ mod tests {
             };
 
             match test_case.address_family {
-                AddressFamily::IPv4 => {
+                AddressFamily::Ipv4 => {
                     if let rdb::Prefix::V4(rdb_prefix4) = prefix {
                         assert_eq!(
                             rdb_prefix4.length, test_case.prefix_length,
@@ -3396,7 +3390,7 @@ mod tests {
                         panic!("Expected IPv4 prefix");
                     }
                 }
-                AddressFamily::IPv6 => {
+                AddressFamily::Ipv6 => {
                     if let rdb::Prefix::V6(rdb_prefix6) = prefix {
                         assert_eq!(
                             rdb_prefix6.length, test_case.prefix_length,
