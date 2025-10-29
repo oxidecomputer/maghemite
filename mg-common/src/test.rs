@@ -338,7 +338,7 @@ impl LoopbackIpManager {
 
         #[cfg(target_os = "linux")]
         let output = Command::new("sudo")
-            .args(&["ip", "addr", "add", &addr_str, "dev", ifname])
+            .args(["ip", "addr", "add", &addr_str, "dev", ifname])
             .output()?;
 
         #[cfg(target_os = "macos")]
@@ -469,7 +469,7 @@ impl LoopbackIpManager {
         let output = {
             let addr_str = format!("{}/32", ip.address);
             Command::new("sudo")
-                .args(&["ip", "addr", "del", &addr_str, "dev", ifname])
+                .args(["ip", "addr", "del", &addr_str, "dev", ifname])
                 .output()
         };
 
