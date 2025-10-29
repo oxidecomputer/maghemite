@@ -18,11 +18,13 @@ chrono.workspace = true
 libc.workspace = true
 socket2.workspace = true
 rhai.workspace = true
-libnet = { workspace = true, optional = true }
 itertools.workspace = true
 oxnet.workspace = true
 uuid.workspace = true
 rand.workspace = true
+
+[target.'cfg(target_os = "illumos")'.dependencies]
+libnet = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty-hex.workspace = true

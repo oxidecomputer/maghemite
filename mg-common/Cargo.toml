@@ -24,7 +24,7 @@ uuid.workspace = true
 libc.workspace = true
 
 # We need this on illumos, but must omit it on other platforms
-[dependencies.libnet]
+[target.'cfg(target_os = "illumos")'.dependencies.libnet]
 workspace = true
 optional = true
 
