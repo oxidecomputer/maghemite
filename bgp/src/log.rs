@@ -15,7 +15,7 @@ macro_rules! session_log {
             "connection" => format!("{:?}", $conn.conn()),
             "connection_id" => $conn.id().short(),
             "connection_clock" => format!("{}", $conn.clock()),
-            "creator" => $conn.creator().as_str(),
+            "direction" => $conn.direction().as_str(),
             "fsm_state" => $self.state().as_str(),
             $($key => $value),*
         )
@@ -32,7 +32,7 @@ macro_rules! session_log {
             "connection" => format!("{:?}", $conn.conn()),
             "connection_id" => $conn.id().short(),
             "connection_clock" => format!("{}", $conn.clock()),
-            "creator" => $conn.creator().as_str(),
+            "direction" => $conn.direction().as_str(),
             "fsm_state" => $self.state().as_str(),
             $($key => $value),*
         )
@@ -49,7 +49,7 @@ macro_rules! session_log {
             "connection" => format!("{:?}", $conn.conn()),
             "connection_id" => $conn.id().short(),
             "connection_clock" => format!("{}", $conn.clock()),
-            "creator" => $conn.creator().as_str(),
+            "direction" => $conn.direction().as_str(),
             "fsm_state" => $self.state().as_str(),
         )
     };
@@ -65,7 +65,7 @@ macro_rules! session_log {
             "connection" => format!("{:?}", $conn.conn()),
             "connection_id" => $conn.id().short(),
             "connection_clock" => format!("{}", $conn.clock()),
-            "creator" => $conn.creator().as_str(),
+            "direction" => $conn.direction().as_str(),
             "fsm_state" => $self.state().as_str(),
         )
     };
@@ -139,11 +139,11 @@ macro_rules! collision_log {
             "new_conn" => format!("{:?}", $new.conn()),
             "new_conn_id" => $new.id().short(),
             "new_connection_clock" => format!("{}", $new.clock()),
-            "new_creator" => $new.creator().as_str(),
+            "new_direction" => $new.direction().as_str(),
             "exist_conn" => format!("{:?}", $exist.conn()),
             "exist_conn_id" => $exist.id().short(),
             "exist_connection_clock" => format!("{}", $exist.clock()),
-            "exist_creator" => $exist.creator().as_str(),
+            "exist_direction" => $exist.direction().as_str(),
             $($key => $value),*
         )
     };
@@ -160,11 +160,11 @@ macro_rules! collision_log {
             "new_conn" => format!("{:?}", $new.conn()),
             "new_conn_id" => $new.id().short(),
             "new_connection_clock" => format!("{}", $new.clock()),
-            "new_creator" => $new.creator().as_str(),
+            "new_direction" => $new.direction().as_str(),
             "exist_conn" => format!("{:?}", $exist.conn()),
             "exist_conn_id" => $exist.id().short(),
             "exist_connection_clock" => format!("{}", $exist.clock()),
-            "exist_creator" => $exist.creator().as_str(),
+            "exist_direction" => $exist.direction().as_str(),
             $($key => $value),*
         )
     };
@@ -181,11 +181,11 @@ macro_rules! collision_log {
             "new_conn" => format!("{:?}", $new.conn()),
             "new_conn_id" => $new.id().short(),
             "new_connection_clock" => format!("{}", $new.clock()),
-            "new_creator" => $new.creator().as_str(),
+            "new_direction" => $new.direction().as_str(),
             "exist_conn" => format!("{:?}", $exist.conn()),
             "exist_conn_id" => $exist.id().short(),
             "exist_connection_clock" => format!("{}", $exist.clock()),
-            "exist_creator" => $exist.creator().as_str(),
+            "exist_direction" => $exist.direction().as_str(),
         )
     };
     ($self:expr, $level:ident, $new:expr, $exist:expr, $msg:expr, $($args:expr),*) => {
@@ -201,11 +201,11 @@ macro_rules! collision_log {
             "new_conn" => format!("{:?}", $new.conn()),
             "new_conn_id" => $new.id().short(),
             "new_connection_clock" => format!("{}", $new.clock()),
-            "new_creator" => $new.creator().as_str(),
+            "new_direction" => $new.direction().as_str(),
             "exist_conn" => format!("{:?}", $exist.conn()),
             "exist_conn_id" => $exist.id().short(),
             "exist_connection_clock" => format!("{}", $exist.clock()),
-            "exist_creator" => $exist.creator().as_str(),
+            "exist_direction" => $exist.direction().as_str(),
         )
     };
 }
@@ -255,7 +255,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => $self.creator().as_str(),
+            "direction" => $self.direction().as_str(),
             "connection_id" => $self.id().short(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),
@@ -268,7 +268,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => $self.creator().as_str(),
+            "direction" => $self.direction().as_str(),
             "connection_id" => $self.id().short(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),
@@ -281,7 +281,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => $self.creator().as_str(),
+            "direction" => $self.direction().as_str(),
             "connection_id" => $self.id().short(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),
@@ -293,7 +293,7 @@ macro_rules! connection_log {
             "component" => crate::COMPONENT_BGP,
             "module" => crate::MOD_NEIGHBOR,
             "unit" => UNIT_CONNECTION,
-            "creator" => $self.creator().as_str(),
+            "direction" => $self.direction().as_str(),
             "connection_id" => $self.id().short(),
             "connection_peer" => $self.peer(),
             "connection_local" => $self.local(),

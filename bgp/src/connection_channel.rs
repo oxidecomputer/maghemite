@@ -10,7 +10,7 @@
 use crate::{
     clock::ConnectionClock,
     connection::{
-        BgpConnection, BgpConnector, BgpListener, ConnectionCreator,
+        BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
         ConnectionId,
     },
     error::Error,
@@ -168,7 +168,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
                     session_endpoint.event_tx.clone(),
                     timeout,
                     log,
-                    ConnectionCreator::Dispatcher,
+                    ConnectionDirection::Inbound,
                     &config,
                 ))
             }
@@ -192,8 +192,8 @@ pub struct BgpConnectionChannel {
     peer: SocketAddr,
     conn_tx: Arc<Mutex<Sender<Message>>>,
     log: Logger,
-    // creator of this connection, i.e. BgpListener or BgpConnector
-    creator: ConnectionCreator,
+    // direction of this connection, i.e. BgpListener or BgpConnector
+    direction: ConnectionDirection,
     conn_id: ConnectionId,
     // Connection-level timers for keepalive, hold, and delay open
     connection_clock: ConnectionClock,
@@ -215,7 +215,7 @@ impl Clone for BgpConnectionChannel {
             peer: self.peer,
             conn_tx: self.conn_tx.clone(),
             log: self.log.clone(),
-            creator: self.creator,
+            direction: self.direction,
             conn_id: self.conn_id,
             connection_clock: self.connection_clock.clone(),
             recv_loop_params: Mutex::new(None),
@@ -274,8 +274,8 @@ impl BgpConnection for BgpConnectionChannel {
         (self.local(), self.peer())
     }
 
-    fn creator(&self) -> ConnectionCreator {
-        self.creator
+    fn direction(&self) -> ConnectionDirection {
+        self.direction
     }
 
     fn id(&self) -> &ConnectionId {
@@ -316,12 +316,13 @@ impl BgpConnection for BgpConnectionChannel {
             let rx = params.rx;
             let timeout = params.timeout;
             let log = self.log.clone();
-            let creator = self.creator;
+            let direction = self.direction;
             let conn_id = self.conn_id;
             let channel_id = self.channel_id;
 
             Self::spawn_recv_loop(
-                peer, rx, event_tx, timeout, log, creator, conn_id, channel_id,
+                peer, rx, event_tx, timeout, log, direction, conn_id,
+                channel_id,
             );
         }
     }
@@ -339,7 +340,7 @@ impl BgpConnectionChannel {
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
         log: Logger,
-        creator: ConnectionCreator,
+        direction: ConnectionDirection,
         config: &SessionInfo,
     ) -> Self {
         let conn_id = ConnectionId::new(addr, peer);
@@ -367,7 +368,7 @@ impl BgpConnectionChannel {
             peer,
             conn_tx: Arc::new(Mutex::new(conn.tx)),
             log,
-            creator,
+            direction,
             conn_id,
             connection_clock,
             recv_loop_params,
@@ -384,7 +385,7 @@ impl BgpConnectionChannel {
         event_tx: Sender<FsmEvent<Self>>,
         timeout: Duration,
         log: Logger,
-        creator: ConnectionCreator,
+        direction: ConnectionDirection,
         conn_id: ConnectionId,
         channel_id: u64,
     ) {
@@ -396,7 +397,7 @@ impl BgpConnectionChannel {
                             debug,
                             "recv {} msg from {peer} (conn_id: {}, channel_id: {})",
                             msg.title(), conn_id.short(), channel_id;
-                            "creator" => creator.as_str(),
+                            "direction" => direction.as_str(),
                             "peer" => format!("{peer}"),
                             "message" => msg.title(),
                             "message_contents" => format!("{msg}"),
@@ -408,7 +409,7 @@ impl BgpConnectionChannel {
                             connection_log_lite!(log,
                                 error,
                                 "error sending event to {peer}: {e}";
-                                "creator" => creator.as_str(),
+                                "direction" => direction.as_str(),
                                 "peer" => format!("{peer}"),
                                 "error" => format!("{e}"),
                                 "channel_id" => channel_id
@@ -425,7 +426,7 @@ impl BgpConnectionChannel {
                             debug,
                             "peer {peer} disconnected (conn_id: {}, channel_id: {}), terminating recv loop",
                             conn_id.short(), channel_id;
-                            "creator" => creator.as_str(),
+                            "direction" => direction.as_str(),
                             "peer" => format!("{peer}"),
                             "connection_id" => conn_id.short(),
                             "channel_id" => channel_id
@@ -448,7 +449,7 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
         event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
         config: SessionInfo,
     ) -> Result<std::thread::JoinHandle<()>, Error> {
-        let creator = ConnectionCreator::Connector;
+        let direction = ConnectionDirection::Outbound;
         let addr = config
             .bind_addr
             .expect("source address required for channel-based connection");
@@ -456,7 +457,7 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
         connection_log_lite!(log,
             debug,
             "connecting to {peer}";
-            "creator" => creator.as_str(),
+            "direction" => direction.as_str(),
             "timeout" => timeout.as_millis()
         );
 
@@ -474,7 +475,7 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
                         event_tx.clone(),
                         timeout,
                         log.clone(),
-                        creator,
+                        direction,
                         &config,
                     );
 
@@ -482,7 +483,7 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
                         info,
                         "channel connection to {peer} established (conn_id: {}, channel_id: {})",
                         conn.id().short(), conn.channel_id;
-                        "creator" => creator.as_str(),
+                        "direction" => direction.as_str(),
                         "peer" => format!("{peer}"),
                         "local" => format!("{addr}"),
                         "connection_id" => conn.id().short(),
@@ -497,7 +498,7 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
                         connection_log_lite!(log,
                             error,
                             "failed to send TcpConnectionConfirmed event for {peer}: {e}";
-                            "creator" => creator.as_str(),
+                            "direction" => direction.as_str(),
                             "peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );
@@ -507,7 +508,7 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
                     connection_log_lite!(log,
                         debug,
                         "connect error: {e:?}";
-                        "creator" => creator.as_str(),
+                        "direction" => direction.as_str(),
                         "timeout" => timeout.as_millis(),
                         "error" => format!("{e}")
                     );

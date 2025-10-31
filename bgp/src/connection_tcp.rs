@@ -5,7 +5,7 @@
 use crate::{
     clock::ConnectionClock,
     connection::{
-        BgpConnection, BgpConnector, BgpListener, ConnectionCreator,
+        BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
         ConnectionId,
     },
     error::Error,
@@ -132,7 +132,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                     timeout,
                     session_endpoint.event_tx.clone(),
                     log,
-                    ConnectionCreator::Dispatcher,
+                    ConnectionDirection::Inbound,
                     &config,
                 )
             }
@@ -211,7 +211,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
             connection_log_lite!(log,
                 debug,
                 "starting connection attempt to {peer}";
-                "creator" => ConnectionCreator::Connector.as_str(),
+                "direction" => ConnectionDirection::Outbound,
                 "peer" => format!("{peer}"),
                 "timeout" => timeout.as_millis()
             );
@@ -227,7 +227,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                         connection_log_lite!(log,
                             warn,
                             "failed to create IPv4 socket for {peer}: {e}";
-                            "creator" => ConnectionCreator::Connector.as_str(),
+                            "direction" => ConnectionDirection::Outbound,
                             "peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );
@@ -244,7 +244,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                         connection_log_lite!(log,
                             warn,
                             "failed to create IPv6 socket for {peer}: {e}";
-                            "creator" => ConnectionCreator::Connector.as_str(),
+                            "direction" => ConnectionDirection::Outbound,
                             "peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );
@@ -265,7 +265,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     connection_log_lite!(log,
                         warn,
                         "failed to apply MD5 auth for {peer}: {e}";
-                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}"),
                         "error" => format!("{e}")
                     );
@@ -281,7 +281,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                         connection_log_lite!(log,
                             warn,
                             "failed to select source address for {peer}: {e}";
-                            "creator" => ConnectionCreator::Connector.as_str(),
+                            "direction" => ConnectionDirection::Outbound,
                             "peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );
@@ -292,7 +292,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     connection_log_lite!(log,
                         warn,
                         "no source address available for {peer}";
-                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}")
                     );
                     return;
@@ -307,7 +307,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     connection_log_lite!(log,
                         warn,
                         "failed to apply MD5 auth for {peer}: {e}";
-                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}"),
                         "error" => format!("{e}")
                     );
@@ -325,7 +325,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     connection_log_lite!(log,
                         warn,
                         "failed to bind to source {src} for {peer}: {e}";
-                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}"),
                         "source" => format!("{src}"),
                         "error" => format!("{e}")
@@ -342,7 +342,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     connection_log_lite!(log,
                         debug,
                         "connection attempt to {peer} failed: {e}";
-                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}"),
                         "error" => format!("{e}")
                     );
@@ -357,7 +357,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                 connection_log_lite!(log,
                     warn,
                     "failed to apply min TTL for {peer}: {e}";
-                    "creator" => ConnectionCreator::Connector.as_str(),
+                    "direction" => ConnectionDirection::Outbound,
                     "peer" => format!("{peer}"),
                     "error" => format!("{e}")
                 );
@@ -371,7 +371,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     connection_log_lite!(log,
                         warn,
                         "failed to get local address for {peer}: {e}";
-                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}"),
                         "error" => format!("{e}")
                     );
@@ -387,7 +387,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                 timeout,
                 event_tx.clone(),
                 log.clone(),
-                ConnectionCreator::Connector,
+                ConnectionDirection::Outbound,
                 &config,
             ) {
                 Ok(conn) => conn,
@@ -395,7 +395,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     connection_log_lite!(log,
                         warn,
                         "failed to create connection object for {peer}: {e}";
-                        "creator" => ConnectionCreator::Connector.as_str(),
+                        "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}"),
                         "error" => format!("{e}")
                     );
@@ -412,7 +412,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                         connection_log_lite!(log,
                             warn,
                             "failed to select source address for SA tracking for {peer}: {e}";
-                            "creator" => ConnectionCreator::Connector.as_str(),
+                            "direction" => Connectiondirection::Connector,
                             "peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );
@@ -430,7 +430,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                         connection_log_lite!(log,
                             warn,
                             "failed to start SA tracking for {peer}: {e}";
-                            "creator" => ConnectionCreator::Connector.as_str(),
+                            "direction" => Connectiondirection::Connector,
                             "peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );
@@ -443,7 +443,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                 info,
                 "connection to {peer} established (conn_id: {})",
                 conn.id().short();
-                "creator" => ConnectionCreator::Connector.as_str(),
+                "direction" => ConnectionDirection::Outbound,
                 "peer" => format!("{peer}"),
                 "local" => format!("{actual_source}"),
                 "connection_id" => conn.id().short()
@@ -456,7 +456,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                 connection_log_lite!(log,
                     error,
                     "failed to send TcpConnectionConfirmed event for {peer}: {e}";
-                    "creator" => ConnectionCreator::Connector.as_str(),
+                    "direction" => ConnectionDirection::Outbound,
                     "peer" => format!("{peer}"),
                     "error" => format!("{e}")
                 );
@@ -478,8 +478,8 @@ pub struct BgpConnectionTcp {
     sa_keepalive_running: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
     log: Logger,
-    // creator of this connection, i.e. BgpListener or BgpConnector
-    creator: ConnectionCreator,
+    // direction of this connection, i.e. BgpListener or BgpConnector
+    direction: ConnectionDirection,
     // Connection-level timers for keepalive, hold, and delay open
     connection_clock: ConnectionClock,
     // Parameters for spawning the recv loop (stored until start_recv_loop is called)
@@ -504,7 +504,7 @@ impl Clone for BgpConnectionTcp {
             sa_keepalive_running: self.sa_keepalive_running.clone(),
             dropped: self.dropped.clone(),
             log: self.log.clone(),
-            creator: self.creator,
+            direction: self.direction,
             connection_clock: self.connection_clock.clone(),
             recv_loop_params: Mutex::new(None),
             recv_loop_started: AtomicBool::new(true),
@@ -523,7 +523,7 @@ impl BgpConnection for BgpConnectionTcp {
 
     fn send(&self, msg: Message) -> Result<(), Error> {
         let mut guard = lock!(self.conn);
-        Self::send_msg(&mut guard, &self.log, self.creator.as_str(), msg)
+        Self::send_msg(&mut guard, &self.log, self.direction, msg)
     }
 
     fn peer(&self) -> SocketAddr {
@@ -538,8 +538,8 @@ impl BgpConnection for BgpConnectionTcp {
         (self.local(), self.peer())
     }
 
-    fn creator(&self) -> ConnectionCreator {
-        self.creator
+    fn direction(&self) -> ConnectionDirection {
+        self.direction
     }
 
     fn id(&self) -> &ConnectionId {
@@ -578,13 +578,13 @@ impl BgpConnection for BgpConnectionTcp {
             let timeout = params.timeout;
             let dropped = self.dropped.clone();
             let log = self.log.clone();
-            let creator = self.creator;
+            let direction = self.direction;
             let conn_id = self.id;
 
             // Clone the TcpStream for the recv thread
             if let Ok(conn) = lock!(self.conn).try_clone() {
                 Self::spawn_recv_loop(
-                    peer, event_tx, conn, timeout, dropped, log, creator,
+                    peer, event_tx, conn, timeout, dropped, log, direction,
                     conn_id,
                 );
             }
@@ -625,7 +625,7 @@ impl BgpConnectionTcp {
         timeout: Duration,
         event_tx: Sender<FsmEvent<Self>>,
         log: Logger,
-        creator: ConnectionCreator,
+        direction: ConnectionDirection,
         config: &SessionInfo,
     ) -> Result<Self, Error> {
         let id = ConnectionId::new(source, peer);
@@ -656,7 +656,7 @@ impl BgpConnectionTcp {
             sa_keepalive_running: Arc::new(AtomicBool::new(false)),
             #[cfg(target_os = "illumos")]
             sas: Arc::new(Mutex::new(None)),
-            creator,
+            direction,
             connection_clock,
             recv_loop_params,
             recv_loop_started: AtomicBool::new(false),
@@ -672,7 +672,7 @@ impl BgpConnectionTcp {
         timeout: Duration,
         dropped: Arc<AtomicBool>,
         log: Logger,
-        creator: ConnectionCreator,
+        direction: ConnectionDirection,
         conn_id: ConnectionId,
     ) {
         if !timeout.is_zero()
@@ -682,7 +682,7 @@ impl BgpConnectionTcp {
                 error,
                 "failed to set read timeout in recv loop for {peer} (conn_id: {}): {e}",
                 conn_id.short();
-                "creator" => creator.as_str(),
+                "direction" => direction,
                 "connection" => format!("{conn:?}"),
                 "connection_peer" => format!("{peer}"),
                 "connection_id" => conn_id.short(),
@@ -699,24 +699,20 @@ impl BgpConnectionTcp {
                     connection_log_lite!(l, info,
                         "recv loop dropped (peer: {peer}, conn_id: {}), closing..",
                         conn_id.short();
-                        "creator" => creator.as_str(),
+                        "direction" => direction,
                         "connection" => format!("{conn:?}"),
                         "connection_peer" => format!("{peer}"),
                         "connection_id" => conn_id.short()
                     );
                     break;
                 }
-                match Self::recv_msg(
-                    &mut conn,
-                    dropped.clone(),
-                    &l,
-                    creator.as_str(),
-                ) {
+                match Self::recv_msg(&mut conn, dropped.clone(), &l, direction)
+                {
                     Ok(msg) => {
                         connection_log_lite!(l, trace,
                             "recv {} msg from {peer} (conn_id: {})",
                             msg.title(), conn_id.short();
-                            "creator" => creator.as_str(),
+                            "direction" => direction,
                             "connection" => format!("{conn:?}"),
                             "connection_peer" => format!("{peer}"),
                             "connection_id" => conn_id.short(),
@@ -728,7 +724,7 @@ impl BgpConnectionTcp {
                         )) {
                             connection_log_lite!(l, warn,
                                 "error sending event to {peer}: {e}";
-                                "creator" => creator.as_str(),
+                                "direction" => direction,
                                 "connection" => format!("{conn:?}"),
                                 "connection_peer" => format!("{peer}"),
                                 "connection_id" => conn_id.short(),
@@ -741,7 +737,7 @@ impl BgpConnectionTcp {
                         connection_log_lite!(l, info,
                             "recv_msg error (peer: {peer}, conn_id: {}): {e}",
                             conn_id.short();
-                            "creator" => creator.as_str(),
+                            "direction" => direction,
                             "connection" => format!("{conn:?}"),
                             "connection_peer" => format!("{peer}"),
                             "connection_id" => conn_id.short(),
@@ -756,7 +752,7 @@ impl BgpConnectionTcp {
             connection_log_lite!(l, info,
                 "recv loop closed (peer: {peer}, conn_id: {})",
                 conn_id.short();
-                "creator" => creator.as_str(),
+                "direction" => direction,
                 "connection" => format!("{conn:?}"),
                 "connection_peer" => format!("{peer}"),
                 "connection_id" => conn_id.short()
@@ -811,7 +807,7 @@ impl BgpConnectionTcp {
         stream: &mut TcpStream,
         dropped: Arc<AtomicBool>,
         log: &Logger,
-        creator: &str,
+        direction: ConnectionDirection,
     ) -> std::io::Result<Message> {
         use crate::messages::OpenErrorSubcode;
         let hdr = Self::recv_header(stream, dropped.clone())?;
@@ -826,7 +822,7 @@ impl BgpConnectionTcp {
                     connection_log_lite!(log,
                         error,
                         "open message error: {e}";
-                        "creator" => creator,
+                        "direction" => direction,
                         "connection" => format!("{stream:?}"),
                         "error" => format!("{e}")
                     );
@@ -841,7 +837,7 @@ impl BgpConnectionTcp {
                     if let Err(e) = Self::send_notification(
                         stream,
                         log,
-                        UNIT_CONNECTION,
+                        direction,
                         ErrorCode::Open,
                         ErrorSubcode::Open(subcode),
                         Vec::new(),
@@ -849,7 +845,7 @@ impl BgpConnectionTcp {
                         connection_log_lite!(log,
                             error,
                             "error sending notification: {e}";
-                            "creator" => creator,
+                            "direction" => direction,
                             "connection" => format!("{stream:?}"),
                             "error" => format!("{e}")
                         );
@@ -891,18 +887,18 @@ impl BgpConnectionTcp {
 
     fn send_msg(
         stream: &mut TcpStream,
-        _log: &Logger,
-        _creator: &str,
+        log: &Logger,
+        direction: ConnectionDirection,
         msg: Message,
     ) -> Result<(), Error> {
-        // connection_log_lite!(log,
-        //     trace,
-        //     "sending {} msg", msg.title();
-        //     "creator" => creator,
-        //     "connection" => format!("{stream:?}"),
-        //     "message" => msg.title(),
-        //     "message_contents" => format!("{msg}")
-        // );
+        connection_log_lite!(log,
+            trace,
+            "sending {} msg", msg.title();
+            "direction" => direction,
+            "connection" => format!("{stream:?}"),
+            "message" => msg.title(),
+            "message_contents" => format!("{msg}")
+        );
         let msg_buf = msg.to_wire()?;
         let header = Header {
             length: (msg_buf.len() + Header::WIRE_SIZE).try_into().map_err(
@@ -916,13 +912,13 @@ impl BgpConnectionTcp {
         };
         let mut buf = header.to_wire().to_vec();
         buf.extend_from_slice(&msg_buf);
-        // connection_log_lite!(log,
-        //     trace,
-        //     "sending {} msg with header", msg.title();
-        //     "connection" => format!("{stream:?}"),
-        //     "message" => msg.title(),
-        //     "message_contents" => format!("{buf:x?}")
-        // );
+        connection_log_lite!(log,
+            trace,
+            "sending {} msg with header", msg.title();
+            "connection" => format!("{stream:?}"),
+            "message" => msg.title(),
+            "message_contents" => format!("{buf:x?}")
+        );
         stream.write_all(&buf)?;
         Ok(())
     }
@@ -930,7 +926,7 @@ impl BgpConnectionTcp {
     fn send_notification(
         stream: &mut TcpStream,
         log: &Logger,
-        creator: &str,
+        direction: ConnectionDirection,
         error_code: ErrorCode,
         error_subcode: ErrorSubcode,
         data: Vec<u8>,
@@ -938,7 +934,7 @@ impl BgpConnectionTcp {
         Self::send_msg(
             stream,
             log,
-            creator,
+            direction,
             Message::Notification(NotificationMessage {
                 error_code,
                 error_subcode,
@@ -1020,10 +1016,11 @@ impl BgpConnectionTcp {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire)
             .is_err();
         if running {
-            connection_log!(self,
+            connection_log!(
+                self,
                 debug,
                 "security association keepalive loop already running";
-                "connection" => format!("{:?}", lock!(self.conn)),
+                "connection" => format!("{:?}", self.conn()),
                 "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
             );
             return;
@@ -1033,11 +1030,11 @@ impl BgpConnectionTcp {
         // get set up before setting up the socket.
         Self::do_sa_keepalive(&self.sas, &self.log, self.conn());
 
-        connection_log!(self,
+        connection_log!(
+            self,
             debug,
-            // space after loop is needed... because macros?
-            "spawning security association keepalive loop ";
-            "connection" => format!("{:?}", lock!(self.conn)),
+            "spawning security association keepalive loop";
+            "connection" => format!("{:?}", self.conn()),
             "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
         );
         let dropped = self.dropped.clone();

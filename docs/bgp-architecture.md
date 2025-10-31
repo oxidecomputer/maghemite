@@ -242,10 +242,10 @@ pub trait BgpConnection: Send + Clone {
     fn send(&self, msg: Message) -> Result<(), Error>;
     fn peer(&self) -> SocketAddr;
     fn local(&self) -> SocketAddr;
-    fn creator(&self) -> ConnectionCreator;  // Dispatcher or Connector
-    fn id(&self) -> &ConnectionId;           // Unique connection identifier
-    fn clock(&self) -> &ConnectionClock;     // Per-connection timers
-    fn start_recv_loop(&self);               // Spawns receive thread
+    fn direction(&self) -> ConnectionDirection; // Inbound or Outbound
+    fn id(&self) -> &ConnectionId;              // Unique connection identifier
+    fn clock(&self) -> &ConnectionClock;        // Per-connection timers
+    fn start_recv_loop(&self);                  // Spawns receive thread
 }
 ```
 
@@ -276,10 +276,10 @@ pub struct BgpConnectionTcp {
     id: ConnectionId,                      // Unique ID (UUID + addresses)
     peer: SocketAddr,                      // Remote address
     source: SocketAddr,                    // Local address
-    conn: Arc<Mutex<TcpStream>>,          // TCP socket
+    conn: Arc<Mutex<TcpStream>>,           // TCP socket
     dropped: Arc<AtomicBool>,              // Shutdown flag
     log: Logger,
-    creator: ConnectionCreator,            // Dispatcher or Connector
+    direction: ConnectionDirection,        // Dispatcher or Connector
     connection_clock: ConnectionClock,     // Hold/Keepalive/DelayOpen timers
     recv_loop_params: Mutex<Option<RecvLoopParams>>,  // Parameters for recv thread
     recv_loop_started: AtomicBool,         // Idempotent start flag
@@ -288,7 +288,7 @@ pub struct BgpConnectionTcp {
 
 **Key Fields**:
 - `conn`: Wrapped TCP socket (Arc<Mutex> for shared ownership and thread-safety)
-- `creator`: Records whether connection was initiated by Dispatcher (inbound) or Connector (outbound)
+- `direction`: Records whether connection was initiated by peer (inbound) or the local system (outbound)
 - `connection_clock`: Per-connection timers that expire and send FSM events
 
 **Lifecycle**:
@@ -725,13 +725,13 @@ Collision is detected when SessionRunner receives a new connection event while a
 
 | Current State | New Event | Action |
 |---------------|-----------|--------|
-| OpenSent | TcpConnectionAcked/Confirmed with **different creator** | Enter ConnectionCollision |
+| OpenSent | TcpConnectionAcked/Confirmed with **different direction** | Enter ConnectionCollision |
 | OpenConfirm | TcpConnectionAcked/Confirmed | Enter ConnectionCollision |
 | Established | TcpConnectionAcked/Confirmed | **Refuse new connection** (close immediately) |
 | Established | Open message on non-Established connection | **Resolve collision** without entering ConnectionCollision state |
 
 **Key Insights**:
-- "Different creator" means one connection was initiated by us (Connector) and one was initiated by peer (Dispatcher).
+- "Different direction" means one connection was initiated by us (outbound) and one was initiated by peer (inbound).
 - New connections are **refused** in Established state (not transitioned to ConnectionCollision).
 - If an Open is received on an existing connection not owned by the Established FSM state, collision resolution occurs without re-entering ConnectionCollision state.
 
@@ -739,37 +739,11 @@ Collision is detected when SessionRunner receives a new connection event while a
 
 ### Collision Resolution Algorithm (RFC 4271 §6.8)
 
-**Function Signature**:
-```rust
-pub fn collision_resolution(
-    exist_creator: ConnectionCreator,
-    local_bgp_id: u32,
-    remote_bgp_id: u32,
-) -> CollisionResolution
-```
-
-**Resolution Logic**:
-```rust
-if local_bgp_id < remote_bgp_id {
-    // Keep the connection the peer initiated (Dispatcher)
-    match exist_creator {
-        ConnectionCreator::Dispatcher => CollisionResolution::KeepExist,
-        ConnectionCreator::Connector => CollisionResolution::KeepNew,
-    }
-} else {
-    // Keep the connection we initiated (Connector)
-    match exist_creator {
-        ConnectionCreator::Connector => CollisionResolution::KeepExist,
-        ConnectionCreator::Dispatcher => CollisionResolution::KeepNew,
-    }
-}
-```
-
 **Simplified Rule**:
 - **Lower BGP ID** breaks the tie: lower ID keeps the connection it **received**
 - **Higher BGP ID** keeps the connection it **initiated**
 
-**Why this rule?** It ensures both sides reach the same decision deterministically, preventing oscillation.
+**Why this rule?** It ensures both sides reach the same decision deterministically.
 
 ---
 
@@ -806,15 +780,15 @@ Time 0: SessionRunner in Connect state
 
 Time 1: SessionRunner receives TcpConnectionConfirmed
   ├─► Send Open message
-  ├─► register_conn(conn_1) [creator: Connector]
+  ├─► register_conn(conn_1) [direction: Outbound]
   └─► Transition to OpenSent(conn_1)
 
 Time 2: Dispatcher accepts inbound connection from peer
   └─► TcpConnectionAcked event sent
 
 Time 3: SessionRunner (in OpenSent) receives TcpConnectionAcked
-  ├─► Check: new connection creator (Dispatcher) != existing (Connector) ✓
-  ├─► register_conn(conn_2) [creator: Dispatcher]
+  ├─► Check: new connection direction (Inbound) != existing (Outbound) ✓
+  ├─► register_conn(conn_2) [direction: Inbound]
   └─► Transition to ConnectionCollision(OpenSent(conn_1, conn_2))
       │
       │ Registry now has: {conn_1, conn_2}

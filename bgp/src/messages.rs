@@ -508,10 +508,12 @@ impl OpenMessage {
 
 impl Display for OpenMessage {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let mut param_string = String::new();
-        for param in self.parameters.iter() {
-            param_string.push_str(&format!("{param}, "));
-        }
+        let param_string = self
+            .parameters
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
         write!(
             f,
             "Open [ version: {}, asn: {}, hold_time: {}, id: {}, parameters: [ {param_string}] ]",
@@ -851,20 +853,26 @@ impl UpdateMessage {
 
 impl Display for UpdateMessage {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let mut w_str = String::new();
-        for w in self.withdrawn.iter() {
-            w_str.push_str(&format!("{} ", w));
-        }
+        let w_str = self
+            .withdrawn
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
 
-        let mut n_str = String::new();
-        for n in self.nlri.iter() {
-            n_str.push_str(&format!("{} ", n));
-        }
+        let n_str = self
+            .nlri
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
 
-        let mut p_str = String::new();
-        for p in self.path_attributes.iter() {
-            p_str.push_str(&format!("{}, ", p.value));
-        }
+        let p_str = self
+            .path_attributes
+            .iter()
+            .map(|pa| pa.value.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
 
         write!(
             f,
@@ -1191,16 +1199,12 @@ impl Display for PathAttributeValue {
         match self {
             PathAttributeValue::Origin(po) => write!(f, "origin: {po}"),
             PathAttributeValue::AsPath(path_segs) => {
-                let mut path = String::from("as-path: [");
-                for seg in path_segs.iter() {
-                    for val in seg.value.iter() {
-                        let mut v = val.to_string();
-                        v.push(' ');
-                        path.push_str(&v);
-                    }
-                }
-                path.push(']');
-                write!(f, "{path}")
+                let path = path_segs
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "as-path: [{path}]")
             }
             PathAttributeValue::NextHop(nh) => write!(f, "next-hop: {nh}"),
             PathAttributeValue::MultiExitDisc(med) => write!(f, "med: {med}"),
@@ -1214,24 +1218,20 @@ impl Display for PathAttributeValue {
                 agg[0], agg[1], agg[2], agg[3], agg[4], agg[5]
             ),
             PathAttributeValue::Communities(comms) => {
-                let mut comm_str = String::from("communities: [");
-                for comm in comms.iter() {
-                    let mut c = u32::from(*comm).to_string();
-                    c.push(' ');
-                    comm_str.push_str(&c);
-                }
-                comm_str.push(']');
-                write!(f, "{comm_str}")
+                let comms = comms
+                    .iter()
+                    .map(|c| u32::from(*c).to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "communities: [{comms}]")
             }
             PathAttributeValue::As4Path(path_segs) => {
-                let mut path = String::from("as4-path: [");
-                for seg in path_segs.iter() {
-                    for val in seg.value.iter() {
-                        path.push_str(val.to_string().as_str());
-                    }
-                }
-                path.push(']');
-                write!(f, "{path}")
+                let path = path_segs
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "as4-path: [{path}]")
             }
             // XXX: Do real formatting
             PathAttributeValue::As4Aggregator(agg) => write!(
@@ -1374,6 +1374,33 @@ impl As4PathSegment {
             value_input = out;
         }
         Ok((input, segment))
+    }
+}
+
+impl Display for As4PathSegment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.typ {
+            // Wrap an AS-SET in curly braces
+            AsPathType::AsSet => {
+                let set = self
+                    .value
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "{{ {set} }}")
+            }
+            // Wrap an AS-SEQUENCE in nothing
+            AsPathType::AsSequence => {
+                let seq = self
+                    .value
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "{seq}")
+            }
+        }
     }
 }
 

@@ -30,33 +30,36 @@ pub const MAX_MD5SIG_KEYLEN: usize = 80;
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
 )]
-pub enum ConnectionCreator {
+pub enum ConnectionDirection {
     /// Connection was created by the dispatcher (listener)
-    Dispatcher,
+    Inbound,
     /// Connection was created by the connector
-    Connector,
+    Outbound,
 }
 
-impl ConnectionCreator {
-    /// Get the string representation of the creator
+impl ConnectionDirection {
     pub fn as_str(&self) -> &'static str {
         match self {
-            ConnectionCreator::Dispatcher => "dispatcher",
-            ConnectionCreator::Connector => "connector",
-        }
-    }
-
-    pub fn direction(&self) -> &'static str {
-        match self {
-            ConnectionCreator::Dispatcher => "inbound",
-            ConnectionCreator::Connector => "outbound",
+            ConnectionDirection::Inbound => "inbound",
+            ConnectionDirection::Outbound => "outbound",
         }
     }
 }
 
-impl std::fmt::Display for ConnectionCreator {
+impl std::fmt::Display for ConnectionDirection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+impl slog::Value for ConnectionDirection {
+    fn serialize(
+        &self,
+        _record: &slog::Record,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_str(key, &self.to_string())
     }
 }
 
@@ -143,16 +146,14 @@ pub trait BgpListener<Cnx: BgpConnection> {
 }
 
 /// Implementors of this trait initiate outbound BGP connections to peers.
-/// BgpConnector spawns a background thread to establish the connection and
-/// applies all policy (TTL, MD5) before sending a SessionEvent::TcpConnectionConfirmed
-/// on the event channel. Connection failures are silent - the ConnectRetryTimer
-/// will handle retries.
+/// A BgpConnector applies all policy (TTL, MD5) before informing the FSM of a
+/// successful connection attempt. Connection failures are silent.
 pub trait BgpConnector<Cnx: BgpConnection> {
-    /// Initiate an outbound connection attempt to a peer in a background thread.
-    /// On success, sends SessionEvent::TcpConnectionConfirmed via event_tx.
-    /// On failure, logs the error but does not send an event (FSM retry logic handles it).
-    /// Returns a JoinHandle to the spawned thread, allowing the caller to track
-    /// the connection attempt and detect panics.
+    /// Initiate an outbound connection attempt to a peer.
+    /// On success, hands off the BgpConnection to the FSM via event_tx.
+    /// On failure, logs the error but does not send an event.
+    /// Returns a handle to the connection attempt, allowing the caller to track
+    /// and manage it.
     fn connect(
         peer: SocketAddr,
         timeout: Duration,
@@ -197,8 +198,8 @@ pub trait BgpConnection: Send + Clone {
     /// Return the local/remote sockaddr pair for this connection.
     fn conn(&self) -> (SocketAddr, SocketAddr);
 
-    /// Return the ConnectionCreator indicating what component created this connection.
-    fn creator(&self) -> ConnectionCreator;
+    /// Return the direction (inbound or outbound) of this connection.
+    fn direction(&self) -> ConnectionDirection;
 
     /// Return the unique identifier for this connection.
     fn id(&self) -> &ConnectionId;
@@ -206,9 +207,6 @@ pub trait BgpConnection: Send + Clone {
     /// Return the connection-level clock for this connection.
     fn clock(&self) -> &ConnectionClock;
 
-    /// Start the receive loop for this connection. This spawns a background
-    /// thread that will receive messages and send them to the SessionRunner.
-    /// This method is idempotent - calling it multiple times has no effect
-    /// after the first call.
+    /// Start the receive loop for this connection. This method is idempotent.
     fn start_recv_loop(&self);
 }

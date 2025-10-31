@@ -283,13 +283,17 @@ impl SessionClock {
         log: &Logger,
     ) {
         timer.tick(resolution);
-        if timer.expired()
-            && let Err(e) = event_tx.send(event)
-        {
-            error!(
-                log,
-                "{} send {:?} error: {e}", UNIT_TIMER, "session_timer_event"
-            );
+        if timer.expired() {
+            if let Err(e) = event_tx.send(event) {
+                error!(
+                    log,
+                    "{} send {:?} error: {e}",
+                    UNIT_TIMER,
+                    "session_timer_event"
+                );
+            }
+            // reset timer here so we don't fire an event for every tick
+            timer.reset();
         }
     }
 
@@ -427,13 +431,17 @@ impl ConnectionClock {
         log: &Logger,
     ) {
         timer.tick(resolution);
-        if timer.expired()
-            && let Err(e) = event_tx.send(event)
-        {
-            error!(
-                log,
-                "{} send {:?} error: {e}", UNIT_TIMER, "connection_timer_event"
-            );
+        if timer.expired() {
+            if let Err(e) = event_tx.send(event) {
+                error!(
+                    log,
+                    "{} send {:?} error: {e}",
+                    UNIT_TIMER,
+                    "connection_timer_event"
+                );
+            }
+            // reset timer here so we don't fire an event for every tick
+            timer.reset();
         }
     }
 

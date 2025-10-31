@@ -7,7 +7,7 @@ use crate::{
     clock::SessionClock,
     config::PeerConfig,
     connection::{
-        BgpConnection, BgpConnector, ConnectionCreator, ConnectionId,
+        BgpConnection, BgpConnector, ConnectionDirection, ConnectionId,
     },
     error::{Error, ExpectationMismatch},
     fanout::Fanout,
@@ -981,6 +981,7 @@ pub enum CollisionResolution {
 
 /// Pure function to determine which connection wins in a collision.
 ///
+/// ```text
 ///    RFC 4271 Section 6.8
 ///
 ///    1) The BGP Identifier of the local system is compared to the BGP
@@ -1010,30 +1011,31 @@ pub enum CollisionResolution {
 ///       Closing the BGP connection (that results from the collision
 ///       resolution procedure) is accomplished by sending the NOTIFICATION
 ///       message with the Error Code Cease.
+/// ```
 ///
 /// # Arguments
-/// * `exist_creator` - Creator of the existing connection (Connector or Dispatcher)
+/// * `exist_direction` - direction of the existing connection (Inbound or Outbound)
 /// * `local_bgp_id`  - Our BGP Identifier
 /// * `remote_bgp_id` - Peer's BGP Identifier
 ///
 /// # Returns
 /// `CollisionResolution` indicating whether exist or new connection wins
 pub fn collision_resolution(
-    exist_creator: ConnectionCreator,
+    exist_direction: ConnectionDirection,
     local_bgp_id: u32,
     remote_bgp_id: u32,
 ) -> CollisionResolution {
     if local_bgp_id < remote_bgp_id {
         // The peer has a higher RID, keep the connection they initiated
-        match exist_creator {
-            ConnectionCreator::Dispatcher => CollisionResolution::ExistWins,
-            ConnectionCreator::Connector => CollisionResolution::NewWins,
+        match exist_direction {
+            ConnectionDirection::Inbound => CollisionResolution::ExistWins,
+            ConnectionDirection::Outbound => CollisionResolution::NewWins,
         }
     } else {
         // The local system has a higher RID, keep the connection we initiated
-        match exist_creator {
-            ConnectionCreator::Dispatcher => CollisionResolution::NewWins,
-            ConnectionCreator::Connector => CollisionResolution::ExistWins,
+        match exist_direction {
+            ConnectionDirection::Inbound => CollisionResolution::NewWins,
+            ConnectionDirection::Outbound => CollisionResolution::ExistWins,
         }
     }
 }
@@ -1095,7 +1097,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// away. Simply sets a flag that the session is to be shut down which will
     /// be acted upon in the state machine loop.
     pub fn shutdown(&self) {
-        session_log_lite!(self, info,
+        session_log_lite!(
+            self,
+            info,
             "session runner (peer {}) received shutdown request, setting shutdown flag",
             self.neighbor.host.ip();
         );
@@ -1111,16 +1115,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ) {
         match handle.join() {
             Ok(()) => {
-                session_log_lite!(self, debug,
+                session_log_lite!(
+                    self,
+                    debug,
                     "connector thread completed successfully";
                     "context" => context
                 );
             }
             Err(e) => {
-                session_log_lite!(self, error,
-                    "connector thread panicked: {:?}", e;
+                session_log_lite!(
+                    self,
+                    error,
+                    "connector thread panicked: {e:?}";
                     "context" => context,
-                    "panic" => format!("{:?}", e)
+                    "panic" => format!("{e:?}")
                 );
                 self.counters
                     .connector_panics
@@ -1145,8 +1153,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 if !old_handle.is_finished() {
                     // Thread still running, put handle back and skip spawn
                     *handle_guard = Some(old_handle);
-                    session_log_lite!(self, debug,
-                        "connector already running, skipping spawn";
+                    session_log_lite!(
+                        self,
+                        debug,
+                        "connector already running, skipping spawn"
                     );
                     return;
                 }
@@ -1167,7 +1177,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         ) {
             Ok(h) => h,
             Err(e) => {
-                session_log_lite!(self, error,
+                session_log_lite!(
+                    self,
+                    error,
                     "failed to spawn connection thread: {e}";
                     "error" => format!("{e}")
                 );
@@ -1176,9 +1188,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         *lock!(self.connector_handle) = Some(handle);
-        session_log_lite!(self, debug,
-            "spawned new connector thread";
-        );
+        session_log_lite!(self, debug, "spawned new connector thread");
     }
 
     /// Add a connection to the registry. Newly registered connection is
@@ -1268,7 +1278,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.initialize_capabilities();
 
         // Run the BGP peer state machine.
-        session_log_lite!(self, info, "starting peer state machine";
+        session_log_lite!(
+            self,
+            info,
+            "starting peer state machine";
             "params" => format!("{:?}", lock!(self.session))
         );
         let mut current = FsmState::<Cnx>::Idle;
@@ -1276,7 +1289,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
-                session_log_lite!(self, info,
+                session_log_lite!(
+                    self,
+                    info,
                     "session runner (peer: {}) caught shutdown flag",
                     self.neighbor.host.ip();
                 );
@@ -1418,7 +1433,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
                 Ok(event) => {
-                    session_log_lite!(self, debug, "received fsm event {}",
+                    session_log_lite!(
+                        self,
+                        debug,
+                        "received fsm event {}",
                         event.title();
                         "event" => event.title()
                     );
@@ -1428,7 +1446,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
-                    session_log_lite!(self, error, "event rx error: {e}";
+                    session_log_lite!(
+                        self,
+                        error,
+                        "event rx error: {e}";
                         "error" => format!("{e}")
                     );
                     continue;
@@ -1460,7 +1481,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ReAdvertiseRoutes
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
-                        session_log_lite!(self, warn,
+                        session_log_lite!(
+                            self,
+                            warn,
                             "unexpected admin fsm event {title}, ignoring";
                             "event" => title
                         );
@@ -1486,20 +1509,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     SessionEvent::TcpConnectionAcked(new)
                     | SessionEvent::TcpConnectionConfirmed(new) => {
-                        match new.creator() {
-                            ConnectionCreator::Dispatcher => {
-                                session_log!(self, info, new,
+                        match new.direction() {
+                            ConnectionDirection::Inbound => {
+                                session_log!(
+                                    self,
+                                    info,
+                                    new,
                                     "inbound connection not allowed in idle (peer: {}, conn_id: {})",
-                                    new.peer(), new.id().short();
+                                    new.peer(),
+                                    new.id().short()
                                 );
                                 self.counters
                                     .passive_connections_declined
                                     .fetch_add(1, Ordering::Relaxed);
                             }
-                            ConnectionCreator::Connector => {
-                                session_log!(self, info, new,
+                            ConnectionDirection::Outbound => {
+                                session_log!(
+                                    self,
+                                    info,
+                                    new,
                                     "outbound connection completed but not allowed in idle (peer: {}, conn_id: {})",
-                                    new.peer(), new.id().short();
+                                    new.peer(),
+                                    new.id().short()
                                 );
                                 self.counters
                                     .active_connections_declined
@@ -1524,8 +1555,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         if !session_timer!(self, connect_retry).enabled() {
                             continue;
                         }
-                        session_log_lite!(self, warn,
-                            "unexpected session fsm event {} not allowed in this state", session_event.title();
+                        session_log_lite!(
+                            self,
+                            warn,
+                            "unexpected session fsm event {} not allowed in this state",
+                            session_event.title();
                         );
                         session_timer!(self, connect_retry).disable();
                         continue;
@@ -1545,9 +1579,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         {
                             match self.get_conn(conn_id) {
                                 Some(conn) => {
-                                    session_log_lite!(self, warn,
+                                    session_log_lite!(
+                                        self,
+                                        warn,
                                         "unexpected connection fsm event {} for known but inactive conn (conn_id: {}), closing..",
-                                        connection_event.title(), conn_id.short();
+                                        connection_event.title(),
+                                        conn_id.short();
                                     );
                                     self.stop(
                                         Some(&conn),
@@ -1560,9 +1597,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 // this loop. If we do hit it, then there is
                                 // likely a bug in the cleanup or clock logic.
                                 None => {
-                                    session_log_lite!(self, warn,
+                                    session_log_lite!(
+                                        self,
+                                        warn,
                                         "unexpected connection fsm event {} for unknown conn (conn_id: {}), ignoring..",
-                                        connection_event.title(), conn_id.short();
+                                        connection_event.title(),
+                                        conn_id.short();
                                     );
                                 }
                             }
@@ -1572,8 +1612,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         ConnectionEvent::Message { msg, ref conn_id } => {
                             match self.get_conn(conn_id) {
                                 Some(conn) => {
-                                    session_log_lite!(self, warn, "unexpected {} message from known but inactive conn (conn_id: {}), closing..",
-                                        msg.title(), conn_id.short();
+                                    session_log_lite!(
+                                        self,
+                                        warn,
+                                        "unexpected {} message from known but inactive conn (conn_id: {}), closing..",
+                                        msg.title(),
+                                        conn_id.short();
                                         "message" => msg.title(),
                                         "message_contents" => format!("{msg}")
                                     );
@@ -1588,8 +1632,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 // this loop. If we do hit it, then there is
                                 // likely a bug in the cleanup or clock logic.
                                 None => {
-                                    session_log_lite!(self, warn, "unexpected {} message from unknown conn (conn_id: {})",
-                                        msg.title(), conn_id.short();
+                                    session_log_lite!(
+                                        self,
+                                        warn,
+                                        "unexpected {} message from unknown conn (conn_id: {})",
+                                        msg.title(),
+                                        conn_id.short();
                                         "message" => msg.title(),
                                         "message_contents" => format!("{msg}")
                                     );
@@ -1628,9 +1676,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
                 Ok(event) => {
-                    session_log_lite!(self,
+                    session_log_lite!(
+                        self,
                         debug,
-                        "received fsm event {}", event.title();
+                        "received fsm event {}",
+                        event.title();
                         "event" => event.title()
                     );
                     event
@@ -1639,7 +1689,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Err(RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
-                    session_log_lite!(self,
+                    session_log_lite!(
+                        self,
                         error,
                         "event rx error: {e}";
                         "error" => format!("{e}")
@@ -1652,18 +1703,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
                     AdminEvent::ManualStop => {
-                        session_log_lite!(self,
+                        session_log_lite!(
+                            self,
                             info,
-                            "rx {}, fsm transition to idle", admin_event.title();
+                            "rx {}, fsm transition to idle",
+                            admin_event.title()
                         );
                         self.stop(None, None, StopReason::Shutdown);
                         return FsmState::Idle;
                     }
 
                     AdminEvent::Reset => {
-                        session_log_lite!(self,
+                        session_log_lite!(
+                            self,
                             info,
-                            "rx {}, fsm transition to idle", admin_event.title();
+                            "rx {}, fsm transition to idle",
+                            admin_event.title()
                         );
                         self.stop(None, None, StopReason::Reset);
                         return FsmState::Idle;
@@ -1680,7 +1735,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ReAdvertiseRoutes
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
-                        session_log_lite!(self, warn,
+                        session_log_lite!(
+                            self,
+                            warn,
                             "unexpected admin fsm event {title}, ignoring";
                             "event" => title
                         );
@@ -1751,19 +1808,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          */
                         SessionEvent::TcpConnectionAcked(accepted)
                         | SessionEvent::TcpConnectionConfirmed(accepted) => {
-                            match accepted.creator() {
-                                ConnectionCreator::Dispatcher => {
-                                    session_log!(self, info, accepted,
-                                        "accepted inbound connection from {}", accepted.peer();
-                                    );
+                            session_log!(
+                                self,
+                                info,
+                                accepted,
+                                "accepted {} connection from {}",
+                                accepted.direction(),
+                                accepted.peer()
+                            );
+                            match accepted.direction() {
+                                ConnectionDirection::Inbound => {
                                     self.counters
                                         .passive_connections_accepted
                                         .fetch_add(1, Ordering::Relaxed);
                                 }
-                                ConnectionCreator::Connector => {
-                                    session_log!(self, info, accepted,
-                                        "outbound connection to {} accepted", accepted.peer();
-                                    );
+                                ConnectionDirection::Outbound => {
                                     self.counters
                                         .active_connections_accepted
                                         .fetch_add(1, Ordering::Relaxed);
@@ -1776,7 +1835,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             session_timer!(self, connect_retry).stop();
 
                             if let Err(e) = self.send_open(&accepted) {
-                                session_log!(self, error, accepted,
+                                session_log!(
+                                    self,
+                                    error,
+                                    accepted,
                                     "failed to send open, fsm transition to idle";
                                     "error" => format!("{e}")
                                 );
@@ -1798,10 +1860,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             session_timer!(self, connect_retry).stop();
                             self.connect_retry_counter
                                 .fetch_add(1, Ordering::Relaxed);
-                            session_log_lite!(self,
+                            session_log_lite!(
+                                self,
                                 warn,
                                 "{} event not allowed in this state, fsm transition to idle",
-                                session_event.title();
+                                session_event.title()
                             );
                             return FsmState::Idle;
                         }
@@ -1859,7 +1922,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             let title = msg.title();
 
                             if let Message::Notification(ref n) = msg {
-                                session_log_lite!(self, warn,
+                                session_log_lite!(
+                                    self,
+                                    warn,
                                     "rx {title} message (conn_id: {}), fsm transition to idle",
                                     conn_id.short();
                                     "message" => title,
@@ -1867,7 +1932,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 );
                                 self.bump_msg_counter(msg.kind(), false);
                             } else {
-                                session_log_lite!(self, warn,
+                                session_log_lite!(
+                                    self,
+                                    warn,
                                     "rx unexpected {title} message (conn_id: {}), fsm transition to idle",
                                     conn_id.short();
                                     "message" => msg.title(),
@@ -1896,9 +1963,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             self.connect_retry_counter
                                 .fetch_add(1, Ordering::Relaxed);
 
-                            session_log_lite!(self, warn,
+                            session_log_lite!(
+                                self,
+                                warn,
                                 "connection fsm event {title} (conn_id {}) not allowed in this state, fsm transition to idle",
-                                conn_id.short();
+                                conn_id.short()
                             );
 
                             return FsmState::Idle;
@@ -1977,16 +2046,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                      *   - changes its state to Idle.
                      */
                     AdminEvent::ManualStop => {
-                        session_log_lite!(self, info,
-                            "rx {}, fsm transition to idle", admin_event.title();
+                        session_log_lite!(
+                            self,
+                            info,
+                            "rx {}, fsm transition to idle",
+                            admin_event.title()
                         );
                         self.stop(None, None, StopReason::Shutdown);
                         return FsmState::Idle;
                     }
 
                     AdminEvent::Reset => {
-                        session_log_lite!(self, info,
-                            "rx {}, fsm transition to idle", admin_event.title();
+                        session_log_lite!(
+                            self,
+                            info,
+                            "rx {}, fsm transition to idle",
+                            admin_event.title()
                         );
                         self.stop(None, None, StopReason::Reset);
                         return FsmState::Idle;
@@ -2003,7 +2078,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ReAdvertiseRoutes
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
-                        session_log_lite!(self, warn,
+                        session_log_lite!(
+                            self,
+                            warn,
                             "unexpected admin fsm event {title}, ignoring";
                             "event" => title
                         );
@@ -2057,7 +2134,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             let title = msg.title();
 
                             if let Message::Notification(ref n) = msg {
-                                session_log_lite!(self, warn,
+                                session_log_lite!(
+                                    self,
+                                    warn,
                                     "rx {title} message (conn_id: {}), fsm transition to idle",
                                     conn_id.short();
                                     "message" => title,
@@ -2065,7 +2144,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 );
                                 self.bump_msg_counter(msg.kind(), false);
                             } else {
-                                session_log_lite!(self, warn,
+                                session_log_lite!(
+                                    self,
+                                    warn,
                                     "rx unexpected {title} message (conn_id: {}), fsm transition to idle",
                                     conn_id.short();
                                     "message" => msg.title(),
@@ -2099,9 +2180,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 .connection_retries
                                 .fetch_add(1, Ordering::Relaxed);
 
-                            session_log_lite!(self, warn,
+                            session_log_lite!(
+                                self,
+                                warn,
                                 "rx connection fsm event {} (conn_id: {}), but not allowed in this state. fsm transition to idle",
-                                connection_event.title(), conn_id.short();
+                                connection_event.title(),
+                                conn_id.short()
                             );
 
                             return FsmState::Idle;
@@ -2122,9 +2206,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 .connection_retries
                                 .fetch_add(1, Ordering::Relaxed);
 
-                            session_log_lite!(self, warn,
+                            session_log_lite!(
+                                self,
+                                warn,
                                 "rx connection fsm event {} (conn_id: {}), but not allowed in this state. fsm transition to idle",
-                                connection_event.title(), conn_id.short();
+                                connection_event.title(),
+                                conn_id.short()
                             );
 
                             return FsmState::Idle;
@@ -2136,9 +2223,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             {
                                 continue;
                             }
-                            session_log_lite!(self, warn,
+                            session_log_lite!(
+                                self,
+                                warn,
                                 "rx connection fsm event {} (conn_id: {}), but not allowed in this state. ignoring..",
-                                connection_event.title(), conn_id.short();
+                                connection_event.title(),
+                                conn_id.short()
                             );
 
                             continue;
@@ -2173,17 +2263,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         // outbound TCP session, which is exactly the opposite
                         // of what you want to do for a passive peer.
                         if lock!(self.session).passive_tcp_establishment {
-                            session_log_lite!(self, info,
+                            session_log_lite!(
+                                self,
+                                info,
                                 "rx {} but peer is configured as passive, staying in active",
-                                session_event.title();
+                                session_event.title()
                             );
                             session_timer!(self, connect_retry).stop();
                             continue;
                         }
 
-                        session_log_lite!(self, info,
+                        session_log_lite!(
+                            self,
+                            info,
                             "rx {}, fsm transition to connect",
-                            session_event.title();
+                            session_event.title()
                         );
 
                         self.counters
@@ -2197,8 +2291,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     // The Dispatcher has accepted a TCP connection initiated by
                     // the peer.
                     SessionEvent::TcpConnectionAcked(accepted) => {
-                        session_log!(self, info, accepted,
-                            "accepted inbound connection from {}", accepted.peer();
+                        session_log!(
+                            self,
+                            info,
+                            accepted,
+                            "accepted inbound connection from {}",
+                            accepted.peer()
                         );
 
                         self.counters
@@ -2208,7 +2306,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         session_timer!(self, connect_retry).stop();
 
                         if let Err(e) = self.send_open(&accepted) {
-                            session_log!(self, error, accepted,
+                            session_log!(
+                                self,
+                                error,
+                                accepted,
                                 "failed to send open, fsm transition to idle";
                                 "error" => format!("{e}")
                             );
@@ -2228,9 +2329,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     // it's likely a timing thing as a result of improper
                     // Connector handling (not dropping the TcpStream).
                     SessionEvent::TcpConnectionConfirmed(confirmed) => {
-                        session_log!(self, info, confirmed,
+                        session_log!(
+                            self,
+                            info,
+                            confirmed,
                             "outbound connection to peer {} (conn_id: {}) accepted, but not allowed in {}",
-                            confirmed.peer(), confirmed.id().short(), self.state();
+                            confirmed.peer(),
+                            confirmed.id().short(),
+                            self.state()
                         );
                         self.counters
                             .active_connections_declined
@@ -2247,9 +2353,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         if !session_timer!(self, idle_hold).enabled() {
                             continue;
                         }
-                        session_log_lite!(self, warn,
+                        session_log_lite!(
+                            self,
+                            warn,
                             "rx session fsm event {}, but not allowed in {}. ignoring..",
-                            session_event.title(), self.state();
+                            session_event.title(),
+                            self.state()
                         );
                         continue;
                     }
@@ -2268,8 +2377,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
                 Ok(event) => {
-                    session_log!(self, debug, conn, "received fsm event {}",
-                        event.title(); "event" => event.title()
+                    session_log!(
+                        self,
+                        debug,
+                        conn,
+                        "received fsm event {}",
+                        event.title();
+                        "event" => event.title()
                     );
                     event
                 }
@@ -2277,7 +2391,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Err(RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
-                    session_log!(self, error, conn, "event rx error: {e}";
+                    session_log!(
+                        self,
+                        error,
+                        conn,
+                        "event rx error: {e}";
                         "error" => format!("{e}")
                     );
                     continue;
@@ -2305,8 +2423,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                      *   - changes its state to Idle.
                      */
                     AdminEvent::ManualStop => {
-                        session_log!(self, info, conn, "rx {}, fsm transition to idle",
-                            admin_event.title();
+                        session_log!(
+                            self,
+                            info,
+                            conn,
+                            "rx {}, fsm transition to idle",
+                            admin_event.title()
                         );
                         self.stop(Some(&conn), None, StopReason::Shutdown);
                         return FsmState::Idle;
@@ -2314,7 +2436,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     // Follow ManualStop logic, but with the appropriate ErrorSubcode
                     AdminEvent::Reset => {
-                        session_log!(self, info, conn,
+                        session_log!(
+                            self,
+                            info,
+                            conn,
                             "rx {}, fsm transition to idle",
                             admin_event.title();
                         );
@@ -2333,7 +2458,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ReAdvertiseRoutes
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
-                        session_log!(self, warn, conn,
+                        session_log!(
+                            self,
+                            warn,
+                            conn,
                             "unexpected admin fsm event {title}, ignoring";
                             "event" => title
                         );
@@ -2368,7 +2496,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             continue;
                         }
                         let title = session_event.title();
-                        session_log!(self, warn, conn,
+                        session_log!(
+                            self,
+                            warn,
+                            conn,
                             "{title} event not allowed in this state, fsm transition to idle";
                             "event" => title
                         );
@@ -2382,7 +2513,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             continue;
                         }
                         let title = session_event.title();
-                        session_log!(self, warn, conn,
+                        session_log!(
+                            self,
+                            warn,
+                            conn,
                             "{title} event not allowed in this state, fsm transition to idle";
                             "event" => title
                         );
@@ -2399,31 +2533,43 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                      */
                     SessionEvent::TcpConnectionAcked(new)
                     | SessionEvent::TcpConnectionConfirmed(new) => {
-                        let new_creator = new.creator();
-                        if new_creator == conn.creator() {
-                            collision_log!(self, error, new, conn,
-                                "rejected new {} connection with {}: has same creator as existing connection {}",
-                                new_creator.direction(),
-                                new.id().short(),
-                                conn.id().short();
+                        let new_direction = new.direction();
+                        if new_direction == conn.direction() {
+                            collision_log!(
+                                self,
+                                error,
+                                new,
+                                conn,
+                                "rejected new {new_direction} connection ({}): multiple {new_direction} connections not allowed",
+                                new.id().short()
                             );
                             continue;
                         }
 
-                        match new_creator {
-                            ConnectionCreator::Dispatcher => {
-                                collision_log!(self, info, new, conn,
+                        match new_direction {
+                            ConnectionDirection::Inbound => {
+                                collision_log!(
+                                    self,
+                                    info,
+                                    new,
+                                    conn,
                                     "collision detected: new inbound connection from {} (conn_id: {})",
-                                    new.peer(), new.id().short();
+                                    new.peer(),
+                                    new.id().short()
                                 );
                                 self.counters
                                     .passive_connections_accepted
                                     .fetch_add(1, Ordering::Relaxed);
                             }
-                            ConnectionCreator::Connector => {
-                                collision_log!(self, info, new, conn,
+                            ConnectionDirection::Outbound => {
+                                collision_log!(
+                                    self,
+                                    info,
+                                    new,
+                                    conn,
                                     "collision detected: outbound connection to {} (conn_id: {}) completed",
-                                    new.peer(), new.id().short();
+                                    new.peer(),
+                                    new.id().short()
                                 );
                                 self.counters
                                     .active_connections_accepted
@@ -2432,7 +2578,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
 
                         if let Err(e) = self.send_open(&new) {
-                            collision_log!(self, error, new, conn,
+                            collision_log!(
+                                self,
+                                error,
+                                new,
+                                conn,
                                 "error sending open to new conn, continue with open conn";
                                 "error" => format!("{e}")
                             );
@@ -2460,10 +2610,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             match self.get_conn(conn_id) {
                                 Some(connection) => {
                                     if connection.id() != conn.id() {
-                                        session_log!(self, warn, conn,
+                                        session_log!(
+                                            self,
+                                            warn,
+                                            conn,
                                             "rx {} from peer {} for known connection (conn_id: {}) that's unexpected in this state? closing conn",
-                                            msg.kind(), conn_id.remote().ip(),
-                                            conn_id.short();
+                                            msg.kind(),
+                                            conn_id.remote().ip(),
+                                            conn_id.short()
                                         );
                                         self.stop(
                                             Some(&connection),
@@ -2474,10 +2628,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     }
                                 }
                                 None => {
-                                    session_log!(self, warn, conn,
+                                    session_log!(
+                                        self,
+                                        warn,
+                                        conn,
                                         "rx {} from peer {} for unknown connection (conn_id: {}), ignoring",
-                                        msg.kind(), conn_id.remote().ip(),
-                                        conn_id.short();
+                                        msg.kind(),
+                                        conn_id.remote().ip(),
+                                        conn_id.short()
                                     );
                                     continue;
                                 }
@@ -2498,9 +2656,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             self.connect_retry_counter
                                 .fetch_add(1, Ordering::Relaxed);
 
-                            session_log!(self, warn, conn,
+                            session_log!(
+                                self,
+                                warn,
+                                conn,
                                 "rx unexpected {} message (conn_id: {}), fsm transition to idle",
-                                msg.title(), conn_id.short();
+                                msg.title(),
+                                conn_id.short();
                                 "message" => msg.title(),
                                 "message_contents" => format!("{msg}")
                             );
@@ -2537,13 +2699,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             match self.get_conn(conn_id) {
                                 Some(connection) => {
                                     if connection.id() == conn.id() {
-                                        session_log!(self, warn, conn,
+                                        session_log!(
+                                            self,
+                                            warn,
+                                            conn,
                                             "rx {title} (conn_id: {}), fsm transition to idle",
                                             conn_id.short();
                                             "event" => title
                                         );
                                     } else {
-                                        session_log!(self, warn, conn,
+                                        session_log!(
+                                            self,
+                                            warn,
+                                            conn,
                                             "rx {title} for known connection (conn_id: {}) that's unexpected in this state? closing conn",
                                             conn_id.short();
                                         );
@@ -2556,7 +2724,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     }
                                 }
                                 None => {
-                                    session_log!(self, warn, conn,
+                                    session_log!(
+                                        self,
+                                        warn,
+                                        conn,
                                         "rx {title} for unknown connection (conn_id: {}), ignoring..",
                                         conn_id.short();
                                     );
@@ -2583,15 +2754,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             match self.get_conn(conn_id) {
                                 Some(connection) => {
                                     if connection.id() == conn.id() {
-                                        session_log!(self, warn, conn,
+                                        session_log!(
+                                            self,
+                                            warn,
+                                            conn,
                                             "rx {title} (conn_id: {}) but event not allowed in this state, fsm transition to idle",
                                             conn_id.short();
                                             "event" => title
                                         );
                                     } else {
-                                        session_log!(self, warn, conn,
+                                        session_log!(
+                                            self,
+                                            warn,
+                                            conn,
                                             "rx {title} for known connection (conn_id: {}) that's unexpected in this state? closing conn",
-                                            conn_id.short();
+                                            conn_id.short()
                                         );
                                         self.stop(
                                             Some(&connection),
@@ -2622,15 +2799,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             match self.get_conn(conn_id) {
                                 Some(connection) => {
                                     if connection.id() == conn.id() {
-                                        session_log!(self, warn, conn,
+                                        session_log!(
+                                            self,
+                                            warn,
+                                            conn,
                                             "rx {title} (conn_id: {}) but event not allowed in this state, fsm transition to idle",
                                             conn_id.short();
                                             "event" => title
                                         );
                                     } else {
-                                        session_log!(self, warn, conn,
+                                        session_log!(
+                                            self,
+                                            warn,
+                                            conn,
                                             "rx {title} for known connection (conn_id: {}) that's unexpected in this state? closing conn",
-                                            conn_id.short();
+                                            conn_id.short()
                                         );
                                         self.stop(
                                             Some(&connection),
@@ -2641,9 +2824,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     }
                                 }
                                 None => {
-                                    session_log!(self, warn, conn,
+                                    session_log!(
+                                        self,
+                                        warn,
+                                        conn,
                                         "rx {title} for unknown connection (conn_id: {}), ignoring..",
-                                        conn_id.short();
+                                        conn_id.short()
                                     );
                                     continue;
                                 }
@@ -2679,13 +2865,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Err(e) = self.handle_open(&conn, &om) {
             match e {
                 Error::PolicyCheckFailed => {
-                    session_log!(self, info, conn,
+                    session_log!(
+                        self,
+                        info,
+                        conn,
                         "policy check failed";
                         "error" => format!("{e}")
                     );
                 }
                 e => {
-                    session_log!(self, warn, conn,
+                    session_log!(
+                        self,
+                        warn,
+                        conn,
                         "failed to handle open message, fsm transition to idle";
                         "error" => format!("{e}")
                     );
@@ -2747,8 +2939,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
             Ok(event) => {
-                session_log!(self, debug, pc.conn,
-                     "received fsm event";
+                session_log!(
+                    self,
+                    debug,
+                    pc.conn,
+                    "received fsm event";
                     "event" => event.title()
                 );
                 event
@@ -2757,7 +2952,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             Err(RecvTimeoutError::Timeout) => return FsmState::OpenConfirm(pc),
 
             Err(e) => {
-                session_log!(self, error,  pc.conn,
+                session_log!(
+                    self,
+                    error,
+                    pc.conn,
                     "event rx error: {e}";
                     "error" => format!("{e}")
                 );
@@ -2785,7 +2983,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  *   - changes its state to Idle.
                  */
                 AdminEvent::ManualStop => {
-                    session_log!(self, info,  pc.conn,
+                    session_log!(
+                        self,
+                        info,
+                        pc.conn,
                         "rx {}, fsm transition to idle",
                         admin_event.title();
                     );
@@ -2795,7 +2996,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 // Follow ManualStop logic, but with the appropriate ErrorSubcode
                 AdminEvent::Reset => {
-                    session_log!(self, info,  pc.conn,
+                    session_log!(
+                        self,
+                        info,
+                        pc.conn,
                         "rx {}, fsm transition to idle",
                         admin_event.title();
                     );
@@ -2812,7 +3016,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 | AdminEvent::ReAdvertiseRoutes
                 | AdminEvent::PathAttributesChanged => {
                     let title = admin_event.title();
-                    session_log!(self, warn, pc.conn,
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
                         "unexpected admin fsm event {title}, ignoring";
                         "event" => title
                     );
@@ -2868,7 +3075,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     match self.get_conn(conn_id) {
                         Some(connection) => {
                             if connection.id() == pc.conn.id() {
-                                session_log!(self, warn, pc.conn,
+                                session_log!(
+                                    self,
+                                    warn,
+                                    pc.conn,
                                     "rx {title} (conn_id: {}), fsm transition to idle",
                                     conn_id.short();
                                     "event" => title
@@ -2880,7 +3090,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 );
                                 FsmState::Idle
                             } else {
-                                session_log!(self, warn, pc.conn,
+                                session_log!(
+                                    self,
+                                    warn,
+                                    pc.conn,
                                     "rx {title} for known connection (conn_id: {}) that's unexpected in this state? closing conn",
                                     conn_id.short();
                                 );
@@ -2893,7 +3106,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             }
                         }
                         None => {
-                            session_log!(self, warn, pc.conn,
+                            session_log!(
+                                self,
+                                warn,
+                                pc.conn,
                                 "rx {title} for unknown connection (conn_id: {}), ignoring..",
                                 conn_id.short();
                             );
@@ -2916,8 +3132,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     if !conn_timer!(pc.conn, keepalive).enabled() {
                         return FsmState::OpenConfirm(pc);
                     }
-                    session_log!(self, warn, pc.conn,
-                        "keepalive timer expired, generate keepalive";
+                    session_log!(
+                        self,
+                        info,
+                        pc.conn,
+                        "keepalive timer expired, generate keepalive"
                     );
                     self.send_keepalive(&pc.conn);
                     conn_timer!(pc.conn, keepalive).restart();
@@ -2929,8 +3148,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     if !conn_timer!(pc.conn, delay_open).enabled() {
                         return FsmState::OpenConfirm(pc);
                     }
-                    session_log!(self, warn, pc.conn,
-                        "delay open timer expires event not allowed in this state, fsm transition to idle";
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
+                        "delay open timer expires event not allowed in this state, fsm transition to idle"
                     );
                     self.stop(Some(&pc.conn), None, StopReason::FsmError);
                     FsmState::Idle
@@ -2944,9 +3166,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     if conn_id != *pc.conn.id() {
                         match self.get_conn(&conn_id) {
                             Some(conn) => {
-                                session_log!(self, warn, pc.conn,
+                                session_log!(
+                                    self,
+                                    warn,
+                                    pc.conn,
                                     "unexpected {} message from known but inactive conn (conn_id: {}), closing..",
-                                    msg.title(), conn_id.short();
+                                    msg.title(),
+                                    conn_id.short();
                                     "message" => msg.title(),
                                     "message_contents" => format!("{msg}")
                                 );
@@ -2957,9 +3183,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 );
                             }
                             None => {
-                                session_log!(self, warn, pc.conn,
+                                session_log!(
+                                    self,
+                                    warn,
+                                    pc.conn,
                                     "unexpected {} message from unknown conn (conn_id: {}), ignoring",
-                                    msg.title(), conn_id.short();
+                                    msg.title(),
+                                    conn_id.short();
                                     "message" => msg.title(),
                                     "message_contents" => format!("{msg}")
                                 );
@@ -2997,9 +3227,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          *
                          *   - changes its state to Idle.
                          */
-                        session_log!(self, warn, pc.conn,
+                        session_log!(
+                            self,
+                            warn,
+                            pc.conn,
                             "unexpected {} received (conn_id: {}), fsm transition to idle",
-                            msg.title(), conn_id.short();
+                            msg.title(),
+                            conn_id.short();
                             "message" => "notification",
                             "message_contents" => format!("{msg}")
                         );
@@ -3017,7 +3251,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::OpenConfirm(pc);
                     }
                     let title = session_event.title();
-                    session_log!(self, warn, pc.conn,
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
                         "{title} event not allowed in this state, fsm transition to idle";
                         "event" => title
                     );
@@ -3031,7 +3268,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::OpenConfirm(pc);
                     }
                     let title = session_event.title();
-                    session_log!(self, warn, pc.conn,
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
                         "{title} event not allowed in this state, fsm transition to idle";
                         "event" => title
                     );
@@ -3047,31 +3287,43 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  */
                 SessionEvent::TcpConnectionAcked(new)
                 | SessionEvent::TcpConnectionConfirmed(new) => {
-                    let new_creator = new.creator();
-                    if new_creator == pc.conn.creator() {
-                        collision_log!(self, error, new, pc.conn,
-                            "rejected new {} connection with {}: has same creator as existing connection {}",
-                            new_creator.direction(),
-                            new.id().short(),
-                            pc.conn.id().short();
+                    let new_direction = new.direction();
+                    if new_direction == pc.conn.direction() {
+                        collision_log!(
+                            self,
+                            error,
+                            new,
+                            pc.conn,
+                            "rejected new {new_direction} connection ({}): multiple {new_direction} connections not allowed",
+                            new.id().short()
                         );
                         return FsmState::OpenConfirm(pc);
                     }
 
-                    match new_creator {
-                        ConnectionCreator::Dispatcher => {
-                            collision_log!(self, info, new, pc.conn,
+                    match new_direction {
+                        ConnectionDirection::Inbound => {
+                            collision_log!(
+                                self,
+                                info,
+                                new,
+                                pc.conn,
                                 "collision detected: new inbound connection from {} (conn_id: {})",
-                                new.peer(), new.id().short();
+                                new.peer(),
+                                new.id().short()
                             );
                             self.counters
                                 .passive_connections_accepted
                                 .fetch_add(1, Ordering::Relaxed);
                         }
-                        ConnectionCreator::Connector => {
-                            collision_log!(self, info, new, pc.conn,
+                        ConnectionDirection::Outbound => {
+                            collision_log!(
+                                self,
+                                info,
+                                new,
+                                pc.conn,
                                 "collision detected: outbound connection to {} (conn_id: {}) completed",
-                                new.peer(), new.id().short();
+                                new.peer(),
+                                new.id().short()
                             );
                             self.counters
                                 .active_connections_accepted
@@ -3151,18 +3403,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ) -> FsmState<Cnx> {
         match conn_pair {
             CollisionPair::OpenConfirm(exist, new) => {
-                collision_log!(self, info, new, exist.conn,
+                collision_log!(
+                    self,
+                    info,
+                    new,
+                    exist.conn,
                     "collision detected: new connection [{:?}, conn_id: {}], existing connection [{:?}, conn_id: {}]",
-                    new.conn(), new.id().short(),
-                    exist.conn.conn(), exist.conn.id().short();
+                    new.conn(),
+                    new.id().short(),
+                    exist.conn.conn(),
+                    exist.conn.id().short()
                 );
                 self.connection_collision_open_confirm(exist, new)
             }
             CollisionPair::OpenSent(exist, new) => {
-                collision_log!(self, info, new, exist,
+                collision_log!(
+                    self,
+                    info,
+                    new,
+                    exist,
                     "collision detected: new connection [{:?}, conn_id: {}], existing connection [{:?}, conn_id: {}]",
-                    new.conn(), new.id().short(),
-                    exist.conn(), exist.id().short();
+                    new.conn(),
+                    new.id().short(),
+                    exist.conn(),
+                    exist.id().short()
                 );
                 self.connection_collision_open_sent(exist, new)
             }
@@ -3198,7 +3462,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
                 Ok(event) => {
-                    collision_log!(self, debug, new, exist.conn,
+                    collision_log!(
+                        self,
+                        debug,
+                        new,
+                        exist.conn,
                         "received fsm event {}", event.title();
                         "event" => event.title()
                     );
@@ -3208,7 +3476,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Err(RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
-                    collision_log!(self, error, new, exist.conn,
+                    collision_log!(
+                        self,
+                        error,
+                        new,
+                        exist.conn,
                         "event rx error for ({e}), fsm transition to idle";
                         "error" => format!("{e}")
                     );
@@ -3220,8 +3492,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
                     AdminEvent::ManualStop => {
-                        collision_log!(self, info, new, exist.conn,
-                            "rx manual stop, fsm transition to idle";
+                        collision_log!(
+                            self,
+                            info,
+                            new,
+                            exist.conn,
+                            "rx manual stop, fsm transition to idle"
                         );
                         self.stop(
                             Some(&new),
@@ -3232,8 +3508,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
 
                     AdminEvent::Reset => {
-                        collision_log!(self, info, new, exist.conn,
-                            "rx fsm reset, fsm transition to idle";
+                        collision_log!(
+                            self,
+                            info,
+                            new,
+                            exist.conn,
+                            "rx fsm reset, fsm transition to idle"
                         );
                         self.stop(
                             Some(&new),
@@ -3252,7 +3532,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ReAdvertiseRoutes
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
-                        collision_log!(self, warn, new, exist.conn,
+                        collision_log!(
+                            self,
+                            warn,
+                            new,
+                            exist.conn,
                             "unexpected admin fsm event {title}, ignoring";
                             "event" => title
                         );
@@ -3267,7 +3551,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             continue;
                         }
                         let title = session_event.title();
-                        collision_log!(self, warn, new, exist.conn,
+                        collision_log!(
+                            self,
+                            warn,
+                            new,
+                            exist.conn,
                             "{title} event not allowed in this state, fsm transition to idle";
                             "event" => title
                         );
@@ -3285,7 +3573,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             continue;
                         }
                         let title = session_event.title();
-                        collision_log!(self, warn, new, exist.conn,
+                        collision_log!(
+                            self,
+                            warn,
+                            new,
+                            exist.conn,
                             "{title} event not allowed in this state, fsm transition to idle";
                             "event" => title
                         );
@@ -3299,20 +3591,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     SessionEvent::TcpConnectionAcked(extra)
                     | SessionEvent::TcpConnectionConfirmed(extra) => {
-                        match extra.creator() {
-                            ConnectionCreator::Dispatcher => {
-                                collision_log!(self, info, new, exist.conn,
+                        match extra.direction() {
+                            ConnectionDirection::Inbound => {
+                                collision_log!(
+                                    self,
+                                    info,
+                                    new,
+                                    exist.conn,
                                     "new inbound connection (peer: {}, conn_id: {}), but we're already in a collision. rejecting..",
-                                    extra.peer(), extra.id().short();
+                                    extra.peer(),
+                                    extra.id().short()
                                 );
                                 self.counters
                                     .passive_connections_declined
                                     .fetch_add(1, Ordering::Relaxed);
                             }
-                            ConnectionCreator::Connector => {
-                                collision_log!(self, info, new, exist.conn,
+                            ConnectionDirection::Outbound => {
+                                collision_log!(
+                                    self,
+                                    info,
+                                    new,
+                                    exist.conn,
                                     "outbound connection completed (peer: {}, conn_id: {}), but we're already in a collision. rejecting..",
-                                    extra.peer(), extra.id().short();
+                                    extra.peer(),
+                                    extra.id().short()
                                 );
                                 self.counters
                                     .active_connections_declined
@@ -3338,9 +3640,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         continue;
                                     }
                                     if conn_id == *new.id() {
-                                        collision_log!(self, warn, new, exist.conn,
+                                        collision_log!(
+                                            self,
+                                            warn,
+                                            new,
+                                            exist.conn,
                                             "hold timer expired (conn_id: {}), fsm transition existing conn back to open confirm",
-                                            conn_id.short();
+                                            conn_id.short()
                                         );
                                         self.stop(
                                             Some(&new),
@@ -3349,9 +3655,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         );
                                         return FsmState::OpenConfirm(exist);
                                     } else if conn_id == *exist.conn.id() {
-                                        collision_log!(self, warn, new, exist.conn,
+                                        collision_log!(
+                                            self,
+                                            warn,
+                                            new,
+                                            exist.conn,
                                             "hold timer expired (conn_id: {}), fsm transition new conn to open sent",
-                                            conn_id.short();
+                                            conn_id.short()
                                         );
                                         self.stop(
                                             Some(&exist.conn),
@@ -3375,9 +3685,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         // So this error is likely indicative of
                                         // a bug in the registry handling,
                                         // probably a missing unregister call.
-                                        collision_log!(self, warn, new, exist.conn,
+                                        collision_log!(
+                                            self,
+                                            warn,
+                                            new,
+                                            exist.conn,
                                             "rx open message from peer {} for known connection (conn_id: {}) that isn't part of this collision? closing conn",
-                                            conn_id.remote().ip(), conn_id.short();
+                                            conn_id.remote().ip(),
+                                            conn_id.short()
                                         );
                                         self.stop(
                                             Some(&connection),
@@ -3388,9 +3703,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     }
                                 }
                                 None => {
-                                    collision_log!(self, warn, new, exist.conn,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
                                         "rx open message from peer {} for unknown connection (conn_id: {}), ignoring",
-                                        conn_id.remote().ip(), conn_id.short();
+                                        conn_id.remote().ip(),
+                                        conn_id.short()
                                     );
                                     continue;
                                 }
@@ -3446,9 +3766,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     // connection to have been registered. So this
                                     // error is indicative of a bug in the registry
                                     // handling, probably a missing unregister call.
-                                    collision_log!(self, warn, new, exist.conn,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
                                         "rx {} for known connection (conn_id: {}) that isn't part of this collision (likely a bug). closing conn",
-                                        connection_event.title(), conn_id.short();
+                                        connection_event.title(),
+                                        conn_id.short()
                                     );
                                     self.stop(
                                         Some(&unknown),
@@ -3462,9 +3787,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     // nothing to do since we don't have a
                                     // handle for the connection to send a
                                     // notification. All we can do is ignore it.
-                                    collision_log!(self, warn, new, exist.conn,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
                                         "rx {} for unknown connection (conn_id: {}), ignoring",
-                                        connection_event.title(), conn_id.short();
+                                        connection_event.title(),
+                                        conn_id.short()
                                     );
                                 }
                             }
@@ -3478,9 +3808,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 new.id(),
                             ) {
                                 CollisionConnectionKind::New => {
-                                    collision_log!(self, warn, new, exist.conn,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
                                         "new conn rx {} (conn_id: {}), but event is not allowed. fsm transition existing conn back to open confirm",
-                                        connection_event.title(), conn_id.short();
+                                        connection_event.title(),
+                                        conn_id.short()
                                     );
                                     self.stop(
                                         Some(&new),
@@ -3491,9 +3826,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 }
 
                                 CollisionConnectionKind::Exist => {
-                                    collision_log!(self, warn, new, exist.conn,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
                                         "exist conn rx {} (conn_id: {}), fsm transition new conn to open sent",
-                                        connection_event.title(), conn_id.short();
+                                        connection_event.title(),
+                                        conn_id.short()
                                     );
                                     self.stop(
                                         Some(&exist.conn),
@@ -3521,9 +3861,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     // So this error is likely indicative of
                                     // a bug in the registry handling,
                                     // probably a missing unregister call.
-                                    collision_log!(self, warn, new, exist.conn,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
                                         "rx {} for known connection (conn_id: {}) that isn't part of this collision? closing connection",
-                                        connection_event.title(), conn_id.short();
+                                        connection_event.title(),
+                                        conn_id.short()
                                     );
                                     self.stop(
                                         Some(&unknown),
@@ -3534,9 +3879,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 }
 
                                 CollisionConnectionKind::Missing => {
-                                    collision_log!(self, warn, new, exist.conn,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
                                         "rx {} for unknown connection (conn_id: {}), ignoring",
-                                        connection_event.title(), conn_id.short();
+                                        connection_event.title(),
+                                        conn_id.short()
                                     );
                                     continue;
                                 }
@@ -3562,7 +3912,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         if let Err(e) =
                                             self.handle_open(&new, &om)
                                         {
-                                            collision_log!(self, warn, new, exist.conn,
+                                            collision_log!(
+                                                self,
+                                                warn,
+                                                new,
+                                                exist.conn,
                                                 "new conn failed to handle open message ({e}), existing conn falls back to open confirm";
                                                 "error" => format!("{e}")
                                             );
@@ -3587,9 +3941,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         break om;
                                     } else {
                                         self.bump_msg_counter(msg_kind, true);
-                                        collision_log!(self, warn, new, exist.conn,
+                                        collision_log!(
+                                            self,
+                                            warn,
+                                            new,
+                                            exist.conn,
                                             "rx unexpected {msg_kind} via new conn (conn_id: {}), fsm transition existing conn back to open confirm",
-                                            conn_id.short();
+                                            conn_id.short()
                                         );
                                         self.stop(
                                             Some(&new),
@@ -3637,9 +3995,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         return FsmState::SessionSetup(exist);
                                     } else {
                                         self.bump_msg_counter(msg_kind, true);
-                                        collision_log!(self, warn, new, exist.conn,
+                                        collision_log!(
+                                            self,
+                                            warn,
+                                            new,
+                                            exist.conn,
                                             "rx unexpected {msg_kind} for existing connection (conn_id: {}), fsm transition new to open sent",
-                                            conn_id.short();
+                                            conn_id.short()
                                         );
                                         self.stop(
                                             Some(&exist.conn),
@@ -3668,9 +4030,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     // So this error is likely indicative of
                                     // a bug in the registry handling,
                                     // probably a missing unregister call.
-                                    collision_log!(self, warn, new, exist.conn,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
                                         "rx unexpected {msg_kind} for known connection (conn_id: {}) that isn't part of this collision? closing conn",
-                                        conn_id.short();
+                                        conn_id.short()
                                     );
                                     self.stop(
                                         Some(&unknown),
@@ -3682,9 +4048,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 }
 
                                 CollisionConnectionKind::Missing => {
-                                    collision_log!(self, warn, new, exist.conn,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
                                         "rx unexpected {msg_kind} for unknown connection (conn_id: {}), ignoring..",
-                                        conn_id.remote().ip();
+                                        conn_id.remote().ip()
                                     );
                                     self.bump_msg_counter(msg_kind, true);
                                     continue;
@@ -3696,17 +4066,27 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        collision_log!(self, info, &exist.conn, &new,
+        collision_log!(
+            self,
+            info,
+            &exist.conn,
+            &new,
             "collision detected: local id {}, remote id {}",
-            self.id, om.id;
+            self.id,
+            om.id
         );
 
-        match collision_resolution(exist.conn.creator(), self.id, om.id) {
+        match collision_resolution(exist.conn.direction(), self.id, om.id) {
             CollisionResolution::ExistWins => {
                 // Existing connection wins
-                collision_log!(self, info, &exist.conn, &new,
+                collision_log!(
+                    self,
+                    info,
+                    &exist.conn,
+                    &new,
                     "collision resolution: local system wins with higher RID ({} > {})",
-                    self.id, om.id;
+                    self.id,
+                    om.id
                 );
 
                 self.stop(Some(&new), None, StopReason::CollisionResolution);
@@ -3723,9 +4103,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             CollisionResolution::NewWins => {
                 // New connection wins
-                collision_log!(self, info, &exist.conn, &new,
+                collision_log!(
+                    self,
+                    info,
+                    &exist.conn,
+                    &new,
                     "collision resolution: peer wins with higher RID ({} >= {})",
-                    om.id, self.id;
+                    om.id,
+                    self.id
                 );
 
                 self.stop(
@@ -3804,8 +4189,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
                 Ok(event) => {
-                    collision_log!(self, debug, new, exist,
-                        "received fsm event {}", event.title();
+                    collision_log!(
+                        self,
+                        debug,
+                        new,
+                        exist,
+                        "received fsm event {}",
+                        event.title();
                         "event" => event.title()
                     );
                     event
@@ -3814,7 +4204,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Err(RecvTimeoutError::Timeout) => continue,
 
                 Err(e) => {
-                    collision_log!(self, error, new, exist,
+                    collision_log!(
+                        self,
+                        error,
+                        new,
+                        exist,
                         "event rx error for ({e}), fsm transition to idle";
                         "error" => format!("{e}")
                     );
@@ -3826,8 +4220,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
                     AdminEvent::ManualStop => {
-                        collision_log!(self, info, new, exist,
-                            "rx manual stop, fsm transition to idle";
+                        collision_log!(
+                            self,
+                            info,
+                            new,
+                            exist,
+                            "rx manual stop, fsm transition to idle"
                         );
                         self.stop(
                             Some(&new),
@@ -3838,8 +4236,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
 
                     AdminEvent::Reset => {
-                        collision_log!(self, info, new, exist,
-                            "rx fsm reset, fsm transition to idle";
+                        collision_log!(
+                            self,
+                            info,
+                            new,
+                            exist,
+                            "rx fsm reset, fsm transition to idle"
                         );
                         self.stop(Some(&new), Some(&exist), StopReason::Reset);
                         return FsmState::Idle;
@@ -3854,7 +4256,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ReAdvertiseRoutes
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
-                        collision_log!(self, warn, new, exist,
+                        collision_log!(
+                            self,
+                            warn,
+                            new,
+                            exist,
                             "unexpected admin fsm event {title}, ignoring";
                             "event" => title
                         );
@@ -3890,7 +4296,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             continue;
                         }
                         let title = session_event.title();
-                        collision_log!(self, warn, new, exist,
+                        collision_log!(
+                            self,
+                            warn,
+                            new,
+                            exist,
                             "{title} event not allowed in this state, fsm transition to idle";
                             "event" => title
                         );
@@ -3908,7 +4318,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             continue;
                         }
                         let title = session_event.title();
-                        collision_log!(self, warn, new, exist,
+                        collision_log!(
+                            self,
+                            warn,
+                            new,
+                            exist,
                             "{title} event not allowed in this state, fsm transition to idle";
                             "event" => title
                         );
@@ -3929,8 +4343,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                      */
                     SessionEvent::TcpConnectionAcked(extra)
                     | SessionEvent::TcpConnectionConfirmed(extra) => {
-                        match extra.creator() {
-                            ConnectionCreator::Dispatcher => {
+                        match extra.direction() {
+                            ConnectionDirection::Inbound => {
                                 collision_log!(self, info, new, exist,
                                     "new inbound connection (peer: {}, conn_id: {}), but we're already in a collision. closing..",
                                     extra.peer(), extra.id().short();
@@ -3939,7 +4353,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     .passive_connections_declined
                                     .fetch_add(1, Ordering::Relaxed);
                             }
-                            ConnectionCreator::Connector => {
+                            ConnectionDirection::Outbound => {
                                 collision_log!(self, info, new, exist,
                                     "outbound connection completed (peer: {}, conn_id: {}), but we're already in a collision. closing..",
                                     extra.peer(), extra.id().short();
@@ -4034,7 +4448,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         );
 
                                         match collision_resolution(
-                                            exist.creator(),
+                                            exist.direction(),
                                             self.id,
                                             om.id,
                                         ) {
@@ -4063,7 +4477,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             }
                                             CollisionResolution::NewWins => {
                                                 // New connection wins
-                                                collision_log!(self, info, exist, new,
+                                                collision_log!(
+                                                    self,
+                                                    info,
+                                                    exist,
+                                                    new,
                                                     "new conn wins collision, close new conn",
                                                 );
 
@@ -4080,7 +4498,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     } else {
                                         // Any message other than Open is an FSM error for OpenSent
                                         self.bump_msg_counter(msg_kind, true);
-                                        collision_log!(self, warn, new, exist,
+                                        collision_log!(
+                                            self,
+                                            warn,
+                                            new,
+                                            exist,
                                             "existing conn rx unexpected {msg_kind} (conn_id: {}), fallback to new conn",
                                             conn_id.short();
                                             "message" => msg_kind
@@ -4107,7 +4529,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         self.bump_msg_counter(msg_kind, false);
 
                                         if let Err(e) = self.handle_open(&new, &om) {
-                                            collision_log!(self, warn, new, exist,
+                                            collision_log!(
+                                                self,
+                                                warn,
+                                                new,
+                                                exist,
                                                 "new conn failed to handle {msg_kind} ({e}), fallback to existing conn";
                                                 "error" => format!("{e}")
                                             );
@@ -4126,20 +4552,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         self.send_keepalive(&new);
 
                                         // Resolve collision on first Open - don't wait for both
-                                        collision_log!(self, info, new, exist,
+                                        collision_log!(
+                                            self,
+                                            info,
+                                            new,
+                                            exist,
                                             "new conn received Open (conn_id: {}), resolving collision immediately",
-                                            conn_id.short();
+                                            conn_id.short()
                                         );
 
                                         match collision_resolution(
-                                            exist.creator(),
+                                            exist.direction(),
                                             self.id,
                                             om.id,
                                         ) {
                                             CollisionResolution::ExistWins => {
                                                 // Existing connection wins
-                                                collision_log!(self, info, new, exist,
-                                                    "exist conn wins collision, closing new",
+                                                collision_log!(
+                                                    self,
+                                                    info,
+                                                    new,
+                                                    exist,
+                                                    "exist conn wins collision, closing new"
                                                 );
 
                                                 self.stop(Some(&new), None, StopReason::CollisionResolution);
@@ -4153,8 +4587,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             }
                                             CollisionResolution::NewWins => {
                                                 // New connection wins
-                                                collision_log!(self, info, new, exist,
-                                                    "new conn wins collision, closing exist",
+                                                collision_log!(
+                                                    self,
+                                                    info,
+                                                    new,
+                                                    exist,
+                                                    "new conn wins collision, closing exist"
                                                 );
 
                                                 self.stop(Some(&exist), None, StopReason::CollisionResolution);
@@ -4178,7 +4616,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     } else {
                                         // Any message other than Open is an FSM error for OpenSent
                                         self.bump_msg_counter(msg_kind, true);
-                                        collision_log!(self, warn, new, exist,
+                                        collision_log!(
+                                            self,
+                                            warn,
+                                            new,
+                                            exist,
                                             "new conn rx unexpected {msg_kind} (conn_id: {}), fallback to existing conn",
                                             conn_id.short();
                                             "message" => msg_kind
@@ -4223,7 +4665,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     if !conn_timer!(new, hold).enabled() {
                                         continue;
                                     }
-                                    collision_log!(self, warn, new, exist,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
                                         "new conn rx {title} (conn_id: {}), fallback to existing conn",
                                         conn_id.short();
                                         "event" => title
@@ -4237,7 +4683,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     if !conn_timer!(exist, hold).enabled() {
                                         continue;
                                     }
-                                    collision_log!(self, warn, new, exist,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
                                         "existing conn rx {title} (conn_id: {}), fallback to new conn",
                                         conn_id.short();
                                         "event" => title
@@ -4248,7 +4698,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 },
 
                                 CollisionConnectionKind::Unexpected(unknown) => {
-                                    collision_log!(self, warn, new, exist,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
                                         "rx {title} for known connection (conn_id: {}) that isn't part of this collision? closing conn",
                                         conn_id.short();
                                         "event" => title
@@ -4258,7 +4712,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 },
 
                                 CollisionConnectionKind::Missing => {
-                                    collision_log!(self, warn, new, exist,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
                                         "rx {title} for unknown connection (conn_id: {}), ignoring..",
                                         conn_id.short();
                                         "event" => title
@@ -4281,7 +4739,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                             match self.collision_conn_kind(&conn_id, exist.id(), new.id()) {
                                 CollisionConnectionKind::New => {
-                                    collision_log!(self, warn, new, exist,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
                                         "new conn rx {title}, but event not allowed in this state, fallback to existing conn";
                                         "event" => title
                                     );
@@ -4291,7 +4753,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 },
 
                                 CollisionConnectionKind::Exist => {
-                                    collision_log!(self, warn, new, exist,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
                                         "existing conn rx {title}, but event not allowed in this state, fallback to new conn";
                                         "event" => title
                                     );
@@ -4301,7 +4767,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 },
 
                                 CollisionConnectionKind::Unexpected(unknown) => {
-                                    collision_log!(self, warn, new, exist,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
                                         "rx {title} for connection that is known (conn_id: {}) but not part of this collision? closing conn",
                                         conn_id.short();
                                         "event" => title
@@ -4311,7 +4781,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 },
 
                                 CollisionConnectionKind::Missing => {
-                                    collision_log!(self, warn, new, exist,
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
                                         "rx {title} for unknown connection (conn_id: {}), ignoring..",
                                         conn_id.short();
                                         "event" => title
@@ -4368,7 +4842,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             Ok(value) => value,
             Err(e) => {
                 //TODO possible death loop. Should we just panic here?
-                session_log!(self, error, pc.conn,
+                session_log!(
+                    self,
+                    error,
+                    pc.conn,
                     "failed to get originated routes from db";
                     "error" => format!("{e}")
                 );
@@ -4401,7 +4878,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             if let Err(e) =
                 self.send_update(update, &pc, ShaperApplication::Current)
             {
-                session_log!(self, error, pc.conn,
+                session_log!(
+                    self,
+                    error,
+                    pc.conn,
                     "failed to send update, fsm transition to idle";
                     "error" => format!("{e}")
                 );
@@ -4447,7 +4927,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
             Ok(event) => {
-                session_log!(self, debug, pc.conn,
+                session_log!(
+                    self,
+                    debug,
+                    pc.conn,
                     "received fsm event";
                     "event" => event.title()
                 );
@@ -4460,7 +4943,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 //TODO possible death loop. Should we just panic here? Is it
                 // even possible to recover from an error here as it likely
                 // means the channel is toast.
-                session_log!(self, error, pc.conn,
+                session_log!(
+                    self,
+                    error,
+                    pc.conn,
                     "event rx error: {e}";
                     "error" => format!("{e}")
                 );
@@ -4488,7 +4974,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         &pc,
                         ShaperApplication::Current,
                     ) {
-                        session_log!(self, error, pc.conn,
+                        session_log!(
+                            self,
+                            error,
+                            pc.conn,
                             "failed to send update, fsm transition to idle";
                             "error" => format!("{e}")
                         );
@@ -4503,7 +4992,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         ShaperApplication::Difference(previous),
                     ) {
                         Err(e) => {
-                            session_log!(self, error, pc.conn,
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
                                 "failed to originate update, fsm transition to idle";
                                 "error" => format!("{e}")
                             );
@@ -4518,7 +5010,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         Ok(value) => value,
                         Err(e) => {
                             //TODO possible death loop. Should we just panic here?
-                            session_log!(self, error, pc.conn,
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
                                 "failed to get originated routes from db";
                                 "error" => format!("{e}")
                             );
@@ -4578,7 +5073,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         &pc,
                         ShaperApplication::Current,
                     ) {
-                        session_log!(self, error, pc.conn,
+                        session_log!(
+                            self,
+                            error,
+                            pc.conn,
                             "failed to send update, fsm transition to idle";
                             "error" => format!("{e}")
                         );
@@ -4602,7 +5100,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 AdminEvent::ReAdvertiseRoutes => {
                     if let Err(e) = self.refresh_react(&pc) {
-                        session_log!(self, error, pc.conn,
+                        session_log!(
+                            self,
+                            error,
+                            pc.conn,
                             "route re-advertisement error: {e}";
                             "error" => format!("{e}")
                         );
@@ -4615,7 +5116,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     match self.originate_update(&pc, ShaperApplication::Current)
                     {
                         Err(e) => {
-                            session_log!(self, error, pc.conn,
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
                                 "failed to originate update, fsm transition to idle";
                                 "error" => format!("{e}")
                             );
@@ -4627,7 +5131,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 AdminEvent::ManualStart => {
                     let title = admin_event.title();
-                    session_log_lite!(self, warn,
+                    session_log_lite!(
+                        self,
+                        warn,
                         "unexpected admin fsm event {title}, ignoring";
                         "event" => title
                     );
@@ -4640,9 +5146,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     if !session_timer!(self, connect_retry).enabled() {
                         return FsmState::Established(pc);
                     }
-                    session_log!(self, info,  pc.conn,
+                    session_log!(
+                        self,
+                        info,
+                        pc.conn,
                         "rx {}, fsm transition to idle",
-                        session_event.title();
+                        session_event.title()
                     );
                     self.stop(Some(&pc.conn), None, StopReason::FsmError);
                     self.exit_established(pc)
@@ -4652,8 +5161,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     if !session_timer!(self, idle_hold).enabled() {
                         return FsmState::Established(pc);
                     }
-                    session_log!(self, info,  pc.conn,
-                        "rx delay open timer expires, fsm transition to idle";
+                    session_log!(
+                        self,
+                        info,
+                        pc.conn,
+                        "rx delay open timer expires, fsm transition to idle"
                     );
                     self.stop(Some(&pc.conn), None, StopReason::FsmError);
                     self.exit_established(pc)
@@ -4661,20 +5173,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 SessionEvent::TcpConnectionAcked(new)
                 | SessionEvent::TcpConnectionConfirmed(new) => {
-                    match new.creator() {
-                        ConnectionCreator::Dispatcher => {
-                            session_log!(self, info, new,
+                    match new.direction() {
+                        ConnectionDirection::Inbound => {
+                            session_log!(
+                                self,
+                                info,
+                                new,
                                 "inbound connection not allowed in established (peer: {}, conn_id: {})",
-                                new.peer(), new.id().short();
+                                new.peer(),
+                                new.id().short()
                             );
                             self.counters
                                 .passive_connections_declined
                                 .fetch_add(1, Ordering::Relaxed);
                         }
-                        ConnectionCreator::Connector => {
-                            session_log!(self, info, new,
+                        ConnectionDirection::Outbound => {
+                            session_log!(
+                                self,
+                                info,
+                                new,
                                 "outbound connection completed but not allowed in established (peer: {}, conn_id: {})",
-                                new.peer(), new.id().short();
+                                new.peer(),
+                                new.id().short()
                             );
                             self.counters
                                 .active_connections_declined
@@ -4715,8 +5235,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         // If the HoldTimer fires, it means we've not received a
                         // Keepalive or Update from the peer within the hold time.
                         // So exit Established and restart the peer FSM from Idle
-                        session_log!(self, warn, pc.conn,
-                            "hold timer expired, fsm transition to idle";
+                        session_log!(
+                            self,
+                            warn,
+                            pc.conn,
+                            "hold timer expired, fsm transition to idle"
                         );
                         self.counters
                             .hold_timer_expirations
@@ -4728,9 +5251,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         );
                         self.exit_established(pc)
                     } else {
-                        session_log!(self, warn, pc.conn,
+                        session_log!(
+                            self,
+                            warn,
+                            pc.conn,
                             "rx {} for unexpected known connection (conn_id: {}). closing..",
-                            connection_event.title(), conn_id.short();
+                            connection_event.title(),
+                            conn_id.short();
                             "event" => connection_event.title()
                         );
                         if let Some(conn) = self
@@ -4763,9 +5290,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
                         self.send_keepalive(&pc.conn);
                     } else {
-                        session_log!(self, warn, pc.conn,
+                        session_log!(
+                            self,
+                            warn,
+                            pc.conn,
                             "rx {} for unexpected known connection (conn_id: {}). closing..",
-                            connection_event.title(), conn_id.short();
+                            connection_event.title(),
+                            conn_id.short();
                             "event" => connection_event.title()
                         );
                         if let Some(conn) = self
@@ -4783,15 +5314,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         if !conn_timer!(pc.conn, delay_open).enabled() {
                             return FsmState::Established(pc);
                         }
-                        session_log!(self, info,  pc.conn,
-                            "rx delay open timer expires, fsm transition to idle";
+                        session_log!(
+                            self,
+                            info,
+                            pc.conn,
+                            "rx delay open timer expires, fsm transition to idle"
                         );
                         self.stop(Some(&pc.conn), None, StopReason::FsmError);
                         self.exit_established(pc)
                     } else {
-                        session_log!(self, warn, pc.conn,
+                        session_log!(
+                            self,
+                            warn,
+                            pc.conn,
                             "rx {} for unexpected known connection (conn_id: {}). closing..",
-                            connection_event.title(), conn_id.short();
+                            connection_event.title(),
+                            conn_id.short();
                             "event" => connection_event.title()
                         );
                         if let Some(conn) = self
@@ -4899,16 +5437,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 {
                                     // Determine which connection wins using pure function
                                     let resolution = collision_resolution(
-                                        pc.conn.creator(),
+                                        pc.conn.direction(),
                                         om.id,
                                         self.id,
                                     );
 
-                                    session_log!(self, info, pc.conn,
+                                    session_log!(self,
+                                        info,
+                                        pc.conn,
                                         "collision detected in established state (conn_id: {}), collision_detect_established_state enabled",
                                         conn_id.short();
                                         "message" => "open",
-                                        "message_contents" => format!("{om}").as_str(),
+                                        "message_contents" => format!("{om}"),
                                         "resolution" => format!("{:?}", resolution)
                                     );
 
@@ -4964,11 +5504,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         }
                                     }
                                 } else {
-                                    session_log!(self, info, pc.conn,
+                                    session_log!(
+                                        self,
+                                        info,
+                                        pc.conn,
                                         "collision detected in established state (conn_id: {}), resolving",
                                         conn_id.short();
                                         "message" => "open",
-                                        "message_contents" => format!("{om}").as_str()
+                                        "message_contents" => format!("{om}")
                                     );
                                     self.bump_msg_counter(msg_kind, true);
                                     self.stop(
@@ -4980,7 +5523,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 }
                             } else {
                                 // No special case for anything other than Open
-                                session_log!(self, warn, pc.conn,
+                                session_log!(
+                                    self,
+                                    warn,
+                                    pc.conn,
                                     "rx {msg_kind} for unexpected known connection (conn_id: {}). closing..",
                                     conn_id.short();
                                     "message" => msg_kind,
@@ -4993,7 +5539,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 );
                             }
                         } else {
-                            session_log!(self, warn, pc.conn,
+                            session_log!(
+                                self,
+                                warn,
+                                pc.conn,
                                 "rx {msg_kind} for unknown connection (conn_id: {}). ignoring..",
                                 conn_id.short();
                                 "message" => msg_kind,
@@ -5008,10 +5557,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             // Unexpected Open on the active connection while in Established.
                             // All collision cases (Open from non-active connections) are
                             // handled above before reaching this match block.
-                            session_log!(self, warn, pc.conn,
+                            session_log!(
+                                self,
+                                warn,
+                                pc.conn,
                                 "unexpected {msg_kind} on active connection, fsm transition to idle";
                                 "message" => "open",
-                                "message_contents" => format!("{om}").as_str()
+                                "message_contents" => format!("{om}")
                             );
                             self.bump_msg_counter(msg_kind, true);
                             self.stop(
@@ -5035,10 +5587,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          */
                         Message::Update(m) => {
                             conn_timer!(pc.conn, hold).reset();
-                            session_log!(self, info, pc.conn, "received {msg_kind} (conn_id: {})",
+                            session_log!(
+                                self,
+                                info,
+                                pc.conn,
+                                "received {msg_kind} (conn_id: {})",
                                 conn_id.short();
                                 "message" => "update",
-                                "message_contents" => format!("{m}").as_str()
+                                "message_contents" => format!("{m}")
                             );
                             self.apply_update(m.clone(), &pc);
                             lock!(self.message_history)
@@ -5096,7 +5652,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             if matches!(m.error_subcode,
                                 ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionCollisionResolution)) {
 
-                                session_log!(self, info, pc.conn,
+                                session_log!(
+                                    self,
+                                    info,
+                                    pc.conn,
                                     "rx collision resolution notification (conn_id: {}), fsm transition to active",
                                     conn_id.short();
                                     "message" => msg.title(),
@@ -5127,7 +5686,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             // We've received a notification from the peer. They are
                             // displeased with us. Exit established and restart from
                             // the idle state.
-                            session_log!(self, warn, pc.conn,
+                            session_log!(
+                                self,
+                                warn,
+                                pc.conn,
                                 "{msg_kind} received (conn_id: {}), fsm transition to idle",
                                 conn_id.short();
                                 "message" => "notification",
@@ -5149,8 +5711,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          *    - remains in the Established state.
                          */
                         Message::KeepAlive => {
-                            session_log!(self, trace, pc.conn,
-                                "keepalive received (conn_id: {})", conn_id.short();
+                            session_log!(
+                                self,
+                                trace,
+                                pc.conn,
+                                "keepalive received (conn_id: {})",
+                                conn_id.short();
                                 "message" => "keepalive"
                             );
                             self.bump_msg_counter(msg_kind, false);
@@ -5170,7 +5736,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          */
                         Message::RouteRefresh(m) => {
                             conn_timer!(pc.conn, hold).reset();
-                            session_log!(self, info, pc.conn,
+                            session_log!(
+                                self,
+                                info,
+                                pc.conn,
                                 "received route refresh (conn_id: {})",
                                 conn_id.short();
                                 "message" => "route refresh",
@@ -5180,7 +5749,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 .receive(m.clone().into(), *conn_id);
                             self.bump_msg_counter(msg_kind, false);
                             if let Err(e) = self.handle_refresh(m, &pc) {
-                                session_log!(self, error, pc.conn,
+                                session_log!(
+                                    self,
+                                    error,
+                                    pc.conn,
                                     "error handling route refresh (conn_id: {}), fsm transition to idle",
                                     conn_id.short();
                                     "error" => format!("{e}")
@@ -5198,17 +5770,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     // Housekeeping items to do when a session shutdown is requested.
     pub fn on_shutdown(&self) {
-        session_log_lite!(self, info,
+        session_log_lite!(
+            self,
+            info,
             "session runner (peer {}): shutdown start",
-            self.neighbor.host.ip();
+            self.neighbor.host.ip()
         );
 
         self.cleanup_connections();
 
         // Join the connector thread if one is running to ensure clean shutdown
         if let Some(handle) = lock!(self.connector_handle).take() {
-            session_log_lite!(self, debug,
-                "joining connector thread during shutdown";
+            session_log_lite!(
+                self,
+                debug,
+                "joining connector thread during shutdown"
             );
             self.join_connector_thread(handle, "shutdown");
         }
@@ -5222,7 +5798,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             session_log_lite!(
                 self,
                 info,
-                "fsm transition {previous} -> {next}";
+                "fsm transition {previous} -> {next}"
             );
             // Go back to the beginning of the state machine.
             *(lock!(self.state)) = next;
@@ -5232,9 +5808,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.shutdown.store(false, Ordering::Release);
         self.running.store(false, Ordering::Release);
 
-        session_log_lite!(self, info,
+        session_log_lite!(
+            self,
+            info,
             "session runner (peer {}): shutdown complete",
-            self.neighbor.host.ip();
+            self.neighbor.host.ip()
         );
     }
 
@@ -5282,7 +5860,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 },
                 Err(e) => {
-                    session_log!(self, error, conn,
+                    session_log!(
+                        self,
+                        error,
+                        conn,
                         "open checker exec failed: {e}";
                         "error" => format!("{e}")
                     );
@@ -5329,7 +5910,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Send a keepalive message to the session peer.
     fn send_keepalive(&self, conn: &Cnx) {
-        session_log!(self, trace, conn, "sending keepalive";
+        session_log!(
+            self,
+            trace,
+            conn,
+            "sending keepalive";
             "message" => "keepalive"
         );
         if let Err(e) = conn.send(Message::KeepAlive) {
@@ -5348,14 +5933,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn send_route_refresh(&self, conn: &Cnx) {
-        session_log!(self, info, conn, "sending route refresh";
+        session_log!(
+            self,
+            info,
+            conn,
+            "sending route refresh";
             "message" => "route refresh"
         );
         if let Err(e) = conn.send(Message::RouteRefresh(RouteRefreshMessage {
             afi: Afi::Ipv4 as u16,
             safi: Safi::NlriUnicast as u8,
         })) {
-            session_log!(self, error, conn, "failed to send route refresh: {e}";
+            session_log!(
+                self,
+                error,
+                conn,
+                "failed to send route refresh: {e}";
                 "error" => format!("{e}")
             );
             self.counters
@@ -5431,17 +6024,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             data: Vec::new(),
         };
 
-        session_log!(self, info, conn,
+        session_log!(
+            self,
+            info,
+            conn,
             "sending notification: {error_code} / {error_subcode}";
             "message" => "notification",
-            "message_contents" => format!("{notification}").as_str()
+            "message_contents" => format!("{notification}")
         );
 
         let msg = Message::Notification(notification);
         lock!(self.message_history).send(msg.clone(), *conn.id());
 
         if let Err(e) = conn.send(msg) {
-            session_log!(self, error, conn,
+            session_log!(
+                self,
+                error,
+                conn,
                 "failed to send notification: {e}";
                 "error" => format!("{e}")
             );
@@ -5490,7 +6089,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 },
                 Err(e) => {
-                    session_log!(self, error, conn,
+                    session_log!(
+                        self,
+                        error,
+                        conn,
                         "open shaper exec failed: {e}";
                         "error" => format!("{e}")
                     );
@@ -5502,7 +6104,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         self.counters.opens_sent.fetch_add(1, Ordering::Relaxed);
         if let Err(e) = conn.send(out) {
-            session_log!(self, error, conn,
+            session_log!(
+                self,
+                error,
+                conn,
                 "send_open failed: {e}";
                 "error" => format!("{e}")
             );
@@ -5658,13 +6263,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
 
-        session_log!(self, info, pc.conn, "sending update";
+        session_log!(
+            self,
+            info,
+            pc.conn,
+            "sending update";
             "message" => "update",
             "message_contents" => format!("{out}")
         );
 
         if let Err(e) = pc.conn.send(out) {
-            session_log!(self, error, pc.conn,
+            session_log!(
+                self,
+                error,
+                pc.conn,
                 "failed to send update: {e}";
                 "error" => format!("{e}")
             );
@@ -5897,11 +6509,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         pc: &PeerConnection<Cnx>,
     ) {
         if let Err(e) = self.check_update(&update, pc.asn) {
-            session_log!(self, warn, pc.conn,
+            session_log!(
+                self,
+                warn,
+                pc.conn,
                 "update check failed: {e}";
                 "error" => format!("{e}"),
                 "message" => "update",
-                "message_contents" => format!("{update}").as_str()
+                "message_contents" => format!("{update}")
             );
             return;
         }
@@ -5922,7 +6537,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 },
                 Err(e) => {
-                    session_log!(self, error, pc.conn,
+                    session_log!(
+                        self,
+                        error,
+                        pc.conn,
                         "open checker exec failed: {e}";
                         "error" => format!("{e}")
                     );
@@ -5959,7 +6577,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
-                session_log!(self, error, pc.conn,
+                session_log!(
+                    self,
+                    error,
+                    pc.conn,
                     "failed to get originated routes from db";
                     "error" => format!("{e}")
                 );
@@ -6009,7 +6630,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
-                session_log!(self, error, pc.conn,
+                session_log!(
+                    self,
+                    error,
+                    pc.conn,
                     "failed to get originated routes from db";
                     "error" => format!("{e}")
                 );
@@ -6052,7 +6676,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             let nexthop = match update.nexthop4() {
                 Some(nh) => nh,
                 None => {
-                    session_log!(self, warn, pc.conn,
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
                         "recieved update with nlri, but no nexthop";
                         "message" => "update",
                         "message_contents" => format!("{update}").as_str()
@@ -6459,7 +7086,7 @@ mod tests {
 
     #[test]
     fn test_resolve_collision_decision() {
-        use crate::connection::ConnectionCreator;
+        use crate::connection::ConnectionDirection;
         use crate::session::collision_resolution;
 
         // Case 1: Local wins (higher BGP ID), Connector (ours) is exist
@@ -6467,7 +7094,7 @@ mod tests {
         // Expected: ExistWins
         assert_eq!(
             collision_resolution(
-                ConnectionCreator::Connector,
+                ConnectionDirection::Outbound,
                 100, // local
                 50,  // remote
             ),
@@ -6480,7 +7107,7 @@ mod tests {
         // Expected: NewWins
         assert_eq!(
             collision_resolution(
-                ConnectionCreator::Dispatcher,
+                ConnectionDirection::Inbound,
                 100, // local
                 50,  // remote
             ),
@@ -6492,7 +7119,7 @@ mod tests {
         // Expected: ExistWins
         assert_eq!(
             collision_resolution(
-                ConnectionCreator::Dispatcher,
+                ConnectionDirection::Inbound,
                 50,  // local
                 100, // remote
             ),
@@ -6504,7 +7131,7 @@ mod tests {
         // Expected: NewWins
         assert_eq!(
             collision_resolution(
-                ConnectionCreator::Connector,
+                ConnectionDirection::Outbound,
                 50,  // local
                 100, // remote
             ),
