@@ -412,7 +412,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                         connection_log_lite!(log,
                             warn,
                             "failed to select source address for SA tracking for {peer}: {e}";
-                            "direction" => Connectiondirection::Connector,
+                            "direction" => ConnectionDirection::Outbound,
                             "peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );
@@ -430,7 +430,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                         connection_log_lite!(log,
                             warn,
                             "failed to start SA tracking for {peer}: {e}";
-                            "direction" => Connectiondirection::Connector,
+                            "direction" => ConnectionDirection::Outbound,
                             "peer" => format!("{peer}"),
                             "error" => format!("{e}")
                         );
