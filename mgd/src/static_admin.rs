@@ -7,8 +7,11 @@ use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
 };
-use mg_api::{AddStaticRoute4Request, DeleteStaticRoute4Request, GetRibResult};
-use rdb::StaticRouteKey;
+use mg_api::{
+    AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
+    DeleteStaticRoute6Request, GetRibResult,
+};
+use rdb::{AddressFamily, StaticRouteKey};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub async fn static_add_v4_route(
@@ -53,7 +56,62 @@ pub async fn static_list_v4_routes(
     let static_db = ctx
         .context()
         .db
-        .get_static4()
+        .get_static(Some(AddressFamily::Ipv4))
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    let mut static_rib: GetRibResult = BTreeMap::new();
+    for srk in static_db {
+        let key = srk.prefix.to_string();
+        let paths = static_rib.entry(key).or_default();
+        paths.insert(srk.into());
+    }
+
+    Ok(HttpResponseOk(static_rib))
+}
+
+pub async fn static_add_v6_route(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<AddStaticRoute6Request>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let routes: Vec<StaticRouteKey> = request
+        .into_inner()
+        .routes
+        .list
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    ctx.context()
+        .db
+        .add_static_routes(&routes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn static_remove_v6_route(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<DeleteStaticRoute6Request>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let routes: Vec<StaticRouteKey> = request
+        .into_inner()
+        .routes
+        .list
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    ctx.context()
+        .db
+        .remove_static_routes(&routes)
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+    Ok(HttpResponseDeleted())
+}
+
+pub async fn static_list_v6_routes(
+    ctx: RequestContext<Arc<HandlerContext>>,
+) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
+    let static_db = ctx
+        .context()
+        .db
+        .get_static(Some(AddressFamily::Ipv6))
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     let mut static_rib: GetRibResult = BTreeMap::new();

@@ -17,4 +17,11 @@ slog-async.workspace = true
 mg-common.workspace = true
 itertools.workspace = true
 chrono.workspace = true
+clap = { workspace = true, optional = true }
 oxnet.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[features]
+clap = ["dep:clap"]

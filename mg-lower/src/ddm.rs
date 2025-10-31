@@ -2,15 +2,17 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::log::ddm_log;
 use ddm_admin_client::Client;
 use ddm_admin_client::types::TunnelOrigin;
 use oxnet::Ipv6Net;
-use slog::{Logger, error, info};
+use slog::Logger;
 use std::{net::Ipv6Addr, sync::Arc};
 
 use crate::platform::Ddm;
 
 pub(crate) const BOUNDARY_SERVICES_VNI: u32 = 99;
+const UNIT_DDM: &str = "ddm";
 
 fn ensure_tep_underlay_origin(
     client: &impl Ddm,
@@ -24,7 +26,12 @@ fn ensure_tep_underlay_origin(
     {
         Ok(x) => x,
         Err(e) => {
-            error!(log, "get originated endpoints: {e}");
+            ddm_log!(
+                log,
+                error,
+                "failed to get originated endpoints: {e}";
+                "error" => format!("{e}")
+            );
             return;
         }
     }
@@ -40,7 +47,12 @@ fn ensure_tep_underlay_origin(
     if let Err(e) =
         rt.block_on(async { client.advertise_prefixes(&vec![target]).await })
     {
-        error!(log, "get originated endpoints: {e}");
+        ddm_log!(log,
+            error,
+            "advertise prefixes error: {e}";
+            "error" => format!("{e}"),
+            "prefixes" => format!("{target:#?}")
+        );
     };
 }
 
@@ -59,7 +71,12 @@ pub(crate) fn add_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     let resp =
         rt.block_on(async { client.advertise_tunnel_endpoints(&routes).await });
     if let Err(e) = resp {
-        error!(log, "advertise tunnel endpoints: {e}");
+        ddm_log!(log,
+            error,
+            "advertise prefixes error: {e}";
+            "error" => format!("{e}"),
+            "prefixes" => format!("{routes:#?}")
+        );
     }
 }
 
@@ -76,8 +93,16 @@ pub(crate) fn remove_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     let resp =
         rt.block_on(async { client.withdraw_tunnel_endpoints(&routes).await });
     match resp {
-        Err(e) => error!(log, "withdraw tunnel endpoints: {e}"),
-        Ok(_) => info!(log, "withdrew tunnel endpoints: {:#?}", routes),
+        Err(e) => ddm_log!(log,
+            error,
+            "withdraw tunnel endpoints error: {e}";
+            "prefixes" => format!("{routes:#?}")
+        ),
+        Ok(_) => ddm_log!(log,
+            info,
+            "withdrew tunnel endpoints";
+            "prefixes" => format!("{routes:#?}")
+        ),
     }
 }
 

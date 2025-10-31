@@ -5,10 +5,12 @@
 use crate::error::Error;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+#[cfg(feature = "clap")]
+use clap::ValueEnum;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::fmt::Display;
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
@@ -108,6 +110,19 @@ pub struct StaticRouteKey {
     pub rib_priority: u8,
 }
 
+impl Display for StaticRouteKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[prefix={}, nexthop={}, vlan_id={}, rib_priority={}]",
+            self.prefix,
+            self.nexthop,
+            self.vlan_id.unwrap_or(0),
+            self.rib_priority
+        )
+    }
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Route4Key {
     pub prefix: Prefix4,
@@ -178,7 +193,7 @@ impl Policy4Key {
 }
 
 #[derive(
-    Debug, Copy, Clone, Serialize, Deserialize, Eq, PartialEq, JsonSchema,
+    Debug, Copy, Clone, Serialize, Deserialize, Eq, Hash, PartialEq, JsonSchema,
 )]
 pub struct Prefix4 {
     pub value: Ipv4Addr,
@@ -200,6 +215,12 @@ impl Ord for Prefix4 {
 }
 
 impl Prefix4 {
+    pub fn new(ip: Ipv4Addr, length: u8) -> Self {
+        let mut new = Self { value: ip, length };
+        new.unset_host_bits();
+        new
+    }
+
     pub fn db_key(&self) -> Vec<u8> {
         let mut buf: Vec<u8> = self.value.octets().into();
         buf.push(self.length);
@@ -218,6 +239,47 @@ impl Prefix4 {
                 length: v[4],
             })
         }
+    }
+
+    pub fn host_bits_are_unset(&self) -> bool {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u32) << (32 - self.length),
+        };
+
+        self.value.to_bits() & mask == self.value.to_bits()
+    }
+
+    pub fn unset_host_bits(&mut self) {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u32) << (32 - self.length),
+        };
+
+        self.value = Ipv4Addr::from_bits(self.value.to_bits() & mask)
+    }
+
+    /// Check if this prefix is contained within another prefix.
+    /// Returns true if this prefix is equal to or more specific than the other.
+    pub fn within(&self, other: &Prefix4) -> bool {
+        // A more specific prefix cannot be within a less specific one
+        if self.length < other.length {
+            return false;
+        }
+
+        if other.length == 0 {
+            // /0 contains everything
+            return true;
+        }
+
+        // Create masks for comparison
+        let shift_amount = 32 - other.length;
+        let mask = !0u32 << shift_amount;
+
+        let self_masked = self.value.to_bits() & mask;
+        let other_masked = other.value.to_bits() & mask;
+
+        self_masked == other_masked
     }
 }
 
@@ -273,6 +335,99 @@ impl fmt::Display for Prefix6 {
     }
 }
 
+impl Prefix6 {
+    pub fn new(ip: Ipv6Addr, length: u8) -> Self {
+        let mut new = Self { value: ip, length };
+        new.unset_host_bits();
+        new
+    }
+
+    pub fn host_bits_are_unset(&self) -> bool {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u128) << (128 - self.length),
+        };
+
+        self.value.to_bits() & mask == self.value.to_bits()
+    }
+
+    pub fn unset_host_bits(&mut self) {
+        let mask = match self.length {
+            0 => 0,
+            _ => (!0u128) << (128 - self.length),
+        };
+
+        self.value = Ipv6Addr::from_bits(self.value.to_bits() & mask)
+    }
+
+    pub fn db_key(&self) -> Vec<u8> {
+        let mut buf: Vec<u8> = self.value.octets().into();
+        buf.push(self.length);
+        buf
+    }
+
+    pub fn from_db_key(v: &[u8]) -> Result<Self, Error> {
+        if v.len() < 17 {
+            Err(Error::DbKey(format!(
+                "buffer too short for prefix 6 key {} < 17",
+                v.len()
+            )))
+        } else {
+            let octets: [u8; 16] = v[0..16].try_into().map_err(|_| {
+                Error::DbKey("failed to convert to IPv6 octets".to_string())
+            })?;
+            Ok(Prefix6 {
+                value: Ipv6Addr::from(octets),
+                length: v[16],
+            })
+        }
+    }
+
+    /// Check if this prefix is contained within another prefix.
+    /// Returns true if this prefix is equal to or more specific than the other.
+    pub fn within(&self, other: &Prefix6) -> bool {
+        // A more specific prefix cannot be within a less specific one
+        if self.length < other.length {
+            return false;
+        }
+
+        if other.length == 0 {
+            // /0 contains everything
+            return true;
+        }
+
+        // Create masks for comparison
+        let shift_amount = 128 - other.length;
+        if shift_amount >= 128 {
+            return false; // Invalid case
+        }
+        let mask = !0u128 << shift_amount;
+
+        let self_masked = self.value.to_bits() & mask;
+        let other_masked = other.value.to_bits() & mask;
+
+        self_masked == other_masked
+    }
+}
+
+impl FromStr for Prefix6 {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (value, length) =
+            s.split_once('/').ok_or("malformed route key".to_string())?;
+
+        Ok(Self {
+            value: value
+                .parse()
+                .map_err(|_| "malformed ip addr".to_string())?,
+            length: length
+                .parse()
+                .map_err(|_| "malformed length".to_string())?,
+        })
+    }
+}
+
 #[derive(
     Debug,
     Copy,
@@ -280,6 +435,7 @@ impl fmt::Display for Prefix6 {
     Serialize,
     Deserialize,
     Eq,
+    Hash,
     PartialEq,
     JsonSchema,
     PartialOrd,
@@ -325,16 +481,65 @@ impl From<Prefix6> for Prefix {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct BgpAttributes4 {
-    pub origin: Ipv4Addr,
-    pub path: Vec<Asn>,
+impl FromStr for Prefix {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(prefix4) = s.parse::<Prefix4>() {
+            Ok(Self::V4(prefix4))
+        } else if let Ok(prefix6) = s.parse::<Prefix6>() {
+            Ok(Self::V6(prefix6))
+        } else {
+            Err("malformed prefix".to_string())
+        }
+    }
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct BgpAttributes6 {
-    pub origin: Ipv4Addr,
-    pub path: Vec<Asn>,
+impl Prefix {
+    pub fn new(ip: IpAddr, length: u8) -> Self {
+        match ip {
+            IpAddr::V4(ip4) => Self::V4(Prefix4::new(ip4, length)),
+            IpAddr::V6(ip6) => Self::V6(Prefix6::new(ip6, length)),
+        }
+    }
+
+    pub fn host_bits_are_unset(&self) -> bool {
+        match self {
+            Self::V4(p4) => p4.host_bits_are_unset(),
+            Self::V6(p6) => p6.host_bits_are_unset(),
+        }
+    }
+
+    pub fn unset_host_bits(&mut self) {
+        match self {
+            Self::V4(p4) => p4.unset_host_bits(),
+            Self::V6(p6) => p6.unset_host_bits(),
+        }
+    }
+
+    /// Encode prefix to BGP wire format bytes
+    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+        match self {
+            Prefix::V4(p) => p.to_wire(),
+            Prefix::V6(p) => p.to_wire(),
+        }
+    }
+
+    /// Check if this prefix is contained within another prefix.
+    /// Returns true if this prefix is equal to or more specific than the other.
+    /// Returns false for cross-family comparisons.
+    pub fn within(&self, other: &Prefix) -> bool {
+        match (self, other) {
+            (Prefix::V4(a), Prefix::V4(b)) => a.within(b),
+            (Prefix::V6(a), Prefix::V6(b)) => a.within(b),
+            _ => false, // Cross-family always false
+        }
+    }
+
+    /// Check if this prefix is IPv4.
+    pub fn is_v4(&self) -> bool {
+        matches!(self, Prefix::V4(_))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,12 +578,6 @@ impl Asn {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum Status {
-    Up,
-    Down,
-}
-
 pub fn to_buf<T: ?Sized + Serialize>(value: &T) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     ciborium::into_writer(&value, &mut buf)?;
@@ -407,27 +606,6 @@ impl FromStr for PolicyAction {
 pub struct Policy {
     pub action: PolicyAction,
     pub priority: u16,
-}
-
-#[derive(Clone, Default, Debug)]
-pub struct OriginChangeSet {
-    pub added: HashSet<Prefix4>,
-    pub removed: HashSet<Prefix4>,
-}
-
-impl OriginChangeSet {
-    pub fn added<V: Into<HashSet<Prefix4>>>(v: V) -> Self {
-        Self {
-            added: v.into(),
-            ..Default::default()
-        }
-    }
-    pub fn removed<V: Into<HashSet<Prefix4>>>(v: V) -> Self {
-        Self {
-            removed: v.into(),
-            ..Default::default()
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
@@ -518,4 +696,180 @@ impl From<Prefix6> for PrefixChangeNotification {
             changed: BTreeSet::from([value.into()]),
         }
     }
+}
+
+impl Display for PrefixChangeNotification {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut pcn = String::new();
+        for p in self.changed.iter() {
+            pcn.push_str(&format!("{p} "));
+        }
+        write!(f, "PrefixChangeNotification [ {pcn}]")
+    }
+}
+
+/// Represents the address family (protocol version) for network routes.
+///
+/// This is the canonical source of truth for address family definitions across the
+/// entire codebase. All routing-related components (RIB operations, BGP messages,
+/// API filtering, CLI tools) use this single enum rather than defining their own.
+///
+/// # Semantics
+///
+/// When used in filtering contexts (e.g., database queries or API parameters),
+/// `Option<AddressFamily>` is preferred:
+/// - `None` = no filter (match all address families)
+/// - `Some(Ipv4)` = IPv4 routes only
+/// - `Some(Ipv6)` = IPv6 routes only
+///
+/// # Examples
+///
+/// ```
+/// use rdb::types::AddressFamily;
+///
+/// let ipv4 = AddressFamily::Ipv4;
+/// let ipv6 = AddressFamily::Ipv6;
+///
+/// // For filtering, use Option
+/// let filter: Option<AddressFamily> = Some(AddressFamily::Ipv4);
+/// let no_filter: Option<AddressFamily> = None; // matches all families
+/// ```
+#[derive(
+    Clone,
+    Copy,
+    Eq,
+    Debug,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[cfg_attr(feature = "clap", derive(ValueEnum))]
+pub enum AddressFamily {
+    /// Internet Protocol Version 4 (IPv4)
+    Ipv4,
+    /// Internet Protocol Version 6 (IPv6)
+    Ipv6,
+}
+
+/// Trait for encoding/decoding prefixes to/from BGP wire format
+pub trait BgpWireFormat: Sized {
+    type Error;
+
+    /// Encode prefix to wire format bytes
+    fn to_wire(&self) -> Result<Vec<u8>, Self::Error>;
+
+    /// Decode prefix from wire format, returning (remaining_bytes, prefix)
+    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error>;
+}
+
+impl BgpWireFormat for Prefix4 {
+    type Error = Error;
+
+    fn to_wire(&self) -> Result<Vec<u8>, Self::Error> {
+        let mut buf = vec![self.length];
+        let n = (self.length as usize).div_ceil(8);
+        buf.extend_from_slice(&self.value.octets()[..n]);
+        Ok(buf)
+    }
+
+    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error> {
+        if input.is_empty() {
+            return Err(Error::Parsing("prefix length byte missing".into()));
+        }
+
+        let len = input[0];
+
+        // Validate length bound for IPv4
+        if len > 32 {
+            return Err(Error::Parsing(format!(
+                "invalid IPv4 prefix length {} > 32",
+                len
+            )));
+        }
+
+        let byte_count = (len as usize).div_ceil(8);
+        if input.len() < 1 + byte_count {
+            return Err(Error::Parsing(format!(
+                "prefix data too short: need {} bytes, have {}",
+                1 + byte_count,
+                input.len()
+            )));
+        }
+
+        let mut bytes = [0u8; 4];
+        bytes[..byte_count].copy_from_slice(&input[1..1 + byte_count]);
+
+        Ok((
+            &input[1 + byte_count..],
+            Prefix4::new(Ipv4Addr::from(bytes), len),
+        ))
+    }
+}
+
+impl BgpWireFormat for Prefix6 {
+    type Error = Error;
+
+    fn to_wire(&self) -> Result<Vec<u8>, Self::Error> {
+        let mut buf = vec![self.length];
+        let n = (self.length as usize).div_ceil(8);
+        buf.extend_from_slice(&self.value.octets()[..n]);
+        Ok(buf)
+    }
+
+    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error> {
+        if input.is_empty() {
+            return Err(Error::Parsing("prefix length byte missing".into()));
+        }
+
+        let len = input[0];
+
+        // Validate length bound for IPv6
+        if len > 128 {
+            return Err(Error::Parsing(format!(
+                "invalid IPv6 prefix length {} > 128",
+                len
+            )));
+        }
+
+        let byte_count = (len as usize).div_ceil(8);
+        if input.len() < 1 + byte_count {
+            return Err(Error::Parsing(format!(
+                "prefix data too short: need {} bytes, have {}",
+                1 + byte_count,
+                input.len()
+            )));
+        }
+
+        let mut bytes = [0u8; 16];
+        bytes[..byte_count].copy_from_slice(&input[1..1 + byte_count]);
+
+        Ok((
+            &input[1 + byte_count..],
+            Prefix6::new(Ipv6Addr::from(bytes), len),
+        ))
+    }
+}
+
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+pub enum ProtocolFilter {
+    /// BGP routes only
+    Bgp,
+    /// Static routes only
+    Static,
 }

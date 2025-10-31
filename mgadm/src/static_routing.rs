@@ -4,30 +4,19 @@
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use mg_admin_client::Client;
-use mg_admin_client::types;
-use rdb::DEFAULT_RIB_PRIORITY_STATIC;
-use std::net::{AddrParseError, Ipv4Addr};
-use std::num::ParseIntError;
-use thiserror::Error;
+use mg_admin_client::{Client, types};
+use oxnet::{Ipv4Net, Ipv6Net};
+use rdb::{DEFAULT_RIB_PRIORITY_STATIC, Prefix4, Prefix6};
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     GetV4Routes,
     AddV4Route(StaticRoute4),
     RemoveV4Routes(StaticRoute4),
-}
-
-#[derive(Debug, Error)]
-pub enum Ipv4NetParseError {
-    #[error("expected CIDR representation <addr>/<mask>")]
-    Cidr,
-
-    #[error("address parse error: {0}")]
-    Addr(#[from] AddrParseError),
-
-    #[error("mask parse error: {0}")]
-    Mask(#[from] ParseIntError),
+    GetV6Routes,
+    AddV6Route(StaticRoute6),
+    RemoveV6Routes(StaticRoute6),
 }
 
 #[derive(Debug, Args)]
@@ -40,26 +29,14 @@ pub struct StaticRoute4 {
     pub rib_priority: u8,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Ipv4Net {
-    pub addr: Ipv4Addr,
-    pub len: u8,
-}
-
-impl std::str::FromStr for Ipv4Net {
-    type Err = Ipv4NetParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split('/').collect();
-        if parts.len() < 2 {
-            return Err(Ipv4NetParseError::Cidr);
-        }
-
-        Ok(Ipv4Net {
-            addr: Ipv4Addr::from_str(parts[0])?,
-            len: u8::from_str(parts[1])?,
-        })
-    }
+#[derive(Debug, Args)]
+pub struct StaticRoute6 {
+    pub destination: Ipv6Net,
+    pub nexthop: Ipv6Addr,
+    #[clap(long)]
+    pub vlan_id: Option<u16>,
+    #[clap(long, default_value_t = DEFAULT_RIB_PRIORITY_STATIC)]
+    pub rib_priority: u8,
 }
 
 pub async fn commands(command: Commands, client: Client) -> Result<()> {
@@ -72,10 +49,10 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = types::AddStaticRoute4Request {
                 routes: types::StaticRoute4List {
                     list: vec![types::StaticRoute4 {
-                        prefix: types::Prefix4 {
-                            value: route.destination.addr,
-                            length: route.destination.len,
-                        },
+                        prefix: Prefix4::new(
+                            route.destination.addr(),
+                            route.destination.width(),
+                        ),
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,
@@ -88,10 +65,10 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             let arg = types::DeleteStaticRoute4Request {
                 routes: types::StaticRoute4List {
                     list: vec![types::StaticRoute4 {
-                        prefix: types::Prefix4 {
-                            value: route.destination.addr,
-                            length: route.destination.len,
-                        },
+                        prefix: Prefix4::new(
+                            route.destination.addr(),
+                            route.destination.width(),
+                        ),
                         nexthop: route.nexthop,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,
@@ -100,6 +77,105 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
             };
             client.static_remove_v4_route(&arg).await?;
         }
+        Commands::GetV6Routes => {
+            let routes = client.static_list_v6_routes().await?;
+            println!("{:#?}", routes);
+        }
+        Commands::AddV6Route(route) => {
+            let arg = types::AddStaticRoute6Request {
+                routes: types::StaticRoute6List {
+                    list: vec![types::StaticRoute6 {
+                        prefix: Prefix6 {
+                            value: route.destination.addr(),
+                            length: route.destination.width(),
+                        },
+                        nexthop: route.nexthop,
+                        vlan_id: route.vlan_id,
+                        rib_priority: route.rib_priority,
+                    }],
+                },
+            };
+            client.static_add_v6_route(&arg).await?;
+        }
+        Commands::RemoveV6Routes(route) => {
+            let arg = types::DeleteStaticRoute6Request {
+                routes: types::StaticRoute6List {
+                    list: vec![types::StaticRoute6 {
+                        prefix: Prefix6 {
+                            value: route.destination.addr(),
+                            length: route.destination.width(),
+                        },
+                        nexthop: route.nexthop,
+                        vlan_id: route.vlan_id,
+                        rib_priority: route.rib_priority,
+                    }],
+                },
+            };
+            client.static_remove_v6_route(&arg).await?;
+        }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_route_conversion_to_api_types() {
+        // IPv4 test case
+        let route4 = StaticRoute4 {
+            destination: Ipv4Net::from_str("192.168.0.0/16").unwrap(),
+            nexthop: Ipv4Addr::from_str("10.0.0.1").unwrap(),
+            vlan_id: Some(100),
+            rib_priority: 50,
+        };
+
+        let api_route4 = types::StaticRoute4 {
+            prefix: Prefix4::new(
+                route4.destination.addr(),
+                route4.destination.width(),
+            ),
+            nexthop: route4.nexthop,
+            vlan_id: route4.vlan_id,
+            rib_priority: route4.rib_priority,
+        };
+
+        assert_eq!(
+            api_route4.prefix.value,
+            Ipv4Addr::from_str("192.168.0.0").unwrap()
+        );
+        assert_eq!(api_route4.prefix.length, 16);
+        assert_eq!(api_route4.nexthop, route4.nexthop);
+        assert_eq!(api_route4.vlan_id, route4.vlan_id);
+        assert_eq!(api_route4.rib_priority, route4.rib_priority);
+
+        // IPv6 test case
+        let route6 = StaticRoute6 {
+            destination: Ipv6Net::from_str("fd00::/8").unwrap(),
+            nexthop: Ipv6Addr::from_str("fe80::1").unwrap(),
+            vlan_id: Some(300),
+            rib_priority: 75,
+        };
+
+        let api_route6 = types::StaticRoute6 {
+            prefix: Prefix6::new(
+                route6.destination.addr(),
+                route6.destination.width(),
+            ),
+            nexthop: route6.nexthop,
+            vlan_id: route6.vlan_id,
+            rib_priority: route6.rib_priority,
+        };
+
+        assert_eq!(
+            api_route6.prefix.value,
+            Ipv6Addr::from_str("fd00::").unwrap()
+        );
+        assert_eq!(api_route6.prefix.length, 8);
+        assert_eq!(api_route6.nexthop, route6.nexthop);
+        assert_eq!(api_route6.vlan_id, route6.vlan_id);
+        assert_eq!(api_route6.rib_priority, route6.rib_priority);
+    }
 }

@@ -339,6 +339,8 @@ dependencies = [
  "oxnet",
  "pretty-hex",
  "pretty_assertions",
+ "proptest",
+ "rand 0.8.5",
  "rdb",
  "rhai",
  "schemars",
@@ -347,6 +349,7 @@ dependencies = [
  "slog",
  "socket2 0.5.10",
  "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]
@@ -3248,13 +3251,18 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "colored",
+ "mg-common",
  "percent-encoding",
  "progenitor 0.11.1",
+ "rdb",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
  "slog",
+ "tabwriter",
+ "uuid",
 ]
 
 [[package]]
@@ -3294,6 +3302,7 @@ dependencies = [
  "anyhow",
  "backoff",
  "clap",
+ "libc",
  "libnet",
  "omicron-common",
  "oximeter",
@@ -3315,7 +3324,10 @@ name = "mg-ddm-verify"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ddm",
+ "ddm-types",
  "oxide-tokio-rt",
+ "oxnet",
  "reqwest",
  "serde",
  "serde_json",
@@ -3382,6 +3394,7 @@ dependencies = [
  "mg-admin-client 0.1.0",
  "mg-common",
  "oxide-tokio-rt",
+ "oxnet",
  "rdb",
  "serde_json",
  "slog",
@@ -5168,9 +5181,11 @@ dependencies = [
  "anyhow",
  "chrono",
  "ciborium",
+ "clap",
  "itertools 0.14.0",
  "mg-common",
  "oxnet",
+ "proptest",
  "schemars",
  "serde",
  "serde_json",

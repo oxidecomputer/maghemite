@@ -17,4 +17,4 @@ set -o errexit
 
 cargo --version
 rustc --version
-curl -sSfL --retry 10 https://get.nexte.st/"$NEXTEST_VERSION"/"$PLATFORM" | gunzip | tar -xvf - -C ~/.cargo/bin
+cargo install cargo-nextest --version "$NEXTEST_VERSION"

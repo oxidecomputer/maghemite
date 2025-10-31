@@ -12,9 +12,9 @@ use slog::Drain;
 use slog::Logger;
 use std::net::{IpAddr, SocketAddr};
 
-mod bestpath;
 mod bfd;
 mod bgp;
+mod rib;
 mod static_routing;
 
 #[derive(Parser, Debug)]
@@ -52,9 +52,9 @@ enum Commands {
     #[command(subcommand)]
     Bfd(bfd::Commands),
 
-    /// Bestpath configuration commands.
+    /// RIB configuration commands.
     #[command(subcommand)]
-    Bestpath(bestpath::Commands),
+    Rib(rib::Commands),
 }
 
 fn main() -> Result<()> {
@@ -76,9 +76,7 @@ async fn run() -> Result<()> {
             static_routing::commands(command, client).await?
         }
         Commands::Bfd(command) => bfd::commands(command, client).await?,
-        Commands::Bestpath(command) => {
-            bestpath::commands(command, client).await?
-        }
+        Commands::Rib(command) => rib::commands(command, client).await?,
     }
     Ok(())
 }
