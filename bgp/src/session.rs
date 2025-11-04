@@ -209,7 +209,7 @@ impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKind {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum AdminEvent {
     // Instructs peer to announce the update
     Announce(UpdateMessage),
@@ -246,33 +246,6 @@ pub enum AdminEvent {
     PathAttributesChanged,
 }
 
-impl fmt::Debug for AdminEvent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AdminEvent::Announce(update) => {
-                write!(f, "announce {update:?}")
-            }
-            AdminEvent::ShaperChanged(_) => write!(f, "shaper changed"),
-            AdminEvent::CheckerChanged(_) => write!(f, "checker changed"),
-            AdminEvent::ExportPolicyChanged(_) => {
-                write!(f, "export policy changed")
-            }
-            AdminEvent::Reset => write!(f, "reset"),
-            AdminEvent::ManualStart => write!(f, "manual start"),
-            AdminEvent::ManualStop => write!(f, "manual stop"),
-            AdminEvent::SendRouteRefresh => {
-                write!(f, "route refresh needed")
-            }
-            AdminEvent::ReAdvertiseRoutes => {
-                write!(f, "re-advertise routes")
-            }
-            AdminEvent::PathAttributesChanged => {
-                write!(f, "path attributes changed")
-            }
-        }
-    }
-}
-
 impl AdminEvent {
     fn title(&self) -> &'static str {
         match self {
@@ -306,6 +279,7 @@ pub enum StopReason {
 }
 
 /// FsmEvents pertaining to a specific Connection
+#[derive(Debug)]
 pub enum ConnectionEvent {
     /// A new message from the peer has been received.
     Message { msg: Message, conn_id: ConnectionId },
@@ -318,25 +292,6 @@ pub enum ConnectionEvent {
 
     /// Fires when the connection's delay open timer expires.
     DelayOpenTimerExpires(ConnectionId),
-}
-
-impl fmt::Debug for ConnectionEvent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ConnectionEvent::Message { msg, conn_id } => {
-                write!(f, "message {msg:?} from {}", conn_id.short())
-            }
-            ConnectionEvent::HoldTimerExpires(conn_id) => {
-                write!(f, "hold timer expires for {}", conn_id.short())
-            }
-            ConnectionEvent::KeepaliveTimerExpires(conn_id) => {
-                write!(f, "keepalive timer expires for {}", conn_id.short())
-            }
-            ConnectionEvent::DelayOpenTimerExpires(conn_id) => {
-                write!(f, "delay open timer expires for {}", conn_id.short())
-            }
-        }
-    }
 }
 
 impl ConnectionEvent {
@@ -355,6 +310,7 @@ impl ConnectionEvent {
 }
 
 /// Session-level events that persist across connections
+#[derive(Debug)]
 pub enum SessionEvent<Cnx: BgpConnection> {
     /// Fires when the session's connect retry timer expires.
     ConnectRetryTimerExpires,
@@ -362,38 +318,20 @@ pub enum SessionEvent<Cnx: BgpConnection> {
     /// Fires when the session's idle hold timer expires.
     IdleHoldTimerExpires,
 
-    /// Fires when the local systems tcp-syn recieved a syn-ack from the remote
-    /// peer and the local system has sent an ack.
+    /// Fires when an inbound connection has completed.
+    /// The remote peer initiated a TCP connection with a TCP SYN, we confirmed
+    /// the connection with a TCP SYN-ACK, and the remote peer has `acked` the
+    /// connection with the final TCP ACK.
     /// i.e.
-    /// We have ACKed the peer's connection.
-    /// We use this event to indicate an inbound connection has completed.
+    /// The peer has `acked` the connection they initiated.
     TcpConnectionAcked(Cnx),
 
-    /// Fires when the local system has received the final ack in establishing
-    /// a TCP connection with the peer.
+    /// Fires when an outbound connection has completed.
+    /// The local system initiated a TCP connection with a TCP SYN, and the
+    /// remote peer has `confirmed` it with a TCP SYN-ACK.
     /// i.e.
-    /// The peer has confirmed our connection.
-    /// We use this event to indicate an outbound connection has completed.
+    /// The peer has `confirmed` the connection we initiated.
     TcpConnectionConfirmed(Cnx),
-}
-
-impl<Cnx: BgpConnection> fmt::Debug for SessionEvent<Cnx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SessionEvent::ConnectRetryTimerExpires => {
-                write!(f, "connect retry timer expires")
-            }
-            SessionEvent::IdleHoldTimerExpires => {
-                write!(f, "idle hold timer expires")
-            }
-            SessionEvent::TcpConnectionAcked(_) => {
-                write!(f, "tcp connection acked")
-            }
-            SessionEvent::TcpConnectionConfirmed(_) => {
-                write!(f, "tcp connection confirmed")
-            }
-        }
-    }
 }
 
 impl<Cnx: BgpConnection> SessionEvent<Cnx> {
@@ -413,6 +351,7 @@ impl<Cnx: BgpConnection> SessionEvent<Cnx> {
 
 /// These are the events that drive state transitions in the BGP peer state
 /// machine. They are subdivided into event categories
+#[derive(Debug)]
 pub enum FsmEvent<Cnx: BgpConnection> {
     /// Events triggered by an Administrative action
     Admin(AdminEvent),
@@ -422,18 +361,6 @@ pub enum FsmEvent<Cnx: BgpConnection> {
 
     /// Session-level events that persist across connections
     Session(SessionEvent<Cnx>),
-}
-
-impl<Cnx: BgpConnection> fmt::Debug for FsmEvent<Cnx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Admin(admin_event) => write!(f, "{admin_event:?}"),
-            Self::Connection(connection_event) => {
-                write!(f, "{connection_event:?}")
-            }
-            Self::Session(session_event) => write!(f, "{session_event:?}"),
-        }
-    }
 }
 
 impl<Cnx: BgpConnection> FsmEvent<Cnx> {
@@ -449,10 +376,11 @@ impl<Cnx: BgpConnection> FsmEvent<Cnx> {
 /// FSM Events specified in RFC 4271 which we either don't implement or whose
 /// implementations are carried out through other means.
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum UnusedEvent {
     /// Local system administrator manually starts the peer connection, but has
     /// [`Session::passive_tcp_establishment`] enabled which indicates that the
-    /// peer wil listen prior to establishing the connection. Functionality is
+    /// peer will listen prior to establishing the connection. Functionality is
     /// implemented via ManualStart when passive_tcp_establishment is enabled
     PassiveManualStart,
 
@@ -529,37 +457,6 @@ pub enum UnusedEvent {
     /// Fires when a connection has been detected while processing an open
     /// message. We implement Collision handling in FsmState::ConnectionCollision
     OpenCollisionDump,
-}
-
-impl fmt::Debug for UnusedEvent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::AutomaticStart => write!(f, "automatic start"),
-            Self::PassiveManualStart => write!(f, "passive manual start"),
-            Self::PassiveAutomaticStart => write!(f, "passive automatic start"),
-            Self::DampedAutomaticStart => write!(f, "damped automatic start"),
-            Self::PassiveDampedAutomaticStart => {
-                write!(f, "passive damped automatic start")
-            }
-            Self::AutomaticStop => write!(f, "automatic stop"),
-            Self::DelayOpenTimerExpires => {
-                write!(f, "delay open timer expires")
-            }
-            Self::TcpConnectionValid => write!(f, "tcp connection valid"),
-            Self::TcpConnectionInvalid => write!(f, "tcp connection invalid"),
-            Self::TcpConnectionFails => write!(f, "tcp connection fails"),
-            Self::BgpOpen => write!(f, "bgp open"),
-            Self::DelayedBgpOpen => write!(f, "delay bgp open"),
-            Self::BgpHeaderErr => write!(f, "bgp header err"),
-            Self::BgpOpenMsgErr => write!(f, "bgp open message error"),
-            Self::OpenCollisionDump => write!(f, "open collission dump"),
-            Self::NotifyMsgVerErr => write!(f, "notify msg ver error"),
-            Self::NotifyMsg => write!(f, "notify message"),
-            Self::KeepAliveMsg => write!(f, "keepalive message"),
-            Self::UpdateMsg => write!(f, "update message"),
-            Self::UpdateMsgErr => write!(f, "update message error"),
-        }
-    }
 }
 
 impl UnusedEvent {
@@ -4482,7 +4379,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     info,
                                                     exist,
                                                     new,
-                                                    "new conn wins collision, close new conn",
+                                                    "new conn wins collision, close exist conn",
                                                 );
 
                                                 self.stop(Some(&exist), None, StopReason::CollisionResolution);
@@ -5621,68 +5518,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          *    - changes its state to Idle.
                          */
                         Message::Notification(ref m) => {
-                            // Note: This does NOT align with RFC 4271.
-                            //
-                            // We move into Active instead of Idle to avoid
-                            // getting stuck in a death spiral where both peers
-                            // are stuck trying to open new connections that get
-                            // dropped by the peer. This can happen if our peer
-                            // both detects and resolves a collision before we
-                            // ever detect the second connection.
-                            // i.e.
-                            // Our FSM sees:
-                            // 1. Outbound connection completes
-                            // 2. Rx Open
-                            // 3. Rx Keepalive
-                            // 4. Rx Notification (collision resolution)
-                            // 5. Transition to Idle
-                            // 6. Inbound connection completes
-                            // 7. Inbound connection dropped (in Idle)
-                            //
-                            // Moving to Active gives us a chance to catch the
-                            // in-flight inbound connection instead of dropping
-                            // it, which allows us to get out of the spiral.
-                            // If an inbound connection never arrives, we'll
-                            // be in Active and won't initiate a new outbound
-                            // connection connection until ConnectRetryTimer
-                            // expires. This move to Active rather than Idle is
-                            // done only for Collision Resolution Notifications
-                            // to reduce the surface area of this non-standard
-                            // change.
-                            if matches!(m.error_subcode,
-                                ErrorSubcode::Cease(CeaseErrorSubcode::ConnectionCollisionResolution)) {
-
-                                session_log!(
-                                    self,
-                                    info,
-                                    pc.conn,
-                                    "rx collision resolution notification (conn_id: {}), fsm transition to active",
-                                    conn_id.short();
-                                    "message" => msg.title(),
-                                    "message_contents" => format!("{msg}")
-                                );
-
-                                lock!(self.message_history).receive(m.clone().into(), *conn_id);
-                                self.bump_msg_counter(msg_kind, false);
-
-                                // Clean up connection WITHOUT sending
-                                // notification. We don't send Notifications in
-                                // response to Notifications.
-                                self.unregister_conn(pc.conn.id());
-
-                                // Restart ConnectRetryTimer if peer is not
-                                // passive This provides fallback if peer's
-                                // connection never arrives
-                                if !lock!(self.session).passive_tcp_establishment {
-                                    session_timer!(self, connect_retry).restart();
-                                } else {
-                                    session_timer!(self, connect_retry).stop();
-                                }
-
-                                return self.exit_established(pc);
-                            }
-
-                            // All other notifications → exit_established (existing behavior)
                             // We've received a notification from the peer. They are
                             // displeased with us. Exit established and restart from
                             // the idle state.
@@ -5867,9 +5702,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "open checker exec failed: {e}";
                         "error" => format!("{e}")
                     );
-                    // XXX: This can probably be removed with more robust
-                    //      policy handling
-                    self.unregister_conn(conn.id());
                 }
             }
         }
@@ -6056,17 +5888,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Send an open message to the session peer.
     fn send_open(&self, conn: &Cnx) -> Result<(), Error> {
         let capabilities = lock!(self.caps_tx).clone();
+        // pull hold_time from config, not the clock
+        let hold_time = lock!(self.session).hold_time;
         let mut msg = match self.asn {
-            Asn::FourOctet(asn) => OpenMessage::new4(
-                asn,
-                conn_timer!(conn, hold).interval.as_secs() as u16,
-                self.id,
-            ),
-            Asn::TwoOctet(asn) => OpenMessage::new2(
-                asn,
-                conn_timer!(conn, hold).interval.as_secs() as u16,
-                self.id,
-            ),
+            Asn::FourOctet(asn) => {
+                OpenMessage::new4(asn, hold_time.as_secs() as u16, self.id)
+            }
+            Asn::TwoOctet(asn) => {
+                OpenMessage::new2(asn, hold_time.as_secs() as u16, self.id)
+            }
         };
         msg.add_capabilities(&capabilities);
 
@@ -6329,40 +6159,25 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         match msg {
             MessageKind::Open => {
                 self.counters.opens_received.fetch_add(1, Ordering::Relaxed);
-                self.counters
-                    .unexpected_open_message
-                    .fetch_add(1, Ordering::Relaxed);
             }
             MessageKind::Notification => {
                 self.counters
                     .notifications_received
-                    .fetch_add(1, Ordering::Relaxed);
-                self.counters
-                    .unexpected_notification_message
                     .fetch_add(1, Ordering::Relaxed);
             }
             MessageKind::KeepAlive => {
                 self.counters
                     .keepalives_received
                     .fetch_add(1, Ordering::Relaxed);
-                self.counters
-                    .unexpected_keepalive_message
-                    .fetch_add(1, Ordering::Relaxed);
             }
             MessageKind::Update => {
                 self.counters
                     .updates_received
                     .fetch_add(1, Ordering::Relaxed);
-                self.counters
-                    .unexpected_update_message
-                    .fetch_add(1, Ordering::Relaxed);
             }
             MessageKind::RouteRefresh => {
                 self.counters
                     .route_refresh_received
-                    .fetch_add(1, Ordering::Relaxed);
-                self.counters
-                    .unexpected_route_refresh_message
                     .fetch_add(1, Ordering::Relaxed);
             }
         }

@@ -340,7 +340,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                 Ok(()) => s.into(),
                 Err(e) => {
                     connection_log_lite!(log,
-                        debug,
+                        warn,
                         "connection attempt to {peer} failed: {e}";
                         "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}"),

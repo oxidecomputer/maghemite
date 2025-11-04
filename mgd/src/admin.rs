@@ -23,7 +23,6 @@ use tokio::task::JoinHandle;
 const UNIT_API_SERVER: &str = "api_server";
 
 pub struct HandlerContext {
-    #[allow(dead_code)]
     pub tep: Ipv6Addr, // tunnel endpoint address
     pub bgp: BgpContext,
     pub bfd: BfdContext,

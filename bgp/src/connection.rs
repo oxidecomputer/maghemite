@@ -9,7 +9,6 @@ use crate::session::{FsmEvent, SessionEndpoint, SessionInfo};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
-use std::cmp::{Ord, Ordering, PartialOrd};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::mpsc::Sender;
@@ -65,7 +64,17 @@ impl slog::Value for ConnectionDirection {
 
 /// Unique identifier for a BGP connection instance
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 pub struct ConnectionId {
     /// Unique identifier for this connection instance
@@ -99,22 +108,6 @@ impl ConnectionId {
     /// Get the remote socket address
     pub fn remote(&self) -> SocketAddr {
         self.remote
-    }
-}
-
-impl PartialOrd for ConnectionId {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ConnectionId {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Order by UUID first (most unique), then by local/remote addresses
-        self.uuid
-            .cmp(&other.uuid)
-            .then_with(|| self.local.cmp(&other.local))
-            .then_with(|| self.remote.cmp(&other.remote))
     }
 }
 

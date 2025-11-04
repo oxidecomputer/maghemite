@@ -5,7 +5,7 @@
 use oxnet::IpNet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv6Addr;
 
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
@@ -49,22 +49,4 @@ impl From<TunnelOrigin> for TunnelOriginV2 {
             metric: value.metric,
         }
     }
-}
-
-pub fn zero_ipv4_addr_host_bits(ip: Ipv4Addr, length: u8) -> Ipv4Addr {
-    let mask = match length {
-        0 => 0,
-        _ => (!0u32) << (32 - length),
-    };
-
-    Ipv4Addr::from_bits(ip.to_bits() & mask)
-}
-
-pub fn zero_ipv6_addr_host_bits(ip: Ipv6Addr, length: u8) -> Ipv6Addr {
-    let mask = match length {
-        0 => 0,
-        _ => (!0u128) << (128 - length),
-    };
-
-    Ipv6Addr::from_bits(ip.to_bits() & mask)
 }

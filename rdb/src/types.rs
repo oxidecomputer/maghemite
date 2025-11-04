@@ -215,6 +215,13 @@ impl Ord for Prefix4 {
 }
 
 impl Prefix4 {
+    /// Create a new `Prefix4` from an IP address and net mask.
+    /// The newly created `Prefix4` will have its host bits zeroed upon creation
+    /// e.g.
+    /// ```
+    /// let p4 = Prefix4::new(Ipv4Addr::from_str("10.0.0.10").unwrap(), 24);
+    /// assert_eq!(p4.value, Ipv4Addr::from_str("10.0.0.0").unwrap());
+    /// ```
     pub fn new(ip: Ipv4Addr, length: u8) -> Self {
         let mut new = Self { value: ip, length };
         new.unset_host_bits();
@@ -262,7 +269,7 @@ impl Prefix4 {
     /// Check if this prefix is contained within another prefix.
     /// Returns true if this prefix is equal to or more specific than the other.
     pub fn within(&self, other: &Prefix4) -> bool {
-        // A more specific prefix cannot be within a less specific one
+        // A less specific prefix cannot be within a more specific one
         if self.length < other.length {
             return false;
         }
@@ -336,6 +343,13 @@ impl fmt::Display for Prefix6 {
 }
 
 impl Prefix6 {
+    /// Create a new `Prefix6` from an IP address and net mask.
+    /// The newly created `Prefix6` will have its host bits zeroed upon creation
+    /// e.g.
+    /// ```
+    /// let p6 = Prefix6::new(Ipv6Addr::from_str("2001:db8::1").unwrap(), 64);
+    /// assert_eq!(p6.value, Ipv6Addr::from_str("2001:db8::").unwrap());
+    /// ```
     pub fn new(ip: Ipv6Addr, length: u8) -> Self {
         let mut new = Self { value: ip, length };
         new.unset_host_bits();
@@ -386,7 +400,7 @@ impl Prefix6 {
     /// Check if this prefix is contained within another prefix.
     /// Returns true if this prefix is equal to or more specific than the other.
     pub fn within(&self, other: &Prefix6) -> bool {
-        // A more specific prefix cannot be within a less specific one
+        // A less  specific prefix cannot be within a more specific one
         if self.length < other.length {
             return false;
         }
