@@ -203,3 +203,12 @@ pub trait BgpConnection: Send + Clone {
     /// Start the receive loop for this connection. This method is idempotent.
     fn start_recv_loop(&self);
 }
+
+/// Explicit state machine for lifecycle of a BgpConnection's recv loop.
+pub enum RecvLoopState<P> {
+    /// Connection created but recv loop not started
+    Ready(P),
+
+    /// Recv loop started (thread is detached, not tracked)
+    Started,
+}

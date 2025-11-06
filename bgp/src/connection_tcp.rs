@@ -6,7 +6,7 @@ use crate::{
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId,
+        ConnectionId, RecvLoopState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -56,6 +56,13 @@ const TCP_MD5SIG: i32 = 0x27;
 const PFKEY_DURATION: Duration = Duration::from_secs(60 * 2);
 #[cfg(target_os = "illumos")]
 const PFKEY_KEEPALIVE: Duration = Duration::from_secs(60);
+
+/// Parameters needed to initialize a recv loop for TCP connections
+#[derive(Clone)]
+struct RecvLoopParamsTcp {
+    pub event_tx: Sender<FsmEvent<BgpConnectionTcp>>,
+    pub timeout: Duration,
+}
 
 pub struct BgpListenerTcp {
     listener: TcpListener,
@@ -167,22 +174,13 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
 
             #[cfg(target_os = "illumos")]
             {
-                let sources = match source_address_select(conn.peer.ip()) {
-                    Ok(s) => s,
-                    Err(e) => return Err(Error::InvalidAddress(e.to_string())),
-                };
-                if !sources.is_empty() {
-                    let local: Vec<SocketAddr> = sources
-                        .iter()
-                        .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
-                        .collect();
-                    conn.manage_md5_associations(
-                        tcp_stream.as_raw_fd(),
-                        key,
-                        local,
-                        conn.peer,
-                    )?;
-                }
+                let local = get_md5_source_addrs(conn.peer.ip())?;
+                conn.manage_md5_associations(
+                    tcp_stream.as_raw_fd(),
+                    key,
+                    local,
+                    conn.peer,
+                )?;
             }
 
             #[cfg(not(any(target_os = "linux", target_os = "illumos")))]
@@ -482,17 +480,21 @@ pub struct BgpConnectionTcp {
     direction: ConnectionDirection,
     // Connection-level timers for keepalive, hold, and delay open
     connection_clock: ConnectionClock,
-    // Parameters for spawning the recv loop (stored until start_recv_loop is called)
-    // Note: No Arc needed! recv loop is started before cloning in register_conn()
-    recv_loop_params: Mutex<Option<RecvLoopParams>>,
-    // Track whether recv loop has been started
-    recv_loop_started: AtomicBool,
+    // Explicit recv loop state machine
+    recv_loop_state: Mutex<RecvLoopState<RecvLoopParamsTcp>>,
 }
 
 impl Clone for BgpConnectionTcp {
     fn clone(&self) -> Self {
-        // Clones always have empty recv loop params since the original connection
-        // should have started the recv loop before being cloned (in register_conn).
+        // Clone state (both variants are cloneable)
+        let state_lock = lock!(self.recv_loop_state);
+        let new_state = match *state_lock {
+            RecvLoopState::Ready(ref params) => {
+                RecvLoopState::Ready(params.clone())
+            }
+            RecvLoopState::Started => RecvLoopState::Started,
+        };
+
         Self {
             id: self.id,
             peer: self.peer,
@@ -506,16 +508,9 @@ impl Clone for BgpConnectionTcp {
             log: self.log.clone(),
             direction: self.direction,
             connection_clock: self.connection_clock.clone(),
-            recv_loop_params: Mutex::new(None),
-            recv_loop_started: AtomicBool::new(true),
+            recv_loop_state: Mutex::new(new_state),
         }
     }
-}
-
-/// Parameters needed to spawn the receive loop for a BGP connection
-struct RecvLoopParams {
-    event_tx: Sender<FsmEvent<BgpConnectionTcp>>,
-    timeout: Duration,
 }
 
 impl BgpConnection for BgpConnectionTcp {
@@ -551,41 +546,49 @@ impl BgpConnection for BgpConnectionTcp {
     }
 
     fn start_recv_loop(&self) {
-        // Check if already started (idempotent)
-        if self
-            .recv_loop_started
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::Acquire,
-            )
-            .is_err()
-        {
-            // Already started, nothing to do
-            return;
-        }
+        let mut state = lock!(self.recv_loop_state);
 
-        // Take the params (they should exist since we haven't started yet)
-        let params = lock!(self.recv_loop_params).take();
-        if let Some(params) = params {
-            connection_log!(self, info,
-                "spawning recv loop for {}", self.peer;
-            );
+        match *state {
+            RecvLoopState::Ready(ref params) => {
+                connection_log!(self, info,
+                    "spawning recv loop for {}", self.peer;
+                );
 
-            let peer = self.peer;
-            let event_tx = params.event_tx;
-            let timeout = params.timeout;
-            let dropped = self.dropped.clone();
-            let log = self.log.clone();
-            let direction = self.direction;
-            let conn_id = self.id;
+                let peer = self.peer;
+                let event_tx = params.event_tx.clone();
+                let timeout = params.timeout;
+                let dropped = self.dropped.clone();
+                let log = self.log.clone();
+                let direction = self.direction;
+                let conn_id = self.id;
 
-            // Clone the TcpStream for the recv thread
-            if let Ok(conn) = lock!(self.conn).try_clone() {
-                Self::spawn_recv_loop(
-                    peer, event_tx, conn, timeout, dropped, log, direction,
-                    conn_id,
+                // Clone the TcpStream for the recv thread
+                match lock!(self.conn).try_clone() {
+                    Ok(conn) => {
+                        // Spawn and discard JoinHandle (detached)
+                        Self::spawn_recv_loop(
+                            peer, event_tx, conn, timeout, dropped, log,
+                            direction, conn_id,
+                        );
+
+                        // Transition to Started
+                        *state = RecvLoopState::Started;
+                    }
+                    Err(_) => {
+                        connection_log_lite!(log, error,
+                            "failed to clone TcpStream for recv loop for {peer}";
+                            "direction" => format!("{direction:?}"),
+                            "peer" => format!("{peer}"),
+                            "connection_id" => conn_id.short()
+                        );
+                    }
+                }
+            }
+
+            RecvLoopState::Started => {
+                // Idempotent - already started
+                connection_log!(self, debug,
+                    "recv_loop already started for {}", self.peer;
                 );
             }
         }
@@ -641,9 +644,11 @@ impl BgpConnectionTcp {
             log.clone(),
         );
 
-        // Store the parameters for spawning the recv loop later
-        let recv_loop_params =
-            Mutex::new(Some(RecvLoopParams { event_tx, timeout }));
+        let recv_loop_state =
+            Mutex::new(RecvLoopState::Ready(RecvLoopParamsTcp {
+                event_tx,
+                timeout,
+            }));
 
         Ok(Self {
             id,
@@ -658,8 +663,7 @@ impl BgpConnectionTcp {
             sas: Arc::new(Mutex::new(None)),
             direction,
             connection_clock,
-            recv_loop_params,
-            recv_loop_started: AtomicBool::new(false),
+            recv_loop_state,
         })
     }
 
@@ -1138,6 +1142,25 @@ fn set_md5_sig(
     Ok(())
 }
 
+/// Helper function to select and validate MD5 source addresses
+/// Eliminates duplication between inbound and outbound paths
+#[cfg(target_os = "illumos")]
+fn get_md5_source_addrs(peer_ip: IpAddr) -> Result<Vec<SocketAddr>, Error> {
+    let sources = source_address_select(peer_ip)
+        .map_err(|e| Error::InvalidAddress(e.to_string()))?;
+
+    if sources.is_empty() {
+        return Err(Error::InvalidAddress(
+            "no source address available for MD5 SA setup".to_string(),
+        ));
+    }
+
+    Ok(sources
+        .iter()
+        .map(|x| SocketAddr::new(*x, crate::BGP_PORT))
+        .collect())
+}
+
 #[cfg(target_os = "linux")]
 #[repr(C)]
 struct TcpMd5Sig {
@@ -1257,15 +1280,32 @@ fn init_md5_associations(
     // Set MD5 security associations for Illumos
     for local in locals.iter() {
         for (a, b) in sa_set(*local, peer) {
-            if let Err(e) = libnet::pf_key::tcp_md5_key_add(
-                a.into(),
-                b.into(),
-                key,
-                PFKEY_DURATION,
-            ) {
-                return Err(Error::Io(std::io::Error::other(format!(
-                    "failed to add pf_key {a} -> {b}: {e}"
-                ))));
+            // Check if SA already exists before attempting to add
+            let exists =
+                libnet::pf_key::tcp_md5_key_get(a.into(), b.into()).is_ok();
+            if exists {
+                // Update existing SA with extended duration
+                if let Err(e) = libnet::pf_key::tcp_md5_key_update(
+                    a.into(),
+                    b.into(),
+                    PFKEY_DURATION,
+                ) {
+                    return Err(Error::Io(std::io::Error::other(format!(
+                        "failed to update pf_key {a} -> {b}: {e}"
+                    ))));
+                }
+            } else {
+                // Add new SA
+                if let Err(e) = libnet::pf_key::tcp_md5_key_add(
+                    a.into(),
+                    b.into(),
+                    key,
+                    PFKEY_DURATION,
+                ) {
+                    return Err(Error::Io(std::io::Error::other(format!(
+                        "failed to add pf_key {a} -> {b}: {e}"
+                    ))));
+                }
             }
         }
     }

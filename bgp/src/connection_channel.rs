@@ -11,7 +11,7 @@ use crate::{
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId,
+        ConnectionId, RecvLoopState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -197,18 +197,15 @@ pub struct BgpConnectionChannel {
     conn_id: ConnectionId,
     // Connection-level timers for keepalive, hold, and delay open
     connection_clock: ConnectionClock,
-    // Parameters for spawning the recv loop (stored until start_recv_loop is called)
-    // Note: No Arc needed! recv loop is started before cloning in register_conn()
-    recv_loop_params: Mutex<Option<RecvLoopParamsChannel>>,
-    // Track whether recv loop has been started
-    recv_loop_started: std::sync::atomic::AtomicBool,
+    // Explicit recv loop state machine
+    recv_loop_state: Mutex<RecvLoopState<RecvLoopParamsChannel>>,
     // Unique identifier for the underlying channel pair (shared by both endpoints)
     channel_id: u64,
 }
 
 impl Clone for BgpConnectionChannel {
     fn clone(&self) -> Self {
-        // Clones always have empty recv loop params since the original connection
+        // Clones always have Started state since the original connection
         // should have started the recv loop before being cloned (in register_conn).
         Self {
             addr: self.addr,
@@ -218,14 +215,15 @@ impl Clone for BgpConnectionChannel {
             direction: self.direction,
             conn_id: self.conn_id,
             connection_clock: self.connection_clock.clone(),
-            recv_loop_params: Mutex::new(None),
-            recv_loop_started: std::sync::atomic::AtomicBool::new(true),
+            recv_loop_state: Mutex::new(RecvLoopState::Started),
             channel_id: self.channel_id,
         }
     }
 }
 
 /// Parameters needed to spawn the receive loop for a channel-based BGP connection
+/// Note: Receiver<Message> doesn't implement Clone, so we can't derive Clone.
+/// Used with the generic RecvLoopState<P> enum from connection.rs.
 struct RecvLoopParamsChannel {
     rx: Receiver<Message>,
     event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
@@ -287,43 +285,38 @@ impl BgpConnection for BgpConnectionChannel {
     }
 
     fn start_recv_loop(&self) {
-        // Check if already started (idempotent)
-        if self
-            .recv_loop_started
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::Acquire,
-            )
-            .is_err()
-        {
-            // Already started, nothing to do
-            return;
-        }
+        let mut state = lock!(self.recv_loop_state);
 
-        // Take the params (they should exist since we haven't started yet)
-        let params = lock!(self.recv_loop_params).take();
-        if let Some(params) = params {
-            connection_log!(self, info,
-                "spawning recv loop for {} (conn_id: {}, channel_id: {})",
-                self.peer(), self.conn_id.short(), self.channel_id;
-                "channel_id" => self.channel_id
-            );
+        match std::mem::replace(&mut *state, RecvLoopState::Started) {
+            RecvLoopState::Ready(params) => {
+                connection_log!(self, info,
+                    "spawning recv loop for {} (conn_id: {}, channel_id: {})",
+                    self.peer(), self.conn_id.short(), self.channel_id;
+                    "channel_id" => self.channel_id
+                );
 
-            let peer = self.peer;
-            let event_tx = params.event_tx;
-            let rx = params.rx;
-            let timeout = params.timeout;
-            let log = self.log.clone();
-            let direction = self.direction;
-            let conn_id = self.conn_id;
-            let channel_id = self.channel_id;
+                let peer = self.peer;
+                let event_tx = params.event_tx;
+                let rx = params.rx;
+                let timeout = params.timeout;
+                let log = self.log.clone();
+                let direction = self.direction;
+                let conn_id = self.conn_id;
+                let channel_id = self.channel_id;
 
-            Self::spawn_recv_loop(
-                peer, rx, event_tx, timeout, log, direction, conn_id,
-                channel_id,
-            );
+                Self::spawn_recv_loop(
+                    peer, rx, event_tx, timeout, log, direction, conn_id,
+                    channel_id,
+                );
+            }
+            RecvLoopState::Started => {
+                // Idempotent - already started
+                connection_log!(self, debug,
+                    "recv_loop already started for {} (conn_id: {}, channel_id: {})",
+                    self.peer(), self.conn_id.short(), self.channel_id;
+                    "channel_id" => self.channel_id
+                );
+            }
         }
     }
 }
@@ -356,12 +349,12 @@ impl BgpConnectionChannel {
 
         let channel_id = conn.channel_id;
 
-        // Store the parameters for spawning the recv loop later
-        let recv_loop_params = Mutex::new(Some(RecvLoopParamsChannel {
-            rx: conn.rx,
-            event_tx,
-            timeout,
-        }));
+        let recv_loop_state =
+            Mutex::new(RecvLoopState::Ready(RecvLoopParamsChannel {
+                rx: conn.rx,
+                event_tx,
+                timeout,
+            }));
 
         Self {
             addr,
@@ -371,8 +364,7 @@ impl BgpConnectionChannel {
             direction,
             conn_id,
             connection_clock,
-            recv_loop_params,
-            recv_loop_started: std::sync::atomic::AtomicBool::new(false),
+            recv_loop_state,
             channel_id,
         }
     }
