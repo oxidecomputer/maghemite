@@ -26,8 +26,8 @@ use std::{
     io::Write,
     net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::atomic::AtomicBool,
-    sync::{Arc, Mutex, mpsc::Sender},
-    thread::spawn,
+    sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
+    thread::{JoinHandle, spawn},
     time::Duration,
 };
 
@@ -56,13 +56,6 @@ const TCP_MD5SIG: i32 = 0x27;
 const PFKEY_DURATION: Duration = Duration::from_secs(60 * 2);
 #[cfg(target_os = "illumos")]
 const PFKEY_KEEPALIVE: Duration = Duration::from_secs(60);
-
-/// Parameters needed to initialize a recv loop for TCP connections
-#[derive(Clone)]
-struct RecvLoopParamsTcp {
-    pub event_tx: Sender<FsmEvent<BgpConnectionTcp>>,
-    pub timeout: Duration,
-}
 
 pub struct BgpListenerTcp {
     listener: TcpListener,
@@ -203,7 +196,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
         log: Logger,
         event_tx: Sender<FsmEvent<BgpConnectionTcp>>,
         config: SessionInfo,
-    ) -> Result<std::thread::JoinHandle<()>, Error> {
+    ) -> Result<JoinHandle<()>, Error> {
         // Spawn a background thread to perform the connection attempt
         let handle = spawn(move || {
             connection_log_lite!(log,
@@ -480,37 +473,12 @@ pub struct BgpConnectionTcp {
     direction: ConnectionDirection,
     // Connection-level timers for keepalive, hold, and delay open
     connection_clock: ConnectionClock,
-    // Explicit recv loop state machine
-    recv_loop_state: Mutex<RecvLoopState<RecvLoopParamsTcp>>,
-}
-
-impl Clone for BgpConnectionTcp {
-    fn clone(&self) -> Self {
-        // Clone state (both variants are cloneable)
-        let state_lock = lock!(self.recv_loop_state);
-        let new_state = match *state_lock {
-            RecvLoopState::Ready(ref params) => {
-                RecvLoopState::Ready(params.clone())
-            }
-            RecvLoopState::Started => RecvLoopState::Started,
-        };
-
-        Self {
-            id: self.id,
-            peer: self.peer,
-            source: self.source,
-            conn: self.conn.clone(),
-            #[cfg(target_os = "illumos")]
-            sas: self.sas.clone(),
-            #[cfg(target_os = "illumos")]
-            sa_keepalive_running: self.sa_keepalive_running.clone(),
-            dropped: self.dropped.clone(),
-            log: self.log.clone(),
-            direction: self.direction,
-            connection_clock: self.connection_clock.clone(),
-            recv_loop_state: Mutex::new(new_state),
-        }
-    }
+    // Event sender for the recv loop (needed for spawn_recv_loop)
+    event_tx: Sender<FsmEvent<BgpConnectionTcp>>,
+    // Read timeout for the recv loop
+    recv_timeout: Duration,
+    // Typestate managing the recv loop thread lifecycle (Ready or Running)
+    recv_loop_state: Mutex<RecvLoopState>,
 }
 
 impl BgpConnection for BgpConnectionTcp {
@@ -545,53 +513,28 @@ impl BgpConnection for BgpConnectionTcp {
         &self.connection_clock
     }
 
-    fn start_recv_loop(&self) {
+    fn start_recv_loop(self: &Arc<Self>) -> Result<(), Error> {
         let mut state = lock!(self.recv_loop_state);
 
-        match *state {
-            RecvLoopState::Ready(ref params) => {
-                connection_log!(self, info,
-                    "spawning recv loop for {}", self.peer;
-                );
-
-                let peer = self.peer;
-                let event_tx = params.event_tx.clone();
-                let timeout = params.timeout;
-                let dropped = self.dropped.clone();
-                let log = self.log.clone();
-                let direction = self.direction;
-                let conn_id = self.id;
-
-                // Clone the TcpStream for the recv thread
-                match lock!(self.conn).try_clone() {
-                    Ok(conn) => {
-                        // Spawn and discard JoinHandle (detached)
-                        Self::spawn_recv_loop(
-                            peer, event_tx, conn, timeout, dropped, log,
-                            direction, conn_id,
-                        );
-
-                        // Transition to Started
-                        *state = RecvLoopState::Started;
-                    }
-                    Err(_) => {
-                        connection_log_lite!(log, error,
-                            "failed to clone TcpStream for recv loop for {peer}";
-                            "direction" => format!("{direction:?}"),
-                            "peer" => format!("{peer}"),
-                            "connection_id" => conn_id.short()
-                        );
-                    }
-                }
-            }
-
-            RecvLoopState::Started => {
-                // Idempotent - already started
-                connection_log!(self, debug,
-                    "recv_loop already started for {}", self.peer;
-                );
-            }
+        // Check if already started (idempotent via typestate)
+        if state.is_running() {
+            // Already started, return Ok (idempotent)
+            connection_log!(self, debug,
+                "recv_loop already started for {}", self.peer;
+            );
+            return Ok(());
         }
+
+        // Spawn the recv loop with Arc clone
+        connection_log!(self, info,
+            "spawning recv loop for {}", self.peer;
+        );
+        let handle = Self::spawn_recv_loop(Arc::clone(self))?;
+
+        // Store the handle in the typestate
+        state.start(handle);
+
+        Ok(())
     }
 }
 
@@ -606,12 +549,11 @@ impl Drop for BgpConnectionTcp {
                 self.conn(), self.id().short();
                 "connection" => format!("{:?}", self.conn()),
                 "connection_id" => self.id().short(),
-                "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+                "dropped" => self.dropped.load(Ordering::Relaxed)
             );
             #[cfg(target_os = "illumos")]
             self.md5_sig_drop();
-            self.dropped
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.dropped.store(true, Ordering::Relaxed);
         }
     }
 }
@@ -644,12 +586,6 @@ impl BgpConnectionTcp {
             log.clone(),
         );
 
-        let recv_loop_state =
-            Mutex::new(RecvLoopState::Ready(RecvLoopParamsTcp {
-                event_tx,
-                timeout,
-            }));
-
         Ok(Self {
             id,
             peer,
@@ -663,105 +599,123 @@ impl BgpConnectionTcp {
             sas: Arc::new(Mutex::new(None)),
             direction,
             connection_clock,
-            recv_loop_state,
+            event_tx,
+            recv_timeout: timeout,
+            recv_loop_state: Mutex::new(RecvLoopState::new()),
         })
     }
 
     /// Spawn the receive loop thread for this connection.
-    #[allow(clippy::too_many_arguments)]
-    fn spawn_recv_loop(
-        peer: SocketAddr,
-        event_tx: Sender<FsmEvent<Self>>,
-        mut conn: TcpStream,
-        timeout: Duration,
-        dropped: Arc<AtomicBool>,
-        log: Logger,
-        direction: ConnectionDirection,
-        conn_id: ConnectionId,
-    ) {
-        if !timeout.is_zero()
-            && let Err(e) = conn.set_read_timeout(Some(timeout))
-        {
-            connection_log_lite!(log,
-                error,
-                "failed to set read timeout in recv loop for {peer} (conn_id: {}): {e}",
-                conn_id.short();
+    fn spawn_recv_loop(conn_arc: Arc<Self>) -> Result<JoinHandle<()>, Error> {
+        let peer = conn_arc.peer;
+        let event_tx = conn_arc.event_tx.clone();
+        let timeout = conn_arc.recv_timeout;
+        let dropped = conn_arc.dropped.clone();
+        let log = conn_arc.log.clone();
+        let direction = conn_arc.direction;
+        let conn_id = conn_arc.id;
+
+        // Try to clone the stream before spawning the thread
+        // This way we can fail fast if the connection is already broken
+        let conn = lock!(conn_arc.conn).try_clone().map_err(|e| {
+            connection_log_lite!(log, error,
+                "failed to clone TcpStream for recv loop for {peer}";
                 "direction" => direction,
-                "connection" => format!("{conn:?}"),
                 "connection_peer" => format!("{peer}"),
                 "connection_id" => conn_id.short(),
                 "error" => format!("{e}")
             );
-            return;
-        }
+            Error::Io(e)
+        })?;
 
-        let l = log.clone();
+        // Use Builder instead of spawn().
+        // This lets us catch thread spawn errors instead of panicking.
+        std::thread::Builder::new()
+            .spawn(move || {
+                let mut conn = conn;
 
-        spawn(move || {
-            loop {
-                if dropped.load(std::sync::atomic::Ordering::Relaxed) {
-                    connection_log_lite!(l, info,
-                        "recv loop dropped (peer: {peer}, conn_id: {}), closing..",
+                if !timeout.is_zero()
+                    && let Err(e) = conn.set_read_timeout(Some(timeout))
+                {
+                    connection_log_lite!(log,
+                        error,
+                        "failed to set read timeout in recv loop for {peer} (conn_id: {}): {e}",
                         conn_id.short();
                         "direction" => direction,
                         "connection" => format!("{conn:?}"),
                         "connection_peer" => format!("{peer}"),
-                        "connection_id" => conn_id.short()
+                        "connection_id" => conn_id.short(),
+                        "error" => format!("{e}")
                     );
-                    break;
+                    return;
                 }
-                match Self::recv_msg(&mut conn, dropped.clone(), &l, direction)
-                {
-                    Ok(msg) => {
-                        connection_log_lite!(l, trace,
-                            "recv {} msg from {peer} (conn_id: {})",
-                            msg.title(), conn_id.short();
+
+                let l = log.clone();
+                loop {
+                    if dropped.load(Ordering::Relaxed) {
+                        connection_log_lite!(l, info,
+                            "recv loop dropped (peer: {peer}, conn_id: {}), closing..",
+                            conn_id.short();
                             "direction" => direction,
                             "connection" => format!("{conn:?}"),
                             "connection_peer" => format!("{peer}"),
-                            "connection_id" => conn_id.short(),
-                            "message" => msg.title(),
-                            "message_contents" => format!("{msg}")
+                            "connection_id" => conn_id.short()
                         );
-                        if let Err(e) = event_tx.send(FsmEvent::Connection(
-                            ConnectionEvent::Message { msg, conn_id },
-                        )) {
-                            connection_log_lite!(l, warn,
-                                "error sending event to {peer}: {e}";
+                        break;
+                    }
+                    match Self::recv_msg(&mut conn, dropped.clone(), &l, direction)
+                    {
+                        Ok(msg) => {
+                            connection_log_lite!(l, trace,
+                                "recv {} msg from {peer} (conn_id: {})",
+                                msg.title(), conn_id.short();
+                                "direction" => direction,
+                                "connection" => format!("{conn:?}"),
+                                "connection_peer" => format!("{peer}"),
+                                "connection_id" => conn_id.short(),
+                                "message" => msg.title(),
+                                "message_contents" => format!("{msg}")
+                            );
+                            if let Err(e) = event_tx.send(FsmEvent::Connection(
+                                ConnectionEvent::Message { msg, conn_id },
+                            )) {
+                                connection_log_lite!(l, warn,
+                                    "error sending event to {peer}: {e}";
+                                    "direction" => direction,
+                                    "connection" => format!("{conn:?}"),
+                                    "connection_peer" => format!("{peer}"),
+                                    "connection_id" => conn_id.short(),
+                                    "error" => format!("{e}")
+                                );
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            connection_log_lite!(l, info,
+                                "recv_msg error (peer: {peer}, conn_id: {}): {e}",
+                                conn_id.short();
                                 "direction" => direction,
                                 "connection" => format!("{conn:?}"),
                                 "connection_peer" => format!("{peer}"),
                                 "connection_id" => conn_id.short(),
                                 "error" => format!("{e}")
                             );
+                            // Break the loop on connection errors to prevent zombie threads
+                            // that continue trying to read from closed connections
                             break;
                         }
                     }
-                    Err(e) => {
-                        connection_log_lite!(l, info,
-                            "recv_msg error (peer: {peer}, conn_id: {}): {e}",
-                            conn_id.short();
-                            "direction" => direction,
-                            "connection" => format!("{conn:?}"),
-                            "connection_peer" => format!("{peer}"),
-                            "connection_id" => conn_id.short(),
-                            "error" => format!("{e}")
-                        );
-                        // Break the loop on connection errors to prevent zombie threads
-                        // that continue trying to read from closed connections
-                        break;
-                    }
                 }
-            }
-            connection_log_lite!(l, info,
-                "recv loop closed (peer: {peer}, conn_id: {})",
-                conn_id.short();
-                "direction" => direction,
-                "connection" => format!("{conn:?}"),
-                "connection_peer" => format!("{peer}"),
-                "connection_id" => conn_id.short()
-            );
-        });
+                connection_log_lite!(l, info,
+                    "recv loop closed (peer: {peer}, conn_id: {})",
+                    conn_id.short();
+                    "direction" => direction,
+                    "connection" => format!("{conn:?}"),
+                    "connection_peer" => format!("{peer}"),
+                    "connection_id" => conn_id.short()
+                );
+            })
+            .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))
     }
 
     fn recv_header(
@@ -771,7 +725,7 @@ impl BgpConnectionTcp {
         let mut buf = [0u8; Header::WIRE_SIZE];
         let mut i = 0;
         loop {
-            if dropped.load(std::sync::atomic::Ordering::Relaxed) {
+            if dropped.load(Ordering::Relaxed) {
                 return Err(std::io::Error::other("shutting down"));
             }
             let n = match stream.read(&mut buf[i..]) {
@@ -960,7 +914,7 @@ impl BgpConnectionTcp {
                             error,
                             "failed to drop sa {a} -> {b}: {e}";
                             "connection" => format!("{:?}", lock!(self.conn)),
-                            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                            "dropped" => self.dropped.load(Ordering::Relaxed),
                             "error" => format!("{e}")
                         );
                     }
@@ -1013,7 +967,7 @@ impl BgpConnectionTcp {
 
     #[cfg(target_os = "illumos")]
     fn sa_keepalive(&self) {
-        use std::{sync::atomic::Ordering, thread::sleep};
+        use std::thread::sleep;
 
         let running = self
             .sa_keepalive_running
@@ -1025,7 +979,7 @@ impl BgpConnectionTcp {
                 debug,
                 "security association keepalive loop already running";
                 "connection" => format!("{:?}", self.conn()),
-                "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+                "dropped" => self.dropped.load(Ordering::Relaxed)
             );
             return;
         }
@@ -1039,7 +993,7 @@ impl BgpConnectionTcp {
             debug,
             "spawning security association keepalive loop";
             "connection" => format!("{:?}", self.conn()),
-            "dropped" => self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+            "dropped" => self.dropped.load(Ordering::Relaxed)
         );
         let dropped = self.dropped.clone();
         let log = self.log.clone();
@@ -1048,7 +1002,7 @@ impl BgpConnectionTcp {
         spawn(move || {
             loop {
                 sleep(PFKEY_KEEPALIVE);
-                if dropped.load(std::sync::atomic::Ordering::Relaxed) {
+                if dropped.load(Ordering::Relaxed) {
                     break;
                 }
                 Self::do_sa_keepalive(&sas, &log, conn);

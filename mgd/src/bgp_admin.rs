@@ -6,7 +6,7 @@
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::params::*;
 use bgp::router::LoadPolicyError;
-use bgp::session::{ConnectionKind, FsmStateKind};
+use bgp::session::FsmStateKind;
 use bgp::{
     BGP_PORT,
     config::RouterConfig,
@@ -453,30 +453,27 @@ pub async fn get_neighbors(
     for s in lock!(r.sessions).values() {
         let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
 
-        let conf_holdtime;
-        let neg_holdtime;
-        let conf_keepalive;
-        let neg_keepalive;
-
         // If the session runner has a primary connection, pull the config and
         // runtime state from it. If not, just use the config owned by the
         // session runner as both the config and runtime state.
-        if let Some(ref primary) = *lock!(s.primary) {
-            let clock = match primary {
-                ConnectionKind::Partial(p) => p.clock(),
-                ConnectionKind::Full(pc) => pc.conn.clock(),
+        let (conf_holdtime, neg_holdtime, conf_keepalive, neg_keepalive) =
+            if let Some(primary) = s.primary_connection() {
+                let clock = primary.connection().clock();
+                (
+                    clock.timers.config_hold_time,
+                    lock!(clock.timers.hold).interval,
+                    clock.timers.config_keepalive_time,
+                    lock!(clock.timers.keepalive).interval,
+                )
+            } else {
+                let session_info = lock!(s.session);
+                (
+                    session_info.hold_time,
+                    session_info.hold_time,
+                    session_info.keepalive_time,
+                    session_info.keepalive_time,
+                )
             };
-            conf_holdtime = clock.timers.config_hold_time;
-            neg_holdtime = lock!(clock.timers.hold).interval;
-            conf_keepalive = clock.timers.config_keepalive_time;
-            neg_keepalive = lock!(clock.timers.keepalive).interval;
-        } else {
-            let session_info = lock!(s.session);
-            conf_holdtime = session_info.hold_time;
-            neg_holdtime = session_info.hold_time;
-            conf_keepalive = session_info.keepalive_time;
-            neg_keepalive = session_info.keepalive_time;
-        }
 
         let pi = PeerInfo {
             state: s.state(),
@@ -516,30 +513,24 @@ pub async fn get_neighbors_v2(
     for s in lock!(r.sessions).values() {
         let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
 
-        let conf_holdtime;
-        let neg_holdtime;
-        let conf_keepalive;
-        let neg_keepalive;
-
-        // If the session runner has a primary connection, pull the config and
-        // runtime state from it. If not, just use the config owned by the
-        // session runner as both the config and runtime state.
-        if let Some(ref primary) = *lock!(s.primary) {
-            let clock = match primary {
-                ConnectionKind::Partial(p) => p.clock(),
-                ConnectionKind::Full(pc) => pc.conn.clock(),
+        let (conf_holdtime, neg_holdtime, conf_keepalive, neg_keepalive) =
+            if let Some(primary) = s.primary_connection() {
+                let clock = primary.connection().clock();
+                (
+                    clock.timers.config_hold_time,
+                    lock!(clock.timers.hold).interval,
+                    clock.timers.config_keepalive_time,
+                    lock!(clock.timers.keepalive).interval,
+                )
+            } else {
+                let session_info = lock!(s.session);
+                (
+                    session_info.hold_time,
+                    session_info.hold_time,
+                    session_info.keepalive_time,
+                    session_info.keepalive_time,
+                )
             };
-            conf_holdtime = clock.timers.config_hold_time;
-            neg_holdtime = lock!(clock.timers.hold).interval;
-            conf_keepalive = clock.timers.config_keepalive_time;
-            neg_keepalive = lock!(clock.timers.keepalive).interval;
-        } else {
-            let session_info = lock!(s.session);
-            conf_holdtime = session_info.hold_time;
-            neg_holdtime = session_info.hold_time;
-            conf_keepalive = session_info.keepalive_time;
-            neg_keepalive = session_info.keepalive_time;
-        }
 
         peers.insert(
             s.neighbor.host.ip(),

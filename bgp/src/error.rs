@@ -204,6 +204,9 @@ pub enum Error {
 
     #[error("Tcpkey database error: {0}")]
     TcpKey(String),
+
+    #[error("Connection registry is full: {0}")]
+    RegistryFull(String),
 }
 
 #[derive(Debug)]

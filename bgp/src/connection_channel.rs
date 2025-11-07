@@ -28,7 +28,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         mpsc::{Receiver, RecvTimeoutError, Sender, channel as mpsc_channel},
     },
-    thread::spawn,
+    thread::{JoinHandle, spawn},
     time::Duration,
 };
 
@@ -191,43 +191,21 @@ pub struct BgpConnectionChannel {
     addr: SocketAddr,
     peer: SocketAddr,
     conn_tx: Arc<Mutex<Sender<Message>>>,
+    conn_rx: Arc<Mutex<Option<Receiver<Message>>>>,
     log: Logger,
     // direction of this connection, i.e. BgpListener or BgpConnector
     direction: ConnectionDirection,
     conn_id: ConnectionId,
     // Connection-level timers for keepalive, hold, and delay open
     connection_clock: ConnectionClock,
-    // Explicit recv loop state machine
-    recv_loop_state: Mutex<RecvLoopState<RecvLoopParamsChannel>>,
+    // Event sender for recv loop
+    event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
+    // Receive timeout for channel recv loop
+    recv_timeout: std::time::Duration,
     // Unique identifier for the underlying channel pair (shared by both endpoints)
     channel_id: u64,
-}
-
-impl Clone for BgpConnectionChannel {
-    fn clone(&self) -> Self {
-        // Clones always have Started state since the original connection
-        // should have started the recv loop before being cloned (in register_conn).
-        Self {
-            addr: self.addr,
-            peer: self.peer,
-            conn_tx: self.conn_tx.clone(),
-            log: self.log.clone(),
-            direction: self.direction,
-            conn_id: self.conn_id,
-            connection_clock: self.connection_clock.clone(),
-            recv_loop_state: Mutex::new(RecvLoopState::Started),
-            channel_id: self.channel_id,
-        }
-    }
-}
-
-/// Parameters needed to spawn the receive loop for a channel-based BGP connection
-/// Note: Receiver<Message> doesn't implement Clone, so we can't derive Clone.
-/// Used with the generic RecvLoopState<P> enum from connection.rs.
-struct RecvLoopParamsChannel {
-    rx: Receiver<Message>,
-    event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
-    timeout: Duration,
+    // Typestate managing the recv loop thread lifecycle (Ready or Running)
+    recv_loop_state: Mutex<RecvLoopState>,
 }
 
 impl BgpConnection for BgpConnectionChannel {
@@ -284,40 +262,21 @@ impl BgpConnection for BgpConnectionChannel {
         &self.connection_clock
     }
 
-    fn start_recv_loop(&self) {
+    fn start_recv_loop(self: &Arc<Self>) -> Result<(), Error> {
         let mut state = lock!(self.recv_loop_state);
 
-        match std::mem::replace(&mut *state, RecvLoopState::Started) {
-            RecvLoopState::Ready(params) => {
-                connection_log!(self, info,
-                    "spawning recv loop for {} (conn_id: {}, channel_id: {})",
-                    self.peer(), self.conn_id.short(), self.channel_id;
-                    "channel_id" => self.channel_id
-                );
-
-                let peer = self.peer;
-                let event_tx = params.event_tx;
-                let rx = params.rx;
-                let timeout = params.timeout;
-                let log = self.log.clone();
-                let direction = self.direction;
-                let conn_id = self.conn_id;
-                let channel_id = self.channel_id;
-
-                Self::spawn_recv_loop(
-                    peer, rx, event_tx, timeout, log, direction, conn_id,
-                    channel_id,
-                );
-            }
-            RecvLoopState::Started => {
-                // Idempotent - already started
-                connection_log!(self, debug,
-                    "recv_loop already started for {} (conn_id: {}, channel_id: {})",
-                    self.peer(), self.conn_id.short(), self.channel_id;
-                    "channel_id" => self.channel_id
-                );
-            }
+        // Check if already started (idempotent via typestate)
+        if state.is_running() {
+            // Already started, return Ok (idempotent)
+            return Ok(());
         }
+
+        let handle = Self::spawn_recv_loop(Arc::clone(self))?;
+
+        // Store the handle in the typestate
+        state.start(handle);
+
+        Ok(())
     }
 }
 
@@ -349,85 +308,100 @@ impl BgpConnectionChannel {
 
         let channel_id = conn.channel_id;
 
-        let recv_loop_state =
-            Mutex::new(RecvLoopState::Ready(RecvLoopParamsChannel {
-                rx: conn.rx,
-                event_tx,
-                timeout,
-            }));
-
         Self {
             addr,
             peer,
             conn_tx: Arc::new(Mutex::new(conn.tx)),
+            conn_rx: Arc::new(Mutex::new(Some(conn.rx))),
             log,
             direction,
             conn_id,
             connection_clock,
-            recv_loop_state,
+            event_tx,
+            recv_timeout: timeout,
             channel_id,
+            recv_loop_state: Mutex::new(RecvLoopState::new()),
         }
     }
 
     /// Spawn the receive loop thread for this connection.
-    #[allow(clippy::too_many_arguments)]
-    fn spawn_recv_loop(
-        peer: SocketAddr,
-        rx: Receiver<Message>,
-        event_tx: Sender<FsmEvent<Self>>,
-        timeout: Duration,
-        log: Logger,
-        direction: ConnectionDirection,
-        conn_id: ConnectionId,
-        channel_id: u64,
-    ) {
-        spawn(move || {
-            loop {
-                match rx.recv_timeout(timeout) {
-                    Ok(msg) => {
-                        connection_log_lite!(log,
-                            debug,
-                            "recv {} msg from {peer} (conn_id: {}, channel_id: {})",
-                            msg.title(), conn_id.short(), channel_id;
-                            "direction" => direction.as_str(),
-                            "peer" => format!("{peer}"),
-                            "message" => msg.title(),
-                            "message_contents" => format!("{msg}"),
-                            "channel_id" => channel_id
-                        );
-                        if let Err(e) = event_tx.send(FsmEvent::Connection(
-                            ConnectionEvent::Message { msg, conn_id },
-                        )) {
+    fn spawn_recv_loop(self_: Arc<Self>) -> Result<JoinHandle<()>, Error> {
+        // Take the receiver. This will be None after first call.
+        let rx = {
+            let mut conn_rx = lock!(self_.conn_rx);
+            conn_rx.take()
+        };
+
+        // If no receiver, return error immediately
+        let rx = rx.ok_or_else(|| {
+            connection_log_lite!(self_.log,
+                error,
+                "failed to spawn recv loop: receiver already consumed or unavailable (channel_id: {})",
+                self_.channel_id;
+                "channel_id" => self_.channel_id
+            );
+            Error::Disconnected
+        })?;
+
+        let peer = self_.peer;
+        let direction = self_.direction;
+        let conn_id = self_.conn_id;
+        let channel_id = self_.channel_id;
+        let log = self_.log.clone();
+        let timeout = self_.recv_timeout;
+        let event_tx = self_.event_tx.clone();
+
+        // Use Builder instead of spawn().
+        // This lets us catch thread spawn errors instead of panicking.
+        std::thread::Builder::new()
+            .spawn(move || {
+                loop {
+                    match rx.recv_timeout(timeout) {
+                        Ok(msg) => {
                             connection_log_lite!(log,
-                                error,
-                                "error sending event to {peer}: {e}";
+                                debug,
+                                "recv {} msg from {peer} (conn_id: {}, channel_id: {})",
+                                msg.title(), conn_id.short(), channel_id;
                                 "direction" => direction.as_str(),
                                 "peer" => format!("{peer}"),
-                                "error" => format!("{e}"),
+                                "message" => msg.title(),
+                                "message_contents" => format!("{msg}"),
                                 "channel_id" => channel_id
                             );
+                            if let Err(e) = event_tx.send(FsmEvent::Connection(
+                                ConnectionEvent::Message { msg, conn_id },
+                            )) {
+                                connection_log_lite!(log,
+                                    error,
+                                    "error sending event to {peer}: {e}";
+                                    "direction" => direction.as_str(),
+                                    "peer" => format!("{peer}"),
+                                    "error" => format!("{e}"),
+                                    "channel_id" => channel_id
+                                );
+                            }
+                        }
+                        Err(RecvTimeoutError::Timeout) => {
+                            // Normal timeout, continue waiting for messages
+                            continue;
+                        }
+                        Err(RecvTimeoutError::Disconnected) => {
+                            // Peer closed connection, exit recv loop cleanly
+                            connection_log_lite!(log,
+                                debug,
+                                "peer {peer} disconnected (conn_id: {}, channel_id: {}), terminating recv loop",
+                                conn_id.short(), channel_id;
+                                "direction" => direction.as_str(),
+                                "peer" => format!("{peer}"),
+                                "connection_id" => conn_id.short(),
+                                "channel_id" => channel_id
+                            );
+                            break;
                         }
                     }
-                    Err(RecvTimeoutError::Timeout) => {
-                        // Normal timeout, continue waiting for messages
-                        continue;
-                    }
-                    Err(RecvTimeoutError::Disconnected) => {
-                        // Peer closed connection, exit recv loop cleanly
-                        connection_log_lite!(log,
-                            debug,
-                            "peer {peer} disconnected (conn_id: {}, channel_id: {}), terminating recv loop",
-                            conn_id.short(), channel_id;
-                            "direction" => direction.as_str(),
-                            "peer" => format!("{peer}"),
-                            "connection_id" => conn_id.short(),
-                            "channel_id" => channel_id
-                        );
-                        break;
-                    }
                 }
-            }
-        });
+            })
+            .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))
     }
 }
 
@@ -440,7 +414,7 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
         log: Logger,
         event_tx: Sender<FsmEvent<BgpConnectionChannel>>,
         config: SessionInfo,
-    ) -> Result<std::thread::JoinHandle<()>, Error> {
+    ) -> Result<JoinHandle<()>, Error> {
         let direction = ConnectionDirection::Outbound;
         let addr = config
             .bind_addr

@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::sync::mpsc::{Receiver, Sender};
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
     net::SocketAddr,
     sync::{
@@ -49,10 +49,10 @@ const UNIT_SESSION_RUNNER: &str = "session_runner";
 /// states and (various helper methods specific to those states) expect a
 /// PeerConnection rather than a BgpConnection, because those are states we
 /// enter after a BgpConnection has already received (and accepted) an Open.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PeerConnection<Cnx: BgpConnection> {
     /// The BgpConnection to the peer itself (TCP or Channel)
-    pub conn: Cnx,
+    pub conn: Arc<Cnx>,
     /// The actual BGP-ID (Router-ID) learned from the peer (runtime state)
     pub id: u32,
     /// The actual ASN learned from the peer (runtime state)
@@ -61,13 +61,24 @@ pub struct PeerConnection<Cnx: BgpConnection> {
     pub caps: BTreeSet<Capability>,
 }
 
+impl<Cnx: BgpConnection> Clone for PeerConnection<Cnx> {
+    fn clone(&self) -> Self {
+        PeerConnection {
+            conn: Arc::clone(&self.conn),
+            id: self.id,
+            asn: self.asn,
+            caps: self.caps.clone(),
+        }
+    }
+}
+
 /// This wraps a pair of BgpConnections that have been identified as being a
 /// Connection Collision. This condition is detected in either OpenConfirm or
 /// OpenSent FSM states, and these invariants indicate which state the FSM was
 /// in when the collision was detected.
 pub enum CollisionPair<Cnx: BgpConnection> {
-    OpenConfirm(PeerConnection<Cnx>, Cnx),
-    OpenSent(Cnx, Cnx),
+    OpenConfirm(PeerConnection<Cnx>, Arc<Cnx>),
+    OpenSent(Arc<Cnx>, Arc<Cnx>),
 }
 
 /// This is a helper enum to classify what connection an FsmEvent is tied to
@@ -76,11 +87,11 @@ pub enum CollisionPair<Cnx: BgpConnection> {
 /// active connections (`new`/`exist` handled by the current FSM state), an
 /// unexpected connection (in the registry but not being actively handled by the
 /// current FSM state), and an unknown connection (not in the registry),
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CollisionConnectionKind<Cnx: BgpConnection> {
     New,
     Exist,
-    Unexpected(Cnx),
+    Unexpected(Arc<Cnx>),
     Missing,
 }
 
@@ -112,7 +123,7 @@ pub enum FsmState<Cnx: BgpConnection> {
     Active,
 
     /// Waiting for open message from peer.
-    OpenSent(Cnx),
+    OpenSent(Arc<Cnx>),
 
     /// Waiting for keepaliave or notification from peer.
     OpenConfirm(PeerConnection<Cnx>),
@@ -598,13 +609,21 @@ pub struct NeighborInfo {
 /// Session endpoint that combines the event sender with session configuration.
 /// This is used in addr_to_session map to provide both communication channel
 /// and policy information for each peer.
-#[derive(Clone)]
 pub struct SessionEndpoint<Cnx: BgpConnection> {
     /// Event sender for FSM events to this session
     pub event_tx: Sender<FsmEvent<Cnx>>,
 
     /// Session configuration including policy settings
     pub config: Arc<Mutex<SessionInfo>>,
+}
+
+impl<Cnx: BgpConnection> Clone for SessionEndpoint<Cnx> {
+    fn clone(&self) -> Self {
+        Self {
+            event_tx: self.event_tx.clone(),
+            config: Arc::clone(&self.config),
+        }
+    }
 }
 
 pub const MAX_MESSAGE_HISTORY: usize = 1024;
@@ -715,18 +734,52 @@ pub enum ShaperApplication {
 
 /// This is used to represent a BgpConnection based on what progress it's made
 /// through the FSM.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum ConnectionKind<Cnx: BgpConnection> {
     /// This represents a connection in the "early" FSM states where we haven't
     /// yet learned details about the BGP peer (via Open message).
     /// i.e.
     /// OpenSent or earlier.
-    Partial(Cnx),
+    Partial(Arc<Cnx>),
     /// This represents a connection in the "late" FSM states where we know
     /// details details about the BGP peer (via Open message).
     /// i.e.
     /// OpenConfirm or later.
     Full(PeerConnection<Cnx>),
+}
+
+impl<Cnx: BgpConnection> Clone for ConnectionKind<Cnx> {
+    fn clone(&self) -> Self {
+        match self {
+            ConnectionKind::Partial(arc) => {
+                ConnectionKind::Partial(Arc::clone(arc))
+            }
+            ConnectionKind::Full(pc) => ConnectionKind::Full(pc.clone()),
+        }
+    }
+}
+
+impl<Cnx: BgpConnection> ConnectionKind<Cnx> {
+    /// Get the connection ID regardless of maturity state
+    pub fn id(&self) -> ConnectionId {
+        match self {
+            ConnectionKind::Partial(c) => *c.id(),
+            ConnectionKind::Full(pc) => *pc.conn.id(),
+        }
+    }
+
+    /// Check if this is a Full (mature) connection
+    pub fn is_full(&self) -> bool {
+        matches!(self, ConnectionKind::Full(_))
+    }
+
+    /// Get a reference to the underlying connection (Arc<Cnx>)
+    pub fn connection(&self) -> &Arc<Cnx> {
+        match self {
+            ConnectionKind::Partial(c) => c,
+            ConnectionKind::Full(pc) => &pc.conn,
+        }
+    }
 }
 
 /// Convenience macro for accessing session-level timers with less verbosity
@@ -749,6 +802,191 @@ macro_rules! connect_timeout {
     ($self:expr) => {
         lock!($self.clock.timers.connect_retry).interval / 3
     };
+}
+
+/// Registry for tracking active connections
+#[derive(Debug)]
+pub enum ConnectionRegistry<Cnx: BgpConnection> {
+    /// No connections registered
+    Empty,
+    /// Single connection registered with its maturity state
+    Single { active: ConnectionKind<Cnx> },
+    /// During a collision, there are two connections.
+    /// first = the connection the FSM is actively managing
+    /// second = the incoming connection during collision window
+    Collision {
+        first: ConnectionKind<Cnx>,
+        second: ConnectionKind<Cnx>,
+    },
+}
+
+impl<Cnx: BgpConnection> ConnectionRegistry<Cnx> {
+    /// Create a new empty registry
+    pub fn new() -> Self {
+        ConnectionRegistry::Empty
+    }
+
+    /// Register a new connection with its maturity state.
+    /// Returns error if at capacity.
+    pub fn register(&mut self, conn: ConnectionKind<Cnx>) -> Result<(), Error> {
+        let new_state = match std::mem::replace(self, ConnectionRegistry::Empty)
+        {
+            ConnectionRegistry::Empty => {
+                ConnectionRegistry::Single { active: conn }
+            }
+            ConnectionRegistry::Single { active: first } => {
+                ConnectionRegistry::Collision {
+                    first,
+                    second: conn,
+                }
+            }
+            collision @ ConnectionRegistry::Collision { .. } => {
+                // Restore the collision state and return error
+                *self = collision;
+                return Err(Error::RegistryFull(
+                    "registry already has maximum connections".into(),
+                ));
+            }
+        };
+        *self = new_state;
+        Ok(())
+    }
+
+    /// Remove a connection by ID. Returns the connection if found.
+    pub fn remove(
+        &mut self,
+        conn_id: &ConnectionId,
+    ) -> Option<ConnectionKind<Cnx>> {
+        match std::mem::replace(self, ConnectionRegistry::Empty) {
+            ConnectionRegistry::Empty => None,
+            ConnectionRegistry::Single { active } => {
+                if active.id() == *conn_id {
+                    *self = ConnectionRegistry::Empty;
+                    Some(active)
+                } else {
+                    // Restore state if ID doesn't match
+                    *self = ConnectionRegistry::Single { active };
+                    None
+                }
+            }
+            ConnectionRegistry::Collision { first, second } => {
+                if first.id() == *conn_id {
+                    // Remove first, keep second
+                    *self = ConnectionRegistry::Single { active: second };
+                    Some(first)
+                } else if second.id() == *conn_id {
+                    // Remove second, keep first
+                    *self = ConnectionRegistry::Single { active: first };
+                    Some(second)
+                } else {
+                    // Restore state if ID doesn't match
+                    *self = ConnectionRegistry::Collision { first, second };
+                    None
+                }
+            }
+        }
+    }
+
+    /// Clear all connections and return to Empty state
+    pub fn clear(&mut self) {
+        *self = ConnectionRegistry::Empty;
+    }
+
+    /// Get the number of registered connections
+    pub fn count(&self) -> u8 {
+        match self {
+            ConnectionRegistry::Empty => 0,
+            ConnectionRegistry::Single { .. } => 1,
+            ConnectionRegistry::Collision { .. } => 2,
+        }
+    }
+
+    /// Check if registry is empty
+    pub fn is_empty(&self) -> bool {
+        matches!(self, ConnectionRegistry::Empty)
+    }
+
+    /// Get all ConnectionIds currently registered
+    pub fn connection_ids(&self) -> Vec<ConnectionId> {
+        match self {
+            ConnectionRegistry::Empty => Vec::new(),
+            ConnectionRegistry::Single { active } => {
+                vec![active.id()]
+            }
+            ConnectionRegistry::Collision { first, second } => {
+                vec![first.id(), second.id()]
+            }
+        }
+    }
+
+    /// Get all connections currently registered
+    pub fn all_connections(&self) -> Vec<&ConnectionKind<Cnx>> {
+        match self {
+            ConnectionRegistry::Empty => Vec::new(),
+            ConnectionRegistry::Single { active } => vec![active],
+            ConnectionRegistry::Collision { first, second } => {
+                vec![first, second]
+            }
+        }
+    }
+
+    /// Get the primary (actively managed) connection, if one exists.
+    ///
+    /// Single: returns the only connection.
+    /// Collision: returns the first connection (actively managed by FSM).
+    /// Empty: returns None.
+    pub fn primary(&self) -> Option<&ConnectionKind<Cnx>> {
+        match self {
+            ConnectionRegistry::Empty => None,
+            ConnectionRegistry::Single { active } => Some(active),
+            ConnectionRegistry::Collision { first, .. } => Some(first),
+        }
+    }
+
+    /// Upgrade a connection from Partial to Full maturity.
+    /// Finds the connection by ID and replaces it with the Full version.
+    /// This is used when a Partial connection receives and accepts an Open message.
+    pub fn upgrade_to_full(&mut self, peer_conn: PeerConnection<Cnx>) {
+        let conn_id = *peer_conn.conn.id();
+        match self {
+            ConnectionRegistry::Single {
+                active: ConnectionKind::Partial(_),
+            } => {
+                *self = ConnectionRegistry::Single {
+                    active: ConnectionKind::Full(peer_conn),
+                };
+            }
+            ConnectionRegistry::Single {
+                active: ConnectionKind::Full(_),
+            } => {
+                // Already Full, this shouldn't happen normally
+            }
+            ConnectionRegistry::Collision { first, second } => {
+                if match first {
+                    ConnectionKind::Partial(c) => *c.id() == conn_id,
+                    ConnectionKind::Full(pc) => *pc.conn.id() == conn_id,
+                } && let ConnectionKind::Partial(_) = first
+                {
+                    *first = ConnectionKind::Full(peer_conn);
+                } else if match second {
+                    ConnectionKind::Partial(c) => *c.id() == conn_id,
+                    ConnectionKind::Full(pc) => *pc.conn.id() == conn_id,
+                } && let ConnectionKind::Partial(_) = second
+                {
+                    *second = ConnectionKind::Full(peer_conn);
+                }
+            }
+            ConnectionRegistry::Empty => {
+                // Empty, shouldn't upgrade to Full
+            }
+        }
+    }
+}
+
+impl<Cnx: BgpConnection> Default for ConnectionRegistry<Cnx> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// This is the top level object that tracks a BGP session with a peer. There is
@@ -847,15 +1085,10 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     fanout: Arc<RwLock<Fanout<Cnx>>>,
     router: Arc<Router<Cnx>>,
 
-    /// Registry of active connections indexed by ConnectionId
-    connections: Arc<Mutex<BTreeMap<ConnectionId, Cnx>>>,
-
-    /// A handle to the primary connection for a given peer.
-    /// Used to expose runtime state of the peer itself, not just the FSM.
-    /// If there are no collisions in progress, this will be the only
-    /// BgpConnection. This exists so we the Router can know which connection to
-    /// pull state from when a query arrives for information about a peer.
-    pub primary: Arc<Mutex<Option<ConnectionKind<Cnx>>>>,
+    /// Registry of active connections with typestate enforcement
+    /// Ensures at most 2 connections (primary + collision during negotiation)
+    /// Now stores the primary connection directly with its maturity state via ConnectionKind
+    connection_registry: Arc<Mutex<ConnectionRegistry<Cnx>>>,
 
     /// Handle to the currently running connector thread, if any.
     /// Used to track outbound connection attempts and prevent duplicate spawns.
@@ -982,8 +1215,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             counters: Arc::new(SessionCounters::default()),
             db,
             caps_tx: Arc::new(Mutex::new(BTreeSet::new())),
-            connections: Arc::new(Mutex::new(BTreeMap::new())),
-            primary: Arc::new(Mutex::new(None)),
+            connection_registry: Arc::new(
+                Mutex::new(ConnectionRegistry::new()),
+            ),
             connector_handle: Mutex::new(None),
         };
         drop(session_info);
@@ -1092,72 +1326,73 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// promoted to primary only if there isn't already a primary.
     /// This also starts the receive loop for the connection, ensuring that
     /// messages cannot arrive before the connection is registered.
-    fn register_conn(&self, conn: &Cnx) {
-        let conn_id = *conn.id();
+    fn register_conn(&self, conn: Arc<Cnx>) -> Result<(), Error> {
+        // Start the recv loop before registration
+        conn.start_recv_loop()?;
 
-        // Start the receive loop BEFORE cloning. This consumes the recv loop
-        // parameters from the original connection, so the clone won't have them.
-        // This prevents race conditions and allows us to avoid Arc wrappers.
-        conn.start_recv_loop();
+        // Register the connection in the registry with Partial maturity
+        // This will return an error if the registry is already at capacity (2 connections)
+        lock!(self.connection_registry)
+            .register(ConnectionKind::Partial(Arc::clone(&conn)))?;
 
-        // Now clone and insert into the registry. The clone will have empty
-        // recv loop params since we already started the loop above.
-        lock!(self.connections).insert(conn_id, conn.clone());
-
-        // If this was the primary connection, either promote another connection
-        // or reset it to None
-        if lock!(self.primary).is_none() {
-            self.set_primary_conn(Some(ConnectionKind::Partial(conn.clone())));
-        }
+        // Connection is now registered with the registry as the source of truth
+        // No need to maintain a separate primary field
+        Ok(())
     }
 
     /// Remove a connection from the registry
     fn unregister_conn(&self, conn_id: &ConnectionId) {
-        if let Some(conn) = lock!(self.connections).remove(conn_id) {
+        // Remove from connection registry
+        if let Some(conn_kind) = lock!(self.connection_registry).remove(conn_id)
+        {
+            // Extract the Arc from the ConnectionKind
+            let conn = match conn_kind {
+                ConnectionKind::Partial(c) => c,
+                ConnectionKind::Full(pc) => pc.conn,
+            };
             // Stop all running clocks to reduce unnecessary noise
             conn.clock().disable_all();
-        }
-
-        // If this was the primary connection, either promote another connection
-        // or reset it to None
-        if let Some(primary_id) = self.get_primary_conn_id()
-            && primary_id == *conn_id
-        {
-            self.set_primary_conn(None);
+            // The recv loop JoinHandle is owned by the connection's recv_loop_state field,
+            // so it will be cleaned up when the Arc<Cnx> is dropped
         }
     }
 
     /// Get a specific connection by ID
-    fn get_conn(&self, conn_id: &ConnectionId) -> Option<Cnx> {
-        lock!(self.connections).get(conn_id).cloned()
-    }
-
-    /// Promote a connection to be the primary for this BGP session
-    fn set_primary_conn(&self, primary: Option<ConnectionKind<Cnx>>) {
-        *lock!(self.primary) = primary;
-    }
-
-    /// Get the ConnectionId of the primary connection
-    pub fn get_primary_conn_id(&self) -> Option<ConnectionId> {
-        if let Some(ref primary) = *lock!(self.primary) {
-            match primary {
-                ConnectionKind::Partial(p) => Some(*p.id()),
-                ConnectionKind::Full(pc) => Some(*pc.conn.id()),
+    fn get_conn(&self, conn_id: &ConnectionId) -> Option<Arc<Cnx>> {
+        let registry = lock!(self.connection_registry);
+        match &*registry {
+            ConnectionRegistry::Empty => None,
+            ConnectionRegistry::Single { active } => {
+                if active.id() == *conn_id {
+                    Some(Arc::clone(active.connection()))
+                } else {
+                    None
+                }
             }
-        } else {
-            None
+            ConnectionRegistry::Collision { first, second } => {
+                if first.id() == *conn_id {
+                    Some(Arc::clone(first.connection()))
+                } else if second.id() == *conn_id {
+                    Some(Arc::clone(second.connection()))
+                } else {
+                    None
+                }
+            }
         }
     }
 
     /// Clean up all connections associated with this SessionRunner
     fn cleanup_connections(&self) {
-        let mut connections = lock!(self.connections);
+        let mut registry = lock!(self.connection_registry);
         // Disable timers before dropping to ensure timers stop immediately
-        for conn in connections.values() {
+        for ck in registry.all_connections() {
+            let conn = match ck {
+                ConnectionKind::Partial(c) => c,
+                ConnectionKind::Full(pc) => &pc.conn,
+            };
             conn.clock().disable_all();
         }
-        connections.clear();
-        *lock!(self.primary) = None;
+        registry.clear();
     }
 
     /// This is the BGP peer state machine entry point. This function only
@@ -1705,10 +1940,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          */
                         SessionEvent::TcpConnectionAcked(accepted)
                         | SessionEvent::TcpConnectionConfirmed(accepted) => {
+                            let accepted = Arc::new(accepted);
                             session_log!(
                                 self,
                                 info,
-                                accepted,
+                                &accepted,
                                 "accepted {} connection from {}",
                                 accepted.direction(),
                                 accepted.peer()
@@ -1735,16 +1971,27 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 session_log!(
                                     self,
                                     error,
-                                    accepted,
+                                    &accepted,
                                     "failed to send open, fsm transition to idle";
                                     "error" => format!("{e}")
                                 );
                                 return FsmState::Idle;
                             }
 
-                            self.register_conn(&accepted);
+                            if let Err(e) =
+                                self.register_conn(Arc::clone(&accepted))
+                            {
+                                session_log!(
+                                    self,
+                                    error,
+                                    &accepted,
+                                    "failed to register connection, fsm transition to idle";
+                                    "error" => format!("{e}")
+                                );
+                                return FsmState::Idle;
+                            }
 
-                            conn_timer!(accepted, hold).restart();
+                            conn_timer!(&accepted, hold).restart();
 
                             return FsmState::OpenSent(accepted);
                         }
@@ -2188,10 +2435,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     // The Dispatcher has accepted a TCP connection initiated by
                     // the peer.
                     SessionEvent::TcpConnectionAcked(accepted) => {
+                        let accepted = Arc::new(accepted);
                         session_log!(
                             self,
                             info,
-                            accepted,
+                            &accepted,
                             "accepted inbound connection from {}",
                             accepted.peer()
                         );
@@ -2206,16 +2454,27 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             session_log!(
                                 self,
                                 error,
-                                accepted,
+                                &accepted,
                                 "failed to send open, fsm transition to idle";
                                 "error" => format!("{e}")
                             );
                             return FsmState::Idle;
                         }
 
-                        self.register_conn(&accepted);
+                        if let Err(e) =
+                            self.register_conn(Arc::clone(&accepted))
+                        {
+                            session_log!(
+                                self,
+                                error,
+                                &accepted,
+                                "failed to register connection, fsm transition to idle";
+                                "error" => format!("{e}")
+                            );
+                            return FsmState::Idle;
+                        }
 
-                        conn_timer!(accepted, hold).restart();
+                        conn_timer!(&accepted, hold).restart();
 
                         return FsmState::OpenSent(accepted);
                     }
@@ -2265,7 +2524,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Waiting for open message from peer.
-    fn fsm_open_sent(&self, conn: Cnx) -> FsmState<Cnx> {
+    fn fsm_open_sent(&self, conn: Arc<Cnx>) -> FsmState<Cnx> {
         let om = loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
@@ -2430,13 +2689,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                      */
                     SessionEvent::TcpConnectionAcked(new)
                     | SessionEvent::TcpConnectionConfirmed(new) => {
+                        let new = Arc::new(new);
                         let new_direction = new.direction();
                         if new_direction == conn.direction() {
                             collision_log!(
                                 self,
                                 error,
-                                new,
-                                conn,
+                                &new,
+                                &conn,
                                 "rejected new {new_direction} connection ({}): multiple {new_direction} connections not allowed",
                                 new.id().short()
                             );
@@ -2448,8 +2708,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 collision_log!(
                                     self,
                                     info,
-                                    new,
-                                    conn,
+                                    &new,
+                                    &conn,
                                     "collision detected: new inbound connection from {} (conn_id: {})",
                                     new.peer(),
                                     new.id().short()
@@ -2462,8 +2722,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 collision_log!(
                                     self,
                                     info,
-                                    new,
-                                    conn,
+                                    &new,
+                                    &conn,
                                     "collision detected: outbound connection to {} (conn_id: {}) completed",
                                     new.peer(),
                                     new.id().short()
@@ -2478,8 +2738,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             collision_log!(
                                 self,
                                 error,
-                                new,
-                                conn,
+                                &new,
+                                &conn,
                                 "error sending open to new conn, continue with open conn";
                                 "error" => format!("{e}")
                             );
@@ -2491,9 +2751,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             continue;
                         }
 
-                        self.register_conn(&new);
+                        if let Err(e) = self.register_conn(Arc::clone(&new)) {
+                            collision_log!(
+                                self,
+                                error,
+                                &new,
+                                &conn,
+                                "failed to register new connection in collision, stopping new conn";
+                                "error" => format!("{e}")
+                            );
+                            self.stop(Some(&new), None, StopReason::IoError);
+                            continue;
+                        }
 
-                        conn_timer!(new, hold).restart();
+                        conn_timer!(&new, hold).restart();
 
                         return FsmState::ConnectionCollision(
                             CollisionPair::OpenSent(conn, new),
@@ -2822,7 +3093,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             caps: om.get_capabilities(),
         };
 
-        self.set_primary_conn(Some(ConnectionKind::Full(pc.clone())));
+        // Upgrade this connection from Partial to Full in the registry
+        lock!(self.connection_registry).upgrade_to_full(pc.clone());
 
         FsmState::OpenConfirm(pc)
     }
@@ -3184,13 +3456,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  */
                 SessionEvent::TcpConnectionAcked(new)
                 | SessionEvent::TcpConnectionConfirmed(new) => {
+                    let new = Arc::new(new);
                     let new_direction = new.direction();
                     if new_direction == pc.conn.direction() {
                         collision_log!(
                             self,
                             error,
-                            new,
-                            pc.conn,
+                            &new,
+                            &pc.conn,
                             "rejected new {new_direction} connection ({}): multiple {new_direction} connections not allowed",
                             new.id().short()
                         );
@@ -3202,8 +3475,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             collision_log!(
                                 self,
                                 info,
-                                new,
-                                pc.conn,
+                                &new,
+                                &pc.conn,
                                 "collision detected: new inbound connection from {} (conn_id: {})",
                                 new.peer(),
                                 new.id().short()
@@ -3216,8 +3489,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             collision_log!(
                                 self,
                                 info,
-                                new,
-                                pc.conn,
+                                &new,
+                                &pc.conn,
                                 "collision detected: outbound connection to {} (conn_id: {}) completed",
                                 new.peer(),
                                 new.id().short()
@@ -3229,7 +3502,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
 
                     if let Err(e) = self.send_open(&new) {
-                        collision_log!(self, error, new, pc.conn,
+                        collision_log!(self, error, &new, &pc.conn,
                             "error sending open to new conn, continue with open conn";
                             "error" => format!("{e}")
                         );
@@ -3240,9 +3513,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::OpenConfirm(pc);
                     }
 
-                    self.register_conn(&new);
+                    if let Err(e) = self.register_conn(Arc::clone(&new)) {
+                        collision_log!(
+                            self,
+                            error,
+                            &new,
+                            &pc.conn,
+                            "failed to register new connection in collision, stopping new conn";
+                            "error" => format!("{e}")
+                        );
+                        self.stop(Some(&new), None, StopReason::IoError);
+                        return FsmState::OpenConfirm(pc);
+                    }
 
-                    conn_timer!(new, hold).restart();
+                    conn_timer!(&new, hold).restart();
 
                     FsmState::ConnectionCollision(CollisionPair::OpenConfirm(
                         pc, new,
@@ -3349,7 +3633,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn connection_collision_open_confirm(
         self: &Arc<Self>,
         exist: PeerConnection<Cnx>,
-        new: Cnx,
+        new: Arc<Cnx>,
     ) -> FsmState<Cnx> {
         let om = loop {
             // Check to see if a shutdown has been requested.
@@ -3992,9 +4276,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 conn_timer!(exist.conn, keepalive).restart();
                 self.send_keepalive(&exist.conn);
 
-                self.set_primary_conn(Some(ConnectionKind::Full(
-                    exist.clone(),
-                )));
+                // Upgrade existing connection from Partial to Full in the registry
+                lock!(self.connection_registry).upgrade_to_full(exist.clone());
 
                 FsmState::OpenConfirm(exist)
             }
@@ -4032,9 +4315,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 conn_timer!(new_pc.conn, keepalive).restart();
                 self.send_keepalive(&new_pc.conn);
 
-                self.set_primary_conn(Some(ConnectionKind::Full(
-                    new_pc.clone(),
-                )));
+                // Upgrade new connection from Partial to Full in the registry
+                lock!(self.connection_registry).upgrade_to_full(new_pc.clone());
 
                 FsmState::OpenConfirm(new_pc)
             }
@@ -4075,8 +4357,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// OpenConfirm).
     fn connection_collision_open_sent(
         self: &Arc<Self>,
-        exist: Cnx,
-        new: Cnx,
+        exist: Arc<Cnx>,
+        new: Arc<Cnx>,
     ) -> FsmState<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
@@ -4334,7 +4616,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 .connection_retries
                                                 .fetch_add(1, Ordering::Relaxed);
                                             self.stop(Some(&exist), None, StopReason::FsmError);
-                                            self.set_primary_conn(Some(ConnectionKind::Partial(new.clone())));
                                             return FsmState::OpenSent(new);
                                         }
 
@@ -4367,7 +4648,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     caps: om.get_capabilities(),
                                                 };
 
-                                                self.set_primary_conn(Some(ConnectionKind::Full(exist_pc.clone())));
+                                                // Upgrade existing connection from Partial to Full in the registry
+                                                lock!(self.connection_registry).upgrade_to_full(exist_pc.clone());
 
                                                 self.send_keepalive(&exist_pc.conn);
                                                 return FsmState::OpenConfirm(exist_pc);
@@ -4388,7 +4670,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     .connection_retries
                                                     .fetch_add(1, Ordering::Relaxed);
 
-                                                self.set_primary_conn(Some(ConnectionKind::Partial(new.clone())));
                                                 return FsmState::OpenSent(new);
                                             }
                                         }
@@ -4410,7 +4691,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         self.connect_retry_counter
                                             .fetch_add(1, Ordering::Relaxed);
 
-                                        self.set_primary_conn(Some(ConnectionKind::Partial(new.clone())));
                                         return FsmState::OpenSent(new);
                                     }
                                 },
@@ -4442,7 +4722,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 .connection_retries
                                                 .fetch_add(1, Ordering::Relaxed);
                                             self.stop(Some(&new), None, StopReason::FsmError);
-                                            self.set_primary_conn(Some(ConnectionKind::Partial(exist.clone())));
                                             return FsmState::OpenSent(exist);
                                         }
 
@@ -4479,7 +4758,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     .connection_retries
                                                     .fetch_add(1, Ordering::Relaxed);
 
-                                                self.set_primary_conn(Some(ConnectionKind::Partial(exist.clone())));
                                                 return FsmState::OpenSent(exist);
                                             }
                                             CollisionResolution::NewWins => {
@@ -4503,7 +4781,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 conn_timer!(new, hold).restart();
                                                 conn_timer!(new, keepalive).restart();
 
-                                                self.set_primary_conn(Some(ConnectionKind::Full(new_pc.clone())));
+                                                // Upgrade new connection from Partial to Full in the registry
+                                                lock!(self.connection_registry).upgrade_to_full(new_pc.clone());
 
                                                 self.send_keepalive(&new_pc.conn);
 
@@ -4528,7 +4807,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         self.connect_retry_counter
                                             .fetch_add(1, Ordering::Relaxed);
 
-                                        self.set_primary_conn(Some(ConnectionKind::Partial(exist.clone())));
                                         return FsmState::OpenSent(exist);
                                     }
                                 },
@@ -4572,7 +4850,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "event" => title
                                     );
                                     self.stop(Some(&new), None, StopReason::HoldTimeExpired);
-                                    self.set_primary_conn(Some(ConnectionKind::Partial(exist.clone())));
                                     return FsmState::OpenSent(exist);
                                 },
 
@@ -4590,7 +4867,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "event" => title
                                     );
                                     self.stop(Some(&exist), None, StopReason::HoldTimeExpired);
-                                    self.set_primary_conn(Some(ConnectionKind::Partial(new.clone())));
                                     return FsmState::OpenSent(new);
                                 },
 
@@ -4645,7 +4921,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "event" => title
                                     );
                                     self.stop(Some(&new), None, StopReason::FsmError);
-                                    self.set_primary_conn(Some(ConnectionKind::Partial(exist.clone())));
                                     return FsmState::OpenSent(exist);
                                 },
 
@@ -4659,7 +4934,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         "event" => title
                                     );
                                     self.stop(Some(&exist), None, StopReason::FsmError);
-                                    self.set_primary_conn(Some(ConnectionKind::Partial(new.clone())));
                                     return FsmState::OpenSent(new);
                                 },
 
@@ -5389,11 +5663,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             conn_timer!(new_pc.conn, keepalive)
                                                 .restart();
                                             self.send_keepalive(&new_pc.conn);
-                                            self.set_primary_conn(Some(
-                                                ConnectionKind::Full(
+
+                                            // Upgrade new connection from
+                                            // Partial to Full in the registry
+                                            lock!(self.connection_registry)
+                                                .upgrade_to_full(
                                                     new_pc.clone(),
-                                                ),
-                                            ));
+                                                );
 
                                             return FsmState::SessionSetup(
                                                 new_pc,
@@ -5951,7 +6227,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn is_ebgp(&self) -> Option<bool> {
-        if let Some(ConnectionKind::Full(ref pc)) = *lock!(self.primary) {
+        // Query the registry's primary connection
+        if let Some(ConnectionKind::Full(pc)) =
+            lock!(self.connection_registry).primary()
+        {
             if pc.asn != self.asn.as_u32() {
                 return Some(true);
             } else {
@@ -5962,7 +6241,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn is_ibgp(&self) -> Option<bool> {
-        if let Some(ConnectionKind::Full(ref pc)) = *lock!(self.primary) {
+        // Query the registry's primary connection
+        if let Some(ConnectionKind::Full(pc)) =
+            lock!(self.connection_registry).primary()
+        {
             if pc.asn == self.asn.as_u32() {
                 return Some(true);
             } else {
@@ -6677,7 +6959,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Return the learned remote ASN of the peer (if any).
     pub fn remote_asn(&self) -> Option<u32> {
-        if let Some(ConnectionKind::Full(ref pc)) = *lock!(self.primary) {
+        // Query the registry's primary connection
+        if let Some(ConnectionKind::Full(pc)) =
+            lock!(self.connection_registry).primary()
+        {
             return Some(pc.asn);
         }
         None
@@ -6843,6 +7128,25 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         Ok(reset_needed)
+    }
+
+    /// Get all registered connections
+    pub fn all_connections(&self) -> Vec<ConnectionKind<Cnx>> {
+        lock!(self.connection_registry)
+            .all_connections()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Get the primary (actively managed) connection, if one exists
+    pub fn primary_connection(&self) -> Option<ConnectionKind<Cnx>> {
+        lock!(self.connection_registry).primary().cloned()
+    }
+
+    /// Get the number of connections owned by this SessionRunner
+    pub fn connection_count(&self) -> u8 {
+        lock!(self.connection_registry).count()
     }
 }
 

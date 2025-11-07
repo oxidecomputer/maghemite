@@ -10,7 +10,8 @@ use crate::{
     dispatcher::Dispatcher,
     router::Router,
     session::{
-        AdminEvent, FsmEvent, FsmStateKind, SessionEndpoint, SessionInfo,
+        AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, SessionEndpoint,
+        SessionInfo,
     },
 };
 use lazy_static::lazy_static;
@@ -105,7 +106,7 @@ fn test_setup<Cnx, Listener>(
     routers: &[LogicalRouter],
 ) -> (Vec<TestRouter<Cnx>>, Option<IpAllocation>)
 where
-    Cnx: BgpConnection + Clone + Send + 'static,
+    Cnx: BgpConnection + Send + 'static,
     Listener: BgpListener<Cnx> + 'static,
 {
     std::fs::create_dir_all("/tmp").expect("create tmp dir");
@@ -307,6 +308,50 @@ fn basic_peering_helper<
     // established state on both sides.
     wait_for_eq!(r1_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    // Verify Arc-based connection query API
+    // Both sessions should report exactly 1 active connection
+    assert_eq!(
+        r1_session.connection_count(),
+        1,
+        "r1 should have 1 active connection"
+    );
+
+    assert_eq!(
+        r2_session.connection_count(),
+        1,
+        "r2 should have 1 active connection"
+    );
+
+    // Verify primary connection exists and directions are opposite
+    let r1_primary = r1_session.primary_connection();
+    assert!(r1_primary.is_some(), "r1 should have primary connection");
+    let r1_dir = match &r1_primary.unwrap() {
+        ConnectionKind::Full(pc) => pc.conn.direction(),
+        ConnectionKind::Partial(c) => c.direction(),
+    };
+
+    let r2_primary = r2_session.primary_connection();
+    assert!(r2_primary.is_some(), "r2 should have primary connection");
+    let r2_dir = match &r2_primary.unwrap() {
+        ConnectionKind::Full(pc) => pc.conn.direction(),
+        ConnectionKind::Partial(c) => c.direction(),
+    };
+
+    // One should be Outbound and one Inbound (they're using same physical connection)
+    assert_ne!(r1_dir, r2_dir, "Connection directions should be opposite");
+
+    // Verify all_connections contains single connection in both sessions
+    assert_eq!(
+        r1_session.connection_count(),
+        1,
+        "r1 should have exactly 1 connection"
+    );
+    assert_eq!(
+        r2_session.connection_count(),
+        1,
+        "r2 should have exactly 1 connection"
+    );
 
     // Shut down r2 and ensure that r2's peer session has gone back to idle.
     r2.shutdown();

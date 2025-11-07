@@ -2,18 +2,22 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::clock::ConnectionClock;
-use crate::error::Error;
-use crate::messages::Message;
-use crate::session::{FsmEvent, SessionEndpoint, SessionInfo};
+use crate::{
+    clock::ConnectionClock,
+    error::Error,
+    messages::Message,
+    session::{FsmEvent, SessionEndpoint, SessionInfo},
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
-use std::collections::BTreeMap;
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    collections::BTreeMap,
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    sync::{Arc, Mutex, mpsc::Sender},
+    thread::JoinHandle,
+    time::Duration,
+};
 use uuid::Uuid;
 
 #[cfg(target_os = "linux")]
@@ -153,7 +157,7 @@ pub trait BgpConnector<Cnx: BgpConnection> {
         log: Logger,
         event_tx: Sender<FsmEvent<Cnx>>,
         config: SessionInfo,
-    ) -> Result<std::thread::JoinHandle<()>, Error>
+    ) -> Result<JoinHandle<()>, Error>
     where
         Self: Sized;
 }
@@ -174,7 +178,7 @@ pub trait BgpConnector<Cnx: BgpConnection> {
 /// created. It must be explicitly started by calling `start_recv_loop()`.
 /// This allows the SessionRunner to complete connection registration before
 /// any messages can be received, preventing race conditions.
-pub trait BgpConnection: Send + Clone {
+pub trait BgpConnection: Send + Sync + Sized {
     /// The type of connector used to establish outbound connections for this
     /// connection type.
     type Connector: BgpConnector<Self>;
@@ -201,14 +205,48 @@ pub trait BgpConnection: Send + Clone {
     fn clock(&self) -> &ConnectionClock;
 
     /// Start the receive loop for this connection. This method is idempotent.
-    fn start_recv_loop(&self);
+    /// Returns Ok(()) upon successful start of recv loop, else Err.
+    fn start_recv_loop(self: &Arc<Self>) -> Result<(), Error>;
 }
 
-/// Explicit state machine for lifecycle of a BgpConnection's recv loop.
-pub enum RecvLoopState<P> {
-    /// Connection created but recv loop not started
-    Ready(P),
+/// Status of a BgpConnection's receive loop.
+#[derive(Debug)]
+pub enum RecvLoopState {
+    /// Recv loop has not been started yet
+    Ready,
+    /// Recv loop is running with the given thread handle
+    Running(JoinHandle<()>),
+}
 
-    /// Recv loop started (thread is detached, not tracked)
-    Started,
+impl RecvLoopState {
+    /// Create a new recv loop state in the Ready state
+    pub fn new() -> Self {
+        RecvLoopState::Ready
+    }
+
+    /// Check if the recv loop is ready to start
+    pub fn is_ready(&self) -> bool {
+        matches!(self, RecvLoopState::Ready)
+    }
+
+    /// Check if the recv loop is currently running
+    pub fn is_running(&self) -> bool {
+        matches!(self, RecvLoopState::Running(_))
+    }
+
+    /// Transition from Ready to Running with the given handle.
+    /// Idempotent: if already in Running state, the new handle is dropped and no error is returned.
+    /// This allows safe repeated calls without error handling.
+    pub fn start(&mut self, handle: JoinHandle<()>) {
+        if self.is_ready() {
+            *self = RecvLoopState::Running(handle);
+        }
+        // If already running, the new handle is dropped, terminating the thread immediately
+    }
+}
+
+impl Default for RecvLoopState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
