@@ -3,7 +3,6 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{
-    IO_TIMEOUT,
     clock::SessionClock,
     config::PeerConfig,
     connection::{
@@ -19,6 +18,7 @@ use crate::{
         UpdateMessage,
     },
     policy::{CheckerResult, ShaperResult},
+    recv_event_loop, recv_event_return,
     router::Router,
 };
 use mg_common::{lock, read_lock, write_lock};
@@ -35,7 +35,6 @@ use std::{
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::RecvTimeoutError,
     },
     time::{Duration, Instant},
 };
@@ -1563,30 +1562,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
-                Ok(event) => {
-                    session_log_lite!(
-                        self,
-                        debug,
-                        "received fsm event {}",
-                        event.title();
-                        "event" => event.title()
-                    );
-                    event
-                }
-
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-
-                Err(e) => {
-                    session_log_lite!(
-                        self,
-                        error,
-                        "event rx error: {e}";
-                        "error" => format!("{e}")
-                    );
-                    continue;
-                }
-            };
+            let event = recv_event_loop!(self, self.event_rx, lite);
 
             // The only events we react to are ManualStart, Reset and
             // IdleHoldTimerExpires. ManualStart and Reset are explicit requests
@@ -1806,31 +1782,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
-                Ok(event) => {
-                    session_log_lite!(
-                        self,
-                        debug,
-                        "received fsm event {}",
-                        event.title();
-                        "event" => event.title()
-                    );
-                    event
-                }
-
-                Err(RecvTimeoutError::Timeout) => continue,
-
-                Err(e) => {
-                    session_log_lite!(
-                        self,
-                        error,
-                        "event rx error: {e}";
-                        "error" => format!("{e}")
-                    );
-                    // TODO: Possible death loop. Should we just panic here?
-                    continue;
-                }
-            };
+            let event = recv_event_loop!(self, self.event_rx, lite);
 
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
@@ -2145,25 +2097,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
-                Ok(event) => {
-                    session_log_lite!(self, debug, "received fsm event {}",
-                        self.state();
-                        "event" => event.title()
-                    );
-                    event
-                }
-
-                Err(RecvTimeoutError::Timeout) => continue,
-
-                Err(e) => {
-                    session_log_lite!(self, error, "event rx error: {e}";
-                        "error" => format!("{e}")
-                    );
-                    // TODO: Possible death loop. Should we just panic here?
-                    continue;
-                }
-            };
+            let event = recv_event_loop!(self, self.event_rx, lite);
 
             // The Dispatcher thread is running independently and will hand off
             // any inbound connections via a Connected event. So pretty much all
@@ -2531,32 +2465,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
-                Ok(event) => {
-                    session_log!(
-                        self,
-                        debug,
-                        conn,
-                        "received fsm event {}",
-                        event.title();
-                        "event" => event.title()
-                    );
-                    event
-                }
-
-                Err(RecvTimeoutError::Timeout) => continue,
-
-                Err(e) => {
-                    session_log!(
-                        self,
-                        error,
-                        conn,
-                        "event rx error: {e}";
-                        "error" => format!("{e}")
-                    );
-                    continue;
-                }
-            };
+            let event = recv_event_loop!(self, self.event_rx, conn, conn);
 
             // The main thing we really care about in the open sent state is
             // receiving a reciprocal open message from the peer.
@@ -3106,32 +3015,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return FsmState::Idle;
         }
 
-        let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
-            Ok(event) => {
-                session_log!(
-                    self,
-                    debug,
-                    pc.conn,
-                    "received fsm event";
-                    "event" => event.title()
-                );
-                event
-            }
-
-            Err(RecvTimeoutError::Timeout) => return FsmState::OpenConfirm(pc),
-
-            Err(e) => {
-                session_log!(
-                    self,
-                    error,
-                    pc.conn,
-                    "event rx error: {e}";
-                    "error" => format!("{e}")
-                );
-                //TODO possible death loop. Should we just panic here?
-                return FsmState::OpenConfirm(pc);
-            }
-        };
+        let event = recv_event_return!(
+            self,
+            self.event_rx,
+            FsmState::OpenConfirm(pc),
+            pc.conn
+        );
 
         match event {
             FsmEvent::Admin(admin_event) => match admin_event {
@@ -3641,34 +3530,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
-                Ok(event) => {
-                    collision_log!(
-                        self,
-                        debug,
-                        new,
-                        exist.conn,
-                        "received fsm event {}", event.title();
-                        "event" => event.title()
-                    );
-                    event
-                }
-
-                Err(RecvTimeoutError::Timeout) => continue,
-
-                Err(e) => {
-                    collision_log!(
-                        self,
-                        error,
-                        new,
-                        exist.conn,
-                        "event rx error for ({e}), fsm transition to idle";
-                        "error" => format!("{e}")
-                    );
-                    //TODO possible death loop. Should we just panic here?
-                    continue;
-                }
-            };
+            let event = recv_event_loop!(
+                self,
+                self.event_rx,
+                collision,
+                new,
+                exist.conn
+            );
 
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
@@ -4366,35 +4234,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 return FsmState::Idle;
             }
 
-            let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
-                Ok(event) => {
-                    collision_log!(
-                        self,
-                        debug,
-                        new,
-                        exist,
-                        "received fsm event {}",
-                        event.title();
-                        "event" => event.title()
-                    );
-                    event
-                }
-
-                Err(RecvTimeoutError::Timeout) => continue,
-
-                Err(e) => {
-                    collision_log!(
-                        self,
-                        error,
-                        new,
-                        exist,
-                        "event rx error for ({e}), fsm transition to idle";
-                        "error" => format!("{e}")
-                    );
-                    //TODO possible death loop. Should we just panic here?
-                    continue;
-                }
-            };
+            let event =
+                recv_event_loop!(self, self.event_rx, collision, new, exist);
 
             match event {
                 FsmEvent::Admin(admin_event) => match admin_event {
@@ -5096,34 +4937,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return self.exit_established(pc);
         }
 
-        let event = match self.event_rx.recv_timeout(IO_TIMEOUT) {
-            Ok(event) => {
-                session_log!(
-                    self,
-                    debug,
-                    pc.conn,
-                    "received fsm event";
-                    "event" => event.title()
-                );
-                event
-            }
-
-            Err(RecvTimeoutError::Timeout) => return FsmState::Established(pc),
-
-            Err(e) => {
-                //TODO possible death loop. Should we just panic here? Is it
-                // even possible to recover from an error here as it likely
-                // means the channel is toast.
-                session_log!(
-                    self,
-                    error,
-                    pc.conn,
-                    "event rx error: {e}";
-                    "error" => format!("{e}")
-                );
-                return FsmState::Established(pc);
-            }
-        };
+        let event = recv_event_return!(
+            self,
+            self.event_rx,
+            FsmState::Established(pc),
+            pc.conn
+        );
         match event {
             FsmEvent::Admin(admin_event) => match admin_event {
                 AdminEvent::ManualStop => {
