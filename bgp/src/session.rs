@@ -1279,9 +1279,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             let mut handle_guard = lock!(self.connector_handle);
 
             if let Some(old_handle) = handle_guard.take() {
-                // Check if thread is still running
+                // If thread is still running, put the handle back. Don't spawn.
                 if !old_handle.is_finished() {
-                    // Thread still running, put handle back and skip spawn
+                    // The only time we should realistically expect to encounter
+                    // this is if the FSM has made a trip back through Idle and
+                    // is transitioning into Connect before ConnectRetryTimer
+                    // pops. The FSM moves to Idle upon an Error or an admin
+                    // event. Once there, it transitions to Connect upon another
+                    // admin event or when IdleHoldTimer pops.
+                    // i.e.
+                    // We should only expect to hit this condition if:
+                    // 1. Connection is not passive (Connector is irrelevant for
+                    //    passive connections)
+                    // 2. Connector thread is started
+                    // 3. FSM transitions to Idle
+                    // 4. IdleHoldTimerExpires or admin event pushes FSM out
+                    //    of Idle
+                    // 5. Connector thread is still running
                     *handle_guard = Some(old_handle);
                     session_log_lite!(
                         self,
@@ -1294,10 +1308,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 // Thread finished, join to check for panics
                 self.join_connector_thread(old_handle, "checking previous");
             }
-            // Lock is released here at end of scope
+            // release lock before calling connect
         }
 
-        // Spawn new connector with NO locks held (critical for avoiding deadlock)
         let handle = match Cnx::Connector::connect(
             self.neighbor.host,
             timeout,
@@ -1658,7 +1671,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         continue;
                     }
 
-                    // Event 9
+                    // RFC 4271 FSM Event 9
                     SessionEvent::ConnectRetryTimerExpires => {
                         if !session_timer!(self, connect_retry).enabled() {
                             continue;
@@ -1887,8 +1900,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                          *   - sets the HoldTimer to a large value, and
                          *
                          *   - changes its state to OpenSent.
-                         *
-                         * A HoldTimer value of 4 minutes is suggested.
                          */
                         SessionEvent::TcpConnectionAcked(accepted)
                         | SessionEvent::TcpConnectionConfirmed(accepted) => {
@@ -1948,7 +1959,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             return FsmState::OpenSent(accepted);
                         }
 
-                        // Event 13
+                        // RFC 4271 FSM Event 13
                         SessionEvent::IdleHoldTimerExpires => {
                             if !session_timer!(self, idle_hold).enabled() {
                                 continue;
@@ -2269,7 +2280,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             return FsmState::Idle;
                         }
 
-                        // Event 11
+                        // RFC 4271 FSM Event 11
                         ConnectionEvent::KeepaliveTimerExpires(ref conn_id) => {
                             let Some(conn) = self.get_conn(conn_id) else {
                                 continue;
@@ -2555,7 +2566,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  *   - changes its state to Idle.
                  */
                 FsmEvent::Session(session_event) => match session_event {
-                    // Event 9
+                    // RFC 4271 FSM Event 9
                     SessionEvent::ConnectRetryTimerExpires => {
                         if !session_timer!(self, connect_retry).enabled() {
                             continue;
@@ -2572,7 +2583,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Idle;
                     }
 
-                    // Event 13
+                    // RFC 4271 FSM Event 13
                     SessionEvent::IdleHoldTimerExpires => {
                         if !session_timer!(self, idle_hold).enabled() {
                             continue;
@@ -2612,31 +2623,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             continue;
                         }
 
+                        collision_log!(
+                            self,
+                            info,
+                            &new,
+                            &conn,
+                            "collision detected: new {new_direction} connection from {} (conn_id: {})",
+                            new.peer(),
+                            new.id().short()
+                        );
+
                         match new_direction {
                             ConnectionDirection::Inbound => {
-                                collision_log!(
-                                    self,
-                                    info,
-                                    &new,
-                                    &conn,
-                                    "collision detected: new inbound connection from {} (conn_id: {})",
-                                    new.peer(),
-                                    new.id().short()
-                                );
                                 self.counters
                                     .passive_connections_accepted
                                     .fetch_add(1, Ordering::Relaxed);
                             }
                             ConnectionDirection::Outbound => {
-                                collision_log!(
-                                    self,
-                                    info,
-                                    &new,
-                                    &conn,
-                                    "collision detected: outbound connection to {} (conn_id: {}) completed",
-                                    new.peer(),
-                                    new.id().short()
-                                );
                                 self.counters
                                     .active_connections_accepted
                                     .fetch_add(1, Ordering::Relaxed);
@@ -2718,9 +2721,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 }
                             };
 
-                            // Event 19 (BgpOpen)
+                            // RFC 4271 FSM Event 19
                             if let Message::Open(om) = msg {
-                                // Event 20 (BGPOpen with DelayOpenTimer running)
                                 lock!(self.message_history)
                                     .receive(om.clone().into(), *conn_id);
                                 self.counters
@@ -2822,7 +2824,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             return FsmState::Idle;
                         }
 
-                        // Event 11
+                        // RFC 4271 FSM Event 11
                         ConnectionEvent::KeepaliveTimerExpires(ref conn_id) => {
                             if !conn_timer!(conn, keepalive).enabled() {
                                 continue;
@@ -2867,7 +2869,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             return FsmState::Idle;
                         }
 
-                        // Event 12
+                        // RFC 4271 FSM Event 12
                         ConnectionEvent::DelayOpenTimerExpires(ref conn_id) => {
                             if !conn_timer!(conn, delay_open).enabled() {
                                 continue;
@@ -3201,7 +3203,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     FsmState::OpenConfirm(pc)
                 }
 
-                // Event 12
+                // RFC 4271 FSM Event 12
                 ConnectionEvent::DelayOpenTimerExpires(_conn_id) => {
                     if !conn_timer!(pc.conn, delay_open).enabled() {
                         return FsmState::OpenConfirm(pc);
@@ -3303,7 +3305,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             },
 
             FsmEvent::Session(session_event) => match session_event {
-                // Event 9
+                // RFC 4271 FSM Event 9
                 SessionEvent::ConnectRetryTimerExpires => {
                     if !session_timer!(self, connect_retry).enabled() {
                         return FsmState::OpenConfirm(pc);
@@ -3320,7 +3322,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     FsmState::Idle
                 }
 
-                // Event 13
+                // RFC 4271 FSM Event 13
                 SessionEvent::IdleHoldTimerExpires => {
                     if !session_timer!(self, idle_hold).enabled() {
                         return FsmState::OpenConfirm(pc);
@@ -3594,7 +3596,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 },
 
                 FsmEvent::Session(session_event) => match session_event {
-                    // Event 9
+                    // RFC 4271 FSM Event 9
                     SessionEvent::ConnectRetryTimerExpires => {
                         if !session_timer!(self, connect_retry).enabled() {
                             continue;
@@ -3616,7 +3618,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Idle;
                     }
 
-                    // Event 13
+                    // RFC 4271 FSM Event 13
                     SessionEvent::IdleHoldTimerExpires => {
                         if !session_timer!(self, idle_hold).enabled() {
                             continue;
@@ -3849,7 +3851,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             }
                         }
 
-                        // Event 12
+                        // RFC 4271 FSM Event 12
                         ConnectionEvent::DelayOpenTimerExpires(ref conn_id) => {
                             match self.collision_conn_kind(
                                 conn_id,
@@ -4310,7 +4312,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  *   - changes its state to Idle.
                  */
                 FsmEvent::Session(session_event) => match session_event {
-                    // Event 9
+                    // RFC 4271 FSM Event 9
                     SessionEvent::ConnectRetryTimerExpires => {
                         if !session_timer!(self, connect_retry).enabled() {
                             continue;
@@ -4332,7 +4334,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Idle;
                     }
 
-                    // Event 13
+                    // RFC 4271 FSM Event 13
                     SessionEvent::IdleHoldTimerExpires => {
                         if !session_timer!(self, idle_hold).enabled() {
                             continue;
@@ -4436,7 +4438,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                                 CollisionConnectionKind::Exist => {
                                     if let Message::Open(om) = msg {
-                                        // Event 19
+                                        // RFC 4271 FSM Event 19
                                         lock!(self.message_history).receive(
                                             om.clone().into(),
                                             *conn_id,
@@ -4538,7 +4540,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                                 CollisionConnectionKind::New => {
                                     if let Message::Open(om) = msg {
-                                        // Event 19
+                                        // RFC 4271 FSM Event 19
                                         lock!(self.message_history).receive(
                                             om.clone().into(),
                                             *conn_id,
@@ -4741,11 +4743,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                         }
 
-                        // Event 11
+                        // RFC 4271 FSM Event 11
                         ConnectionEvent::KeepaliveTimerExpires(
                             conn_id,
                         )
-                        // Event 12
+                        // RFC 4271 FSM Event 12
                         | ConnectionEvent::DelayOpenTimerExpires(
                             conn_id,
                         ) => {
@@ -6146,9 +6148,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .push(PathAttributeValue::MultiExitDisc(med).into());
         }
 
-        if let Some(ibgp) = self.is_ibgp()
-            && ibgp
-        {
+        if self.is_ibgp().unwrap_or(false) {
             update.path_attributes.push(
                 PathAttributeValue::LocalPref(
                     lock!(self.session).local_pref.unwrap_or(0),
@@ -6313,6 +6313,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
+    /// Helper method to centralize the cleanup process for connections needing
+    /// to be stopped. When looking at the FSM description in RFC 4271, there
+    /// are a lot of commonalities as to what items need to be updated upon a
+    /// given error condition, regardless of what FSM state that error condition
+    /// was encountered in. This method is intended to centralize many of these
+    /// situations into a single location. The StopReason enum is used to
+    /// indicate which condition was encountered so we know what set of items
+    /// need to be updated.
     fn stop(
         &self,
         conn1: Option<&Cnx>,
@@ -6669,9 +6677,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn apply_static_update_policy(&self, update: &mut UpdateMessage) {
-        if let Some(ebgp) = self.is_ebgp()
-            && ebgp
-        {
+        if self.is_ebgp().unwrap_or(false) {
             update.clear_local_pref()
         }
         if let Some(pref) = lock!(self.session).local_pref {
