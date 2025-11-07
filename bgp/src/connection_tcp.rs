@@ -27,8 +27,8 @@ use std::{
     net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::atomic::AtomicBool,
     sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
-    thread::{JoinHandle, spawn},
-    time::Duration,
+    thread::{JoinHandle, sleep, spawn},
+    time::{Duration, Instant},
 };
 
 const UNIT_CONNECTION: &str = "connection_tcp";
@@ -105,38 +105,52 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         >,
         timeout: Duration,
     ) -> Result<BgpConnectionTcp, Error> {
-        let (conn, mut peer) = self.listener.accept().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::WouldBlock {
-                Error::Timeout
-            } else {
-                e.into()
-            }
-        })?;
+        let start = Instant::now();
+        let retry_interval = Duration::from_millis(10);
 
-        // Get the actual socket addresses for this accepted connection.
-        // This is critical for dual-stack scenarios where the listener may bind
-        // to an IPv6 address but accept IPv4 connections (via IPv4-mapped IPv6).
-        let ip = peer.ip().to_canonical();
-        peer.set_ip(ip);
-        let mut local = conn.local_addr()?;
-        local.set_ip(local.ip().to_canonical());
+        loop {
+            match self.listener.accept() {
+                Ok((conn, mut peer)) => {
+                    // Get the actual socket addresses for this accepted
+                    // connection. This is critical for dual-stack scenarios
+                    // where the listener may bind to an IPv6 address but accept
+                    // IPv4 connections (via IPv4-mapped IPv6).
+                    let ip = peer.ip().to_canonical();
+                    peer.set_ip(ip);
+                    let mut local = conn.local_addr()?;
+                    local.set_ip(local.ip().to_canonical());
 
-        // Check if we have a session for this peer
-        match lock!(addr_to_session).get(&ip) {
-            Some(session_endpoint) => {
-                let config = lock!(session_endpoint.config);
-                BgpConnectionTcp::with_conn(
-                    local,
-                    peer,
-                    conn,
-                    timeout,
-                    session_endpoint.event_tx.clone(),
-                    log,
-                    ConnectionDirection::Inbound,
-                    &config,
-                )
+                    // Check if we have a session for this peer
+                    match lock!(addr_to_session).get(&ip) {
+                        Some(session_endpoint) => {
+                            let config = lock!(session_endpoint.config);
+                            return BgpConnectionTcp::with_conn(
+                                local,
+                                peer,
+                                conn,
+                                timeout,
+                                session_endpoint.event_tx.clone(),
+                                log,
+                                ConnectionDirection::Inbound,
+                                &config,
+                            );
+                        }
+                        None => return Err(Error::UnknownPeer(ip)),
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // Check if we've exceeded the timeout
+                    if start.elapsed() >= timeout {
+                        return Err(Error::Timeout);
+                    }
+                    // Sleep briefly before retrying
+                    sleep(retry_interval);
+                    continue;
+                }
+                Err(e) => {
+                    return Err(e.into());
+                }
             }
-            None => Err(Error::UnknownPeer(ip)),
         }
     }
 
