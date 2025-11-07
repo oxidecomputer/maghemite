@@ -6,7 +6,7 @@ use crate::{
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, RecvLoopState,
+        ConnectionId, ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -387,7 +387,7 @@ pub struct BgpConnectionTcp {
     #[cfg(target_os = "illumos")]
     sas: Arc<Mutex<Option<Md5Sas>>>,
     #[cfg(target_os = "illumos")]
-    sa_keepalive_running: Arc<AtomicBool>,
+    md5_sa_state: Mutex<ThreadState>,
     dropped: Arc<AtomicBool>,
     log: Logger,
     // direction of this connection, i.e. BgpListener or BgpConnector
@@ -399,7 +399,7 @@ pub struct BgpConnectionTcp {
     // Read timeout for the recv loop
     recv_timeout: Duration,
     // Typestate managing the recv loop thread lifecycle (Ready or Running)
-    recv_loop_state: Mutex<RecvLoopState>,
+    recv_loop_state: Mutex<ThreadState>,
 }
 
 impl BgpConnection for BgpConnectionTcp {
@@ -515,14 +515,14 @@ impl BgpConnectionTcp {
             log,
             dropped,
             #[cfg(target_os = "illumos")]
-            sa_keepalive_running: Arc::new(AtomicBool::new(false)),
-            #[cfg(target_os = "illumos")]
             sas: Arc::new(Mutex::new(None)),
+            #[cfg(target_os = "illumos")]
+            md5_sa_state: Mutex::new(ThreadState::new()),
             direction,
             connection_clock,
             event_tx,
             recv_timeout: timeout,
-            recv_loop_state: Mutex::new(RecvLoopState::new()),
+            recv_loop_state: Mutex::new(ThreadState::new()),
         })
     }
 
@@ -882,19 +882,18 @@ impl BgpConnectionTcp {
             }
         }
         drop(guard);
-        self.sa_keepalive();
+        self.sa_keepalive()?;
         Ok(())
     }
 
     #[cfg(target_os = "illumos")]
-    fn sa_keepalive(&self) {
+    fn sa_keepalive(&self) -> Result<(), Error> {
         use std::thread::sleep;
 
-        let running = self
-            .sa_keepalive_running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Acquire)
-            .is_err();
-        if running {
+        let mut state = lock!(self.md5_sa_state);
+
+        if !state.is_ready() {
+            // Already running or already attempted
             connection_log!(
                 self,
                 debug,
@@ -902,7 +901,7 @@ impl BgpConnectionTcp {
                 "connection" => format!("{:?}", self.conn()),
                 "dropped" => self.dropped.load(Ordering::Relaxed)
             );
-            return;
+            return Ok(());
         }
 
         // Get one run in before returning, this helps the SAs to
@@ -920,7 +919,7 @@ impl BgpConnectionTcp {
         let log = self.log.clone();
         let sas = self.sas.clone();
         let conn = self.conn();
-        let _ = std::thread::Builder::new().spawn(move || {
+        let handle = std::thread::Builder::new().spawn(move || {
             loop {
                 sleep(PFKEY_KEEPALIVE);
                 if dropped.load(Ordering::Relaxed) {
@@ -928,10 +927,9 @@ impl BgpConnectionTcp {
                 }
                 Self::do_sa_keepalive(&sas, &log, conn);
             }
-        });
-        // Note: We intentionally ignore spawn errors here as the keepalive thread
-        // is a best-effort background task and its failure should not affect the
-        // main connection lifecycle.
+        })?;
+        state.start(handle);
+        Ok(())
     }
 
     #[cfg(target_os = "illumos")]

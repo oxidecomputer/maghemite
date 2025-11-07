@@ -11,7 +11,7 @@ use crate::{
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, RecvLoopState,
+        ConnectionId, ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -205,7 +205,7 @@ pub struct BgpConnectionChannel {
     // Unique identifier for the underlying channel pair (shared by both endpoints)
     channel_id: u64,
     // Typestate managing the recv loop thread lifecycle (Ready or Running)
-    recv_loop_state: Mutex<RecvLoopState>,
+    recv_loop_state: Mutex<ThreadState>,
 }
 
 impl BgpConnection for BgpConnectionChannel {
@@ -320,7 +320,7 @@ impl BgpConnectionChannel {
             event_tx,
             recv_timeout: timeout,
             channel_id,
-            recv_loop_state: Mutex::new(RecvLoopState::new()),
+            recv_loop_state: Mutex::new(ThreadState::new()),
         }
     }
 

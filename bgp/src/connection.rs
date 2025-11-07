@@ -209,29 +209,30 @@ pub trait BgpConnection: Send + Sync + Sized {
     fn start_recv_loop(self: &Arc<Self>) -> Result<(), Error>;
 }
 
-/// Status of a BgpConnection's receive loop.
+/// Status of a managed child thread (e.g., receive loop, MD5 SA keepalive).
+/// Uses typestate pattern to ensure thread lifecycle safety.
 #[derive(Debug)]
-pub enum RecvLoopState {
-    /// Recv loop has not been started yet
+pub enum ThreadState {
+    /// Thread has not been started yet
     Ready,
-    /// Recv loop is running with the given thread handle
+    /// Thread is running with the given handle
     Running(JoinHandle<()>),
 }
 
-impl RecvLoopState {
-    /// Create a new recv loop state in the Ready state
+impl ThreadState {
+    /// Create a new thread state in the Ready state
     pub fn new() -> Self {
-        RecvLoopState::Ready
+        ThreadState::Ready
     }
 
-    /// Check if the recv loop is ready to start
+    /// Check if the thread is ready to start
     pub fn is_ready(&self) -> bool {
-        matches!(self, RecvLoopState::Ready)
+        matches!(self, ThreadState::Ready)
     }
 
-    /// Check if the recv loop is currently running
+    /// Check if the thread is currently running
     pub fn is_running(&self) -> bool {
-        matches!(self, RecvLoopState::Running(_))
+        matches!(self, ThreadState::Running(_))
     }
 
     /// Transition from Ready to Running with the given handle.
@@ -239,13 +240,13 @@ impl RecvLoopState {
     /// This allows safe repeated calls without error handling.
     pub fn start(&mut self, handle: JoinHandle<()>) {
         if self.is_ready() {
-            *self = RecvLoopState::Running(handle);
+            *self = ThreadState::Running(handle);
         }
         // If already running, the new handle is dropped, terminating the thread immediately
     }
 }
 
-impl Default for RecvLoopState {
+impl Default for ThreadState {
     fn default() -> Self {
         Self::new()
     }
