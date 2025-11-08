@@ -45,7 +45,7 @@ use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;
 #[cfg(target_os = "illumos")]
-use std::{collections::HashSet, time::Instant};
+use std::collections::HashSet;
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
@@ -335,8 +335,8 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
 
                 // Setup SA tracking and keepalive for Illumos MD5 (using pre-selected sources)
                 #[cfg(target_os = "illumos")]
-                if let Some((key, locals)) = md5_locals {
-                    if let Err(e) =
+                if let Some((key, locals)) = md5_locals
+                    && let Err(e) =
                         conn.set_md5_security_associations(&key, locals, peer)
                     {
                         connection_log_lite!(log,
@@ -348,7 +348,6 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                         );
                         return;
                     }
-                }
 
                 connection_log_lite!(log,
                     info,
@@ -1077,7 +1076,6 @@ fn set_md5_sig(
 pub struct Md5Sas {
     key: String,
     associations: HashSet<(SocketAddr, SocketAddr)>,
-    create_time: Instant,
 }
 
 #[cfg(target_os = "illumos")]
@@ -1086,7 +1084,6 @@ impl Md5Sas {
         Self {
             key: key.to_owned(),
             associations: HashSet::new(),
-            create_time: Instant::now(),
         }
     }
 }
