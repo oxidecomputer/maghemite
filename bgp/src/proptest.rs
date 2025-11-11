@@ -30,7 +30,7 @@ proptest! {
     /// Property: IPv4 wire format round-trip is identity
     #[test]
     fn prop_ipv4_wire_format_roundtrip(prefix in ipv4_prefix_strategy()) {
-        let wire_bytes = prefix.to_wire().expect("should encode to wire");
+        let wire_bytes = prefix.to_wire();
         let (remaining, decoded) = Prefix4::from_wire(&wire_bytes)
             .expect("should decode from wire");
 
@@ -41,7 +41,7 @@ proptest! {
     /// Property: IPv6 wire format round-trip is identity
     #[test]
     fn prop_ipv6_wire_format_roundtrip(prefix in ipv6_prefix_strategy()) {
-        let wire_bytes = prefix.to_wire().expect("should encode to wire");
+        let wire_bytes = prefix.to_wire();
         let (remaining, decoded) = Prefix6::from_wire(&wire_bytes)
             .expect("should decode from wire");
 

@@ -32,20 +32,22 @@ pub trait BgpWireFormat<T>: Sized {
     type Error;
 
     /// Encode value to wire format bytes.
-    fn to_wire(&self) -> Result<Vec<u8>, Self::Error>;
+    /// This is infallible as it simply formats existing validated data.
+    fn to_wire(&self) -> Vec<u8>;
 
     /// Decode value from wire format, returning (remaining_bytes, value).
+    /// This can fail due to malformed input (bounds checking, invalid values).
     fn from_wire(input: &[u8]) -> Result<(&[u8], T), Self::Error>;
 }
 
 impl BgpWireFormat<Prefix4> for Prefix4 {
     type Error = Error;
 
-    fn to_wire(&self) -> Result<Vec<u8>, Self::Error> {
+    fn to_wire(&self) -> Vec<u8> {
         let mut buf = vec![self.length];
         let n = (self.length as usize).div_ceil(8);
         buf.extend_from_slice(&self.value.octets()[..n]);
-        Ok(buf)
+        buf
     }
 
     fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error> {
@@ -85,14 +87,14 @@ impl BgpWireFormat<Prefix4> for Prefix4 {
 impl BgpWireFormat<Prefix6> for Prefix6 {
     type Error = Error;
 
-    fn to_wire(&self) -> Result<Vec<u8>, Self::Error> {
+    fn to_wire(&self) -> Vec<u8> {
         let mut buf = vec![self.length];
         let n = (self.length as usize).div_ceil(8);
         buf.extend_from_slice(&self.value.octets()[..n]);
-        Ok(buf)
+        buf
     }
 
-    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error> {
+    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Error> {
         if input.is_empty() {
             return Err(Error::TooSmall("prefix length byte missing".into()));
         }
@@ -754,8 +756,8 @@ impl UpdateMessage {
         let mut buf = Vec::new();
         for w in &self.withdrawn {
             let wire_bytes = match w {
-                Prefix::V4(p) => p.to_wire()?,
-                Prefix::V6(p) => p.to_wire()?,
+                Prefix::V4(p) => p.to_wire(),
+                Prefix::V6(p) => p.to_wire(),
             };
             buf.extend_from_slice(&wire_bytes);
         }
@@ -778,8 +780,8 @@ impl UpdateMessage {
             // TODO hacked in ADD_PATH
             //buf.extend_from_slice(&0u32.to_be_bytes());
             let wire_bytes = match n {
-                Prefix::V4(p) => p.to_wire()?,
-                Prefix::V6(p) => p.to_wire()?,
+                Prefix::V4(p) => p.to_wire(),
+                Prefix::V6(p) => p.to_wire(),
             };
             buf.extend_from_slice(&wire_bytes);
         }
@@ -3100,36 +3102,17 @@ pub struct PrefixV1 {
 
 impl From<Prefix> for PrefixV1 {
     fn from(prefix: Prefix) -> Self {
-        // Convert new Prefix enum to old struct format
-        // The wire format gives us exactly what we need: length byte + prefix octets
-        let wire_result = match &prefix {
+        // Convert new Prefix enum to old struct format using wire format:
+        // length byte followed by prefix octets.
+        let wire_bytes = match &prefix {
             Prefix::V4(p) => p.to_wire(),
             Prefix::V6(p) => p.to_wire(),
         };
 
-        match wire_result {
-            Ok(wire_bytes) => {
-                if wire_bytes.is_empty() {
-                    // Shouldn't happen, but handle gracefully
-                    Self {
-                        length: 0,
-                        value: Vec::new(),
-                    }
-                } else {
-                    // First byte is length, rest are the address bytes
-                    let length = wire_bytes[0];
-                    let value = wire_bytes[1..].to_vec();
-                    Self { length, value }
-                }
-            }
-            Err(_) => {
-                // Fallback for wire conversion errors
-                Self {
-                    length: 0,
-                    value: Vec::new(),
-                }
-            }
-        }
+        // First byte is length, remaining bytes are the address octets
+        let length = wire_bytes[0];
+        let value = wire_bytes[1..].to_vec();
+        Self { length, value }
     }
 }
 
