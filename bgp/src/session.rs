@@ -6565,7 +6565,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        if !update.nlri.is_empty() {
+        // sanity check the routes being advertised to us before doing more work
+        let nlri4: Vec<Prefix> = update
+            .nlri
+            .iter()
+            .filter_map(|p| match p {
+                rdb::Prefix::V4(p4) => {
+                    if !originated.contains(p4) && !self.is_v4_martian(p4) {
+                        Some(*p)
+                    } else {
+                        None
+                    }
+                }
+                rdb::Prefix::V6(_) => None,
+            })
+            .collect();
+
+        if !nlri4.is_empty() {
             // TODO: parse and prefer nexthop in MP_REACH_NLRI
             //
             // Per RFC 4760:
@@ -6637,25 +6653,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 vlan_id: lock!(self.session).vlan_id,
             };
 
-            self.db.add_bgp_prefixes(
-                update
-                    .nlri
-                    .iter()
-                    .filter_map(|p| match p {
-                        rdb::Prefix::V4(p4) => {
-                            if !originated.contains(p4)
-                                && !self.is_v4_martian(p4)
-                            {
-                                Some(*p)
-                            } else {
-                                None
-                            }
-                        }
-                        rdb::Prefix::V6(_) => None,
-                    })
-                    .collect(),
-                path.clone(),
-            );
+            self.db.add_bgp_prefixes(nlri4, path.clone());
         }
 
         //TODO(IPv6) iterate through MpReachNlri attributes for IPv6
@@ -6717,13 +6715,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Class E (240.0.0.0/4) and Link-Local (169.254.0.0/16) ranges, as some
     /// networks have already deployed these and cannot feasibly renumber,
     /// and we need to be able to handle these as routable prefixes.
-    //TODO similar check needed for v6 once we get full v6 support
+    // XXX: similar check needed for v6 once we get full v6 support
     fn is_v4_martian(&self, prefix: &Prefix4) -> bool {
-        let first = prefix.value.octets()[0];
-        if (first == 127) || (first & 0xf0 == 224) {
-            return true;
-        }
-        false
+        prefix.value.is_loopback() || prefix.value.is_multicast()
     }
 
     fn check_nexthop_self(&self, update: &UpdateMessage) -> Result<(), Error> {
