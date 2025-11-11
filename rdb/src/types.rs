@@ -219,6 +219,9 @@ impl Prefix4 {
     /// The newly created `Prefix4` will have its host bits zeroed upon creation
     /// e.g.
     /// ```
+    /// use rdb::types::Prefix4;
+    /// use std::net::Ipv4Addr;
+    /// use std::str::FromStr;
     /// let p4 = Prefix4::new(Ipv4Addr::from_str("10.0.0.10").unwrap(), 24);
     /// assert_eq!(p4.value, Ipv4Addr::from_str("10.0.0.0").unwrap());
     /// ```
@@ -226,6 +229,13 @@ impl Prefix4 {
         let mut new = Self { value: ip, length };
         new.unset_host_bits();
         new
+    }
+
+    /// Create a new `Prefix4` from an IP address and net mask without zeroing host bits.
+    /// This is useful for wire format parsing where you want to preserve the exact bytes
+    /// and validate separately.
+    pub fn new_unchecked(ip: Ipv4Addr, length: u8) -> Self {
+        Self { value: ip, length }
     }
 
     pub fn db_key(&self) -> Vec<u8> {
@@ -347,6 +357,9 @@ impl Prefix6 {
     /// The newly created `Prefix6` will have its host bits zeroed upon creation
     /// e.g.
     /// ```
+    /// use rdb::types::Prefix6;
+    /// use std::net::Ipv6Addr;
+    /// use std::str::FromStr;
     /// let p6 = Prefix6::new(Ipv6Addr::from_str("2001:db8::1").unwrap(), 64);
     /// assert_eq!(p6.value, Ipv6Addr::from_str("2001:db8::").unwrap());
     /// ```
@@ -354,6 +367,13 @@ impl Prefix6 {
         let mut new = Self { value: ip, length };
         new.unset_host_bits();
         new
+    }
+
+    /// Create a new `Prefix6` from an IP address and net mask without zeroing host bits.
+    /// This is useful for wire format parsing where you want to preserve the exact bytes
+    /// and validate separately.
+    pub fn new_unchecked(ip: Ipv6Addr, length: u8) -> Self {
+        Self { value: ip, length }
     }
 
     pub fn host_bits_are_unset(&self) -> bool {
@@ -517,6 +537,16 @@ impl Prefix {
         }
     }
 
+    /// Create a new `Prefix` from an IP address and net mask without zeroing host bits.
+    /// This is useful for wire format parsing where you want to preserve the exact bytes
+    /// and validate separately.
+    pub fn new_unchecked(ip: IpAddr, length: u8) -> Self {
+        match ip {
+            IpAddr::V4(ip4) => Self::V4(Prefix4::new_unchecked(ip4, length)),
+            IpAddr::V6(ip6) => Self::V6(Prefix6::new_unchecked(ip6, length)),
+        }
+    }
+
     pub fn host_bits_are_unset(&self) -> bool {
         match self {
             Self::V4(p4) => p4.host_bits_are_unset(),
@@ -528,14 +558,6 @@ impl Prefix {
         match self {
             Self::V4(p4) => p4.unset_host_bits(),
             Self::V6(p6) => p6.unset_host_bits(),
-        }
-    }
-
-    /// Encode prefix to BGP wire format bytes
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        match self {
-            Prefix::V4(p) => p.to_wire(),
-            Prefix::V6(p) => p.to_wire(),
         }
     }
 
@@ -766,105 +788,6 @@ pub enum AddressFamily {
     Ipv4,
     /// Internet Protocol Version 6 (IPv6)
     Ipv6,
-}
-
-/// Trait for encoding/decoding prefixes to/from BGP wire format
-pub trait BgpWireFormat: Sized {
-    type Error;
-
-    /// Encode prefix to wire format bytes
-    fn to_wire(&self) -> Result<Vec<u8>, Self::Error>;
-
-    /// Decode prefix from wire format, returning (remaining_bytes, prefix)
-    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error>;
-}
-
-impl BgpWireFormat for Prefix4 {
-    type Error = Error;
-
-    fn to_wire(&self) -> Result<Vec<u8>, Self::Error> {
-        let mut buf = vec![self.length];
-        let n = (self.length as usize).div_ceil(8);
-        buf.extend_from_slice(&self.value.octets()[..n]);
-        Ok(buf)
-    }
-
-    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error> {
-        if input.is_empty() {
-            return Err(Error::Parsing("prefix length byte missing".into()));
-        }
-
-        let len = input[0];
-
-        // Validate length bound for IPv4
-        if len > 32 {
-            return Err(Error::Parsing(format!(
-                "invalid IPv4 prefix length {} > 32",
-                len
-            )));
-        }
-
-        let byte_count = (len as usize).div_ceil(8);
-        if input.len() < 1 + byte_count {
-            return Err(Error::Parsing(format!(
-                "prefix data too short: need {} bytes, have {}",
-                1 + byte_count,
-                input.len()
-            )));
-        }
-
-        let mut bytes = [0u8; 4];
-        bytes[..byte_count].copy_from_slice(&input[1..1 + byte_count]);
-
-        Ok((
-            &input[1 + byte_count..],
-            Prefix4::new(Ipv4Addr::from(bytes), len),
-        ))
-    }
-}
-
-impl BgpWireFormat for Prefix6 {
-    type Error = Error;
-
-    fn to_wire(&self) -> Result<Vec<u8>, Self::Error> {
-        let mut buf = vec![self.length];
-        let n = (self.length as usize).div_ceil(8);
-        buf.extend_from_slice(&self.value.octets()[..n]);
-        Ok(buf)
-    }
-
-    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error> {
-        if input.is_empty() {
-            return Err(Error::Parsing("prefix length byte missing".into()));
-        }
-
-        let len = input[0];
-
-        // Validate length bound for IPv6
-        if len > 128 {
-            return Err(Error::Parsing(format!(
-                "invalid IPv6 prefix length {} > 128",
-                len
-            )));
-        }
-
-        let byte_count = (len as usize).div_ceil(8);
-        if input.len() < 1 + byte_count {
-            return Err(Error::Parsing(format!(
-                "prefix data too short: need {} bytes, have {}",
-                1 + byte_count,
-                input.len()
-            )));
-        }
-
-        let mut bytes = [0u8; 16];
-        bytes[..byte_count].copy_from_slice(&input[1..1 + byte_count]);
-
-        Ok((
-            &input[1 + byte_count..],
-            Prefix6::new(Ipv6Addr::from(bytes), len),
-        ))
-    }
 }
 
 #[derive(

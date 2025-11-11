@@ -10,16 +10,121 @@ use nom::{
 use num_enum::FromPrimitive;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 pub use rdb::types::Prefix;
-use rdb::types::{AddressFamily, BgpWireFormat, Prefix4, Prefix6};
+use rdb::types::{AddressFamily, Prefix4, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     fmt::{Display, Formatter},
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
 
 pub const MAX_MESSAGE_SIZE: usize = 4096;
+
+/// Trait for encoding/decoding values to/from BGP wire format.
+///
+/// This trait separates serialization/deserialization concerns from semantic
+/// validation. Implementations should perform only structural validation
+/// (buffer bounds, required fields, etc.). Semantic validation (protocol
+/// rules, consistency constraints) should be performed separately via dedicated
+/// validation methods.
+pub trait BgpWireFormat<T>: Sized {
+    type Error;
+
+    /// Encode value to wire format bytes.
+    fn to_wire(&self) -> Result<Vec<u8>, Self::Error>;
+
+    /// Decode value from wire format, returning (remaining_bytes, value).
+    fn from_wire(input: &[u8]) -> Result<(&[u8], T), Self::Error>;
+}
+
+impl BgpWireFormat<Prefix4> for Prefix4 {
+    type Error = Error;
+
+    fn to_wire(&self) -> Result<Vec<u8>, Self::Error> {
+        let mut buf = vec![self.length];
+        let n = (self.length as usize).div_ceil(8);
+        buf.extend_from_slice(&self.value.octets()[..n]);
+        Ok(buf)
+    }
+
+    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error> {
+        if input.is_empty() {
+            return Err(Error::TooSmall("prefix length byte missing".into()));
+        }
+
+        let len = input[0];
+
+        // Validate length bound for IPv4 (structural validation)
+        if len > 32 {
+            return Err(Error::TooLarge(format!(
+                "invalid IPv4 prefix length {} > 32",
+                len
+            )));
+        }
+
+        let byte_count = (len as usize).div_ceil(8);
+        if input.len() < 1 + byte_count {
+            return Err(Error::TooSmall(format!(
+                "prefix data too short: need {} bytes, have {}",
+                1 + byte_count,
+                input.len()
+            )));
+        }
+
+        let mut bytes = [0u8; 4];
+        bytes[..byte_count].copy_from_slice(&input[1..1 + byte_count]);
+
+        Ok((
+            &input[1 + byte_count..],
+            Prefix4::new_unchecked(Ipv4Addr::from(bytes), len),
+        ))
+    }
+}
+
+impl BgpWireFormat<Prefix6> for Prefix6 {
+    type Error = Error;
+
+    fn to_wire(&self) -> Result<Vec<u8>, Self::Error> {
+        let mut buf = vec![self.length];
+        let n = (self.length as usize).div_ceil(8);
+        buf.extend_from_slice(&self.value.octets()[..n]);
+        Ok(buf)
+    }
+
+    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error> {
+        if input.is_empty() {
+            return Err(Error::TooSmall("prefix length byte missing".into()));
+        }
+
+        let len = input[0];
+
+        // Validate length bound for IPv6 (structural validation)
+        if len > 128 {
+            return Err(Error::TooLarge(format!(
+                "invalid IPv6 prefix length {} > 128",
+                len
+            )));
+        }
+
+        let byte_count = (len as usize).div_ceil(8);
+        if input.len() < 1 + byte_count {
+            return Err(Error::TooSmall(format!(
+                "prefix data too short: need {} bytes, have {}",
+                1 + byte_count,
+                input.len()
+            )));
+        }
+
+        let mut bytes = [0u8; 16];
+        bytes[..byte_count].copy_from_slice(&input[1..1 + byte_count]);
+
+        Ok((
+            &input[1 + byte_count..],
+            Prefix6::new_unchecked(Ipv6Addr::from(bytes), len),
+        ))
+    }
+}
 
 /// BGP Message types.
 ///
@@ -648,7 +753,11 @@ impl UpdateMessage {
     fn withdrawn_to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
         for w in &self.withdrawn {
-            buf.extend_from_slice(&w.to_wire()?);
+            let wire_bytes = match w {
+                Prefix::V4(p) => p.to_wire()?,
+                Prefix::V6(p) => p.to_wire()?,
+            };
+            buf.extend_from_slice(&wire_bytes);
         }
         Ok(buf)
     }
@@ -668,7 +777,11 @@ impl UpdateMessage {
         for n in &self.nlri {
             // TODO hacked in ADD_PATH
             //buf.extend_from_slice(&0u32.to_be_bytes());
-            buf.extend_from_slice(&n.to_wire()?);
+            let wire_bytes = match n {
+                Prefix::V4(p) => p.to_wire()?,
+                Prefix::V6(p) => p.to_wire()?,
+            };
+            buf.extend_from_slice(&wire_bytes);
         }
         Ok(buf)
     }
@@ -2989,7 +3102,12 @@ impl From<Prefix> for PrefixV1 {
     fn from(prefix: Prefix) -> Self {
         // Convert new Prefix enum to old struct format
         // The wire format gives us exactly what we need: length byte + prefix octets
-        match prefix.to_wire() {
+        let wire_result = match &prefix {
+            Prefix::V4(p) => p.to_wire(),
+            Prefix::V6(p) => p.to_wire(),
+        };
+
+        match wire_result {
             Ok(wire_bytes) => {
                 if wire_bytes.is_empty() {
                     // Shouldn't happen, but handle gracefully

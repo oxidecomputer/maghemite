@@ -7,8 +7,9 @@
 //! These tests verify key invariants of prefix wire encoding/decoding to ensure
 //! correctness and consistency of wire format operations.
 
+use crate::messages::BgpWireFormat;
 use proptest::prelude::*;
-use rdb::types::{BgpWireFormat, Prefix, Prefix4, Prefix6};
+use rdb::types::{Prefix4, Prefix6};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 // Strategy for generating valid IPv4 prefixes
@@ -45,36 +46,6 @@ proptest! {
             .expect("should decode from wire");
 
         prop_assert_eq!(decoded, prefix, "Decoded prefix should match original");
-        prop_assert_eq!(remaining.len(), 0, "Should consume all bytes");
-    }
-
-    /// Property: Prefix enum wire format round-trip with explicit IPv4 address family
-    #[test]
-    fn prop_prefix_enum_wire_format_roundtrip_v4(prefix4 in ipv4_prefix_strategy()) {
-        let prefix = Prefix::V4(prefix4);
-        let wire_bytes = prefix.to_wire().expect("should encode to wire");
-
-        // Decode using the underlying IPv4 wire format
-        let (remaining, decoded4) = Prefix4::from_wire(&wire_bytes)
-            .expect("should decode from wire");
-        let decoded = Prefix::V4(decoded4);
-
-        prop_assert_eq!(decoded, prefix, "Decoded enum prefix should match original");
-        prop_assert_eq!(remaining.len(), 0, "Should consume all bytes");
-    }
-
-    /// Property: Prefix enum wire format round-trip with explicit IPv6 address family
-    #[test]
-    fn prop_prefix_enum_wire_format_roundtrip_v6(prefix6 in ipv6_prefix_strategy()) {
-        let prefix = Prefix::V6(prefix6);
-        let wire_bytes = prefix.to_wire().expect("should encode to wire");
-
-        // Decode using the underlying IPv6 wire format
-        let (remaining, decoded6) = Prefix6::from_wire(&wire_bytes)
-            .expect("should decode from wire");
-        let decoded = Prefix::V6(decoded6);
-
-        prop_assert_eq!(decoded, prefix, "Decoded enum prefix should match original");
         prop_assert_eq!(remaining.len(), 0, "Should consume all bytes");
     }
 }
