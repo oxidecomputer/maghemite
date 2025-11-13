@@ -79,14 +79,20 @@ macro_rules! recv_event_loop {
                 event
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(e) => {
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 $crate::log::session_log_lite!(
                     $self,
                     error,
-                    "event rx error: {e}";
-                    "error" => format!("{e}")
+                    "BUG: event_rx channel disconnected";
+                    "error" => format!("{}", std::sync::mpsc::RecvTimeoutError::Disconnected)
                 );
-                continue;
+                // This should never happen!
+                // SessionRunner.event_tx is cloned and divvied up in several
+                // places, including the SessionRunner itself. If we have
+                // somehow gotten into a state where the SessionRunner is alive
+                // and reading from event_rx, but somehow has dropped its own
+                // event_tx, then we have indeed encountered a serious bug.
+                unreachable!("all event_tx clones were dropped")
             }
         }
     };
@@ -105,15 +111,21 @@ macro_rules! recv_event_loop {
                 event
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(e) => {
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 $crate::log::session_log!(
                     $self,
                     error,
                     $conn,
-                    "event rx error: {e}";
-                    "error" => format!("{e}")
+                    "BUG: event_rx channel disconnected";
+                    "error" => format!("{}", std::sync::mpsc::RecvTimeoutError::Disconnected)
                 );
-                continue;
+                // This should never happen!
+                // SessionRunner.event_tx is cloned and divvied up in several
+                // places, including the SessionRunner itself. If we have
+                // somehow gotten into a state where the SessionRunner is alive
+                // and reading from event_rx, but somehow has dropped its own
+                // event_tx, then we have indeed encountered a serious bug.
+                unreachable!("all event_tx clones were dropped")
             }
         }
     };
@@ -133,16 +145,22 @@ macro_rules! recv_event_loop {
                 event
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(e) => {
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 $crate::log::collision_log!(
                     $self,
                     error,
                     $new,
                     $exist,
-                    "event rx error: {e}";
-                    "error" => format!("{e}")
+                    "BUG: event_rx channel disconnected";
+                    "error" => format!("{}", std::sync::mpsc::RecvTimeoutError::Disconnected)
                 );
-                continue;
+                // This should never happen!
+                // SessionRunner.event_tx is cloned and divvied up in several
+                // places, including the SessionRunner itself. If we have
+                // somehow gotten into a state where the SessionRunner is alive
+                // and reading from event_rx, but somehow has dropped its own
+                // event_tx, then we have indeed encountered a serious bug.
+                unreachable!("all event_tx clones were dropped")
             }
         }
     };
