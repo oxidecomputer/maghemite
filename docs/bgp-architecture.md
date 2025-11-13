@@ -1189,6 +1189,39 @@ if let Some(ep) = map.get(&peer_ip) {
 | **Established** | Fully operational, exchanging routes | → Idle (error/close) |
 | **ConnectionCollision** | Two connections exist, resolving | → OpenConfirm/Established (resolved) |
 
+### Defensive Timer Handling
+
+The FSM implements defensive handling for timer events that should be impossible in certain states. Instead of transitioning to Idle (which would unnecessarily reset the session), unexpected timer events are logged with a "BUG:" prefix, the timer is stopped, and the FSM remains in its current state.
+
+**Timer Ownership by State:**
+
+| Timer | Expected States | Unexpected in |
+|-------|----------------|---------------|
+| **IdleHoldTimer** | Idle only | All other states |
+| **ConnectRetryTimer** | Connect, Active | OpenSent, OpenConfirm, ConnectionCollision, Established |
+| **DelayOpenTimer** | Connect, Active (if implemented) | OpenSent, OpenConfirm, ConnectionCollision, Established |
+| **HoldTimer** | States with connections (OpenSent, OpenConfirm, Established, ConnectionCollision) | Idle, Connect, Active |
+| **KeepaliveTimer** | States with connections (OpenSent, OpenConfirm, Established, ConnectionCollision) | Idle, Connect, Active |
+
+**Defensive Behavior:**
+```rust
+// Example: IdleHoldTimer fires in OpenSent state
+SessionEvent::IdleHoldTimerExpires => {
+    if !session_timer!(self, idle_hold).enabled() {
+        continue;  // Timer already stopped
+    }
+    session_timer!(self, idle_hold).stop();
+    session_log!("BUG: idle hold timer expires event not expected in this state, ignoring");
+    continue;  // Stay in OpenSent, don't reset to Idle
+}
+```
+
+**Rationale:**
+- Timer race conditions can occur during state transitions (timer fires after state change)
+- Defensive handling prevents false session resets
+- "BUG:" prefix in logs indicates investigation-worthy events
+- FSM stability is preserved even when timers misbehave
+
 ### Event Types Quick Reference
 
 | Event | Source | Meaning |

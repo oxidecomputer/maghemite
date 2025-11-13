@@ -2015,16 +2015,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             if !session_timer!(self, idle_hold).enabled() {
                                 continue;
                             }
-                            session_timer!(self, connect_retry).stop();
-                            self.connect_retry_counter
-                                .fetch_add(1, Ordering::Relaxed);
+                            session_timer!(self, idle_hold).stop();
                             session_log_lite!(
                                 self,
                                 warn,
-                                "{} event not allowed in this state, fsm transition to idle",
+                                "BUG: {} event not expected in this state, ignoring",
                                 session_event.title()
                             );
-                            return FsmState::Idle;
+                            continue;
                         }
                     }
                 }
@@ -2113,22 +2111,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         | ConnectionEvent::KeepaliveTimerExpires(ref conn_id)
                         | ConnectionEvent::DelayOpenTimerExpires(ref conn_id) =>
                         {
-                            session_timer!(self, connect_retry).stop();
-
-                            // DelayOpenTimer is stored in the Connection, which
-                            // will be dropped in Idle. Skip touching its timer.
-
-                            self.connect_retry_counter
-                                .fetch_add(1, Ordering::Relaxed);
+                            // Stop the specific timer that fired
+                            if let Some(conn) = self.get_conn(conn_id) {
+                                match connection_event {
+                                    ConnectionEvent::HoldTimerExpires(_) => {
+                                        conn_timer!(conn, hold).stop();
+                                    }
+                                    ConnectionEvent::KeepaliveTimerExpires(_) => {
+                                        conn_timer!(conn, keepalive).stop();
+                                    }
+                                    ConnectionEvent::DelayOpenTimerExpires(_) => {
+                                        conn_timer!(conn, delay_open).stop();
+                                    }
+                                    _ => {}
+                                }
+                            }
 
                             session_log_lite!(
                                 self,
                                 warn,
-                                "connection fsm event {title} (conn_id {}) not allowed in this state, fsm transition to idle",
+                                "BUG: connection fsm event {title} (conn_id {}) not expected in this state, ignoring",
                                 conn_id.short()
                             );
 
-                            return FsmState::Idle;
+                            continue;
                         }
                     }
                 }
@@ -2313,22 +2319,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             if !conn_timer!(conn, hold).enabled() {
                                 continue;
                             }
-                            session_timer!(self, connect_retry).stop();
-                            self.connect_retry_counter
-                                .fetch_add(1, Ordering::Relaxed);
-                            self.counters
-                                .connection_retries
-                                .fetch_add(1, Ordering::Relaxed);
+                            conn_timer!(conn, hold).stop();
 
                             session_log_lite!(
                                 self,
                                 warn,
-                                "rx connection fsm event {} (conn_id: {}), but not allowed in this state. fsm transition to idle",
+                                "BUG: rx connection fsm event {} (conn_id: {}), not expected in this state, ignoring",
                                 connection_event.title(),
                                 conn_id.short()
                             );
 
-                            return FsmState::Idle;
+                            continue;
                         }
 
                         // RFC 4271 FSM Event 11
@@ -2339,22 +2340,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             if !conn_timer!(conn, keepalive).enabled() {
                                 continue;
                             }
-                            session_timer!(self, connect_retry).stop();
-                            self.connect_retry_counter
-                                .fetch_add(1, Ordering::Relaxed);
-                            self.counters
-                                .connection_retries
-                                .fetch_add(1, Ordering::Relaxed);
+                            conn_timer!(conn, keepalive).stop();
 
                             session_log_lite!(
                                 self,
                                 warn,
-                                "rx connection fsm event {} (conn_id: {}), but not allowed in this state. fsm transition to idle",
+                                "BUG: rx connection fsm event {} (conn_id: {}), not expected in this state, ignoring",
                                 connection_event.title(),
                                 conn_id.short()
                             );
 
-                            return FsmState::Idle;
+                            continue;
                         }
 
                         ConnectionEvent::DelayOpenTimerExpires(ref conn_id) => {
@@ -2622,16 +2618,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         if !session_timer!(self, connect_retry).enabled() {
                             continue;
                         }
+                        session_timer!(self, connect_retry).stop();
                         let title = session_event.title();
                         session_log!(
                             self,
                             warn,
                             conn,
-                            "{title} event not allowed in this state, fsm transition to idle";
+                            "BUG: {title} event not expected in this state (conn_id: {}), ignoring",
+                            conn.id().short();
                             "event" => title
                         );
-                        self.stop(Some(&conn), None, StopReason::FsmError);
-                        return FsmState::Idle;
+                        continue;
                     }
 
                     // RFC 4271 FSM Event 13
@@ -2639,16 +2636,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         if !session_timer!(self, idle_hold).enabled() {
                             continue;
                         }
+                        session_timer!(self, idle_hold).stop();
                         let title = session_event.title();
                         session_log!(
                             self,
                             warn,
                             conn,
-                            "{title} event not allowed in this state, fsm transition to idle";
+                            "BUG: {title} event not expected in this state (conn_id: {}), ignoring",
+                            conn.id().short();
                             "event" => title
                         );
-                        self.stop(Some(&conn), None, StopReason::FsmError);
-                        return FsmState::Idle;
+                        continue;
                     }
 
                     /*
@@ -3298,16 +3296,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     if !session_timer!(self, connect_retry).enabled() {
                         return FsmState::OpenConfirm(pc);
                     }
+                    session_timer!(self, connect_retry).stop();
                     let title = session_event.title();
                     session_log!(
                         self,
                         warn,
                         pc.conn,
-                        "{title} event not allowed in this state, fsm transition to idle";
+                        "BUG: {title} event not expected in this state (conn_id: {}), ignoring",
+                        pc.conn.id().short();
                         "event" => title
                     );
-                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
-                    FsmState::Idle
+                    FsmState::OpenConfirm(pc)
                 }
 
                 // RFC 4271 FSM Event 13
@@ -3315,16 +3314,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     if !session_timer!(self, idle_hold).enabled() {
                         return FsmState::OpenConfirm(pc);
                     }
+                    session_timer!(self, idle_hold).stop();
                     let title = session_event.title();
                     session_log!(
                         self,
                         warn,
                         pc.conn,
-                        "{title} event not allowed in this state, fsm transition to idle";
+                        "BUG: {title} event not expected in this state (conn_id: {}), ignoring",
+                        pc.conn.id().short();
                         "event" => title
                     );
-                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
-                    FsmState::Idle
+                    FsmState::OpenConfirm(pc)
                 }
 
                 /*
@@ -3589,21 +3589,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         if !session_timer!(self, connect_retry).enabled() {
                             continue;
                         }
+                        session_timer!(self, connect_retry).stop();
                         let title = session_event.title();
                         collision_log!(
                             self,
                             warn,
                             new,
                             exist.conn,
-                            "{title} event not allowed in this state, fsm transition to idle";
+                            "BUG: {title} event not expected in this state (exist_conn_id: {}, new_conn_id: {}), ignoring",
+                            exist.conn.id().short(),
+                            new.id().short();
                             "event" => title
                         );
-                        self.stop(
-                            Some(&new),
-                            Some(&exist.conn),
-                            StopReason::FsmError,
-                        );
-                        return FsmState::Idle;
+                        continue;
                     }
 
                     // RFC 4271 FSM Event 13
@@ -3611,21 +3609,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         if !session_timer!(self, idle_hold).enabled() {
                             continue;
                         }
+                        session_timer!(self, idle_hold).stop();
                         let title = session_event.title();
                         collision_log!(
                             self,
                             warn,
                             new,
                             exist.conn,
-                            "{title} event not allowed in this state, fsm transition to idle";
+                            "BUG: {title} event not expected in this state (exist_conn_id: {}, new_conn_id: {}), ignoring",
+                            exist.conn.id().short(),
+                            new.id().short();
                             "event" => title
                         );
-                        self.stop(
-                            Some(&new),
-                            Some(&exist.conn),
-                            StopReason::FsmError,
-                        );
-                        return FsmState::Idle;
+                        continue;
                     }
 
                     SessionEvent::TcpConnectionAcked(extra)
@@ -5137,29 +5133,31 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     if !session_timer!(self, connect_retry).enabled() {
                         return FsmState::Established(pc);
                     }
+                    session_timer!(self, connect_retry).stop();
                     session_log!(
                         self,
-                        info,
+                        warn,
                         pc.conn,
-                        "rx {}, fsm transition to idle",
-                        session_event.title()
+                        "BUG: rx {} (conn_id: {}), not expected in this state, ignoring",
+                        session_event.title(),
+                        pc.conn.id().short()
                     );
-                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
-                    self.exit_established(pc)
+                    FsmState::Established(pc)
                 }
 
                 SessionEvent::IdleHoldTimerExpires => {
                     if !session_timer!(self, idle_hold).enabled() {
                         return FsmState::Established(pc);
                     }
+                    session_timer!(self, idle_hold).stop();
                     session_log!(
                         self,
-                        info,
+                        warn,
                         pc.conn,
-                        "rx delay open timer expires, fsm transition to idle"
+                        "BUG: rx idle hold timer expires (conn_id: {}), not expected in this state, ignoring",
+                        pc.conn.id().short()
                     );
-                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
-                    self.exit_established(pc)
+                    FsmState::Established(pc)
                 }
 
                 SessionEvent::TcpConnectionAcked(new)
@@ -5287,14 +5285,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return FsmState::Established(pc);
                     }
 
+                    conn_timer!(pc.conn, delay_open).stop();
                     session_log!(
                         self,
-                        info,
+                        warn,
                         pc.conn,
-                        "rx delay open timer expires, fsm transition to idle"
+                        "BUG: rx delay open timer expires (conn_id: {}), not expected in this state, ignoring",
+                        pc.conn.id().short()
                     );
-                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
-                    self.exit_established(pc)
+                    FsmState::Established(pc)
                 }
 
                 ConnectionEvent::Message { msg, ref conn_id } => {
