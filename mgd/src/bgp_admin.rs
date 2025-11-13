@@ -35,6 +35,7 @@ use std::sync::{
     Arc, Mutex,
     mpsc::{Sender, channel},
 };
+use std::time::Duration;
 
 const UNIT_BGP: &str = "bgp";
 const DEFAULT_BGP_LISTEN: SocketAddr =
@@ -944,7 +945,17 @@ pub(crate) mod helpers {
             allow_import: rq.allow_import.clone(),
             allow_export: rq.allow_export.clone(),
             vlan_id: rq.vlan_id,
-            ..Default::default()
+            remote_id: None,
+            bind_addr: None,
+            connect_retry_time: Duration::from_secs(rq.connect_retry),
+            keepalive_time: Duration::from_secs(rq.keepalive),
+            hold_time: Duration::from_secs(rq.hold_time),
+            idle_hold_time: Duration::from_secs(rq.idle_hold_time),
+            delay_open_time: Duration::from_secs(rq.delay_open),
+            resolution: Duration::from_millis(rq.resolution),
+            idle_hold_jitter: Some((0.75, 1.0)),
+            connect_retry_jitter: None,
+            deterministic_collision_resolution: false,
         };
 
         let start_session = if ensure {

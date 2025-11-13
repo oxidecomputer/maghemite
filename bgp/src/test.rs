@@ -176,13 +176,18 @@ where
                 .bind_addr
                 .unwrap_or(logical_router.listen_addr);
 
+            let session_info = neighbor
+                .session_info
+                .clone()
+                .unwrap_or_else(|| SessionInfo::from_peer_config(&peer_config));
+
             let session_runner = router
                 .new_session(
                     peer_config,
                     Some(bind_addr),
                     event_tx.clone(),
                     event_rx,
-                    neighbor.session_info.clone().unwrap_or_default(),
+                    session_info,
                 )
                 .unwrap_or_else(|_| {
                     panic!("new session on router {}", logical_router.name)
@@ -243,6 +248,17 @@ fn basic_peering_helper<
         (false, false) => "basic_peering_active",
     };
 
+    let peer_config_r1 = PeerConfig {
+        name: "r2".into(),
+        host: r2_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+
     let routers = vec![
         LogicalRouter {
             name: "r1".to_string(),
@@ -251,19 +267,12 @@ fn basic_peering_helper<
             listen_addr: r1_addr,
             bind_addr: Some(r1_addr),
             neighbors: vec![Neighbor {
-                peer_config: PeerConfig {
-                    name: "r2".into(),
-                    host: r2_addr,
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                },
-                session_info: Some(SessionInfo {
-                    passive_tcp_establishment: passive,
-                    ..Default::default()
+                peer_config: peer_config_r1.clone(),
+                session_info: Some({
+                    let mut info =
+                        SessionInfo::from_peer_config(&peer_config_r1);
+                    info.passive_tcp_establishment = passive;
+                    info
                 }),
             }],
         },

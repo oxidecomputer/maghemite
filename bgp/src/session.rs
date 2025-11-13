@@ -562,8 +562,10 @@ pub struct SessionInfo {
     pub deterministic_collision_resolution: bool,
 }
 
-impl Default for SessionInfo {
-    fn default() -> Self {
+impl SessionInfo {
+    /// Create a SessionInfo from a PeerConfig with minimal defaults for policy fields.
+    /// This is used when only timer configuration is available (e.g., in tests).
+    pub fn from_peer_config(peer_config: &crate::config::PeerConfig) -> Self {
         Self {
             passive_tcp_establishment: false,
             remote_asn: None,
@@ -578,23 +580,17 @@ impl Default for SessionInfo {
             allow_import: ImportExportPolicy::default(),
             allow_export: ImportExportPolicy::default(),
             vlan_id: None,
-            // Default timer values based on BGP standards
-            connect_retry_time: Duration::from_secs(120),
-            keepalive_time: Duration::from_secs(60),
-            hold_time: Duration::from_secs(180),
-            idle_hold_time: Duration::from_secs(0), // No dampening by default
-            delay_open_time: Duration::from_secs(5),
-            resolution: Duration::from_millis(100), // 100ms timer resolution
-            idle_hold_jitter: Some((0.75, 1.0)), // RFC 4271 recommended range
-            connect_retry_jitter: None,          // Disabled by default
-            deterministic_collision_resolution: false, // Preserve current behavior by default
+            connect_retry_time: Duration::from_secs(peer_config.connect_retry),
+            keepalive_time: Duration::from_secs(peer_config.keepalive),
+            hold_time: Duration::from_secs(peer_config.hold_time),
+            idle_hold_time: Duration::from_secs(peer_config.idle_hold_time),
+            delay_open_time: Duration::from_secs(peer_config.delay_open),
+            resolution: Duration::from_millis(peer_config.resolution),
+            idle_hold_jitter: Some((0.75, 1.0)),
+            connect_retry_jitter: None,
+            // XXX: plumb this through to the neighbor API endpoint
+            deterministic_collision_resolution: false,
         }
-    }
-}
-
-impl SessionInfo {
-    pub fn new() -> Arc<Mutex<SessionInfo>> {
-        Arc::new(Mutex::new(SessionInfo::default()))
     }
 }
 
