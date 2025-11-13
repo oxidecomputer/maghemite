@@ -101,7 +101,16 @@ impl Ord for BgpPathProperties {
 }
 
 #[derive(
-    Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    Debug,
 )]
 pub struct StaticRouteKey {
     pub prefix: Prefix,

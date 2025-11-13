@@ -32,6 +32,10 @@ hostname.workspace = true
 uuid.workspace = true
 smf.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
+proptest.workspace = true
+
 [features]
 default = ["mg-lower"]
 mg-lower = ["dep:mg-lower"]

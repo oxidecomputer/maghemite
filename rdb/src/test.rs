@@ -89,12 +89,30 @@ impl Drop for TestDb {
 ///
 /// ```no_run
 /// use rdb::test::get_test_db;
+/// use rdb::{StaticRouteKey, Prefix, Prefix4};
 /// use mg_common::log::init_file_logger;
+/// use std::net::{IpAddr, Ipv4Addr};
 ///
 /// let log = init_file_logger("test.log");
 /// let db = get_test_db("my_test", log).expect("create db");
+///
+/// // Create some example static routes
+/// let routes = vec![
+///     StaticRouteKey {
+///         prefix: Prefix::V4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24)),
+///         nexthop: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+///         vlan_id: None,
+///         rib_priority: 0,
+///     },
+/// ];
+///
 /// // Use db like a regular Db - it derefs automatically
 /// db.add_static_routes(&routes).unwrap();
+///
+/// // Query the routes back
+/// let stored_routes = db.get_static(None).unwrap();
+/// assert_eq!(stored_routes.len(), 1);
+///
 /// // Database cleaned up automatically on success, left for debugging on failure
 /// ```
 pub fn get_test_db(test_name: &str, log: Logger) -> Result<TestDb, Error> {

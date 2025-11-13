@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #![allow(clippy::type_complexity)]
+use crate::validation::{validate_prefixes_v4, validate_prefixes_v6};
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::params::*;
 use bgp::router::LoadPolicyError;
@@ -246,6 +247,10 @@ pub async fn create_origin4(
     request: TypedBody<Origin4>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
+
+    // Validate prefixes before processing
+    validate_prefixes_v4(&rq.prefixes)?;
+
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
@@ -281,6 +286,10 @@ pub async fn update_origin4(
     request: TypedBody<Origin4>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
+
+    // Validate prefixes before processing
+    validate_prefixes_v4(&rq.prefixes)?;
+
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
@@ -310,6 +319,10 @@ pub async fn create_origin6(
     request: TypedBody<Origin6>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
+
+    // Validate prefixes before processing
+    validate_prefixes_v6(&rq.prefixes)?;
+
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
@@ -345,6 +358,10 @@ pub async fn update_origin6(
     request: TypedBody<Origin6>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
+
+    // Validate prefixes before processing
+    validate_prefixes_v6(&rq.prefixes)?;
+
     let prefixes = rq.prefixes.into_iter().map(Into::into).collect();
     let ctx = ctx.context();
 
@@ -568,6 +585,9 @@ async fn do_bgp_apply(
     rq: ApplyRequest,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let log = ctx.log.clone();
+
+    // Validate originate prefixes before processing
+    validate_prefixes_v4(&rq.originate)?;
 
     bgp_log!(log, info, "bgp apply: {rq:#?}";
         "params" => format!("{rq:?}")

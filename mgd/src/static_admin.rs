@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
+use crate::validation::validate_prefixes;
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, RequestContext, TypedBody,
@@ -11,7 +12,7 @@ use mg_api::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
     DeleteStaticRoute6Request, GetRibResult,
 };
-use rdb::{AddressFamily, StaticRouteKey};
+use rdb::{AddressFamily, Prefix, StaticRouteKey};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub async fn static_add_v4_route(
@@ -25,6 +26,11 @@ pub async fn static_add_v4_route(
         .into_iter()
         .map(Into::into)
         .collect();
+
+    // Validate that all prefixes have host bits unset
+    let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
+    validate_prefixes(&prefixes)?;
+
     ctx.context()
         .db
         .add_static_routes(&routes)
@@ -80,6 +86,11 @@ pub async fn static_add_v6_route(
         .into_iter()
         .map(Into::into)
         .collect();
+
+    // Validate that all prefixes have host bits unset
+    let prefixes: Vec<Prefix> = routes.iter().map(|r| r.prefix).collect();
+    validate_prefixes(&prefixes)?;
+
     ctx.context()
         .db
         .add_static_routes(&routes)
