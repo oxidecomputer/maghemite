@@ -1389,6 +1389,62 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
+    /// Validate that an event's connection ID matches the expected active connection.
+    ///
+    /// Returns `true` if the event is for the active connection. Unexpected connections
+    /// (still in registry) are stopped with FsmError. Unknown connections (not in registry)
+    /// are logged and ignored.
+    ///
+    /// # Arguments
+    ///
+    /// * `event_conn_id` - Connection ID from the FSM event
+    /// * `active_conn` - Currently active connection
+    /// * `event_title` - Event description for logging
+    ///
+    /// # Returns
+    ///
+    /// `true` if event should be processed, `false` if already handled
+    fn validate_active_connection(
+        &self,
+        event_conn_id: &ConnectionId,
+        active_conn: &Arc<Cnx>,
+        event_title: &str,
+    ) -> bool {
+        if *event_conn_id == *active_conn.id() {
+            return true;
+        }
+
+        match self.get_conn(event_conn_id) {
+            Some(conn) => {
+                // Unexpected: connection still in registry
+                session_log!(
+                    self,
+                    warn,
+                    active_conn,
+                    "rx {} for unexpected connection (conn_id: {}), closing",
+                    event_title,
+                    event_conn_id.short();
+                    "event" => event_title
+                );
+                self.stop(Some(&conn), None, StopReason::FsmError);
+            }
+            None => {
+                // Unknown: connection not in registry
+                session_log!(
+                    self,
+                    warn,
+                    active_conn,
+                    "rx {} for unknown connection (conn_id: {}), ignoring",
+                    event_title,
+                    event_conn_id.short();
+                    "event" => event_title
+                );
+            }
+        }
+
+        false
+    }
+
     /// Clean up all connections associated with this SessionRunner
     fn cleanup_connections(&self) {
         let mut registry = lock!(self.connection_registry);
@@ -1688,6 +1744,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  * does not cause change in the state of the local system.
                  */
                 FsmEvent::Connection(connection_event) => {
+                    // We should never hit this path, because we call
+                    // cleanup_connections() before entering this loop. If we do hit
+                    // it, then there is likely a bug in the cleanup or clock logic.
                     match connection_event {
                         // Events 10-12
                         ConnectionEvent::HoldTimerExpires(ref conn_id)
@@ -1709,10 +1768,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         StopReason::FsmError,
                                     );
                                 }
-                                // We should never hit this path, because we
-                                // call cleanup_connections() before entering
-                                // this loop. If we do hit it, then there is
-                                // likely a bug in the cleanup or clock logic.
                                 None => {
                                     session_log_lite!(
                                         self,
@@ -2683,39 +2738,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 FsmEvent::Connection(connection_event) => {
                     match connection_event {
                         ConnectionEvent::Message { msg, ref conn_id } => {
-                            match self.get_conn(conn_id) {
-                                Some(connection) => {
-                                    if connection.id() != conn.id() {
-                                        session_log!(
-                                            self,
-                                            warn,
-                                            conn,
-                                            "rx {} from peer {} for known connection (conn_id: {}) that's unexpected in this state? closing conn",
-                                            msg.kind(),
-                                            conn_id.remote().ip(),
-                                            conn_id.short()
-                                        );
-                                        self.stop(
-                                            Some(&connection),
-                                            None,
-                                            StopReason::FsmError,
-                                        );
-                                        continue;
-                                    }
-                                }
-                                None => {
-                                    session_log!(
-                                        self,
-                                        warn,
-                                        conn,
-                                        "rx {} from peer {} for unknown connection (conn_id: {}), ignoring",
-                                        msg.kind(),
-                                        conn_id.remote().ip(),
-                                        conn_id.short()
-                                    );
-                                    continue;
-                                }
-                            };
+                            if !self.validate_active_connection(
+                                conn_id,
+                                &conn,
+                                msg.title(),
+                            ) {
+                                continue;
+                            }
 
                             // RFC 4271 FSM Event 19
                             if let Message::Open(om) = msg {
@@ -3124,54 +3153,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  *   - changes its state to Idle.
                  */
                 ConnectionEvent::HoldTimerExpires(ref conn_id) => {
+                    if !self.validate_active_connection(
+                        conn_id,
+                        &pc.conn,
+                        "hold timer expires",
+                    ) {
+                        return FsmState::OpenConfirm(pc);
+                    }
+
                     if !conn_timer!(pc.conn, hold).enabled() {
                         return FsmState::OpenConfirm(pc);
                     }
-                    let title = connection_event.title();
-                    match self.get_conn(conn_id) {
-                        Some(connection) => {
-                            if connection.id() == pc.conn.id() {
-                                session_log!(
-                                    self,
-                                    warn,
-                                    pc.conn,
-                                    "rx {title} (conn_id: {}), fsm transition to idle",
-                                    conn_id.short();
-                                    "event" => title
-                                );
-                                self.stop(
-                                    Some(&pc.conn),
-                                    None,
-                                    StopReason::HoldTimeExpired,
-                                );
-                                FsmState::Idle
-                            } else {
-                                session_log!(
-                                    self,
-                                    warn,
-                                    pc.conn,
-                                    "rx {title} for known connection (conn_id: {}) that's unexpected in this state? closing conn",
-                                    conn_id.short();
-                                );
-                                self.stop(
-                                    Some(&connection),
-                                    None,
-                                    StopReason::FsmError,
-                                );
-                                FsmState::OpenConfirm(pc)
-                            }
-                        }
-                        None => {
-                            session_log!(
-                                self,
-                                warn,
-                                pc.conn,
-                                "rx {title} for unknown connection (conn_id: {}), ignoring..",
-                                conn_id.short();
-                            );
-                            FsmState::OpenConfirm(pc)
-                        }
-                    }
+
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
+                        "hold timer expired, fsm transition to idle"
+                    );
+                    self.stop(
+                        Some(&pc.conn),
+                        None,
+                        StopReason::HoldTimeExpired,
+                    );
+                    FsmState::Idle
                 }
 
                 /*
@@ -3184,10 +3189,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  *
                  *   - remains in the OpenConfirmed state.
                  */
-                ConnectionEvent::KeepaliveTimerExpires(_conn_id) => {
+                ConnectionEvent::KeepaliveTimerExpires(ref conn_id) => {
+                    if !self.validate_active_connection(
+                        conn_id,
+                        &pc.conn,
+                        "keepalive timer expires",
+                    ) {
+                        return FsmState::OpenConfirm(pc);
+                    }
+
                     if !conn_timer!(pc.conn, keepalive).enabled() {
                         return FsmState::OpenConfirm(pc);
                     }
+
                     session_log!(
                         self,
                         info,
@@ -3200,10 +3214,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 // RFC 4271 FSM Event 12
-                ConnectionEvent::DelayOpenTimerExpires(_conn_id) => {
+                ConnectionEvent::DelayOpenTimerExpires(ref conn_id) => {
+                    if !self.validate_active_connection(
+                        conn_id,
+                        &pc.conn,
+                        "delay open timer expires",
+                    ) {
+                        return FsmState::OpenConfirm(pc);
+                    }
+
                     if !conn_timer!(pc.conn, delay_open).enabled() {
                         return FsmState::OpenConfirm(pc);
                     }
+
                     session_log!(
                         self,
                         warn,
@@ -3215,42 +3238,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 ConnectionEvent::Message { msg, conn_id } => {
-                    // Validate that the message is from the active connection.
-                    // During collision resolution, messages can arrive from
-                    // the dying connection after it's been closed. We must
-                    // ignore messages from unknown/inactive connections.
-                    if conn_id != *pc.conn.id() {
-                        match self.get_conn(&conn_id) {
-                            Some(conn) => {
-                                session_log!(
-                                    self,
-                                    warn,
-                                    pc.conn,
-                                    "unexpected {} message from known but inactive conn (conn_id: {}), closing..",
-                                    msg.title(),
-                                    conn_id.short();
-                                    "message" => msg.title(),
-                                    "message_contents" => format!("{msg}")
-                                );
-                                self.stop(
-                                    Some(&conn),
-                                    None,
-                                    StopReason::ConnectionRejected,
-                                );
-                            }
-                            None => {
-                                session_log!(
-                                    self,
-                                    warn,
-                                    pc.conn,
-                                    "unexpected {} message from unknown conn (conn_id: {}), ignoring",
-                                    msg.title(),
-                                    conn_id.short();
-                                    "message" => msg.title(),
-                                    "message_contents" => format!("{msg}")
-                                );
-                            }
-                        }
+                    if !self.validate_active_connection(
+                        &conn_id,
+                        &pc.conn,
+                        msg.title(),
+                    ) {
                         self.bump_msg_counter(msg.kind(), true);
                         return FsmState::OpenConfirm(pc);
                     }
@@ -5227,50 +5219,33 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  *   - changes its state to Idle.
                  */
                 ConnectionEvent::HoldTimerExpires(ref conn_id) => {
-                    if *conn_id == *pc.conn.id() {
-                        if !conn_timer!(pc.conn, hold).enabled() {
-                            return FsmState::Established(pc);
-                        }
-                        // If the HoldTimer fires, it means we've not received a
-                        // Keepalive or Update from the peer within the hold time.
-                        // So exit Established and restart the peer FSM from Idle
-                        session_log!(
-                            self,
-                            warn,
-                            pc.conn,
-                            "hold timer expired, fsm transition to idle"
-                        );
-                        self.counters
-                            .hold_timer_expirations
-                            .fetch_add(1, Ordering::Relaxed);
-                        self.stop(
-                            Some(&pc.conn),
-                            None,
-                            StopReason::HoldTimeExpired,
-                        );
-                        self.exit_established(pc)
-                    } else {
-                        session_log!(
-                            self,
-                            warn,
-                            pc.conn,
-                            "rx {} for unexpected known connection (conn_id: {}). closing..",
-                            connection_event.title(),
-                            conn_id.short();
-                            "event" => connection_event.title()
-                        );
-                        if let Some(conn) = self
-                            .get_conn(conn_id)
-                            .filter(|c| conn_timer!(c, hold).enabled())
-                        {
-                            self.stop(
-                                Some(&conn),
-                                None,
-                                StopReason::HoldTimeExpired,
-                            );
-                        }
-                        FsmState::Established(pc)
+                    if !self.validate_active_connection(
+                        conn_id,
+                        &pc.conn,
+                        "hold timer expires",
+                    ) {
+                        return FsmState::Established(pc);
                     }
+
+                    if !conn_timer!(pc.conn, hold).enabled() {
+                        return FsmState::Established(pc);
+                    }
+
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
+                        "hold timer expired, fsm transition to idle"
+                    );
+                    self.counters
+                        .hold_timer_expirations
+                        .fetch_add(1, Ordering::Relaxed);
+                    self.stop(
+                        Some(&pc.conn),
+                        None,
+                        StopReason::HoldTimeExpired,
+                    );
+                    self.exit_established(pc)
                 }
 
                 /*
@@ -5283,62 +5258,43 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                  *       value is zero.
                  */
                 ConnectionEvent::KeepaliveTimerExpires(ref conn_id) => {
-                    if *conn_id == *pc.conn.id() {
-                        if !conn_timer!(pc.conn, keepalive).enabled() {
-                            return FsmState::Established(pc);
-                        }
-                        self.send_keepalive(&pc.conn);
-                    } else {
-                        session_log!(
-                            self,
-                            warn,
-                            pc.conn,
-                            "rx {} for unexpected known connection (conn_id: {}). closing..",
-                            connection_event.title(),
-                            conn_id.short();
-                            "event" => connection_event.title()
-                        );
-                        if let Some(conn) = self
-                            .get_conn(conn_id)
-                            .filter(|c| conn_timer!(c, keepalive).enabled())
-                        {
-                            self.stop(Some(&conn), None, StopReason::FsmError);
-                        }
+                    if !self.validate_active_connection(
+                        conn_id,
+                        &pc.conn,
+                        "keepalive timer expires",
+                    ) {
+                        return FsmState::Established(pc);
                     }
+
+                    if !conn_timer!(pc.conn, keepalive).enabled() {
+                        return FsmState::Established(pc);
+                    }
+
+                    self.send_keepalive(&pc.conn);
                     FsmState::Established(pc)
                 }
 
                 ConnectionEvent::DelayOpenTimerExpires(ref conn_id) => {
-                    if *conn_id == *pc.conn.id() {
-                        if !conn_timer!(pc.conn, delay_open).enabled() {
-                            return FsmState::Established(pc);
-                        }
-                        session_log!(
-                            self,
-                            info,
-                            pc.conn,
-                            "rx delay open timer expires, fsm transition to idle"
-                        );
-                        self.stop(Some(&pc.conn), None, StopReason::FsmError);
-                        self.exit_established(pc)
-                    } else {
-                        session_log!(
-                            self,
-                            warn,
-                            pc.conn,
-                            "rx {} for unexpected known connection (conn_id: {}). closing..",
-                            connection_event.title(),
-                            conn_id.short();
-                            "event" => connection_event.title()
-                        );
-                        if let Some(conn) = self
-                            .get_conn(conn_id)
-                            .filter(|c| conn_timer!(c, delay_open).enabled())
-                        {
-                            self.stop(Some(&conn), None, StopReason::FsmError);
-                        }
-                        FsmState::Established(pc)
+                    if !self.validate_active_connection(
+                        conn_id,
+                        &pc.conn,
+                        "delay open timer expires",
+                    ) {
+                        return FsmState::Established(pc);
                     }
+
+                    if !conn_timer!(pc.conn, delay_open).enabled() {
+                        return FsmState::Established(pc);
+                    }
+
+                    session_log!(
+                        self,
+                        info,
+                        pc.conn,
+                        "rx delay open timer expires, fsm transition to idle"
+                    );
+                    self.stop(Some(&pc.conn), None, StopReason::FsmError);
+                    self.exit_established(pc)
                 }
 
                 ConnectionEvent::Message { msg, ref conn_id } => {
