@@ -2117,10 +2117,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     ConnectionEvent::HoldTimerExpires(_) => {
                                         conn_timer!(conn, hold).stop();
                                     }
-                                    ConnectionEvent::KeepaliveTimerExpires(_) => {
+                                    ConnectionEvent::KeepaliveTimerExpires(
+                                        _,
+                                    ) => {
                                         conn_timer!(conn, keepalive).stop();
                                     }
-                                    ConnectionEvent::DelayOpenTimerExpires(_) => {
+                                    ConnectionEvent::DelayOpenTimerExpires(
+                                        _,
+                                    ) => {
                                         conn_timer!(conn, delay_open).stop();
                                     }
                                     _ => {}
