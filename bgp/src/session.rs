@@ -4961,6 +4961,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 // another peer session (redistribution). Send the update to our
                 // peer.
                 AdminEvent::Announce(update) => {
+                    // XXX: Send a route-refresh to our peer in the event we
+                    //      remove an originated route. This is needed if our
+                    //      peer is advertising a route that we're originating,
+                    //      and we decide to stop originating it. In other BGP
+                    //      stacks, local paths coexist in the RIB with learned
+                    //      paths (local having precedent) and withdrawal of the
+                    //      local path would result in the learned path getting
+                    //      installed. We don't do this or store routes in the
+                    //      adj-rib-in pre-policy, so a route-refresh is the
+                    //      only mechanism we really have to trigger a re-learn
+                    //      of the route without changing the current design.
                     if let Err(e) = self.send_update(
                         update,
                         &pc,
@@ -6539,18 +6550,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, pc: &PeerConnection<Cnx>) {
-        self.db.remove_bgp_prefixes(
-            update
-                .withdrawn
-                .iter()
-                .filter_map(|w| match w {
-                    rdb::Prefix::V4(_) => Some(*w),
-                    rdb::Prefix::V6(_) => None,
-                })
-                .collect(),
-            &pc.conn.peer().ip(),
-        );
-
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
@@ -6565,23 +6564,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        // sanity check the routes being advertised to us before doing more work
-        let nlri4: Vec<Prefix> = update
-            .nlri
+        let withdrawn: Vec<Prefix> = update
+            .withdrawn
             .iter()
-            .filter_map(|p| match p {
-                rdb::Prefix::V4(p4) => {
-                    if !originated.contains(p4) && !self.is_v4_martian(p4) {
-                        Some(*p)
-                    } else {
-                        None
-                    }
-                }
-                rdb::Prefix::V6(_) => None,
-            })
+            .filter(|p| match p {
+                Prefix::V4(p4) => !originated.contains(p4),
+                Prefix::V6(_p6) => false, // XXX: update for v6
+            } && p.valid_for_rib())
+            .copied()
             .collect();
 
-        if !nlri4.is_empty() {
+        self.db
+            .remove_bgp_prefixes(&withdrawn, &pc.conn.peer().ip());
+
+        let nlri: Vec<Prefix> = update
+            .nlri
+            .iter()
+            .filter(|p| match p {
+                Prefix::V4(p4) => !originated.contains(p4),
+                Prefix::V6(_p6) => false, // XXX: update for v6
+            } && p.valid_for_rib())
+            .copied()
+            .collect();
+
+        if !nlri.is_empty() {
             // TODO: parse and prefer nexthop in MP_REACH_NLRI
             //
             // Per RFC 4760:
@@ -6653,7 +6659,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 vlan_id: lock!(self.session).vlan_id,
             };
 
-            self.db.add_bgp_prefixes(nlri4, path.clone());
+            self.db.add_bgp_prefixes(&nlri, path.clone());
         }
 
         //TODO(IPv6) iterate through MpReachNlri attributes for IPv6
@@ -6706,18 +6712,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
         Ok(())
-    }
-
-    /// Returns true if prefix carries a martian value, i.e. the prefix
-    /// is not a valid routable IPv4 Unicast subnet. Currently this only
-    /// checks if the prefix overlaps with IPv4 Loopback (127.0.0.0/8)
-    /// or Multicast (224.0.0.0/4) address space. We deliberately skip
-    /// Class E (240.0.0.0/4) and Link-Local (169.254.0.0/16) ranges, as some
-    /// networks have already deployed these and cannot feasibly renumber,
-    /// and we need to be able to handle these as routable prefixes.
-    // XXX: similar check needed for v6 once we get full v6 support
-    fn is_v4_martian(&self, prefix: &Prefix4) -> bool {
-        prefix.value.is_loopback() || prefix.value.is_multicast()
     }
 
     fn check_nexthop_self(&self, update: &UpdateMessage) -> Result<(), Error> {

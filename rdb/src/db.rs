@@ -789,11 +789,11 @@ impl Db {
         Ok(())
     }
 
-    pub fn add_bgp_prefixes(&self, prefixes: Vec<Prefix>, path: Path) {
+    pub fn add_bgp_prefixes(&self, prefixes: &[Prefix], path: Path) {
         let mut pcn = PrefixChangeNotification::default();
         for prefix in prefixes {
-            self.add_prefix_path(&prefix, &path);
-            pcn.changed.insert(prefix);
+            self.add_prefix_path(prefix, &path);
+            pcn.changed.insert(*prefix);
         }
         self.notify(pcn);
     }
@@ -1134,14 +1134,15 @@ impl Db {
     }
 
     // for each route in @prefixes, remove all bgp paths learned from @peer
-    pub fn remove_bgp_prefixes(&self, prefixes: Vec<Prefix>, peer: &IpAddr) {
+    pub fn remove_bgp_prefixes(&self, prefixes: &[Prefix], peer: &IpAddr) {
         let mut pcn = PrefixChangeNotification::default();
-        self.remove_path_for_prefixes(&prefixes, |rib_path: &Path| {
-            match rib_path.bgp {
+        self.remove_path_for_prefixes(
+            prefixes,
+            |rib_path: &Path| match rib_path.bgp {
                 Some(ref bgp) => bgp.peer == *peer,
                 None => false,
-            }
-        });
+            },
+        );
         pcn.changed.extend(prefixes);
         self.notify(pcn);
     }
@@ -1151,20 +1152,18 @@ impl Db {
     pub fn remove_bgp_prefixes_from_peer(&self, peer: &IpAddr) {
         // TODO(ipv6): call this just for enabled address-families.
         // no need to walk the full rib for an AF that isn't affected
-        self.remove_bgp_prefixes(
-            self.full_rib(Some(AddressFamily::Ipv4))
-                .keys()
-                .copied()
-                .collect(),
-            peer,
-        );
-        self.remove_bgp_prefixes(
-            self.full_rib(Some(AddressFamily::Ipv6))
-                .keys()
-                .copied()
-                .collect(),
-            peer,
-        );
+        let peer_routes4: Vec<_> = self
+            .full_rib(Some(AddressFamily::Ipv4))
+            .keys()
+            .copied()
+            .collect();
+        let peer_routes6: Vec<_> = self
+            .full_rib(Some(AddressFamily::Ipv4))
+            .keys()
+            .copied()
+            .collect();
+        self.remove_bgp_prefixes(&peer_routes4, peer);
+        self.remove_bgp_prefixes(&peer_routes6, peer);
     }
 
     pub fn generation(&self) -> u64 {
@@ -1473,9 +1472,9 @@ mod test {
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
 
         // install bgp routes
-        db.add_bgp_prefixes(vec![p0, p1], bgp_path0.clone());
-        db.add_bgp_prefixes(vec![p1, p2], bgp_path1.clone());
-        db.add_bgp_prefixes(vec![p1, p2], bgp_path2.clone());
+        db.add_bgp_prefixes(&[p0, p1], bgp_path0.clone());
+        db.add_bgp_prefixes(&[p1, p2], bgp_path1.clone());
+        db.add_bgp_prefixes(&[p1, p2], bgp_path2.clone());
 
         // expected current state
         // rib_in:
@@ -1498,7 +1497,7 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // withdrawal of p2 via bgp_path1
-        db.remove_bgp_prefixes(vec![p2], &bgp_path1.clone().bgp.unwrap().peer);
+        db.remove_bgp_prefixes(&[p2], &bgp_path1.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
         // - p0 via static_path1, bgp_path0

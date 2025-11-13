@@ -215,6 +215,8 @@ impl Ord for Prefix4 {
 }
 
 impl Prefix4 {
+    const HOST_MASK: u8 = 32;
+
     /// Create a new `Prefix4` from an IP address and net mask.
     /// The newly created `Prefix4` will have its host bits zeroed upon creation
     /// e.g.
@@ -229,13 +231,6 @@ impl Prefix4 {
         let mut new = Self { value: ip, length };
         new.unset_host_bits();
         new
-    }
-
-    /// Create a new `Prefix4` from an IP address and net mask without zeroing host bits.
-    /// This is useful for wire format parsing where you want to preserve the exact bytes
-    /// and validate separately.
-    pub fn new_unchecked(ip: Ipv4Addr, length: u8) -> Self {
-        Self { value: ip, length }
     }
 
     pub fn db_key(&self) -> Vec<u8> {
@@ -298,6 +293,18 @@ impl Prefix4 {
 
         self_masked == other_masked
     }
+
+    /// Check if a prefix contains a subnet that is valid for use in the RIB.
+    /// Currently this only checks if the prefix overlaps with Loopback
+    /// (127.0.0.0/8) or Multicast (224.0.0.0/4) address space. We deliberately
+    /// do not flag Class E (240.0.0.0/4) or Link-Local (169.254.0.0/16)
+    /// ranges as invalid, as some networks have deployed these as if they were
+    /// standard routable unicast addresses, which we need to handle.
+    pub fn valid_for_rib(&self) -> bool {
+        !(self.value.is_loopback()
+            || self.value.is_multicast()
+            || self.value.is_unspecified() && self.length == Self::HOST_MASK)
+    }
 }
 
 impl fmt::Display for Prefix4 {
@@ -353,6 +360,8 @@ impl fmt::Display for Prefix6 {
 }
 
 impl Prefix6 {
+    const HOST_MASK: u8 = 128;
+
     /// Create a new `Prefix6` from an IP address and net mask.
     /// The newly created `Prefix6` will have its host bits zeroed upon creation
     /// e.g.
@@ -367,13 +376,6 @@ impl Prefix6 {
         let mut new = Self { value: ip, length };
         new.unset_host_bits();
         new
-    }
-
-    /// Create a new `Prefix6` from an IP address and net mask without zeroing host bits.
-    /// This is useful for wire format parsing where you want to preserve the exact bytes
-    /// and validate separately.
-    pub fn new_unchecked(ip: Ipv6Addr, length: u8) -> Self {
-        Self { value: ip, length }
     }
 
     pub fn host_bits_are_unset(&self) -> bool {
@@ -441,6 +443,17 @@ impl Prefix6 {
         let other_masked = other.value.to_bits() & mask;
 
         self_masked == other_masked
+    }
+
+    /// Check if a prefix contains a subnet that is valid for use in the RIB.
+    /// Currently this only checks if the prefix carries the Unspecified or
+    /// Loopback address (::/128 or ::1/128), Multicast (ff00::/8) or Link-Local
+    /// Unicast (fe80::/10) address spaces.
+    pub fn valid_for_rib(&self) -> bool {
+        !(self.value.is_loopback()
+            || self.value.is_multicast()
+            || self.value.is_unicast_link_local()
+            || self.value.is_unspecified() && self.length == Self::HOST_MASK)
     }
 }
 
@@ -537,16 +550,6 @@ impl Prefix {
         }
     }
 
-    /// Create a new `Prefix` from an IP address and net mask without zeroing host bits.
-    /// This is useful for wire format parsing where you want to preserve the exact bytes
-    /// and validate separately.
-    pub fn new_unchecked(ip: IpAddr, length: u8) -> Self {
-        match ip {
-            IpAddr::V4(ip4) => Self::V4(Prefix4::new_unchecked(ip4, length)),
-            IpAddr::V6(ip6) => Self::V6(Prefix6::new_unchecked(ip6, length)),
-        }
-    }
-
     pub fn host_bits_are_unset(&self) -> bool {
         match self {
             Self::V4(p4) => p4.host_bits_are_unset(),
@@ -575,6 +578,14 @@ impl Prefix {
     /// Check if this prefix is IPv4.
     pub fn is_v4(&self) -> bool {
         matches!(self, Prefix::V4(_))
+    }
+
+    /// Check if a prefix contains a subnet that is valid for use in the RIB.
+    pub fn valid_for_rib(&self) -> bool {
+        match self {
+            Prefix::V4(p4) => p4.valid_for_rib(),
+            Prefix::V6(p6) => p6.valid_for_rib(),
+        }
     }
 }
 

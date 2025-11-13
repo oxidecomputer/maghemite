@@ -77,9 +77,30 @@ impl BgpWireFormat<Prefix4> for Prefix4 {
         let mut bytes = [0u8; 4];
         bytes[..byte_count].copy_from_slice(&input[1..1 + byte_count]);
 
+        // Note: BGP wire format encodes the bitlength of a prefix in the first
+        // byte, followed by the minimum number of bytes required to hold the
+        // prefix's bitlength:
+        //
+        // ```
+        //  The Prefix field contains an IP address prefix, followed by
+        //  enough trailing bits to make the end of the field fall on an
+        //  octet boundary.  Note that the value of the trailing bits is
+        //  irrelevant.
+        // ```
+        //
+        // Example: 192.168.1.0/25 is encoded as follows:
+        //   [25, 192, 168, 1, 128]
+        //     ^
+        //     +--- prefix length in bits
+        //
+        // The last encoded byte carries the 25th bit of the prefix plus 7
+        // padding bits (128 = 0b10000000).
+        //
+        // We make the trailing bits irrelevant by zeroing them during Prefix
+        // type instantiation.
         Ok((
             &input[1 + byte_count..],
-            Prefix4::new_unchecked(Ipv4Addr::from(bytes), len),
+            Prefix4::new(Ipv4Addr::from(bytes), len),
         ))
     }
 }
@@ -121,9 +142,30 @@ impl BgpWireFormat<Prefix6> for Prefix6 {
         let mut bytes = [0u8; 16];
         bytes[..byte_count].copy_from_slice(&input[1..1 + byte_count]);
 
+        // Note: BGP wire format encodes the bitlength of a prefix in the first
+        // byte, followed by the minimum number of bytes required to hold the
+        // prefix's bitlength:
+        //
+        // ```
+        //  The Prefix field contains an IP address prefix, followed by
+        //  enough trailing bits to make the end of the field fall on an
+        //  octet boundary.  Note that the value of the trailing bits is
+        //  irrelevant.
+        // ```
+        //
+        // Example: A /25 prefix (2001:d8::/25) transmits 4 bytes:
+        //   [25, 0x20, 0x01, 0x0d, 0x80]
+        //     ^
+        //     +--- prefix length in bits
+        //
+        // The last encoded byte carries the 25th bit of the prefix plus 7
+        // padding bits (0x80 = 0b10000000).
+        //
+        // We make the trailing bits irrelevant by zeroing them during Prefix
+        // type instantiation.
         Ok((
             &input[1 + byte_count..],
-            Prefix6::new_unchecked(Ipv6Addr::from(bytes), len),
+            Prefix6::new(Ipv6Addr::from(bytes), len),
         ))
     }
 }
@@ -674,48 +716,6 @@ pub struct UpdateMessage {
 
 impl UpdateMessage {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        // Validate next-hop address family matches NLRI address family
-        // For IPv4 unicast, NEXT_HOP must be an IPv4 address (4 bytes).
-        // For IPv6 unicast, NEXT_HOP must be either a standalone GUA (16 bytes)
-        // or a GUA with a LL (32 bytes).
-        if !self.nlri.is_empty() || !self.withdrawn.is_empty() {
-            let next_hop = self.path_attributes.iter().find_map(|attr| {
-                if let PathAttributeValue::NextHop(addr) = attr.value {
-                    Some(addr)
-                } else {
-                    None
-                }
-            });
-
-            if let Some(nh) = next_hop {
-                let nh_is_v4 = matches!(nh, IpAddr::V4(_));
-
-                // Check NLRI prefixes
-                for prefix in &self.nlri {
-                    let prefix_is_v4 = prefix.is_v4();
-                    if prefix_is_v4 != nh_is_v4 {
-                        return Err(Error::UnsupportedOperation(format!(
-                            "Address family mismatch: {} NLRI with {} next-hop",
-                            if prefix_is_v4 { "IPv4" } else { "IPv6" },
-                            if nh_is_v4 { "IPv4" } else { "IPv6" }
-                        )));
-                    }
-                }
-
-                // Check withdrawn prefixes
-                for prefix in &self.withdrawn {
-                    let prefix_is_v4 = prefix.is_v4();
-                    if prefix_is_v4 != nh_is_v4 {
-                        return Err(Error::UnsupportedOperation(format!(
-                            "Address family mismatch: {} withdrawn with {} next-hop",
-                            if prefix_is_v4 { "IPv4" } else { "IPv6" },
-                            if nh_is_v4 { "IPv4" } else { "IPv6" }
-                        )));
-                    }
-                }
-            }
-        }
-
         let mut buf = Vec::new();
 
         // withdrawn
@@ -800,52 +800,11 @@ impl UpdateMessage {
 
         let nlri = Self::prefixes_from_wire(input, AddressFamily::Ipv4)?;
 
-        let update = UpdateMessage {
+        Ok(UpdateMessage {
             withdrawn,
             path_attributes,
             nlri,
-        };
-
-        // Validate address family consistency between NLRI and NEXT_HOP
-        if !update.nlri.is_empty() || !update.withdrawn.is_empty() {
-            let next_hop = update.path_attributes.iter().find_map(|attr| {
-                if let PathAttributeValue::NextHop(addr) = attr.value {
-                    Some(addr)
-                } else {
-                    None
-                }
-            });
-
-            if let Some(nh) = next_hop {
-                let nh_is_v4 = matches!(nh, IpAddr::V4(_));
-
-                // Check NLRI prefixes
-                for prefix in &update.nlri {
-                    let prefix_is_v4 = prefix.is_v4();
-                    if prefix_is_v4 != nh_is_v4 {
-                        return Err(Error::UnsupportedOperation(format!(
-                            "Received UPDATE with address family mismatch: {} NLRI with {} next-hop",
-                            if prefix_is_v4 { "IPv4" } else { "IPv6" },
-                            if nh_is_v4 { "IPv4" } else { "IPv6" }
-                        )));
-                    }
-                }
-
-                // Check withdrawn prefixes
-                for prefix in &update.withdrawn {
-                    let prefix_is_v4 = prefix.is_v4();
-                    if prefix_is_v4 != nh_is_v4 {
-                        return Err(Error::UnsupportedOperation(format!(
-                            "Received UPDATE with address family mismatch: {} withdrawn with {} next-hop",
-                            if prefix_is_v4 { "IPv4" } else { "IPv6" },
-                            if nh_is_v4 { "IPv4" } else { "IPv6" }
-                        )));
-                    }
-                }
-            }
-        }
-
-        Ok(update)
+        })
     }
 
     fn prefixes_from_wire(
