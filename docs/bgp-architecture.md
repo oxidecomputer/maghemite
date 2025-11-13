@@ -843,6 +843,51 @@ When **enabled** (`true`):
 
 ---
 
+### When to Enable Deterministic Resolution
+
+In very particular timing scenarios, the FSM on one peer may see its connection reach Established state before collision resolution completes. This can result in both sides sending Notifications to different connections, causing both to shut down.
+
+**Example Scenario**: R1 and R2 simultaneously initiate connections to each other, with R1 having a lower BGP Identifier.
+
+**R1's Perspective** (lower BGP ID):
+```
+1. R1 initiates outbound connection to R2 (R1 → R2)
+2. R1 gets TcpConnectionConfirmed for outbound connection (R1 → R2)
+3. R1 sends Open via outbound connection (R1 → R2), moves to OpenSent
+4. R1 gets Open from outbound connection (R1 → R2), moves to OpenConfirm
+5. R1 gets TcpConnectionAcked for inbound connection (R2 → R1)
+6. R1 sends Open via inbound connection (R2 → R1), moves to ConnectionCollision
+7. R1 gets Keepalive from outbound connection (R1 → R2), moves to Established
+8. R1 gets Open and sends Notification via inbound connection (R2 → R1)
+   because Established wins over collision resolution
+9. R1 gets Notification from outbound connection (R1 → R2), moves to Idle
+```
+
+**R2's Perspective** (higher BGP ID):
+```
+1. R2 initiates outbound connection to R1 (R2 → R1)
+2. R2 gets TcpConnectionAcked for inbound connection from R1 (R1 → R2)
+3. R2 sends Open via inbound connection (R1 → R2), moves to OpenSent
+4. R2 gets TcpConnectionConfirmed for new outbound connection (R2 → R1),
+   moves to ConnectionCollision
+5. R2 gets Open from inbound connection (R1 → R2)
+6. R2 performs collision resolution, R2 wins with higher BGP ID
+7. R2 sends Notification via inbound connection (R1 → R2), moves to OpenSent
+8. R2 receives Open via outbound connection (R2 → R1), moves to OpenConfirm
+9. R2 receives Notification via inbound connection (R2 → R1), moves to Idle
+```
+
+**What Happened**: The timing worked out such that one peer (R1) saw its connection move into Established—which is valid in the dual-FSM model we're emulating—but that connection would have lost the collision resolution tie-breaker. This results in both sides sending a Notification to different connections for different reasons, causing both connections to shut down and restart.
+
+**Solution**: Enable `deterministic_collision_resolution` to ensure BGP-ID-based resolution even when one side reaches Established first. This guarantees both peers agree on which connection to keep, regardless of timing.
+
+**When to enable**:
+- Network has frequent simultaneous connection attempts between peers
+- Logs show repeated collision-related session resets
+- Debugging reveals the race condition described above
+
+---
+
 ## BgpConnection Trait Deep Dive
 
 ### Purpose of the Abstraction
