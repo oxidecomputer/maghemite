@@ -334,7 +334,7 @@ mod test {
             3,
             SessionMode::MultiHop,
             a,
-            db,
+            db.db().clone(),
         );
         assert_eq!(daemon.peer_state(p1_addr), Some(BfdPeerState::Down));
 
@@ -360,7 +360,7 @@ mod test {
             3,
             SessionMode::MultiHop,
             a,
-            db.clone(),
+            db.db().clone(),
         );
         net.register(addr2, b);
 
@@ -372,7 +372,7 @@ mod test {
             3,
             SessionMode::MultiHop,
             a,
-            db,
+            db.db().clone(),
         );
         net.register(addr1, b);
 

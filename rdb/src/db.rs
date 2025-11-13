@@ -1322,13 +1322,13 @@ impl Reaper {
 mod test {
     use crate::{
         AddressFamily, DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4,
-        Prefix6, StaticRouteKey, db::Db,
+        Prefix6, StaticRouteKey, db::Db, test::TestDb,
     };
     use mg_common::log::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
-    fn get_test_db() -> Db {
+    fn get_test_db() -> TestDb {
         let log = init_file_logger("rib.log");
         crate::test::get_test_db("rib_test", log).expect("create db")
     }

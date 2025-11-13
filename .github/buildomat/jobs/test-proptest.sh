@@ -7,6 +7,7 @@
 #: output_rules = [
 #:   "/work/*.log",
 #:   "/work/proptest-regressions/*",
+#:   "/tmp/*.db",
 #: ]
 #: access_repos = [
 #:   "oxidecomputer/dendrite",
@@ -32,7 +33,7 @@ source .github/buildomat/test-common.sh
 
 # RDB proptest suite
 pushd rdb
-PROPTEST_CASES=1000000 cargo nextest run --lib types_proptest
+PROPTEST_CASES=1000000 cargo nextest run --lib proptest
 cp *.log /work/ 2>/dev/null || true
 if [ -d proptest-regressions ]; then
     cp -r proptest-regressions /work/rdb-proptest-regressions

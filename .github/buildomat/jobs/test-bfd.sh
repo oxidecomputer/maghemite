@@ -6,6 +6,7 @@
 #: rust_toolchain = "stable"
 #: output_rules = [
 #:   "/work/*.log",
+#:   "/tmp/*.db",
 #: ]
 #:
 
