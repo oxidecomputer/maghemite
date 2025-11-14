@@ -679,7 +679,9 @@ async fn delete_router(asn: u32, c: Client) -> Result<()> {
 
 async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
     let result = c.get_neighbors_v2(asn).await?;
-    //println!("{result:#?}");
+    let mut sorted: Vec<_> = result.iter().collect();
+    sorted.sort_by_key(|(ip, _)| ip.parse::<IpAddr>().ok());
+
     let mut tw = TabWriter::new(stdout());
     writeln!(
         &mut tw,
@@ -693,7 +695,7 @@ async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
     )
     .unwrap();
 
-    for (addr, info) in result.iter() {
+    for (addr, info) in sorted.iter() {
         writeln!(
             &mut tw,
             "{}\t{:?}\t{:?}\t{:}\t{}/{}\t{}/{}",
