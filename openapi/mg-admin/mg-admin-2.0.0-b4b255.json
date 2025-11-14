@@ -869,7 +869,40 @@
         }
       }
     },
-    "/bgp/message-history": {
+    "/bgp/history/fsm": {
+      "get": {
+        "operationId": "fsm_history",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FsmHistoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FsmHistoryResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/history/message": {
       "get": {
         "operationId": "message_history_v2",
         "requestBody": {
@@ -2426,6 +2459,141 @@
           }
         ]
       },
+      "FsmEventBuffer": {
+        "oneOf": [
+          {
+            "description": "All FSM events (high frequency, includes all timers)",
+            "type": "string",
+            "enum": [
+              "all"
+            ]
+          },
+          {
+            "description": "Major events only (state transitions, admin, new connections)",
+            "type": "string",
+            "enum": [
+              "major"
+            ]
+          }
+        ]
+      },
+      "FsmEventCategory": {
+        "description": "Category of FSM event for filtering and display purposes",
+        "type": "string",
+        "enum": [
+          "Admin",
+          "Connection",
+          "Session",
+          "StateTransition"
+        ]
+      },
+      "FsmEventRecord": {
+        "description": "Serializable record of an FSM event with full context",
+        "type": "object",
+        "properties": {
+          "connection_id": {
+            "nullable": true,
+            "description": "Connection ID if event is connection-specific",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConnectionId"
+              }
+            ]
+          },
+          "current_state": {
+            "description": "FSM state at time of event",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FsmStateKind"
+              }
+            ]
+          },
+          "details": {
+            "nullable": true,
+            "description": "Additional event details (e.g., \"Received OPEN\", \"Admin command\")",
+            "type": "string"
+          },
+          "event_category": {
+            "description": "High-level event category",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FsmEventCategory"
+              }
+            ]
+          },
+          "event_type": {
+            "description": "Specific event type as string (e.g., \"ManualStart\", \"HoldTimerExpires\")",
+            "type": "string"
+          },
+          "previous_state": {
+            "nullable": true,
+            "description": "Previous state if this caused a transition",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FsmStateKind"
+              }
+            ]
+          },
+          "timestamp": {
+            "description": "UTC timestamp when event occurred",
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "current_state",
+          "event_category",
+          "event_type",
+          "timestamp"
+        ]
+      },
+      "FsmHistoryRequest": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "ASN of the BGP router",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "buffer": {
+            "nullable": true,
+            "description": "Which buffer to retrieve - if None, returns major buffer",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FsmEventBuffer"
+              }
+            ]
+          },
+          "peer": {
+            "nullable": true,
+            "description": "Optional peer filter - if None, returns history for all peers",
+            "type": "string",
+            "format": "ip"
+          }
+        },
+        "required": [
+          "asn"
+        ]
+      },
+      "FsmHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "by_peer": {
+            "description": "Events organized by peer address Each peer's value contains only the events from the requested buffer",
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/FsmEventRecord"
+              }
+            }
+          }
+        },
+        "required": [
+          "by_peer"
+        ]
+      },
       "FsmStateKind": {
         "description": "Simplified representation of a BGP state without having to carry a connection.",
         "oneOf": [
@@ -2614,6 +2782,13 @@
           }
         ]
       },
+      "MessageDirection": {
+        "type": "string",
+        "enum": [
+          "sent",
+          "received"
+        ]
+      },
       "MessageHistory": {
         "description": "Message history for a BGP session",
         "type": "object",
@@ -2661,9 +2836,25 @@
         "type": "object",
         "properties": {
           "asn": {
+            "description": "ASN of the BGP router",
             "type": "integer",
             "format": "uint32",
             "minimum": 0
+          },
+          "direction": {
+            "nullable": true,
+            "description": "Optional direction filter - if None, returns both sent and received",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MessageDirection"
+              }
+            ]
+          },
+          "peer": {
+            "nullable": true,
+            "description": "Optional peer filter - if None, returns history for all peers",
+            "type": "string",
+            "format": "ip"
           }
         },
         "required": [
@@ -3677,10 +3868,22 @@
         ]
       },
       "AddressFamily": {
-        "type": "string",
-        "enum": [
-          "Ipv4",
-          "Ipv6"
+        "description": "Represents the address family (protocol version) for network routes.\n\nThis is the canonical source of truth for address family definitions across the entire codebase. All routing-related components (RIB operations, BGP messages, API filtering, CLI tools) use this single enum rather than defining their own.\n\n# Semantics\n\nWhen used in filtering contexts (e.g., database queries or API parameters), `Option<AddressFamily>` is preferred: - `None` = no filter (match all address families) - `Some(Ipv4)` = IPv4 routes only - `Some(Ipv6)` = IPv6 routes only\n\n# Examples\n\n``` use rdb::types::AddressFamily;\n\nlet ipv4 = AddressFamily::Ipv4; let ipv6 = AddressFamily::Ipv6;\n\n// For filtering, use Option let filter: Option<AddressFamily> = Some(AddressFamily::Ipv4); let no_filter: Option<AddressFamily> = None; // matches all families ```",
+        "oneOf": [
+          {
+            "description": "Internet Protocol Version 4 (IPv4)",
+            "type": "string",
+            "enum": [
+              "Ipv4"
+            ]
+          },
+          {
+            "description": "Internet Protocol Version 6 (IPv6)",
+            "type": "string",
+            "enum": [
+              "Ipv6"
+            ]
+          }
         ]
       },
       "ProtocolFilter": {

@@ -15,7 +15,8 @@ use bgp::{
     connection_tcp::BgpConnectionTcp,
     router::Router,
     session::{
-        AdminEvent, FsmEvent, MessageHistoryV1, SessionEndpoint, SessionInfo,
+        AdminEvent, FsmEvent, MessageHistory, MessageHistoryV1,
+        SessionEndpoint, SessionInfo,
     },
 };
 use dropshot::{
@@ -23,9 +24,10 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Query, RequestContext, TypedBody,
 };
 use mg_api::{
-    AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse,
-    MessageHistoryRequest, MessageHistoryResponse, MessageHistoryResponseV1,
-    NeighborResetRequest, NeighborSelector, Rib,
+    AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse, FsmEventBuffer,
+    FsmHistoryRequest, FsmHistoryResponse, MessageDirection,
+    MessageHistoryRequest, MessageHistoryRequestV1, MessageHistoryResponse,
+    MessageHistoryResponseV1, NeighborResetRequest, NeighborSelector, Rib,
 };
 use mg_common::lock;
 use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
@@ -743,9 +745,57 @@ async fn do_bgp_apply(
     Ok(HttpResponseUpdatedNoContent())
 }
 
+// Common helper for fetching message history with optional filtering
+fn get_message_history_filtered(
+    ctx: &Arc<HandlerContext>,
+    asn: u32,
+    peer: Option<IpAddr>,
+    direction: Option<MessageDirection>,
+) -> Result<HashMap<IpAddr, MessageHistory>, HttpError> {
+    let mut result = HashMap::new();
+
+    // Determine which peers to fetch history for
+    let peers_to_query: Vec<IpAddr> = if let Some(peer_addr) = peer {
+        if lock!(get_router!(ctx, asn)?.sessions).contains_key(&peer_addr) {
+            vec![peer_addr]
+        } else {
+            vec![]
+        }
+    } else {
+        lock!(get_router!(ctx, asn)?.sessions)
+            .keys()
+            .copied()
+            .collect()
+    };
+
+    // Fetch history for each peer
+    for addr in peers_to_query {
+        if let Some(session) = lock!(get_router!(ctx, asn)?.sessions).get(&addr)
+        {
+            let mut history = lock!(session.message_history).clone();
+
+            // Apply direction filter if specified
+            if let Some(dir) = direction {
+                match dir {
+                    MessageDirection::Sent => {
+                        history.received.clear();
+                    }
+                    MessageDirection::Received => {
+                        history.sent.clear();
+                    }
+                }
+            }
+
+            result.insert(addr, history);
+        }
+    }
+
+    Ok(result)
+}
+
 pub async fn message_history(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<MessageHistoryRequest>,
+    request: TypedBody<MessageHistoryRequestV1>,
 ) -> Result<HttpResponseOk<MessageHistoryResponseV1>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -767,13 +817,51 @@ pub async fn message_history_v2(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
+    let by_peer =
+        get_message_history_filtered(ctx, rq.asn, rq.peer, rq.direction)?;
+    Ok(HttpResponseOk(MessageHistoryResponse { by_peer }))
+}
+
+// FSM event history handler
+pub async fn fsm_history(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<FsmHistoryRequest>,
+) -> Result<HttpResponseOk<FsmHistoryResponse>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
     let mut result = HashMap::new();
 
-    for (addr, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
-        result.insert(*addr, lock!(session.message_history).clone());
+    // Determine which buffer to use (default to major)
+    let use_all_buffer = matches!(rq.buffer, Some(FsmEventBuffer::All));
+
+    // Filter by specific peer if requested
+    if let Some(peer_addr) = rq.peer {
+        if let Some(session) =
+            lock!(get_router!(ctx, rq.asn)?.sessions).get(&peer_addr)
+        {
+            let full_history = lock!(session.fsm_event_history).clone();
+            let events = if use_all_buffer {
+                full_history.all.into_iter().collect()
+            } else {
+                full_history.major.into_iter().collect()
+            };
+            result.insert(peer_addr, events);
+        }
+    } else {
+        // Return history for all peers
+        for (addr, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter()
+        {
+            let full_history = lock!(session.fsm_event_history).clone();
+            let events = if use_all_buffer {
+                full_history.all.into_iter().collect()
+            } else {
+                full_history.major.into_iter().collect()
+            };
+            result.insert(*addr, events);
+        }
     }
 
-    Ok(HttpResponseOk(MessageHistoryResponse { by_peer: result }))
+    Ok(HttpResponseOk(FsmHistoryResponse { by_peer: result }))
 }
 
 pub async fn create_checker(

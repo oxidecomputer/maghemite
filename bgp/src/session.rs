@@ -662,6 +662,91 @@ impl MessageHistory {
     }
 }
 
+pub const MAX_FSM_HISTORY_ALL: usize = 1024;
+pub const MAX_FSM_HISTORY_MAJOR: usize = 1024;
+
+/// Category of FSM event for filtering and display purposes
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum FsmEventCategory {
+    Admin,
+    Connection,
+    Session,
+    StateTransition,
+}
+
+/// Serializable record of an FSM event with full context
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FsmEventRecord {
+    /// UTC timestamp when event occurred
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+
+    /// High-level event category
+    pub event_category: FsmEventCategory,
+
+    /// Specific event type as string (e.g., "ManualStart", "HoldTimerExpires")
+    pub event_type: String,
+
+    /// FSM state at time of event
+    pub current_state: FsmStateKind,
+
+    /// Previous state if this caused a transition
+    pub previous_state: Option<FsmStateKind>,
+
+    /// Connection ID if event is connection-specific
+    pub connection_id: Option<ConnectionId>,
+
+    /// Additional event details (e.g., "Received OPEN", "Admin command")
+    pub details: Option<String>,
+}
+
+/// Dual-buffer FSM event history for comprehensive and strategic visibility
+///
+/// The 'all' buffer records every FSM event including high-frequency timer events,
+/// useful for detailed debugging of recent behavior. The 'major' buffer records only
+/// significant events (state transitions, admin commands, new connections) that
+/// provide long-term strategic visibility into session lifecycle.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct FsmEventHistory {
+    /// All FSM events (high frequency, includes all timers)
+    pub all: VecDeque<FsmEventRecord>,
+
+    /// Major events only (state transitions, admin, new connections)
+    pub major: VecDeque<FsmEventRecord>,
+}
+
+impl FsmEventHistory {
+    pub fn new() -> Self {
+        Self {
+            all: VecDeque::with_capacity(MAX_FSM_HISTORY_ALL),
+            major: VecDeque::with_capacity(MAX_FSM_HISTORY_MAJOR),
+        }
+    }
+
+    /// Record an event in 'all' buffer (rolling FIFO)
+    pub fn record_all(&mut self, event: FsmEventRecord) {
+        if self.all.len() >= MAX_FSM_HISTORY_ALL {
+            self.all.pop_back();
+        }
+        self.all.push_front(event);
+    }
+
+    /// Record an event in 'major' buffer (rolling FIFO)
+    pub fn record_major(&mut self, event: FsmEventRecord) {
+        if self.major.len() >= MAX_FSM_HISTORY_MAJOR {
+            self.major.pop_back();
+        }
+        self.major.push_front(event);
+    }
+
+    /// Record in both buffers if event is major, otherwise just 'all'
+    pub fn record(&mut self, event: FsmEventRecord, is_major: bool) {
+        self.record_all(event.clone());
+        if is_major {
+            self.record_major(event);
+        }
+    }
+}
+
 /// Session-level counters that persist across connection changes
 /// These serve as aggregate counters across all connections for the session
 #[derive(Default)]
@@ -1053,6 +1138,9 @@ pub struct SessionRunner<Cnx: BgpConnection> {
     /// included in message history.
     pub message_history: Arc<Mutex<MessageHistory>>,
 
+    /// Dual-buffer FSM event history (all events + major events only)
+    pub fsm_event_history: Arc<Mutex<FsmEventHistory>>,
+
     /// Counters for message types sent and received, state transitions, etc.
     pub counters: Arc<SessionCounters>,
 
@@ -1207,6 +1295,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             fanout,
             router,
             message_history: Arc::new(Mutex::new(MessageHistory::default())),
+            fsm_event_history: Arc::new(Mutex::new(FsmEventHistory::new())),
             counters: Arc::new(SessionCounters::default()),
             db,
             caps_tx: Arc::new(Mutex::new(BTreeSet::new())),
@@ -1445,6 +1534,95 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         false
     }
 
+    /// Extract connection ID and additional context from FSM event
+    fn extract_event_context(
+        event: &FsmEvent<Cnx>,
+    ) -> (FsmEventCategory, Option<ConnectionId>, Option<String>) {
+        match event {
+            FsmEvent::Admin(_) => (FsmEventCategory::Admin, None, None),
+            FsmEvent::Connection(ce) => {
+                let conn_id = match ce {
+                    ConnectionEvent::Message { conn_id, msg } => {
+                        let details = format!("received {}", msg.title());
+                        return (
+                            FsmEventCategory::Connection,
+                            Some(*conn_id),
+                            Some(details),
+                        );
+                    }
+                    ConnectionEvent::HoldTimerExpires(id)
+                    | ConnectionEvent::KeepaliveTimerExpires(id)
+                    | ConnectionEvent::DelayOpenTimerExpires(id) => Some(*id),
+                };
+                (FsmEventCategory::Connection, conn_id, None)
+            }
+            FsmEvent::Session(se) => {
+                let (conn_id, details) = match se {
+                    SessionEvent::TcpConnectionAcked(conn) => {
+                        let details = format!("inbound from {}", conn.peer());
+                        (Some(*conn.id()), Some(details))
+                    }
+                    SessionEvent::TcpConnectionConfirmed(conn) => {
+                        let details = format!("outbound to {}", conn.peer());
+                        (Some(*conn.id()), Some(details))
+                    }
+                    _ => (None, None),
+                };
+                (FsmEventCategory::Session, conn_id, details)
+            }
+        }
+    }
+
+    /// Create FSM event record from event
+    fn create_event_record(
+        &self,
+        event: &FsmEvent<Cnx>,
+        current_state: FsmStateKind,
+        previous_state: Option<FsmStateKind>,
+    ) -> FsmEventRecord {
+        let (category, connection_id, details) =
+            Self::extract_event_context(event);
+        let event_type = event.title().to_string();
+
+        FsmEventRecord {
+            timestamp: chrono::Utc::now(),
+            event_category: category,
+            event_type,
+            current_state,
+            previous_state,
+            connection_id,
+            details,
+        }
+    }
+
+    /// Determine if event is "major" (should be in major buffer)
+    /// Major events: all admin events, new TCP connections, state transitions
+    fn is_major_event(event: &FsmEvent<Cnx>) -> bool {
+        match event {
+            FsmEvent::Admin(_) => true, // All admin events are major
+            FsmEvent::Session(se) => matches!(
+                se,
+                SessionEvent::TcpConnectionAcked(_)
+                    | SessionEvent::TcpConnectionConfirmed(_)
+            ),
+            FsmEvent::Connection(_) => false, // Major only if causes state transition
+        }
+    }
+
+    /// Record FSM event in history buffers
+    fn record_fsm_event(
+        &self,
+        event: &FsmEvent<Cnx>,
+        current_state: FsmStateKind,
+        previous_state: Option<FsmStateKind>,
+    ) {
+        let record =
+            self.create_event_record(event, current_state, previous_state);
+        let is_major = Self::is_major_event(event) || previous_state.is_some();
+
+        lock!(self.fsm_event_history).record(record, is_major);
+    }
+
     /// Clean up all connections associated with this SessionRunner
     fn cleanup_connections(&self) {
         let mut registry = lock!(self.connection_registry);
@@ -1522,6 +1700,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     "fsm transition {previous} -> {}",
                     current.kind()
                 );
+
+                // Record state transition as a major event in FSM history
+                let transition_record = FsmEventRecord {
+                    timestamp: chrono::Utc::now(),
+                    event_category: FsmEventCategory::StateTransition,
+                    event_type: format!(
+                        "{:?} -> {:?}",
+                        previous,
+                        current.kind()
+                    ),
+                    current_state: current.kind(),
+                    previous_state: Some(previous),
+                    connection_id: None,
+                    details: Some("State transition".to_string()),
+                };
+                lock!(self.fsm_event_history).record_major(transition_record);
+
                 match current.kind() {
                     FsmStateKind::Idle => {
                         self.counters
@@ -1829,6 +2024,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// The only time non Notification messages are handled in Connect is when
     /// an Open is received while DelayOpenTimer is running. DelayOpen is not
     /// currently implemented, so for now we don't have special handling here.
+    /// A non-passive peer only moves from Connect into Active if a connection
+    /// fails while DelayOpenTimer is running. So we would not expect to see a
+    /// non-passive peer in Active until after DelayOpen is implemented.
     /// Note: ConnectRetryTimer needs to be stopped before any state transitions
     /// occur. ConnectRetryTimer is used to trigger a new outbound connection
     /// attempt for non-passive peers while in Active or Connect states, but
@@ -7024,5 +7222,117 @@ mod tests {
             ),
             CollisionResolution::NewWins
         );
+    }
+
+    #[test]
+    fn test_fsm_event_history_all_buffer_rolling() {
+        let mut history = FsmEventHistory::new();
+
+        // Fill beyond capacity (1024)
+        for i in 0..1500 {
+            let record = FsmEventRecord {
+                timestamp: chrono::Utc::now(),
+                event_category: FsmEventCategory::Connection,
+                event_type: format!("Event {}", i),
+                current_state: FsmStateKind::Established,
+                previous_state: None,
+                connection_id: None,
+                details: None,
+            };
+            history.record_all(record);
+        }
+
+        // Should be capped at 1024
+        assert_eq!(history.all.len(), MAX_FSM_HISTORY_ALL);
+
+        // Most recent should be Event 1499
+        assert_eq!(history.all.front().unwrap().event_type, "Event 1499");
+
+        // Oldest should be Event 476 (1500 - 1024)
+        assert_eq!(history.all.back().unwrap().event_type, "Event 476");
+    }
+
+    #[test]
+    fn test_fsm_event_history_major_buffer_rolling() {
+        let mut history = FsmEventHistory::new();
+
+        // Fill beyond capacity (1024)
+        for i in 0..1500 {
+            let record = FsmEventRecord {
+                timestamp: chrono::Utc::now(),
+                event_category: FsmEventCategory::Admin,
+                event_type: format!("Major {}", i),
+                current_state: FsmStateKind::Idle,
+                previous_state: None,
+                connection_id: None,
+                details: None,
+            };
+            history.record_major(record);
+        }
+
+        // Should be capped at 1024
+        assert_eq!(history.major.len(), MAX_FSM_HISTORY_MAJOR);
+
+        // Most recent should be Major 1499
+        assert_eq!(history.major.front().unwrap().event_type, "Major 1499");
+
+        // Oldest should be Major 476 (1500 - 1024)
+        assert_eq!(history.major.back().unwrap().event_type, "Major 476");
+    }
+
+    #[test]
+    fn test_fsm_event_history_major_filtering() {
+        let mut history = FsmEventHistory::new();
+
+        // Record 100 all events, 10 major
+        for i in 0..100 {
+            let record = FsmEventRecord {
+                timestamp: chrono::Utc::now(),
+                event_category: if i % 10 == 0 {
+                    FsmEventCategory::Admin
+                } else {
+                    FsmEventCategory::Connection
+                },
+                event_type: format!("Event {}", i),
+                current_state: FsmStateKind::Established,
+                previous_state: None,
+                connection_id: None,
+                details: None,
+            };
+            let is_major = i % 10 == 0;
+            history.record(record, is_major);
+        }
+
+        // All buffer should have all 100 events
+        assert_eq!(history.all.len(), 100);
+
+        // Major buffer should have only 10 events
+        assert_eq!(history.major.len(), 10);
+
+        // Verify major events are the ones divisible by 10
+        for (idx, event) in history.major.iter().enumerate() {
+            // Events are in reverse order (most recent first)
+            let expected_num = 90 - (idx * 10);
+            assert_eq!(event.event_type, format!("Event {}", expected_num));
+        }
+    }
+
+    #[test]
+    fn test_fsm_event_record_creation() {
+        // Test that we can create records with all fields
+        let record = FsmEventRecord {
+            timestamp: chrono::Utc::now(),
+            event_category: FsmEventCategory::StateTransition,
+            event_type: "Idle -> Connect".to_string(),
+            current_state: FsmStateKind::Connect,
+            previous_state: Some(FsmStateKind::Idle),
+            connection_id: None,
+            details: Some("State transition".to_string()),
+        };
+
+        assert_eq!(record.event_type, "Idle -> Connect");
+        assert_eq!(record.current_state, FsmStateKind::Connect);
+        assert_eq!(record.previous_state, Some(FsmStateKind::Idle));
+        assert!(record.details.is_some());
     }
 }

@@ -27,6 +27,9 @@ pub enum Commands {
     /// View dynamic router state.
     Status(StatusSubcommand),
 
+    /// View event history for BGP sessions.
+    History(HistorySubcommand),
+
     /// Clear dynamic router state.
     Clear(ClearSubcommand),
 
@@ -73,6 +76,59 @@ pub enum StatusCmd {
     Exported {
         #[clap(env)]
         asn: u32,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct HistorySubcommand {
+    #[command(subcommand)]
+    command: HistoryCmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HistoryCmd {
+    /// Get FSM event history for BGP sessions.
+    Fsm {
+        /// Optional: Filter by specific peer address.
+        peer: Option<IpAddr>,
+
+        /// Which buffer to display: 'major' (default) or 'all'.
+        #[clap(default_value = "major")]
+        buffer: String,
+
+        /// BGP Autonomous System number. Can be specified via ASN env var.
+        #[clap(env)]
+        asn: Option<u32>,
+
+        /// Number of records to display. Use 'all' or '0' to show everything.
+        #[clap(long, default_value = "20")]
+        limit: String,
+
+        /// Display full details without truncation.
+        #[clap(long)]
+        wide: bool,
+    },
+
+    /// Get BGP message history for sessions.
+    Message {
+        /// Peer address to show history for.
+        peer: IpAddr,
+
+        /// BGP Autonomous System number. Can be specified via ASN env var.
+        #[clap(env)]
+        asn: Option<u32>,
+
+        /// Filter by direction: 'sent', 'received', or 'both' (default).
+        #[clap(long, default_value = "both")]
+        direction: String,
+
+        /// Number of records to display. Use 'all' or '0' to show everything.
+        #[clap(long, default_value = "20")]
+        limit: String,
+
+        /// Display full message content without truncation.
+        #[clap(long)]
+        wide: bool,
     },
 }
 
@@ -623,6 +679,34 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             StatusCmd::Exported { asn } => get_exported(c, asn).await?,
         },
 
+        Commands::History(cmd) => match cmd.command {
+            HistoryCmd::Fsm {
+                asn,
+                peer,
+                buffer,
+                limit,
+                wide,
+            } => {
+                let asn = asn.ok_or_else(|| {
+                    anyhow::anyhow!("ASN is required. Specify it on the command line or set the ASN environment variable.")
+                })?;
+                get_fsm_history(c, asn, peer, &buffer, &limit, wide).await?
+            }
+            HistoryCmd::Message {
+                asn,
+                peer,
+                direction,
+                limit,
+                wide,
+            } => {
+                let asn = asn.ok_or_else(|| {
+                    anyhow::anyhow!("ASN is required. Specify it on the command line or set the ASN environment variable.")
+                })?;
+                get_message_history(c, asn, peer, &direction, &limit, wide)
+                    .await?
+            }
+        },
+
         Commands::Clear(cmd) => match cmd.command {
             ClearCmd::Neighbor {
                 asn,
@@ -922,6 +1006,260 @@ async fn update_shp(filename: String, asn: u32, c: Client) -> Result<()> {
 
 async fn delete_shp(asn: u32, c: Client) -> Result<()> {
     c.delete_shaper(asn).await?;
+    Ok(())
+}
+
+async fn get_fsm_history(
+    c: Client,
+    asn: u32,
+    peer: Option<IpAddr>,
+    buffer: &str,
+    limit_str: &str,
+    wide: bool,
+) -> Result<()> {
+    // Parse buffer type for server-side filtering
+    let buffer_type = match buffer {
+        "all" => Some(types::FsmEventBuffer::All),
+        _ => Some(types::FsmEventBuffer::Major), // Default to major
+    };
+
+    let buffer_name = match buffer {
+        "all" => "All Events",
+        _ => "Major Events",
+    };
+
+    let result = c
+        .fsm_history(&types::FsmHistoryRequest {
+            asn,
+            peer,
+            buffer: buffer_type,
+        })
+        .await?
+        .into_inner();
+
+    if result.by_peer.is_empty() {
+        if let Some(peer_addr) = peer {
+            println!("No FSM history found for peer {}", peer_addr);
+        } else {
+            println!("No FSM history found for ASN {}", asn);
+        }
+        return Ok(());
+    }
+
+    // Parse limit ("all" or "0" means unlimited)
+    let limit = if limit_str == "all" {
+        usize::MAX
+    } else {
+        match limit_str.parse::<usize>() {
+            Ok(0) => usize::MAX,
+            Ok(n) => n,
+            Err(_) => 20,
+        }
+    };
+
+    // Display FSM history in tabular format
+    for (peer_addr, events) in result.by_peer.iter() {
+        if events.is_empty() {
+            println!(
+                "\n{}",
+                format!(
+                    "FSM Event History - Peer: {} - {} (empty)",
+                    peer_addr, buffer_name
+                )
+                .dimmed()
+            );
+            continue;
+        }
+
+        println!(
+            "\n{}",
+            format!(
+                "FSM Event History - Peer: {} - {}",
+                peer_addr, buffer_name
+            )
+            .dimmed()
+        );
+        println!("{}", "=".repeat(100).dimmed());
+        println!(
+            "Showing {} of {} events\n",
+            events.len().min(limit),
+            events.len()
+        );
+
+        let mut tw = TabWriter::new(stdout());
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            "Timestamp".dimmed(),
+            "Category".dimmed(),
+            "Event".dimmed(),
+            "State".dimmed(),
+            "Transition".dimmed(),
+            "Details".dimmed(),
+        )?;
+
+        for event in events.iter().take(limit) {
+            let timestamp = event.timestamp.format("%Y-%m-%d %H:%M:%S%.3f");
+            let category = format!("{:?}", event.event_category);
+            let transition = if let Some(prev) = &event.previous_state {
+                format!("{:?} → {:?}", prev, event.current_state)
+            } else {
+                format!("{:?}", event.current_state)
+            };
+            let details = event.details.as_deref().unwrap_or("-");
+
+            // Truncate unless wide mode
+            let details_display = if !wide && details.len() > 50 {
+                format!("{}...", &details[..47])
+            } else {
+                details.to_string()
+            };
+
+            writeln!(
+                &mut tw,
+                "{}\t{}\t{}\t{:?}\t{}\t{}",
+                timestamp,
+                category,
+                event.event_type,
+                event.current_state,
+                transition,
+                details_display,
+            )?;
+        }
+        tw.flush()?;
+
+        if events.len() > limit {
+            println!(
+                "\n... ({} more events not shown, use --limit all to see everything)",
+                events.len() - limit
+            );
+        }
+    }
+
+    Ok(())
+}
+
+async fn get_message_history(
+    c: Client,
+    asn: u32,
+    peer: IpAddr,
+    direction: &str,
+    limit_str: &str,
+    wide: bool,
+) -> Result<()> {
+    // Parse direction filter
+    let dir = match direction {
+        "sent" => Some(types::MessageDirection::Sent),
+        "received" => Some(types::MessageDirection::Received),
+        _ => None, // "both" or any other value means no filter
+    };
+
+    // Parse limit ("all" or "0" means unlimited)
+    let limit = if limit_str == "all" {
+        usize::MAX
+    } else {
+        match limit_str.parse::<usize>() {
+            Ok(0) => usize::MAX,
+            Ok(n) => n,
+            Err(_) => 20,
+        }
+    };
+
+    let result = c
+        .message_history_v2(&types::MessageHistoryRequest {
+            asn,
+            peer: Some(peer),
+            direction: dir,
+        })
+        .await?
+        .into_inner();
+
+    if result.by_peer.is_empty() {
+        println!("No message history found for ASN {} peer {}", asn, peer);
+        return Ok(());
+    }
+
+    // Should only have one peer since we filtered by peer
+    // Note: by_peer uses String keys (from JSON serialization)
+    let history = result.by_peer.get(&peer.to_string()).ok_or_else(|| {
+        anyhow::anyhow!("Peer {} not found in message history", peer)
+    })?;
+
+    // Combine sent and received messages with their direction
+    let mut all_messages = Vec::new();
+
+    for entry in &history.received {
+        all_messages.push((
+            entry.timestamp,
+            "RX",
+            &entry.connection_id,
+            &entry.message,
+        ));
+    }
+
+    for entry in &history.sent {
+        all_messages.push((
+            entry.timestamp,
+            "TX",
+            &entry.connection_id,
+            &entry.message,
+        ));
+    }
+
+    // Sort by timestamp (oldest first)
+    all_messages.sort_by_key(|(ts, _, _, _)| *ts);
+
+    // Apply limit
+    let messages_to_show =
+        all_messages.iter().rev().take(limit).collect::<Vec<_>>();
+    let total_count = all_messages.len();
+
+    println!(
+        "\n{}",
+        format!("BGP Message History - Peer: {}", peer).dimmed()
+    );
+    println!("{}", "=".repeat(80).dimmed());
+    println!(
+        "Showing {} of {} messages ({} RX, {} TX)\n",
+        messages_to_show.len(),
+        total_count,
+        history.received.len(),
+        history.sent.len()
+    );
+
+    // Display messages in reverse chronological order (newest first)
+    for (timestamp, direction, conn_id, message) in
+        messages_to_show.iter().rev()
+    {
+        let ts_str = timestamp.format("%Y-%m-%d %H:%M:%S%.3f");
+        let uuid_str = conn_id.uuid.to_string();
+        let conn_short =
+            format!("{}...{}", &uuid_str[..8], &uuid_str[uuid_str.len() - 4..]);
+
+        // Use Debug formatting for full message content
+        // (client-generated types don't implement Display)
+        let msg_content = format!("{:?}", message);
+
+        // Apply truncation unless wide mode
+        let msg_display = if !wide && msg_content.len() > 100 {
+            format!("{}...", &msg_content[..97])
+        } else {
+            msg_content
+        };
+
+        println!(
+            "{} {} [{}] {}",
+            ts_str.to_string().dimmed(),
+            if *direction == "RX" {
+                "←".green()
+            } else {
+                "→".blue()
+            },
+            conn_short.dimmed(),
+            msg_display
+        );
+    }
+
     Ok(())
 }
 

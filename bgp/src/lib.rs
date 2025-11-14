@@ -76,6 +76,9 @@ macro_rules! recv_event_loop {
                     event.title();
                     "event" => event.title()
                 );
+                // Record event in FSM history
+                let current_state = *mg_common::lock!($self.state);
+                $self.record_fsm_event(&event, current_state, None);
                 event
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -108,6 +111,9 @@ macro_rules! recv_event_loop {
                     "received fsm event";
                     "event" => event.title()
                 );
+                // Record event in FSM history
+                let current_state = *mg_common::lock!($self.state);
+                $self.record_fsm_event(&event, current_state, None);
                 event
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -142,6 +148,9 @@ macro_rules! recv_event_loop {
                     "received fsm event {}", event.title();
                     "event" => event.title()
                 );
+                // Record event in FSM history
+                let current_state = *mg_common::lock!($self.state);
+                $self.record_fsm_event(&event, current_state, None);
                 event
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -191,6 +200,9 @@ macro_rules! recv_event_return {
                     "received fsm event";
                     "event" => event.title()
                 );
+                // Record event in FSM history
+                let current_state = *mg_common::lock!($self.state);
+                $self.record_fsm_event(&event, current_state, None);
                 event
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return $return_state,

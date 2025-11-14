@@ -14,7 +14,7 @@ use bgp::{
         ApplyRequest, CheckerSource, Neighbor, NeighborResetOp, Origin4,
         Origin6, PeerInfo, PeerInfoV1, Router, ShaperSource,
     },
-    session::{MessageHistory, MessageHistoryV1},
+    session::{FsmEventRecord, MessageHistory, MessageHistoryV1},
 };
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
@@ -248,19 +248,23 @@ pub trait MgAdminApi {
         request: TypedBody<ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    // MessageHistory types updated in VERSION_IPV6_BASIC
     #[endpoint { method = GET, path = "/bgp/message-history", versions = ..VERSION_IPV6_BASIC }]
     async fn message_history(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<MessageHistoryRequest>,
+        request: TypedBody<MessageHistoryRequestV1>,
     ) -> Result<HttpResponseOk<MessageHistoryResponseV1>, HttpError>;
 
-    // MessageHistory types updated in VERSION_IPV6_BASIC
-    #[endpoint { method = GET, path = "/bgp/message-history", versions = VERSION_IPV6_BASIC.. }]
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_IPV6_BASIC.. }]
     async fn message_history_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/history/fsm", versions = VERSION_IPV6_BASIC.. }]
+    async fn fsm_history(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<FsmHistoryRequest>,
+    ) -> Result<HttpResponseOk<FsmHistoryResponse>, HttpError>;
 
     #[endpoint { method = PUT, path = "/bgp/config/checker" }]
     async fn create_checker(
@@ -414,7 +418,8 @@ pub struct DeleteNeighborRequest {
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
-pub struct MessageHistoryRequest {
+pub struct MessageHistoryRequestV1 {
+    /// ASN of the BGP router
     pub asn: u32,
 }
 
@@ -423,9 +428,56 @@ pub struct MessageHistoryResponseV1 {
     pub by_peer: HashMap<IpAddr, MessageHistoryV1>,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageDirection {
+    Sent,
+    Received,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Clone)]
+pub struct MessageHistoryRequest {
+    /// ASN of the BGP router
+    pub asn: u32,
+
+    /// Optional peer filter - if None, returns history for all peers
+    pub peer: Option<IpAddr>,
+
+    /// Optional direction filter - if None, returns both sent and received
+    pub direction: Option<MessageDirection>,
+}
+
 #[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct MessageHistoryResponse {
     pub by_peer: HashMap<IpAddr, MessageHistory>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum FsmEventBuffer {
+    /// All FSM events (high frequency, includes all timers)
+    All,
+    /// Major events only (state transitions, admin, new connections)
+    Major,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Clone)]
+pub struct FsmHistoryRequest {
+    /// ASN of the BGP router
+    pub asn: u32,
+
+    /// Optional peer filter - if None, returns history for all peers
+    pub peer: Option<IpAddr>,
+
+    /// Which buffer to retrieve - if None, returns major buffer
+    pub buffer: Option<FsmEventBuffer>,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct FsmHistoryResponse {
+    /// Events organized by peer address
+    /// Each peer's value contains only the events from the requested buffer
+    pub by_peer: HashMap<IpAddr, Vec<FsmEventRecord>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

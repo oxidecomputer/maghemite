@@ -298,7 +298,7 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn message_history(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<MessageHistoryRequest>,
+        request: TypedBody<MessageHistoryRequestV1>,
     ) -> Result<HttpResponseOk<MessageHistoryResponseV1>, HttpError> {
         bgp_admin::message_history(ctx, request).await
     }
@@ -308,6 +308,13 @@ impl MgAdminApi for MgAdminApiImpl {
         request: TypedBody<MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
         bgp_admin::message_history_v2(ctx, request).await
+    }
+
+    async fn fsm_history(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<FsmHistoryRequest>,
+    ) -> Result<HttpResponseOk<FsmHistoryResponse>, HttpError> {
+        bgp_admin::fsm_history(ctx, request).await
     }
 
     async fn create_checker(
