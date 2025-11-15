@@ -506,3 +506,55 @@ impl LoopbackIpManager {
         }
     }
 }
+
+/// Get the current thread count for this process.
+/// Used for regression testing thread leaks.
+///
+/// Returns the number of threads currently active in this process.
+pub fn current_thread_count() -> Result<usize, std::io::Error> {
+    #[cfg(target_os = "linux")]
+    {
+        Ok(std::fs::read_dir("/proc/self/task")?.count())
+    }
+
+    #[cfg(target_os = "illumos")]
+    {
+        let pid = std::process::id();
+        Ok(std::fs::read_dir(format!("/proc/{}/lwp", pid))?.count())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let pid = std::process::id();
+        let output = Command::new("ps")
+            .args(["-M", "-p", &pid.to_string()])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "ps command failed",
+            ));
+        }
+
+        // Parse output: skip header line and count remaining lines
+        let count = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .skip(1)
+            .count();
+
+        Ok(count)
+    }
+
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "illumos",
+        target_os = "macos"
+    )))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Thread counting not implemented for this platform",
+        ))
+    }
+}

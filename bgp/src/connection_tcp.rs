@@ -460,21 +460,16 @@ impl BgpConnection for BgpConnectionTcp {
 
 impl Drop for BgpConnectionTcp {
     fn drop(&mut self) {
-        // Only set dropped flag if this is the last reference.
-        // This prevents the recv loop from closing prematurely when intermediate
-        // clones are dropped during FSM state transitions (e.g., collision resolution).
-        if Arc::strong_count(&self.dropped) == 1 {
-            connection_log!(self, trace,
-                "dropping connection {:?} (conn_id {})",
-                self.conn(), self.id().short();
-                "connection" => format!("{:?}", self.conn()),
-                "connection_id" => self.id().short(),
-                "dropped" => self.dropped.load(Ordering::Relaxed)
-            );
-            #[cfg(target_os = "illumos")]
-            self.md5_sig_drop();
-            self.dropped.store(true, Ordering::Relaxed);
-        }
+        connection_log!(self, trace,
+            "dropping connection {:?} (conn_id {})",
+            self.conn(), self.id().short();
+            "connection" => format!("{:?}", self.conn()),
+            "connection_id" => self.id().short(),
+            "dropped" => self.dropped.load(Ordering::Relaxed)
+        );
+        #[cfg(target_os = "illumos")]
+        self.md5_sig_drop();
+        self.dropped.store(true, Ordering::Relaxed);
     }
 }
 
@@ -503,6 +498,7 @@ impl BgpConnectionTcp {
             config.delay_open_time,
             id,
             event_tx.clone(),
+            dropped.clone(),
             log.clone(),
         );
 

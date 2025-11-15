@@ -209,45 +209,4 @@ pub trait BgpConnection: Send + Sync + Sized {
     fn start_recv_loop(self: &Arc<Self>) -> Result<(), Error>;
 }
 
-/// Status of a managed child thread (e.g., receive loop, MD5 SA keepalive).
-/// Uses typestate pattern to ensure thread lifecycle safety.
-#[derive(Debug)]
-pub enum ThreadState {
-    /// Thread has not been started yet
-    Ready,
-    /// Thread is running with the given handle
-    Running(JoinHandle<()>),
-}
-
-impl ThreadState {
-    /// Create a new thread state in the Ready state
-    pub fn new() -> Self {
-        ThreadState::Ready
-    }
-
-    /// Check if the thread is ready to start
-    pub fn is_ready(&self) -> bool {
-        matches!(self, ThreadState::Ready)
-    }
-
-    /// Check if the thread is currently running
-    pub fn is_running(&self) -> bool {
-        matches!(self, ThreadState::Running(_))
-    }
-
-    /// Transition from Ready to Running with the given handle.
-    /// Idempotent: if already in Running state, the new handle is dropped and no error is returned.
-    /// This allows safe repeated calls without error handling.
-    pub fn start(&mut self, handle: JoinHandle<()>) {
-        if self.is_ready() {
-            *self = ThreadState::Running(handle);
-        }
-        // If already running, the new handle is dropped, terminating the thread immediately
-    }
-}
-
-impl Default for ThreadState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub use mg_common::thread::{ManagedThread, ThreadState};

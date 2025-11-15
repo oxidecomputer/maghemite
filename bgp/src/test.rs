@@ -16,7 +16,7 @@ use crate::{
 };
 use lazy_static::lazy_static;
 use mg_common::log::init_file_logger;
-use mg_common::test::{IpAllocation, LoopbackIpManager};
+use mg_common::test::{IpAllocation, LoopbackIpManager, current_thread_count};
 use mg_common::*;
 use rdb::{Asn, Prefix};
 use std::{
@@ -742,4 +742,126 @@ fn test_three_router_chain_tcp() {
     for router in test_routers.iter() {
         router.shutdown();
     }
+}
+
+/// Test that threads are properly cleaned up throughout the neighbor lifecycle.
+/// This test verifies that no threads leak when:
+/// 1. A neighbor is created and established
+/// 2. The neighbor is reset (hard) and re-established
+/// 3. The neighbor is deleted
+#[test]
+fn test_neighbor_thread_lifecycle_no_leaks() {
+    let r1_addr = sockaddr!(&format!("127.0.0.10:{TEST_BGP_PORT}"));
+    let r2_addr = sockaddr!(&format!("127.0.0.11:{TEST_BGP_PORT}"));
+
+    // Get baseline thread count before any BGP operations
+    let baseline =
+        current_thread_count().expect("couldn't collect thread count");
+
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
+            neighbors: vec![Neighbor {
+                peer_config: PeerConfig {
+                    name: "r2".into(),
+                    host: r2_addr,
+                    hold_time: 6,
+                    idle_hold_time: 0,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                },
+                session_info: None,
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
+            neighbors: vec![Neighbor {
+                peer_config: PeerConfig {
+                    name: "r1".into(),
+                    host: r1_addr,
+                    hold_time: 6,
+                    idle_hold_time: 0,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                },
+                session_info: None,
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard) = test_setup::<
+        BgpConnectionTcp,
+        BgpListenerTcp,
+    >("neighbor_thread_lifecycle", &routers);
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
+
+    // Stage 1: Wait for establishment
+    let r1_session = r1
+        .router
+        .get_session(r2_addr.ip())
+        .expect("Failed to get r1->r2 session");
+    let r2_session = r2
+        .router
+        .get_session(r1_addr.ip())
+        .expect("Failed to get r2->r1 session");
+
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    let after_establish =
+        current_thread_count().expect("couldn't collect thread count");
+    let delta = after_establish - baseline;
+
+    // Stage 2: Reset neighbor and wait for re-establishment
+    r1_session
+        .event_tx
+        .send(FsmEvent::Admin(AdminEvent::Reset))
+        .expect("reset r1");
+
+    // Wait for it to go through Idle and back to Established
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    // Wait for thread count to stabilize back to established delta
+    wait_for!(
+        {
+            let after_reset =
+                current_thread_count().expect("couldn't collect thread count");
+            after_reset == baseline + delta
+        },
+        "Thread count should stabilize after reset+re-establish"
+    );
+
+    // Stage 3: Delete the session/neighbor by shutting down routers
+    r1.shutdown();
+    r2.shutdown();
+
+    // Wait for thread count to return to baseline
+    wait_for!(
+        {
+            let after_shutdown =
+                current_thread_count().expect("couldn't collect thread count");
+            if after_shutdown != baseline {
+                eprintln!(
+                    "thread count after shutdown ({after_shutdown} != baseline {baseline})"
+                )
+            }
+            after_shutdown == baseline
+        },
+        "Thread count should return to baseline after delete"
+    );
 }

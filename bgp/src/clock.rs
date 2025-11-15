@@ -5,6 +5,7 @@
 use crate::connection::{BgpConnection, ConnectionId};
 use crate::session::{ConnectionEvent, FsmEvent, SessionEvent};
 use mg_common::lock;
+use mg_common::thread::ManagedThread;
 use slog::{Logger, error};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -196,10 +197,12 @@ impl Display for Timer {
 /// Clock for session-level timers that persist across connections
 #[derive(Clone, Debug)]
 pub struct SessionClock {
+    /// The rate at which the clock ticks
     pub resolution: Duration,
+    /// The collection of BGP timers specific to this SessionRunner
     pub timers: Arc<SessionTimers>,
-    pub join_handle: Arc<JoinHandle<()>>,
-    shutdown: Arc<AtomicBool>,
+    /// Handle to the thread running the per-session clock
+    _thread: Arc<ManagedThread>,
 }
 
 impl SessionClock {
@@ -212,7 +215,6 @@ impl SessionClock {
         event_tx: Sender<FsmEvent<Cnx>>,
         log: Logger,
     ) -> Self {
-        let shutdown = Arc::new(AtomicBool::new(false));
         let timers = Arc::new(SessionTimers {
             connect_retry: Mutex::new(match connect_retry_jitter {
                 Some(jitter) => {
@@ -227,18 +229,18 @@ impl SessionClock {
                 None => Timer::new(idle_hold_interval),
             }),
         });
-        let join_handle = Arc::new(Self::run(
+        let thread = Arc::new(ManagedThread::new());
+        let _ = thread.start(Self::run(
             resolution,
             timers.clone(),
             event_tx,
-            shutdown.clone(),
+            thread.dropped_flag(),
             log,
         ));
         Self {
             resolution,
             timers,
-            join_handle,
-            shutdown,
+            _thread: thread,
         }
     }
 
@@ -246,12 +248,12 @@ impl SessionClock {
         resolution: Duration,
         timers: Arc<SessionTimers>,
         event_tx: Sender<FsmEvent<Cnx>>,
-        shutdown: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
         log: Logger,
     ) -> JoinHandle<()> {
         spawn(move || {
             loop {
-                if shutdown.load(Ordering::Relaxed) {
+                if dropped.load(Ordering::Relaxed) {
                     break;
                 }
                 sleep(resolution);
@@ -319,25 +321,17 @@ impl Display for SessionClock {
     }
 }
 
-impl Drop for SessionClock {
-    fn drop(&mut self) {
-        // Only signal shutdown when this is the last clone being dropped.
-        // Since all fields are Arc-wrapped and shared across clones, we check
-        // if this is the final reference before stopping the clock thread.
-        if Arc::strong_count(&self.shutdown) == 1 {
-            self.shutdown.store(true, Ordering::Relaxed);
-        }
-    }
-}
-
 /// Clock for connection-level timers tied to individual connections
 #[derive(Clone, Debug)]
 pub struct ConnectionClock {
+    /// The rate at which the clock ticks
     pub resolution: Duration,
+    /// The collection of BGP timers specific to this BgpConnection
     pub timers: Arc<ConnectionTimers>,
-    pub join_handle: Arc<JoinHandle<()>>,
+    /// The ID of the BgpConnection we're running a clock for
     pub conn_id: ConnectionId,
-    shutdown: Arc<AtomicBool>,
+    /// Handle to the thread running the per-connection clock
+    _thread: Arc<ManagedThread>,
 }
 
 impl ConnectionClock {
@@ -348,9 +342,9 @@ impl ConnectionClock {
         delay_open_interval: Duration,
         conn_id: ConnectionId,
         event_tx: Sender<FsmEvent<Cnx>>,
+        dropped: Arc<AtomicBool>,
         log: Logger,
     ) -> Self {
-        let shutdown = Arc::new(AtomicBool::new(false));
         let timers = Arc::new(ConnectionTimers {
             keepalive: Mutex::new(Timer::new(keepalive_interval)),
             hold: Mutex::new(Timer::new(hold_interval)),
@@ -358,20 +352,20 @@ impl ConnectionClock {
             config_hold_time: hold_interval,
             config_keepalive_time: keepalive_interval,
         });
-        let join_handle = Arc::new(Self::run(
+        let thread = Arc::new(ManagedThread::new());
+        thread.start(Self::run(
             resolution,
             timers.clone(),
             conn_id,
             event_tx,
-            shutdown.clone(),
+            dropped.clone(),
             log,
         ));
         Self {
             resolution,
             timers,
-            join_handle,
+            _thread: thread,
             conn_id,
-            shutdown,
         }
     }
 
@@ -380,12 +374,12 @@ impl ConnectionClock {
         timers: Arc<ConnectionTimers>,
         conn_id: ConnectionId,
         event_tx: Sender<FsmEvent<Cnx>>,
-        shutdown: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
         log: Logger,
     ) -> JoinHandle<()> {
         spawn(move || {
             loop {
-                if shutdown.load(Ordering::Relaxed) {
+                if dropped.load(Ordering::Relaxed) {
                     break;
                 }
                 sleep(resolution);
@@ -468,16 +462,5 @@ impl Display for ConnectionClock {
             hold,
             delay_open
         )
-    }
-}
-
-impl Drop for ConnectionClock {
-    fn drop(&mut self) {
-        // Only signal shutdown when this is the last clone being dropped.
-        // Since all fields are Arc-wrapped and shared across clones, we check
-        // if this is the final reference before stopping the clock thread.
-        if Arc::strong_count(&self.shutdown) == 1 {
-            self.shutdown.store(true, Ordering::Relaxed);
-        }
     }
 }

@@ -1,7 +1,7 @@
 # BGP Implementation Architecture Guide
 
 **Author**: Generated Documentation
-**Last Updated**: 2025-10-30
+**Last Updated**: 2025-01-15
 **Audience**: Developers working on or integrating with Maghemite's BGP implementation
 
 ---
@@ -277,19 +277,30 @@ pub struct BgpConnectionTcp {
     peer: SocketAddr,                      // Remote address
     source: SocketAddr,                    // Local address
     conn: Arc<Mutex<TcpStream>>,           // TCP socket
-    dropped: Arc<AtomicBool>,              // Shutdown flag
+    dropped: Arc<AtomicBool>,              // Shutdown flag (shared with threads)
     log: Logger,
     direction: ConnectionDirection,        // Dispatcher or Connector
     connection_clock: ConnectionClock,     // Hold/Keepalive/DelayOpen timers
-    recv_loop_params: Mutex<Option<RecvLoopParams>>,  // Parameters for recv thread
-    recv_loop_started: AtomicBool,         // Idempotent start flag
+    recv_loop_state: Mutex<ThreadState>,   // RecvLoop thread lifecycle
+    #[cfg(target_os = "illumos")]
+    md5_sa_state: Mutex<ThreadState>,      // MD5 SA thread lifecycle
 }
 ```
 
 **Key Fields**:
 - `conn`: Wrapped TCP socket (Arc<Mutex> for shared ownership and thread-safety)
 - `direction`: Records whether connection was initiated by peer (inbound) or the local system (outbound)
+- `dropped`: **Shared shutdown flag** cloned to ConnectionClock, RecvLoop, and MD5 SA threads
 - `connection_clock`: Per-connection timers that expire and send FSM events
+
+**Shared Flag Pattern**:
+
+The `dropped` flag is shared with all connection-owned threads:
+- **ConnectionClock**: Receives `dropped.clone()` during construction
+- **RecvLoop**: Receives `dropped.clone()` during spawn
+- **MD5 SA**: Receives `dropped.clone()` during spawn
+
+When `BgpConnectionTcp::drop()` runs, it sets `dropped=true`, signaling all threads to exit. Each thread checks this flag periodically (clock threads in their sleep loops, RecvLoop at the top of each iteration). This ensures clean, deterministic shutdown without relying on TCP errors or other side effects
 
 **Lifecycle**:
 1. Created by `BgpConnectorTcp::connect()` (outbound) or `BgpListenerTcp::accept()` (inbound)
@@ -1047,20 +1058,24 @@ pub struct Network {
 
 **For a daemon with 3 configured BGP peers in Established state**:
 
-| Thread Type | Count | Lifetime | Purpose |
-|-------------|-------|----------|---------|
-| **Main Thread** | 1 | Daemon lifetime | Admin API, coordination |
-| **Dispatcher** | 1 | Daemon lifetime | Accept inbound BGP connections |
-| **SessionRunner** | 3 | Per-peer lifetime | FSM event loop (1 per peer) |
-| **Receive Loop** | 3 | Per-connection lifetime | Read from TCP socket, send FSM events |
-| **Connector** | 0 | Temporary | Outbound connection establishment (only during Connect) |
-| **Clock Threads** | 6 | Per-session/connection lifetime | 1 SessionClock per peer, 1 ConnectionClock per connection |
+| Thread Type | Count | Lifetime | Managed By | Purpose |
+|-------------|-------|----------|------------|---------|
+| **Main Thread** | 1 | Daemon lifetime | N/A | Admin API, coordination |
+| **Dispatcher** | 1 | Daemon lifetime | N/A | Accept inbound BGP connections |
+| **SessionRunner** | 3 | Per-peer lifetime | N/A | FSM event loop (1 per peer) |
+| **SessionClock** | 3 | Per-peer lifetime | ManagedThread | Session timers (ConnectRetry, IdleHold) |
+| **BgpConnection** | 3 | Per-connection lifetime | N/A | State only, not a thread |
+| **ConnectionClock** | 3 | Per-connection lifetime | ManagedThread | Connection timers (Hold, Keepalive, DelayOpen) |
+| **Receive Loop** | 3 | Per-connection lifetime | ThreadState | Read from TCP socket, send FSM events |
+| **MD5 SA Keepalive** | 0-3 | Per-connection (if MD5) | ThreadState | Maintain PF_KEY security associations (illumos) |
+| **Connector** | 0 | Temporary | N/A | Outbound connection establishment (only during Connect) |
 
-**Total active threads**: ~13 threads for 3 established peers.
+**Total active threads**: ~13 threads for 3 established peers (without MD5), ~16 with MD5.
 
-**Clock Thread Breakdown**:
-- **SessionClock** (1 per SessionRunner): Manages ConnectRetryTimer, IdleHoldTimer
-- **ConnectionClock** (1 per BgpConnection): Manages HoldTimer, KeepaliveTimer, DelayOpenTimer
+**Thread Management**:
+- **ManagedThread**: Used for clock threads, provides automatic cleanup via Drop
+- **ThreadState**: Used for RecvLoop and MD5 SA threads, typestate pattern for lifecycle tracking
+- Both patterns ensure proper thread shutdown and joining when parent objects are dropped
 
 ### Thread Safety Mechanisms
 
@@ -1084,6 +1099,64 @@ pub struct Network {
    - FSM event delivery (timer threads → SessionRunner)
    - BGP message delivery (receive loop → SessionRunner)
    - Dispatcher routing (Dispatcher → SessionRunner)
+
+### Thread Lifecycle Management
+
+**ManagedThread Pattern** (introduced in `mg-common::thread`):
+
+Maghemite uses a unified `ManagedThread` type that bundles thread lifecycle management:
+
+```rust
+pub struct ManagedThread {
+    state: Mutex<ThreadState>,
+    dropped: Arc<AtomicBool>,  // Shared with spawned thread
+}
+```
+
+**Key Properties**:
+- **Automatic cleanup**: Drop implementation signals shutdown and joins thread
+- **Shared shutdown flag**: Thread receives `Arc<AtomicBool>` to check periodically
+- **Not Clone**: Ensures Drop runs exactly once (wrapped in Arc)
+- **Available to all crates**: Lives in `mg-common::thread`
+
+**Shutdown Flag Propagation**:
+
+```
+SessionRunner
+│
+├─> shutdown: AtomicBool (session-level)
+│
+├─> SessionClock
+│   └─> _thread: Arc<ManagedThread>
+│       └─> dropped: Arc<AtomicBool> ───> [SessionClock thread checks this]
+│
+└─> BgpConnection
+    ├─> dropped: Arc<AtomicBool> (connection-level, shared)
+    │
+    ├─> ConnectionClock
+    │   └─> _thread: Arc<ManagedThread>
+    │       └─> dropped: Arc<AtomicBool> ───> [Same as BgpConnection.dropped]
+    │
+    ├─> RecvLoop thread ───> checks dropped flag
+    │
+    └─> MD5 SA thread ───> checks dropped flag (illumos only)
+```
+
+**Shutdown Cascade**:
+
+1. **Session shutdown**: `SessionRunner.shutdown` set → SessionRunner thread exits
+2. **Clock shutdown**: SessionClock dropped → `ManagedThread::drop()` sets flag → clock thread exits
+3. **Connection shutdown**: BgpConnection dropped → sets `dropped` flag
+4. **ConnectionClock**: Shares BgpConnection's `dropped` flag → clock thread exits
+5. **RecvLoop**: Checks `dropped` flag each iteration → thread exits
+6. **MD5 SA**: Checks `dropped` flag in sleep loop → thread exits (illumos only)
+
+**Why This Design**:
+- **Single source of truth**: One flag per lifecycle scope (session vs connection)
+- **No Arc deadlocks**: Unconditional flag setting, no reference counting checks
+- **Explicit shutdown**: All threads check flags in their main loops, don't rely on side effects
+- **Centralized logic**: ManagedThread handles join/cleanup boilerplate once
+- **Reusable**: Available to DDM, BFD, and other maghemite components
 
 ### Concurrency Patterns
 

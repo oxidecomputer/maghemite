@@ -286,16 +286,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
     }
 
-    pub fn replace_session_event_tx(
-        self: &Arc<Self>,
-        peer: IpAddr,
-        tx: Sender<FsmEvent<Cnx>>,
-    ) {
-        if let Some(endpoint) = lock!(self.addr_to_session).get_mut(&peer) {
-            endpoint.event_tx = tx;
-        }
-    }
-
     pub fn send_admin_event(&self, e: AdminEvent) -> Result<(), Error> {
         for s in lock!(self.sessions).values() {
             s.send_event(FsmEvent::Admin(e.clone()))?;

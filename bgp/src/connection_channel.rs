@@ -25,7 +25,7 @@ use std::{
     net::{IpAddr, SocketAddr, ToSocketAddrs},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{Receiver, RecvTimeoutError, Sender, channel as mpsc_channel},
     },
     thread::{JoinHandle, spawn},
@@ -192,6 +192,7 @@ pub struct BgpConnectionChannel {
     peer: SocketAddr,
     conn_tx: Arc<Mutex<Sender<Message>>>,
     conn_rx: Arc<Mutex<Option<Receiver<Message>>>>,
+    dropped: Arc<AtomicBool>,
     log: Logger,
     // direction of this connection, i.e. BgpListener or BgpConnector
     direction: ConnectionDirection,
@@ -296,6 +297,7 @@ impl BgpConnectionChannel {
         config: &SessionInfo,
     ) -> Self {
         let conn_id = ConnectionId::new(addr, peer);
+        let dropped = Arc::new(AtomicBool::new(false));
         let connection_clock = ConnectionClock::new(
             config.resolution,
             config.keepalive_time,
@@ -303,6 +305,7 @@ impl BgpConnectionChannel {
             config.delay_open_time,
             conn_id,
             event_tx.clone(),
+            dropped.clone(),
             log.clone(),
         );
 
@@ -313,6 +316,7 @@ impl BgpConnectionChannel {
             peer,
             conn_tx: Arc::new(Mutex::new(conn.tx)),
             conn_rx: Arc::new(Mutex::new(Some(conn.rx))),
+            dropped,
             log,
             direction,
             conn_id,
@@ -350,12 +354,25 @@ impl BgpConnectionChannel {
         let log = self_.log.clone();
         let timeout = self_.recv_timeout;
         let event_tx = self_.event_tx.clone();
+        let dropped = self_.dropped.clone();
 
         // Use Builder instead of spawn().
         // This lets us catch thread spawn errors instead of panicking.
         std::thread::Builder::new()
             .spawn(move || {
                 loop {
+                    if dropped.load(Ordering::Relaxed) {
+                        connection_log_lite!(log, info,
+                            "connection dropped (peer: {peer}, conn_id: {}, channel_id: {}), terminating recv loop",
+                            conn_id.short(), channel_id;
+                            "direction" => direction.as_str(),
+                            "peer" => format!("{peer}"),
+                            "connection_id" => conn_id.short(),
+                            "channel_id" => channel_id
+                        );
+                        break;
+                    }
+
                     match rx.recv_timeout(timeout) {
                         Ok(msg) => {
                             connection_log_lite!(log,
@@ -402,6 +419,12 @@ impl BgpConnectionChannel {
                 }
             })
             .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))
+    }
+}
+
+impl Drop for BgpConnectionChannel {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::Relaxed);
     }
 }
 
