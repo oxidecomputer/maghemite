@@ -67,7 +67,7 @@ fn ensure_loop_ips(addresses: &[IpAddr]) -> IpAllocation {
     .expect("failed to create loopback manager")
 }
 
-struct TestRouter<Cnx: BgpConnection> {
+struct TestRouter<Cnx: BgpConnection + 'static> {
     router: Arc<Router<Cnx>>,
     dispatcher: Arc<Dispatcher<Cnx>>,
 }

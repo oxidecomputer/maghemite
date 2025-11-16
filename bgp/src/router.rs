@@ -36,7 +36,7 @@ use std::time::Duration;
 
 const UNIT_SESSION_RUNNER: &str = "session_runner";
 
-pub struct Router<Cnx: BgpConnection> {
+pub struct Router<Cnx: BgpConnection + 'static> {
     /// The underlying routing information base (RIB) databse this router
     /// will update in response to BGP update messages (imported routes)
     /// and administrative API requests (originated routes).
@@ -100,6 +100,18 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         lock!(self.sessions).get(&addr).cloned()
     }
 
+    /// Stop all sessions and clear the sessions map.
+    /// This signals SessionRunner threads to exit and releases Arc<SessionRunner>
+    /// references, allowing BgpConnections to drop and their threads to clean up.
+    fn stop_all_sessions(&self) {
+        let sessions = std::mem::take(&mut *lock!(self.sessions));
+        for (addr, s) in sessions {
+            lock!(self.addr_to_session).remove(&addr);
+            s.shutdown();
+        }
+        // When `sessions` drops here, Arc<SessionRunner> references are released
+    }
+
     pub fn shutdown(&self) {
         slog::info!(
             self.log,
@@ -111,14 +123,14 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
                 "unit" => UNIT_SESSION_RUNNER,
             )
         );
-        for (addr, s) in lock!(self.sessions).iter() {
-            lock!(self.addr_to_session).remove(addr);
-            s.shutdown();
-        }
+        self.stop_all_sessions();
         self.shutdown.store(true, Ordering::Release);
     }
 
     pub fn run(&self) {
+        // Clear shutdown flag to allow router to restart
+        self.shutdown.store(false, Ordering::Release);
+
         for s in lock!(self.sessions).values() {
             let session = s.clone();
             slog::info!(
@@ -287,6 +299,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn send_admin_event(&self, e: AdminEvent) -> Result<(), Error> {
+        // Skip sending admin events if router is shutdown (sessions are stopped)
+        if self.shutdown.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
         for s in lock!(self.sessions).values() {
             s.send_event(FsmEvent::Admin(e.clone()))?;
         }
@@ -303,7 +320,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             })
             .collect();
         self.db.create_origin4(&prefix4)?;
-        self.announce_origin4(&prefixes);
+
+        // Skip network propagation if router is shutdown
+        if !self.shutdown.load(Ordering::Acquire) {
+            self.announce_origin4(&prefixes);
+        }
         Ok(())
     }
 
@@ -330,8 +351,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         self.db.set_origin4(&prefix4)?;
 
-        self.withdraw_origin4(&to_withdraw);
-        self.announce_origin4(&to_announce);
+        // Skip network propagation if router is shutdown
+        if !self.shutdown.load(Ordering::Acquire) {
+            self.withdraw_origin4(&to_withdraw);
+            self.announce_origin4(&to_announce);
+        }
         Ok(())
     }
 
@@ -339,7 +363,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let current = self.db.get_origin4()?;
         let prefix: Vec<Prefix> =
             current.iter().cloned().map(Into::into).collect();
-        self.withdraw_origin4(&prefix);
+
+        // Skip network propagation if router is shutdown
+        if !self.shutdown.load(Ordering::Acquire) {
+            self.withdraw_origin4(&prefix);
+        }
         self.db.clear_origin4()?;
         Ok(())
     }
@@ -384,7 +412,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             })
             .collect();
         self.db.create_origin6(&prefix6)?;
-        self.announce_origin6(&prefixes);
+
+        // Skip network propagation if router is shutdown
+        if !self.shutdown.load(Ordering::Acquire) {
+            self.announce_origin6(&prefixes);
+        }
         Ok(())
     }
 
@@ -411,8 +443,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         self.db.set_origin6(&prefix6)?;
 
-        self.withdraw_origin6(&to_withdraw);
-        self.announce_origin6(&to_announce);
+        // Skip network propagation if router is shutdown
+        if !self.shutdown.load(Ordering::Acquire) {
+            self.withdraw_origin6(&to_withdraw);
+            self.announce_origin6(&to_announce);
+        }
         Ok(())
     }
 
@@ -420,7 +455,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let current = self.db.get_origin6()?;
         let prefix: Vec<Prefix> =
             current.iter().cloned().map(Into::into).collect();
-        self.withdraw_origin6(&prefix);
+
+        // Skip network propagation if router is shutdown
+        if !self.shutdown.load(Ordering::Acquire) {
+            self.withdraw_origin6(&prefix);
+        }
         self.db.clear_origin6()?;
         Ok(())
     }
@@ -506,7 +545,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     pub fn graceful_shutdown(&self, enabled: bool) -> Result<(), Error> {
         if enabled != self.graceful_shutdown.load(Ordering::Relaxed) {
             self.graceful_shutdown.store(enabled, Ordering::Relaxed);
-            self.announce_all()?;
+
+            // Skip network propagation if router is shutdown
+            if !self.shutdown.load(Ordering::Acquire) {
+                self.announce_all()?;
+            }
         }
         Ok(())
     }
@@ -528,6 +571,15 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         read_lock!(self.fanout).send_all(&update);
 
         Ok(())
+    }
+}
+
+impl<Cnx: BgpConnection + 'static> Drop for Router<Cnx> {
+    fn drop(&mut self) {
+        // Stop all sessions when router is dropped to prevent thread leaks.
+        // We don't set the shutdown flag here because it's not relevant during drop
+        // (the router is being destroyed, not temporarily shutdown).
+        self.stop_all_sessions();
     }
 }
 

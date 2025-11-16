@@ -1125,7 +1125,7 @@ impl<Cnx: BgpConnection> Default for ConnectionRegistry<Cnx> {
 /// We choose to treat all of this verbiage to mean "stop and reset", i.e. we
 /// disable the timer and then set value equal to the interval. The actual timer
 /// implementation lives in `clock.rs`.
-pub struct SessionRunner<Cnx: BgpConnection> {
+pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     /// FSM Event Queue sender. This handle is owned by the SessionRunner for
     /// the purpose of passing clones to different threads/events that need to
     /// generate FsmEvents to be processed by this SessionRunner's FSM.

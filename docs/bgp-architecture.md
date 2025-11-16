@@ -1158,6 +1158,89 @@ SessionRunner
 - **Centralized logic**: ManagedThread handles join/cleanup boilerplate once
 - **Reusable**: Available to DDM, BFD, and other maghemite components
 
+### Router Lifecycle Semantics
+
+**Router has three lifecycle states**: running, shutdown, and dropped.
+
+#### Router Shutdown (Reversible)
+
+`Router::shutdown()` stops all active sessions but preserves router configuration:
+
+```rust
+pub fn shutdown(&self) {
+    self.stop_all_sessions();  // Clears sessions map, signals SessionRunners
+    self.shutdown.store(true, Ordering::Release);
+}
+```
+
+**Behavior**:
+- **Sessions**: All `Arc<SessionRunner>` removed from map → SessionRunner.shutdown() called → FSM threads exit
+- **Configuration preserved**: Neighbors remain configured, can be queried or modified
+- **Admin operations**: State updates (add neighbor, update policy) allowed but network propagation skipped
+- **Thread cleanup**: Non-blocking, signals threads to exit asynchronously
+- **Restart**: Call `Router::run()` to start all configured neighbors again
+
+**Admin Methods During Shutdown**:
+All methods that propagate changes to peers (announce/withdraw routes, send admin events) check the shutdown flag:
+
+```rust
+if !self.shutdown.load(Ordering::Acquire) {
+    self.announce_origin4(&prefixes);  // Skipped when shutdown
+}
+```
+
+**Methods affected**: `create_origin4/6`, `set_origin4/6`, `clear_origin4/6`, `graceful_shutdown`, `send_admin_event`
+
+#### Router Restart
+
+`Router::run()` clears shutdown flag and starts FSM threads for ALL configured neighbors:
+
+```rust
+pub fn run(&self) {
+    self.shutdown.store(false, Ordering::Release);  // Clear shutdown flag
+
+    for s in lock!(self.sessions).values() {
+        spawn(move || { session.fsm_start(); });
+    }
+}
+```
+
+**Behavior**:
+- Starts all neighbors in the sessions map (including those added during shutdown)
+- Does NOT filter by which sessions were running before shutdown
+- Router transitions from shutdown → running state
+
+#### Router Delete (Drop)
+
+When `Router` is dropped (e.g., daemon shutdown, router removal), all sessions are stopped:
+
+```rust
+impl<Cnx: BgpConnection + 'static> Drop for Router<Cnx> {
+    fn drop(&mut self) {
+        self.stop_all_sessions();  // Signal sessions, don't set shutdown flag
+    }
+}
+```
+
+**Behavior**:
+- **Sessions cleared**: All `Arc<SessionRunner>` removed and shutdown() called
+- **Thread cleanup**: SessionRunner drops → BgpConnection drops → all connection threads exit
+- **Non-blocking**: Signals threads, doesn't wait for join
+- **Irreversible**: Router cannot be restarted after drop
+
+**Thread Cleanup Cascade**:
+```
+Router::Drop
+ └─> stop_all_sessions()
+     └─> SessionRunner.shutdown() + clear sessions map
+         └─> Arc<SessionRunner> drops
+             ├─> SessionClock drops → ManagedThread::drop() → session clock thread exits
+             └─> Arc<BgpConnection> drops
+                 ├─> BgpConnection::drop() sets dropped flag
+                 ├─> ConnectionClock drops → ManagedThread::drop() → connection clock thread exits
+                 └─> RecvLoop checks dropped flag → thread exits
+```
+
 ### Concurrency Patterns
 
 **Pattern 1: Event-Driven FSM**
