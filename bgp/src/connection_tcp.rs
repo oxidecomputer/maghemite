@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{
+    IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
@@ -110,7 +111,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                                 local,
                                 peer,
                                 conn,
-                                timeout,
+                                IO_TIMEOUT,
                                 session_endpoint.event_tx.clone(),
                                 log,
                                 ConnectionDirection::Inbound,
@@ -315,7 +316,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     actual_source,
                     peer,
                     new_conn,
-                    timeout,
+                    IO_TIMEOUT,
                     event_tx.clone(),
                     log.clone(),
                     ConnectionDirection::Outbound,

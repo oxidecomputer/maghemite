@@ -8,6 +8,7 @@
 /// the core functionality of the BGP upper-half in `session.rs` may be tested
 /// rapidly using a simulated network.
 use crate::{
+    IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
@@ -166,7 +167,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
                     peer,
                     endpoint,
                     session_endpoint.event_tx.clone(),
-                    timeout,
+                    IO_TIMEOUT,
                     log,
                     ConnectionDirection::Inbound,
                     &config,
@@ -469,7 +470,7 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
                         peer,
                         local,
                         event_tx.clone(),
-                        timeout,
+                        IO_TIMEOUT,
                         log.clone(),
                         direction,
                         &config,
