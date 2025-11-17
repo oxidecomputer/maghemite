@@ -164,11 +164,26 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
         );
     }
 
+    pub fn listen_addr(&self) -> &str {
+        &self.listen
+    }
+
     pub fn shutdown(&self) {
         dispatcher_log!(self, info,
             "dispatcher received shutdown request, setting shutdown flag";
             "listen_address" => &self.listen
         );
         self.shutdown.store(true, Ordering::Release);
+    }
+}
+
+impl<Cnx: BgpConnection> Drop for Dispatcher<Cnx> {
+    fn drop(&mut self) {
+        dispatcher_log!(self,
+            debug,
+            "dropping dispatcher with listen_addr {}",
+            &self.listen;
+            "listen_address" => &self.listen
+        );
     }
 }

@@ -1253,6 +1253,18 @@ pub fn collision_resolution(
     }
 }
 
+impl<Cnx: BgpConnection + 'static> Drop for SessionRunner<Cnx> {
+    fn drop(&mut self) {
+        let peer_ip = self.neighbor.host.ip();
+        let final_state = *lock!(self.state);
+        session_log_lite!(
+            self,
+            debug,
+            "dropping session runner for peer {peer_ip} (final state: {final_state})"
+        );
+    }
+}
+
 impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Create a new BGP session runner. Only creates the session runner
     /// object. Must call `start` to begin the peering state machine.

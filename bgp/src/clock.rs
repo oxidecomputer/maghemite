@@ -335,6 +335,7 @@ pub struct ConnectionClock {
 }
 
 impl ConnectionClock {
+    #[allow(clippy::too_many_arguments)]
     pub fn new<Cnx: BgpConnection + 'static>(
         resolution: Duration,
         keepalive_interval: Duration,

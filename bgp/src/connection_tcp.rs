@@ -236,6 +236,7 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
         };
 
         let handle = std::thread::Builder::new()
+            .name(format!("bgp-connector-{}", peer))
             .spawn(move || {
                 connection_log_lite!(log,
                     debug,
@@ -547,6 +548,7 @@ impl BgpConnectionTcp {
         // Use Builder instead of spawn().
         // This lets us catch thread spawn errors instead of panicking.
         std::thread::Builder::new()
+            .name(format!("bgp-recv-{}", peer))
             .spawn(move || {
                 let mut conn = conn;
 
@@ -914,15 +916,18 @@ impl BgpConnectionTcp {
         let log = self.log.clone();
         let sas = self.sas.clone();
         let conn = self.conn();
-        let handle = std::thread::Builder::new().spawn(move || {
-            loop {
-                sleep(PFKEY_KEEPALIVE);
-                if dropped.load(Ordering::Relaxed) {
-                    break;
+        let peer = self.peer;
+        let handle = std::thread::Builder::new()
+            .name(format!("bgp-md5-{}", peer))
+            .spawn(move || {
+                loop {
+                    sleep(PFKEY_KEEPALIVE);
+                    if dropped.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    Self::do_sa_keepalive(&sas, &log, conn);
                 }
-                Self::do_sa_keepalive(&sas, &log, conn);
-            }
-        })?;
+            })?;
         state.start(handle);
         Ok(())
     }

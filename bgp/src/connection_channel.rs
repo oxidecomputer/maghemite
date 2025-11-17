@@ -424,6 +424,13 @@ impl BgpConnectionChannel {
 
 impl Drop for BgpConnectionChannel {
     fn drop(&mut self) {
+        connection_log!(self,
+            debug,
+            "dropping bgp connection for peer {} (conn_id: {}, channel_id: {})",
+            self.peer(), self.id().short(), self.channel_id;
+            "network_state" => format!("{}", *NET),
+            "channel_id" => self.channel_id
+        );
         self.dropped.store(true, Ordering::Relaxed);
     }
 }

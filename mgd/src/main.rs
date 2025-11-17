@@ -19,7 +19,7 @@ use slog::Logger;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex};
-use std::thread::spawn;
+use std::thread::Builder;
 use uuid::Uuid;
 
 pub const COMPONENT_MGD: &str = "mgd";
@@ -139,9 +139,12 @@ async fn run(args: RunArgs) {
         let log = log.clone();
         let db = ctx.db.clone();
         let stats = context.mg_lower_stats.clone();
-        std::thread::spawn(move || {
-            mg_lower::run(ctx.tep, db, log, stats, rt);
-        });
+        Builder::new()
+            .name("mg-lower".to_string())
+            .spawn(move || {
+                mg_lower::run(ctx.tep, db, log, stats, rt);
+            })
+            .expect("failed to start mg-lower");
     }
 
     start_bgp_routers(
@@ -209,7 +212,13 @@ fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
                 log.clone(),
             );
 
-        spawn(move || bgp_dispatcher.run::<BgpListenerTcp>());
+        let listener_str =
+            format!("bgp-dispatcher-{}", bgp_dispatcher.listen_addr());
+
+        Builder::new()
+            .name(listener_str.clone())
+            .spawn(move || bgp_dispatcher.run::<BgpListenerTcp>())
+            .expect("failed to start {listener_str}");
     }
     BgpContext::new(addr_to_session)
 }

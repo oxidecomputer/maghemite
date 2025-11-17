@@ -531,10 +531,7 @@ pub fn current_thread_count() -> Result<usize, std::io::Error> {
             .output()?;
 
         if !output.status.success() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "ps command failed",
-            ));
+            return Err(std::io::Error::other("ps command failed"));
         }
 
         // Parse output: skip header line and count remaining lines
@@ -555,6 +552,213 @@ pub fn current_thread_count() -> Result<usize, std::io::Error> {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "Thread counting not implemented for this platform",
+        ))
+    }
+}
+
+/// Count threads with names matching a specific prefix.
+/// This is useful for counting only application threads and ignoring dependency threads.
+///
+/// On Illumos: Reads /proc/{pid}/lwp/{lwpid}/lwpname for each LWP
+/// On Linux: Reads /proc/{pid}/task/{tid}/comm for each thread
+/// On macOS: Parses `sample` command output to extract thread names
+pub fn count_threads_with_prefix(
+    prefix: &str,
+) -> Result<usize, std::io::Error> {
+    let pid = std::process::id();
+
+    #[cfg(target_os = "illumos")]
+    {
+        use std::fs;
+        let lwp_dir = format!("/proc/{}/lwp", pid);
+        let mut count = 0;
+
+        for entry in fs::read_dir(lwp_dir)? {
+            let entry = entry?;
+            let lwpid = entry.file_name();
+            let name_path = format!(
+                "/proc/{}/lwp/{}/lwpname",
+                pid,
+                lwpid.to_string_lossy()
+            );
+
+            if let Ok(name) = fs::read_to_string(&name_path) {
+                let name = name.trim();
+                if name.starts_with(prefix) {
+                    count += 1;
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::fs;
+        let task_dir = format!("/proc/{}/task", pid);
+        let mut count = 0;
+
+        for entry in fs::read_dir(task_dir)? {
+            let entry = entry?;
+            let tid = entry.file_name();
+            let comm_path =
+                format!("/proc/{}/task/{}/comm", pid, tid.to_string_lossy());
+
+            if let Ok(name) = fs::read_to_string(&comm_path) {
+                let name = name.trim();
+                if name.starts_with(prefix) {
+                    count += 1;
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+
+        // Use sample command to capture thread information
+        let output = Command::new("sample")
+            .args([&pid.to_string(), "1", "-file", "/dev/stdout"])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(std::io::Error::other(format!(
+                "sample command failed: {:?}",
+                output.status
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut count = 0;
+
+        // Parse sample output looking for lines like: "576 Thread_18401665: sled-io-0"
+        // Thread names appear after the colon
+        for line in stdout.lines() {
+            // Look for pattern: "<number> Thread_<id>: <name>"
+            if let Some(thread_part) = line.split_whitespace().nth(1)
+                && thread_part.starts_with("Thread_")
+            {
+                // Check if there's a colon indicating a named thread
+                if let Some(colon_pos) = line.find(':') {
+                    // Extract the name after the colon
+                    let name = line[colon_pos + 1..].trim();
+                    if name.starts_with(prefix) {
+                        count += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
+    #[cfg(not(any(
+        target_os = "illumos",
+        target_os = "linux",
+        target_os = "macos"
+    )))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Thread name counting is not implemented for this platform",
+        ))
+    }
+}
+
+/// Dump detailed stack traces for all threads in the current process.
+/// This is useful for debugging thread leaks by showing what each thread is doing.
+///
+/// Platform-specific implementations:
+/// - Illumos: Uses `pstack <pid> | demangle`
+/// - Linux: Uses `gdb` to attach and dump thread backtraces
+/// - macOS: Uses `sample` command for 1 second capture
+pub fn dump_thread_stacks() -> Result<String, std::io::Error> {
+    use std::process::Command;
+
+    let pid = std::process::id();
+
+    #[cfg(target_os = "illumos")]
+    {
+        // Use shell pipeline to run pstack and pipe through demangle
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(format!("pstack {} | demangle", pid))
+            .output()?;
+
+        if !output.status.success() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!(
+                    "pstack | demangle failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            ));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Use gdb to attach and dump thread backtraces
+        let output = Command::new("gdb")
+            .args(&[
+                "-batch",
+                "-ex",
+                "thread apply all bt",
+                "-p",
+                &pid.to_string(),
+            ])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!(
+                    "gdb failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            ));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Use sample command to capture thread stacks
+        let output = Command::new("sample")
+            .args([
+                &pid.to_string(),
+                "1", // Sample for 1 second
+                "-file",
+                "/dev/stdout",
+            ])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(std::io::Error::other(format!(
+                "sample failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    #[cfg(not(any(
+        target_os = "illumos",
+        target_os = "linux",
+        target_os = "macos"
+    )))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Thread stack dumping is not implemented for this platform",
         ))
     }
 }

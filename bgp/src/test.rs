@@ -16,14 +16,13 @@ use crate::{
 };
 use lazy_static::lazy_static;
 use mg_common::log::init_file_logger;
-use mg_common::test::{IpAllocation, LoopbackIpManager, current_thread_count};
+use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
 use rdb::{Asn, Prefix};
 use std::{
     collections::BTreeMap,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex, mpsc::channel},
-    thread::spawn,
 };
 
 // Use non-standard port outside the privileged range to avoid needing privs
@@ -81,9 +80,19 @@ impl<Cnx: BgpConnection + 'static> TestRouter<Cnx> {
     fn run<Listener: BgpListener<Cnx> + 'static>(&self) {
         self.router.run();
         let d = self.dispatcher.clone();
-        spawn(move || {
-            d.run::<Listener>();
-        });
+        let listen_addr = self.dispatcher.listen_addr().to_string();
+        let listen_addr_for_log = listen_addr.clone();
+        eprintln!("Spawning Dispatcher thread for {}", listen_addr);
+        std::thread::Builder::new()
+            .name(format!("bgp-listener-{}", listen_addr))
+            .spawn(move || {
+                d.run::<Listener>();
+                eprintln!(
+                    "Dispatcher thread for {} exiting",
+                    listen_addr_for_log
+                );
+            })
+            .expect("failed to spawn dispatcher thread");
     }
 }
 
@@ -161,9 +170,19 @@ where
         // Start router and dispatcher
         router.run();
         let d = dispatcher.clone();
-        spawn(move || {
-            d.run::<Listener>();
-        });
+        let listen_addr = dispatcher.listen_addr().to_string();
+        let listen_addr_for_log = listen_addr.clone();
+        eprintln!("Spawning Dispatcher thread for {}", listen_addr);
+        std::thread::Builder::new()
+            .name(format!("bgp-listener-{}", listen_addr))
+            .spawn(move || {
+                d.run::<Listener>();
+                eprintln!(
+                    "Dispatcher thread for {} exiting",
+                    listen_addr_for_log
+                );
+            })
+            .expect("failed to spawn dispatcher thread");
 
         // Set up all peer sessions for this router
         for neighbor in &logical_router.neighbors {
@@ -754,9 +773,12 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
     let r1_addr = sockaddr!(&format!("127.0.0.10:{TEST_BGP_PORT}"));
     let r2_addr = sockaddr!(&format!("127.0.0.11:{TEST_BGP_PORT}"));
 
-    // Get baseline thread count before any BGP operations
-    let baseline =
-        current_thread_count().expect("couldn't collect thread count");
+    // Get baseline BGP thread count before any BGP operations
+    // We count only threads with names starting with "bgp-" to exclude
+    // dependency threads (slog-async, rdb reapers, etc.)
+    let baseline = mg_common::test::count_threads_with_prefix("bgp-")
+        .expect("couldn't collect thread count");
+    eprintln!("=== Baseline BGP thread count: {baseline} ===");
 
     let routers = vec![
         LogicalRouter {
@@ -822,8 +844,12 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
     wait_for_eq!(r1_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
-    let after_establish =
-        current_thread_count().expect("couldn't collect thread count");
+    let after_establish = mg_common::test::count_threads_with_prefix("bgp-")
+        .expect("couldn't collect thread count");
+    eprintln!(
+        "=== After establishment BGP thread count: {after_establish} (baseline: {baseline}, delta: +{}) ===",
+        after_establish - baseline
+    );
     let delta = after_establish - baseline;
 
     // Stage 2: Reset neighbor and wait for re-establishment
@@ -840,28 +866,48 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
     wait_for!(
         {
             let after_reset =
-                current_thread_count().expect("couldn't collect thread count");
+                mg_common::test::count_threads_with_prefix("bgp-")
+                    .expect("couldn't collect thread count");
             after_reset == baseline + delta
         },
         "Thread count should stabilize after reset+re-establish"
     );
 
     // Stage 3: Delete the session/neighbor by shutting down routers
+    // First drop session references to release channels
+    drop(r1_session);
+    drop(r2_session);
+
     r1.shutdown();
     r2.shutdown();
+
+    // Drop the routers to trigger cleanup
+    drop(test_routers);
 
     // Wait for thread count to return to baseline
     wait_for!(
         {
             let after_shutdown =
-                current_thread_count().expect("couldn't collect thread count");
+                mg_common::test::count_threads_with_prefix("bgp-")
+                    .expect("couldn't get bgp thread count");
             if after_shutdown != baseline {
                 eprintln!(
-                    "thread count after shutdown ({after_shutdown} != baseline {baseline})"
-                )
+                    "BGP thread count after shutdown ({after_shutdown} != baseline {baseline})"
+                );
+
+                // Dump detailed thread stacks
+                match mg_common::test::dump_thread_stacks() {
+                    Ok(stacks) => {
+                        eprintln!("=== Thread stack traces ===");
+                        eprintln!("{stacks}");
+                    }
+                    Err(e) => {
+                        eprintln!("Could not dump thread stacks: {e}");
+                    }
+                }
             }
             after_shutdown == baseline
         },
-        "Thread count should return to baseline after delete"
+        "BGP thread count should return to baseline after delete"
     );
 }

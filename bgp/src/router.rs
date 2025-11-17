@@ -31,7 +31,6 @@ use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread::spawn;
 use std::time::Duration;
 
 const UNIT_SESSION_RUNNER: &str = "session_runner";
@@ -133,6 +132,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         for s in lock!(self.sessions).values() {
             let session = s.clone();
+            let peer_ip = session.neighbor.host.ip();
             slog::info!(
                 self.log,
                 "spawning session for {}",
@@ -143,9 +143,13 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
                     "unit" => UNIT_SESSION_RUNNER,
                 )
             );
-            spawn(move || {
-                session.fsm_start();
-            });
+            std::thread::Builder::new()
+                .name(format!("bgp-fsm-{}", peer_ip))
+                .spawn(move || {
+                    session.fsm_start();
+                })
+                .expect("failed to spawn BGP FSM thread");
+            // XXX: should we add_fanout here when we restart?
         }
     }
 
@@ -255,6 +259,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         ));
 
         let r = runner.clone();
+        let peer_ip = runner.neighbor.host.ip();
         slog::info!(
             self.log,
             "spawning session for {}",
@@ -265,9 +270,12 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
                 "unit" => UNIT_SESSION_RUNNER,
             )
         );
-        spawn(move || {
-            r.fsm_start();
-        });
+        std::thread::Builder::new()
+            .name(format!("bgp-fsm-{}", peer_ip))
+            .spawn(move || {
+                r.fsm_start();
+            })
+            .expect("failed to spawn BGP FSM thread");
 
         self.add_fanout(neighbor.host.ip(), event_tx);
         lock!(self.sessions).insert(neighbor.host.ip(), runner.clone());
