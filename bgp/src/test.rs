@@ -783,7 +783,9 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
             let count = mg_common::test::count_threads_with_prefix("bgp-")
                 .expect("couldn't collect thread count");
             if count > 0 {
-                eprintln!("Waiting for baseline to stabilize (current: {count})");
+                eprintln!(
+                    "Waiting for baseline to stabilize (current: {count})"
+                );
             }
             count == 0
         },
