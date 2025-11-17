@@ -690,8 +690,7 @@ pub fn dump_thread_stacks() -> Result<String, std::io::Error> {
             .output()?;
 
         if !output.status.success() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(std::io::Error::other(
                 format!(
                     "pstack | demangle failed: {}",
                     String::from_utf8_lossy(&output.stderr)
