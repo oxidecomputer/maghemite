@@ -920,12 +920,22 @@ impl BgpConnectionTcp {
         let handle = std::thread::Builder::new()
             .name(format!("bgp-md5-{}", peer))
             .spawn(move || {
+                // Track when we last updated the SAs
+                let mut last_update = Instant::now();
+
                 loop {
-                    sleep(PFKEY_KEEPALIVE);
+                    // Sleep for a short duration to check shutdown flag frequently
+                    sleep(Duration::from_secs(1));
+
                     if dropped.load(Ordering::Relaxed) {
                         break;
                     }
-                    Self::do_sa_keepalive(&sas, &log, conn);
+
+                    // Only update SAs if the keepalive interval has elapsed
+                    if last_update.elapsed() >= PFKEY_KEEPALIVE {
+                        Self::do_sa_keepalive(&sas, &log, conn);
+                        last_update = Instant::now();
+                    }
                 }
             })?;
         state.start(handle);
