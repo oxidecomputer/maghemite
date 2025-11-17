@@ -926,7 +926,7 @@ impl BgpConnectionTcp {
 
                 loop {
                     // Sleep for a short duration to check shutdown flag frequently
-                    sleep(Duration::from_secs(1));
+                    sleep(Duration::from_secs(IO_TIMEOUT));
 
                     if dropped.load(Ordering::Relaxed) {
                         break;
