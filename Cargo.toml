@@ -108,6 +108,7 @@ itertools = "0.14"
 rhai = { version = "1", features = ["metadata", "sync"] }
 semver = "1.0"
 proptest = "1.4"
+serial_test = "3.2"
 ddm-api = { path = "ddm-api" }
 ddm-types = { path = "ddm-types" }
 

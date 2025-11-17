@@ -99,13 +99,48 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         lock!(self.sessions).get(&addr).cloned()
     }
 
-    /// Stop all sessions and clear the sessions map.
+    /// Spawn an FSM thread for the given session.
+    /// This is used both when initially creating sessions and when restarting
+    /// the router.
+    fn spawn_session_thread(&self, session: Arc<SessionRunner<Cnx>>) {
+        let peer_ip = session.neighbor.host.ip();
+        slog::info!(
+            self.log,
+            "spawning session for {}",
+            lock!(session.neighbor.name);
+            slog::o!(
+                "component" => crate::COMPONENT_BGP,
+                "module" => crate::MOD_ROUTER,
+                "unit" => UNIT_SESSION_RUNNER,
+            )
+        );
+        std::thread::Builder::new()
+            .name(format!("bgp-fsm-{}", peer_ip))
+            .spawn(move || {
+                session.fsm_start();
+            })
+            .expect("failed to spawn BGP FSM thread");
+    }
+
+    /// Stop all session threads but retain session metadata.
+    /// This allows the router to be restarted via run().
+    /// Also cleans up fanout entries for all stopped sessions.
+    fn stop_all_sessions(&self) {
+        let sessions = lock!(self.sessions);
+        for (addr, s) in sessions.iter() {
+            self.remove_fanout(*addr);
+            s.shutdown();
+        }
+    }
+
+    /// Delete all sessions, clearing the SessionRunner and SessionEndpoint maps.
     /// This signals SessionRunner threads to exit and releases Arc<SessionRunner>
     /// references, allowing BgpConnections to drop and their threads to clean up.
-    fn stop_all_sessions(&self) {
+    fn delete_all_sessions(&self) {
         let sessions = std::mem::take(&mut *lock!(self.sessions));
         for (addr, s) in sessions {
             lock!(self.addr_to_session).remove(&addr);
+            self.remove_fanout(addr);
             s.shutdown();
         }
         // When `sessions` drops here, Arc<SessionRunner> references are released
@@ -130,26 +165,14 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         // Clear shutdown flag to allow router to restart
         self.shutdown.store(false, Ordering::Release);
 
-        for s in lock!(self.sessions).values() {
-            let session = s.clone();
-            let peer_ip = session.neighbor.host.ip();
-            slog::info!(
-                self.log,
-                "spawning session for {}",
-                lock!(session.neighbor.name);
-                slog::o!(
-                    "component" => crate::COMPONENT_BGP,
-                    "module" => crate::MOD_ROUTER,
-                    "unit" => UNIT_SESSION_RUNNER,
-                )
-            );
-            std::thread::Builder::new()
-                .name(format!("bgp-fsm-{}", peer_ip))
-                .spawn(move || {
-                    session.fsm_start();
-                })
-                .expect("failed to spawn BGP FSM thread");
-            // XXX: should we add_fanout here when we restart?
+        // Hold lock during entire iteration to prevent concurrent modifications
+        let sessions = lock!(self.sessions);
+        for (addr, session) in sessions.iter() {
+            // Ensure fanout is set up for this session (needed for restart scenario)
+            if let Some(endpoint) = lock!(self.addr_to_session).get(addr) {
+                self.add_fanout(*addr, endpoint.event_tx.clone());
+            }
+            self.spawn_session_thread(session.clone());
         }
     }
 
@@ -258,25 +281,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             self.log.clone(),
         ));
 
-        let r = runner.clone();
-        let peer_ip = runner.neighbor.host.ip();
-        slog::info!(
-            self.log,
-            "spawning session for {}",
-            lock!(runner.neighbor.name);
-            slog::o!(
-                "component" => crate::COMPONENT_BGP,
-                "module" => crate::MOD_ROUTER,
-                "unit" => UNIT_SESSION_RUNNER,
-            )
-        );
-        std::thread::Builder::new()
-            .name(format!("bgp-fsm-{}", peer_ip))
-            .spawn(move || {
-                r.fsm_start();
-            })
-            .expect("failed to spawn BGP FSM thread");
-
+        self.spawn_session_thread(runner.clone());
         self.add_fanout(neighbor.host.ip(), event_tx);
         lock!(self.sessions).insert(neighbor.host.ip(), runner.clone());
 
@@ -587,7 +592,7 @@ impl<Cnx: BgpConnection + 'static> Drop for Router<Cnx> {
         // Stop all sessions when router is dropped to prevent thread leaks.
         // We don't set the shutdown flag here because it's not relevant during drop
         // (the router is being destroyed, not temporarily shutdown).
-        self.stop_all_sessions();
+        self.delete_all_sessions();
     }
 }
 

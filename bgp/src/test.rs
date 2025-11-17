@@ -769,15 +769,27 @@ fn test_three_router_chain_tcp() {
 /// 2. The neighbor is reset (hard) and re-established
 /// 3. The neighbor is deleted
 #[test]
+#[serial_test::serial]
 fn test_neighbor_thread_lifecycle_no_leaks() {
     let r1_addr = sockaddr!(&format!("127.0.0.10:{TEST_BGP_PORT}"));
     let r2_addr = sockaddr!(&format!("127.0.0.11:{TEST_BGP_PORT}"));
 
-    // Get baseline BGP thread count before any BGP operations
+    // Wait for baseline BGP thread count to reach 0
+    // This handles the case where previous tests' threads are still being cleaned up by the OS.
     // We count only threads with names starting with "bgp-" to exclude
     // dependency threads (slog-async, rdb reapers, etc.)
-    let baseline = mg_common::test::count_threads_with_prefix("bgp-")
-        .expect("couldn't collect thread count");
+    wait_for!(
+        {
+            let count = mg_common::test::count_threads_with_prefix("bgp-")
+                .expect("couldn't collect thread count");
+            if count > 0 {
+                eprintln!("Waiting for baseline to stabilize (current: {count})");
+            }
+            count == 0
+        },
+        "Baseline BGP thread count should reach 0"
+    );
+    let baseline = 0;
     eprintln!("=== Baseline BGP thread count: {baseline} ===");
 
     let routers = vec![
