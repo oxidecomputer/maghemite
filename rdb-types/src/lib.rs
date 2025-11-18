@@ -41,7 +41,7 @@ impl Ord for Prefix4 {
 }
 
 impl Prefix4 {
-    const HOST_MASK: u8 = 32;
+    pub const HOST_MASK: u8 = 32;
 
     /// Create a new `Prefix4` from an IP address and net mask.
     /// The newly created `Prefix4` will have its host bits zeroed upon creation
@@ -62,7 +62,7 @@ impl Prefix4 {
     pub fn host_bits_are_unset(&self) -> bool {
         let mask = match self.length {
             0 => 0,
-            _ => (!0u32) << (32 - self.length),
+            _ => u32::MAX << (Self::HOST_MASK - self.length),
         };
 
         self.value.to_bits() & mask == self.value.to_bits()
@@ -71,7 +71,7 @@ impl Prefix4 {
     pub fn unset_host_bits(&mut self) {
         let mask = match self.length {
             0 => 0,
-            _ => (!0u32) << (32 - self.length),
+            _ => u32::MAX << (Self::HOST_MASK - self.length),
         };
 
         self.value = Ipv4Addr::from_bits(self.value.to_bits() & mask)
@@ -91,8 +91,11 @@ impl Prefix4 {
         }
 
         // Create masks for comparison
-        let shift_amount = 32 - other.length;
-        let mask = !0u32 << shift_amount;
+        let shift_amount = Self::HOST_MASK - other.length;
+        if shift_amount >= Self::HOST_MASK {
+            return false; // Invalid case
+        }
+        let mask = u32::MAX << shift_amount;
 
         let self_masked = self.value.to_bits() & mask;
         let other_masked = other.value.to_bits() & mask;
@@ -166,7 +169,7 @@ impl fmt::Display for Prefix6 {
 }
 
 impl Prefix6 {
-    const HOST_MASK: u8 = 128;
+    pub const HOST_MASK: u8 = 128;
 
     /// Create a new `Prefix6` from an IP address and net mask.
     /// The newly created `Prefix6` will have its host bits zeroed upon creation
@@ -187,7 +190,7 @@ impl Prefix6 {
     pub fn host_bits_are_unset(&self) -> bool {
         let mask = match self.length {
             0 => 0,
-            _ => (!0u128) << (128 - self.length),
+            _ => u128::MAX << (Self::HOST_MASK - self.length),
         };
 
         self.value.to_bits() & mask == self.value.to_bits()
@@ -196,7 +199,7 @@ impl Prefix6 {
     pub fn unset_host_bits(&mut self) {
         let mask = match self.length {
             0 => 0,
-            _ => (!0u128) << (128 - self.length),
+            _ => u128::MAX << (Self::HOST_MASK - self.length),
         };
 
         self.value = Ipv6Addr::from_bits(self.value.to_bits() & mask)
@@ -216,11 +219,11 @@ impl Prefix6 {
         }
 
         // Create masks for comparison
-        let shift_amount = 128 - other.length;
-        if shift_amount >= 128 {
+        let shift_amount = Self::HOST_MASK - other.length;
+        if shift_amount >= Self::HOST_MASK {
             return false; // Invalid case
         }
-        let mask = !0u128 << shift_amount;
+        let mask = u128::MAX << shift_amount;
 
         let self_masked = self.value.to_bits() & mask;
         let other_masked = other.value.to_bits() & mask;
@@ -438,3 +441,4 @@ pub enum ProtocolFilter {
     /// Static routes only
     Static,
 }
+

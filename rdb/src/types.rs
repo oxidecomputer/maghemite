@@ -18,6 +18,32 @@ use std::str::FromStr;
 // Re-export core types from rdb-types
 pub use rdb_types::{AddressFamily, Prefix, Prefix4, Prefix6, ProtocolFilter};
 
+// Marker types for compile-time address family discrimination.
+//
+// These zero-sized types enable type-level enforcement of IPv4/IPv6
+// separation in generic data structures. Used in conjunction with
+// PhantomData for compile-time type safety with no runtime overhead.
+//
+// Example:
+// ```
+// struct TypedContainer<Af> {
+//     data: Vec<u8>,
+//     _af: PhantomData<Af>,
+// }
+//
+// // These are different types at compile time
+// type Ipv4Container = TypedContainer<Ipv4Marker>;
+// type Ipv6Container = TypedContainer<Ipv6Marker>;
+// ```
+
+/// IPv4 address family marker (zero-sized type)
+#[derive(Clone, Copy, Debug)]
+pub struct Ipv4Marker;
+
+/// IPv6 address family marker (zero-sized type)
+#[derive(Clone, Copy, Debug)]
+pub struct Ipv6Marker;
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct Path {
     pub nexthop: IpAddr,

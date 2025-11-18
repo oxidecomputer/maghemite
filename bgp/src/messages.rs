@@ -14,7 +14,7 @@ use rdb::types::{AddressFamily, Prefix4, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashSet},
     fmt::{Display, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
@@ -709,9 +709,9 @@ pub struct Tlv {
     Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
 )]
 pub struct UpdateMessage {
-    pub withdrawn: Vec<Prefix>,
+    pub withdrawn: Vec<Prefix4>,
     pub path_attributes: Vec<PathAttribute>,
-    pub nlri: Vec<Prefix>,
+    pub nlri: Vec<Prefix4>,
 }
 
 impl UpdateMessage {
@@ -755,22 +755,65 @@ impl UpdateMessage {
     fn withdrawn_to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
         for w in &self.withdrawn {
-            let wire_bytes = match w {
-                Prefix::V4(p) => p.to_wire(),
-                Prefix::V6(p) => p.to_wire(),
-            };
-            buf.extend_from_slice(&wire_bytes);
+            buf.extend_from_slice(&w.to_wire());
         }
         Ok(buf)
     }
 
+    /// RFC 7606 Section 5.1:
+    /// ```text
+    /// 5.  Parsing of Network Layer Reachability Information (NLRI) Fields
+    ///
+    /// 5.1.  Encoding NLRI
+    ///
+    ///    To facilitate the determination of the NLRI field in an UPDATE
+    ///    message with a malformed attribute:
+    ///
+    ///    o  The MP_REACH_NLRI or MP_UNREACH_NLRI attribute (if present) SHALL
+    ///       be encoded as the very first path attribute in an UPDATE message.
+    ///
+    ///    o  An UPDATE message MUST NOT contain more than one of the following:
+    ///       non-empty Withdrawn Routes field, non-empty Network Layer
+    ///       Reachability Information field, MP_REACH_NLRI attribute, and
+    ///       MP_UNREACH_NLRI attribute.
+    ///
+    ///    Since older BGP speakers may not implement these restrictions, an
+    ///    implementation MUST still be prepared to receive these fields in any
+    ///    position or combination.
+    /// ```
+    ///
+    /// Note: While we MUST encode MP-BGP attributes first per the spec, during
+    /// decoding we accept them in any position for interoperability with older
+    /// BGP speakers (see the last paragraph above).
     fn path_attrs_to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
+
+        // Encode MP-BGP attributes first (RFC 7606 Section 5.1 requirement)
         for p in &self.path_attributes {
-            buf.extend_from_slice(&p.to_wire(
-                p.typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0,
-            )?);
+            if matches!(
+                p.value,
+                PathAttributeValue::MpReachNlri(_)
+                    | PathAttributeValue::MpUnreachNlri(_)
+            ) {
+                buf.extend_from_slice(&p.to_wire(
+                    p.typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0,
+                )?);
+            }
         }
+
+        // Then encode all other attributes
+        for p in &self.path_attributes {
+            if !matches!(
+                p.value,
+                PathAttributeValue::MpReachNlri(_)
+                    | PathAttributeValue::MpUnreachNlri(_)
+            ) {
+                buf.extend_from_slice(&p.to_wire(
+                    p.typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0,
+                )?);
+            }
+        }
+
         Ok(buf)
     }
 
@@ -779,11 +822,7 @@ impl UpdateMessage {
         for n in &self.nlri {
             // TODO hacked in ADD_PATH
             //buf.extend_from_slice(&0u32.to_be_bytes());
-            let wire_bytes = match n {
-                Prefix::V4(p) => p.to_wire(),
-                Prefix::V6(p) => p.to_wire(),
-            };
-            buf.extend_from_slice(&wire_bytes);
+            buf.extend_from_slice(&n.to_wire());
         }
         Ok(buf)
     }
@@ -791,14 +830,13 @@ impl UpdateMessage {
     pub fn from_wire(input: &[u8]) -> Result<UpdateMessage, Error> {
         let (input, len) = be_u16(input)?;
         let (input, withdrawn_input) = take(len)(input)?;
-        let withdrawn =
-            Self::prefixes_from_wire(withdrawn_input, AddressFamily::Ipv4)?;
+        let withdrawn = Self::prefixes4_from_wire(withdrawn_input)?;
 
         let (input, len) = be_u16(input)?;
         let (input, attrs_input) = take(len)(input)?;
         let path_attributes = Self::path_attrs_from_wire(attrs_input)?;
 
-        let nlri = Self::prefixes_from_wire(input, AddressFamily::Ipv4)?;
+        let nlri = Self::prefixes4_from_wire(input)?;
 
         Ok(UpdateMessage {
             withdrawn,
@@ -807,42 +845,181 @@ impl UpdateMessage {
         })
     }
 
-    fn prefixes_from_wire(
-        mut buf: &[u8],
+    /// Check for duplicate MP_REACH_NLRI or MP_UNREACH_NLRI attributes.
+    ///
+    /// RFC 7606 Section 3g:
+    /// ```text
+    /// g.  If the MP_REACH_NLRI attribute or the MP_UNREACH_NLRI [RFC4760]
+    ///     attribute appears more than once in the UPDATE message, then a
+    ///     NOTIFICATION message MUST be sent with the Error Subcode
+    ///     "Malformed Attribute List".  If any other attribute (whether
+    ///     recognized or unrecognized) appears more than once in an UPDATE
+    ///     message, then all the occurrences of the attribute other than the
+    ///     first one SHALL be discarded and the UPDATE message will continue
+    ///     to be processed.
+    /// ```
+    pub fn check_duplicate_mp_attributes(&self) -> Result<(), Error> {
+        let mut has_mp_reach = false;
+        let mut has_mp_unreach = false;
+
+        for attr in &self.path_attributes {
+            match &attr.value {
+                PathAttributeValue::MpReachNlri(_) => {
+                    if has_mp_reach {
+                        return Err(Error::MalformedAttributeList(
+                            "Multiple MP_REACH_NLRI attributes".into(),
+                        ));
+                    }
+                    has_mp_reach = true;
+                }
+                PathAttributeValue::MpUnreachNlri(_) => {
+                    if has_mp_unreach {
+                        return Err(Error::MalformedAttributeList(
+                            "Multiple MP_UNREACH_NLRI attributes".into(),
+                        ));
+                    }
+                    has_mp_unreach = true;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Parse prefixes from wire format.
+    /// Dispatches to the appropriate version-specific parser.
+    pub fn prefixes_from_wire(
+        buf: &[u8],
         afi: AddressFamily,
     ) -> Result<Vec<Prefix>, Error> {
+        match afi {
+            AddressFamily::Ipv4 => Self::prefixes4_from_wire(buf)
+                .map(|v| v.into_iter().map(Prefix::V4).collect()),
+            AddressFamily::Ipv6 => Self::prefixes6_from_wire(buf)
+                .map(|v| v.into_iter().map(Prefix::V6).collect()),
+        }
+    }
+
+    /// Parse IPv4 prefixes from wire format.
+    pub fn prefixes4_from_wire(mut buf: &[u8]) -> Result<Vec<Prefix4>, Error> {
         let mut result = Vec::new();
         while !buf.is_empty() {
-            // XXX: handle error for individual prefix?
-            let (out, pfx) = prefix_from_wire(buf, afi)?;
-            result.push(pfx);
+            let (out, prefix4) = Prefix4::from_wire(buf)
+                .map_err(|_| Error::InvalidNlriPrefix(buf.to_vec()))?;
+            result.push(prefix4);
             buf = out;
         }
         Ok(result)
     }
 
+    /// Parse IPv6 prefixes from wire format.
+    pub fn prefixes6_from_wire(mut buf: &[u8]) -> Result<Vec<Prefix6>, Error> {
+        let mut result = Vec::new();
+        while !buf.is_empty() {
+            let (out, prefix6) = Prefix6::from_wire(buf)
+                .map_err(|_| Error::InvalidNlriPrefix(buf.to_vec()))?;
+            result.push(prefix6);
+            buf = out;
+        }
+        Ok(result)
+    }
+
+    /// Parse Path Attributes carried in an Update from wire format.
+    ///
+    /// For any given path attribute, only the first instance is respected.
+    /// Subsequent instances are discarded. The exceptions to this are MP-BGP
+    /// attributes, which are not allowed to show up multiple times in an
+    /// Update.
+    ///
+    /// All of this is mandated by RFC 7606 Section 3(g):
+    /// ```text
+    /// g.  If the MP_REACH_NLRI attribute or the MP_UNREACH_NLRI [RFC4760]
+    ///     attribute appears more than once in the UPDATE message, then a
+    ///     NOTIFICATION message MUST be sent with the Error Subcode
+    ///     "Malformed Attribute List".  If any other attribute (whether
+    ///     recognized or unrecognized) appears more than once in an UPDATE
+    ///     message, then all the occurrences of the attribute other than the
+    ///     first one SHALL be discarded and the UPDATE message will continue
+    ///     to be processed.
+    /// ```
+    ///
+    /// Note: Currently, this is implemented by retaining MpReachNlri and
+    /// MpUnreachNlri in the parsed Update so the session layer (FSM) can detect
+    /// the duplication and react accordingly (by sending a Malformed Attribute
+    /// List Notification).
     fn path_attrs_from_wire(
         mut buf: &[u8],
     ) -> Result<Vec<PathAttribute>, Error> {
         let mut result = Vec::new();
+        let mut seen_types: HashSet<u8> = HashSet::new();
+
         loop {
             if buf.is_empty() {
                 break;
             }
             let (out, pa) = PathAttribute::from_wire(buf)?;
-            result.push(pa);
+
+            let type_code = pa.typ.type_code as u8;
+            let is_mp_bgp = matches!(
+                pa.typ.type_code,
+                PathAttributeTypeCode::MpReachNlri
+                    | PathAttributeTypeCode::MpUnreachNlri
+            );
+
+            if is_mp_bgp || !seen_types.contains(&type_code) {
+                // Keep MP-BGP attributes (duplicates trigger NOTIFICATION via
+                // check_duplicate_mp_attributes at session layer) and first
+                // occurrence of non-MP-BGP attributes.
+                seen_types.insert(type_code);
+                result.push(pa);
+            }
+            // else: discard duplicate non-MP-BGP attribute per RFC 7606 3(g)
+
             buf = out;
         }
         Ok(result)
     }
 
+    /// This method parses an UpdateMessage and returns a BgpNexthop which
+    /// represents the most correct next-hop for the situation. Since there
+    /// are so many different ways to encode a BGP nexthop (often only being
+    /// valid with certain combinations of MP-BGP address-families and next-hop
+    /// capabilities), this method centralizes the logic for parsing and
+    /// selection of received nexthops.
+    pub fn nexthop(&self) -> Result<BgpNexthop, Error> {
+        let mp =
+            match self.path_attributes.iter().find_map(|a| match &a.value {
+                PathAttributeValue::MpReachNlri(mp) => Some(mp),
+                _ => None,
+            }) {
+                // This Update is not MP-BGP, so we can just hand out NEXT_HOP
+                None => {
+                    return self
+                        .nexthop4()
+                        .map(|n4| n4.into())
+                        .ok_or(Error::MissingNexthop);
+                }
+                Some(mp) => mp,
+            };
+
+        // This Update is MP-BGP, so we need to use the AFI/SAFI (represented
+        // here via Afi) and the nh_len to derive the nexthop type.
+        // XXX: extended nexthop validation
+        BgpNexthop::from_bytes(
+            &mp.nh_bytes,
+            mp.nh_len,
+            Afi::try_from(mp.afi).map_err(|_| {
+                Error::UnsupportedAddressFamily(mp.afi, mp.safi)
+            })?,
+        )
+    }
+
     pub fn nexthop4(&self) -> Option<Ipv4Addr> {
-        for a in &self.path_attributes {
-            if let PathAttributeValue::NextHop(IpAddr::V4(addr)) = a.value {
-                return Some(addr);
-            }
-        }
-        None
+        self.path_attributes.iter().find_map(|a| match a.value {
+            PathAttributeValue::NextHop(addr) => Some(addr),
+            _ => None,
+        })
     }
 
     pub fn graceful_shutdown(&self) -> bool {
@@ -1091,6 +1268,10 @@ pub enum PathAttributeTypeCode {
     Aggregator = 7,
     Communities = 8,
 
+    /// RFC 4760
+    MpReachNlri = 14,
+    MpUnreachNlri = 15,
+
     /// RFC 6793
     As4Path = 17,
     As4Aggregator = 18,
@@ -1113,6 +1294,12 @@ impl From<PathAttributeValue> for PathAttributeTypeCode {
             }
             PathAttributeValue::Communities(_) => {
                 PathAttributeTypeCode::Communities
+            }
+            PathAttributeValue::MpReachNlri(_) => {
+                PathAttributeTypeCode::MpReachNlri
+            }
+            PathAttributeValue::MpUnreachNlri(_) => {
+                PathAttributeTypeCode::MpUnreachNlri
             }
             /* TODO according to RFC 4893 we do not have this as an explicit
              * attribute type when 4-byte ASNs have been negotiated - but are
@@ -1139,8 +1326,8 @@ pub enum PathAttributeValue {
      */
     /// The AS set associated with a path
     AsPath(Vec<As4PathSegment>),
-    /// The nexthop associated with a path
-    NextHop(IpAddr),
+    /// The nexthop associated with a path (IPv4 only for traditional BGP)
+    NextHop(Ipv4Addr),
     /// A metric used for external (inter-AS) links to discriminate among
     /// multiple entry or exit points.
     MultiExitDisc(u32),
@@ -1155,7 +1342,10 @@ pub enum PathAttributeValue {
     As4Path(Vec<As4PathSegment>),
     /// This attribute is included in routes that are formed by aggregation.
     As4Aggregator([u8; 8]),
-    //MpReachNlri(MpReachNlri), //TODO for IPv6
+    /// Carries reachable MP-BGP NLRI and Next-hop (advertisement).
+    MpReachNlri(MpReach),
+    /// Carries unreachable MP-BGP NLRI (withdrawal).
+    MpUnreachNlri(MpUnreach),
 }
 
 impl PathAttributeValue {
@@ -1173,10 +1363,7 @@ impl PathAttributeValue {
                 }
                 Ok(buf)
             }
-            Self::NextHop(addr) => match addr {
-                IpAddr::V4(a) => Ok(a.octets().into()),
-                IpAddr::V6(a) => Ok(a.octets().into()),
-            },
+            Self::NextHop(addr) => Ok(addr.octets().into()),
             Self::As4Path(segments) => {
                 let mut buf = Vec::new();
                 for s in segments {
@@ -1193,6 +1380,8 @@ impl PathAttributeValue {
             }
             Self::LocalPref(value) => Ok(value.to_be_bytes().into()),
             Self::MultiExitDisc(value) => Ok(value.to_be_bytes().into()),
+            Self::MpReachNlri(mp) => mp.to_wire(),
+            Self::MpUnreachNlri(mp) => mp.to_wire(),
             x => Err(Error::UnsupportedPathAttributeValue(x.clone())),
         }
     }
@@ -1227,9 +1416,9 @@ impl PathAttributeValue {
                     });
                 }
                 let (_input, b) = take(4usize)(input)?;
-                Ok(PathAttributeValue::NextHop(
-                    Ipv4Addr::new(b[0], b[1], b[2], b[3]).into(),
-                ))
+                Ok(PathAttributeValue::NextHop(Ipv4Addr::new(
+                    b[0], b[1], b[2], b[3],
+                )))
             }
             PathAttributeTypeCode::MultiExitDisc => {
                 let (_input, v) = be_u32(input)?;
@@ -1263,6 +1452,14 @@ impl PathAttributeValue {
                 let (_input, v) = be_u32(input)?;
                 Ok(PathAttributeValue::LocalPref(v))
             }
+            PathAttributeTypeCode::MpReachNlri => {
+                let (_remaining, mp_reach) = MpReach::from_wire(input)?;
+                Ok(PathAttributeValue::MpReachNlri(mp_reach))
+            }
+            PathAttributeTypeCode::MpUnreachNlri => {
+                let (_remaining, mp_unreach) = MpUnreach::from_wire(input)?;
+                Ok(PathAttributeValue::MpUnreachNlri(mp_unreach))
+            }
             x => Err(Error::UnsupportedPathAttributeTypeCode(x)),
         }
     }
@@ -1285,12 +1482,24 @@ impl Display for PathAttributeValue {
             PathAttributeValue::LocalPref(pref) => {
                 write!(f, "local-pref: {pref}")
             }
-            // XXX: Do real formatting
-            PathAttributeValue::Aggregator(agg) => write!(
-                f,
-                "aggregator: [{} {} {} {} {} {}]",
-                agg[0], agg[1], agg[2], agg[3], agg[4], agg[5]
-            ),
+            /*
+             *    RFC 4271
+             *
+             *    g) AGGREGATOR (Type Code 7)
+             *
+             *       AGGREGATOR is an optional transitive attribute of length 6.
+             *       The attribute contains the last AS number that formed the
+             *       aggregate route (encoded as 2 octets), followed by the IP
+             *       address of the BGP speaker that formed the aggregate route
+             *       (encoded as 4 octets).  This SHOULD be the same address as
+             *       the one used for the BGP Identifier of the speaker.
+             */
+            PathAttributeValue::Aggregator(agg) => {
+                let [a0, a1, a2, a3, a4, a5] = *agg;
+                let asn = u16::from_be_bytes([a0, a1]);
+                let ip = Ipv4Addr::from([a2, a3, a4, a5]);
+                write!(f, "aggregator: [ asn: {asn}, ip: {ip} ]",)
+            }
             PathAttributeValue::Communities(comms) => {
                 let comms = comms
                     .iter()
@@ -1298,6 +1507,27 @@ impl Display for PathAttributeValue {
                     .collect::<Vec<_>>()
                     .join(" ");
                 write!(f, "communities: [{comms}]")
+            }
+            PathAttributeValue::MpReachNlri(reach) => {
+                write!(
+                    f,
+                    "mp-reach-nlri: [ afi: {}, safi: {}, next-hop-len: {}, next-hop-bytes: {} bytes, reserved: {}, nlri-bytes: {} bytes ]",
+                    reach.afi,
+                    reach.safi,
+                    reach.nh_len,
+                    reach.nh_bytes.len(),
+                    reach.reserved,
+                    reach.nlri_bytes.len()
+                )
+            }
+            PathAttributeValue::MpUnreachNlri(unreach) => {
+                write!(
+                    f,
+                    "mp-unreach-nlri: [ afi: {}, safi: {}, withdrawn-bytes: {} bytes ]",
+                    unreach.afi_raw,
+                    unreach.safi_raw,
+                    unreach.withdrawn_bytes.len()
+                )
             }
             PathAttributeValue::As4Path(path_segs) => {
                 let path = path_segs
@@ -1307,12 +1537,20 @@ impl Display for PathAttributeValue {
                     .join(" ");
                 write!(f, "as4-path: [{path}]")
             }
-            // XXX: Do real formatting
-            PathAttributeValue::As4Aggregator(agg) => write!(
-                f,
-                "as4-aggregator: [{} {} {} {} {} {} {} {}]",
-                agg[0], agg[1], agg[2], agg[3], agg[4], agg[5], agg[6], agg[7]
-            ),
+            /*
+             *   RFC 6793
+             *
+             *   Similarly, this document defines a new BGP path attribute called
+             *   AS4_AGGREGATOR, which is optional transitive.  The AS4_AGGREGATOR
+             *   attribute has the same semantics and the same encoding as the
+             *   AGGREGATOR attribute, except that it carries a four-octet AS number.
+             */
+            PathAttributeValue::As4Aggregator(agg) => {
+                let [a0, a1, a2, a3, a4, a5, a6, a7] = *agg;
+                let asn = u32::from_be_bytes([a0, a1, a2, a3]);
+                let ip = Ipv4Addr::from([a4, a5, a6, a7]);
+                write!(f, "as4-aggregator: [ asn: {asn}, ip: {ip} ]")
+            }
         }
     }
 }
@@ -1497,6 +1735,570 @@ pub enum AsPathType {
     AsSet = 1,
     /// The path is to be interpreted as a sequence
     AsSequence = 2,
+}
+
+/// BGP next-hops can come in multiple forms, defined in several different RFCs.
+/// This enum represents the forms supported by this implementation.
+///
+/// In the case of IPv6, RFC 2545 defined the use of either:
+/// 1) A single non-link-local next-hop (length=16)
+/// 2) A non-link-local plus a link-local next-hop (length=32)
+///
+/// This does not account for only a link-local address as the sole next-hop.
+/// As such, many different implementations decided they would encode this in a
+/// variety of ways (since there was no canonical source of truth):
+/// a) Single-address encoding just the link-local (length=16)
+/// b) Double-address encoding the link-local in both positions (length=32)
+/// c) Double-address encoding the link-local in its normal position, but 0's in
+///    the non-link-local position (length=32)
+/// etc.
+/// This led to `draft-ietf-idr-linklocal-capability` which specifies more
+/// detailed encoding and error handling standards, signaled via a new
+/// Link-Local Next Hop Capability.
+///
+/// In addition to this, RFC 8950 (formerly RFC 5549) specified the
+/// advertisement of IPv4 NLRI via an IPv6 next-hop, enabled via the Extended
+/// Next Hop capability. This excerpt contains the encoding logic from RFC 8950:
+/// ```text
+///    Specifically, this document allows advertising the MP_REACH_NLRI
+///    attribute [RFC4760] with this content:
+///
+///    *  AFI = 1
+///
+///    *  SAFI = 1, 2, or 4
+///
+///    *  Length of Next Hop Address = 16 or 32
+///
+///    *  Next Hop Address = IPv6 address of a next hop (potentially
+///       followed by the link-local IPv6 address of the next hop).  This
+///       field is to be constructed as per Section 3 of [RFC2545].
+///
+///    *  NLRI = NLRI as per the AFI/SAFI definition
+///
+///    [..]
+///
+///    This is in addition to the existing mode of operation allowing
+///    advertisement of NLRI for <AFI/SAFI> of <1/1>, <1/2>, and <1/4> with
+///    a next-hop address of an IPv4 type and advertisement of NLRI for an
+///    <AFI/SAFI> of <1/128> and <1/129> with a next-hop address of a VPN-
+///    IPv4 type.
+///
+///    The BGP speaker receiving the advertisement MUST use the Length of
+///    Next Hop Address field to determine which network-layer protocol the
+///    next-hop address belongs to.
+///
+///    *  When the AFI/SAFI is <1/1>, <1/2>, or <1/4> and when the Length of
+///       Next Hop Address field is equal to 16 or 32, the next-hop address
+///       is of type IPv6.
+///
+///    *  When the AFI/SAFI is <1/128> or <1/129> and when the Length of
+///       Next Hop Address field is equal to 24 or 48, the next-hop address
+///       is of type VPN-IPv6.
+/// ```
+///
+/// RFC 8950 also goes on to state that Extended Next Hop is not specified for
+/// any AFI/SAFI other than IPv4 {Unicast, Multicast, Labeled Unicast,
+/// Unicast VPN, Multicast VPN}, because IPv4 next-hops can already be signaled
+/// within IPv6 or VPN-IPv6 encoding (via IPv4-mapped IPv6 addresses).
+///
+/// So for our purposes, IPv4 Unicast NLRI may have Next-hops in the form of:
+/// a) IPv4 nexthop
+/// b) IPv6 single GUA (w/ Extended Next-Hop)
+/// c) IPv6 single LL (w/ Extended Next-Hop + Link-Local Next Hop)
+/// d) IPv6 double (w/ Extended Next-Hop)
+///
+/// and IPv6 Unicast NLRI may have Next-hops in the form of:
+/// a) IPv6 single (IPv4-mapped)
+/// b) IPv6 single GUA
+/// c) IPv6 single LL (w/ Link-Local Next Hop)
+/// d) IPv6 double
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
+)]
+pub enum BgpNexthop {
+    Ipv4(Ipv4Addr),
+    Ipv6Single(Ipv6Addr),
+    Ipv6Double((Ipv6Addr, Ipv6Addr)),
+}
+
+impl BgpNexthop {
+    /// Parse next-hop from raw bytes based on AFI and length.
+    ///
+    /// Per RFC 4760 and RFC 2545:
+    /// - IPv4: 4 bytes (single IPv4 address)
+    /// - IPv6: 16 bytes (single global unicast) or 32 bytes (global + link-local)
+    ///
+    /// # Arguments
+    /// * `nh_bytes` - Raw next-hop bytes
+    /// * `nh_len` - Next-hop length field
+    /// * `afi` - Validated AFI (determines expected format)
+    ///
+    /// # Returns
+    /// Parsed BgpNexthop or error if length is invalid for the AFI
+    pub fn from_bytes(
+        nh_bytes: &[u8],
+        nh_len: u8,
+        afi: Afi,
+    ) -> Result<Self, Error> {
+        if nh_bytes.len() != nh_len as usize {
+            return Err(Error::InvalidAddress(format!(
+                "next-hop bytes length {} doesn't match nh_len {}",
+                nh_bytes.len(),
+                nh_len
+            )));
+        }
+
+        // SAFETY: The length check above guarantees nh_bytes.len() == nh_len.
+        // Each match arm below only matches when nh_len equals the exact size
+        // needed for copy_from_slice, so all slice operations are bounds-safe.
+        // XXX: extended nexthop support
+        match (afi, nh_len) {
+            (Afi::Ipv4, 4) => {
+                let mut bytes = [0u8; 4];
+                bytes.copy_from_slice(nh_bytes);
+                Ok(BgpNexthop::Ipv4(Ipv4Addr::from(bytes)))
+            }
+            (Afi::Ipv6, 16) => {
+                let mut bytes = [0u8; 16];
+                bytes.copy_from_slice(nh_bytes);
+                Ok(BgpNexthop::Ipv6Single(Ipv6Addr::from(bytes)))
+            }
+            (Afi::Ipv6, 32) => {
+                let mut bytes1 = [0u8; 16];
+                let mut bytes2 = [0u8; 16];
+                bytes1.copy_from_slice(&nh_bytes[..16]);
+                bytes2.copy_from_slice(&nh_bytes[16..32]);
+                Ok(BgpNexthop::Ipv6Double((
+                    Ipv6Addr::from(bytes1),
+                    Ipv6Addr::from(bytes2),
+                )))
+            }
+            _ => Err(Error::InvalidAddress(format!(
+                "invalid next-hop length {} for AFI {:?}",
+                nh_len, afi
+            ))),
+        }
+    }
+
+    /// Get byte length of this next-hop
+    pub fn byte_len(&self) -> u8 {
+        match self {
+            // 4 bytes
+            BgpNexthop::Ipv4(_) => (Ipv4Addr::BITS / 8) as u8,
+            // 16 bytes
+            BgpNexthop::Ipv6Single(_) => (Ipv6Addr::BITS / 8) as u8,
+            // 32 bytes
+            BgpNexthop::Ipv6Double(_) => ((Ipv6Addr::BITS * 2) / 8) as u8,
+        }
+    }
+}
+
+impl Display for BgpNexthop {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BgpNexthop::Ipv4(a4) => write!(f, "{a4}"),
+            BgpNexthop::Ipv6Single(a6) => write!(f, "{a6}"),
+            BgpNexthop::Ipv6Double((a, b)) => write!(f, "({a}, {b})"),
+        }
+    }
+}
+
+impl From<Ipv4Addr> for BgpNexthop {
+    fn from(value: Ipv4Addr) -> Self {
+        BgpNexthop::Ipv4(value)
+    }
+}
+
+impl From<Ipv6Addr> for BgpNexthop {
+    fn from(value: Ipv6Addr) -> Self {
+        BgpNexthop::Ipv6Single(value)
+    }
+}
+
+impl From<(Ipv6Addr, Ipv6Addr)> for BgpNexthop {
+    fn from(value: (Ipv6Addr, Ipv6Addr)) -> Self {
+        BgpNexthop::Ipv6Double(value)
+    }
+}
+
+impl From<IpAddr> for BgpNexthop {
+    fn from(value: IpAddr) -> Self {
+        match value {
+            IpAddr::V4(ip4) => BgpNexthop::Ipv4(ip4),
+            IpAddr::V6(ip6) => BgpNexthop::Ipv6Single(ip6),
+        }
+    }
+}
+
+/// ```text
+/// 3.  Multiprotocol Reachable NLRI - MP_REACH_NLRI (Type Code 14):
+///
+///    This is an optional non-transitive attribute that can be used for the
+///    following purposes:
+///
+///    (a) to advertise a feasible route to a peer
+///
+///    (b) to permit a router to advertise the Network Layer address of the
+///        router that should be used as the next hop to the destinations
+///        listed in the Network Layer Reachability Information field of the
+///        MP_NLRI attribute.
+///
+///    The attribute is encoded as shown below:
+///
+///    +---------------------------------------------------------+
+///    | Address Family Identifier (2 octets)                    |
+///    +---------------------------------------------------------+
+///    | Subsequent Address Family Identifier (1 octet)          |
+///    +---------------------------------------------------------+
+///    | Length of Next Hop Network Address (1 octet)            |
+///    +---------------------------------------------------------+
+///    | Network Address of Next Hop (variable)                  |
+///    +---------------------------------------------------------+
+///    | Reserved (1 octet)                                      |
+///    +---------------------------------------------------------+
+///    | Network Layer Reachability Information (variable)       |
+///    +---------------------------------------------------------+
+/// ````
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MpReach {
+    /// Raw AFI value (not validated during parsing - validation deferred to session layer)
+    pub afi: u16,
+
+    /// Raw SAFI value (not validated during parsing - validation deferred to session layer)
+    pub safi: u8,
+
+    /// Length of Next Hop Network Address field
+    pub nh_len: u8,
+
+    /// Next-hop bytes (raw, not parsed - parsing deferred to session layer)
+    pub nh_bytes: Vec<u8>,
+
+    /// Reserved field (must be 0 per RFC 4760)
+    pub reserved: u8,
+
+    /// NLRI bytes (raw, not parsed - parsing deferred to session layer)
+    pub nlri_bytes: Vec<u8>,
+}
+
+impl MpReach {
+    pub fn new(afi: Afi, nh: BgpNexthop, nlri: Vec<Prefix>) -> Self {
+        // Convert next-hop to bytes
+        let nh_bytes = match &nh {
+            BgpNexthop::Ipv4(addr) => addr.octets().to_vec(),
+            BgpNexthop::Ipv6Single(addr) => addr.octets().to_vec(),
+            BgpNexthop::Ipv6Double((addr1, addr2)) => {
+                let mut buf = Vec::new();
+                buf.extend_from_slice(&addr1.octets());
+                buf.extend_from_slice(&addr2.octets());
+                buf
+            }
+        };
+
+        // Convert NLRI to bytes
+        let mut nlri_bytes = Vec::new();
+        for prefix in &nlri {
+            match prefix {
+                Prefix::V4(p) => nlri_bytes.extend_from_slice(&p.to_wire()),
+                Prefix::V6(p) => nlri_bytes.extend_from_slice(&p.to_wire()),
+            }
+        }
+
+        Self {
+            afi: afi as u16,
+            safi: Safi::Unicast as u8,
+            nh_len: nh.byte_len(),
+            nh_bytes,
+            reserved: 0u8,
+            nlri_bytes,
+        }
+    }
+
+    /// Create an MpReach for IPv6 unicast routes.
+    /// This is the type-safe version that takes Vec<Prefix6> directly,
+    /// avoiding the need for runtime type validation.
+    pub fn new_v6(nh: BgpNexthop, nlri: Vec<Prefix6>) -> Self {
+        // Convert next-hop to bytes
+        let nh_bytes = match &nh {
+            BgpNexthop::Ipv4(addr) => addr.octets().to_vec(),
+            BgpNexthop::Ipv6Single(addr) => addr.octets().to_vec(),
+            BgpNexthop::Ipv6Double((addr1, addr2)) => {
+                let mut buf = Vec::new();
+                buf.extend_from_slice(&addr1.octets());
+                buf.extend_from_slice(&addr2.octets());
+                buf
+            }
+        };
+
+        // Convert NLRI to bytes - no match needed, we know it's V6
+        let mut nlri_bytes = Vec::new();
+        for prefix in &nlri {
+            nlri_bytes.extend_from_slice(&prefix.to_wire());
+        }
+
+        Self {
+            afi: Afi::Ipv6 as u16,
+            safi: Safi::Unicast as u8,
+            nh_len: nh.byte_len(),
+            nh_bytes,
+            reserved: 0u8,
+            nlri_bytes,
+        }
+    }
+
+    /// Parse MP_REACH_NLRI from wire format.
+    ///
+    /// ## RFC 4760 Section 3: MP_REACH_NLRI Encoding
+    ///
+    /// This attribute is optional and non-transitive. It carries:
+    /// - AFI (2 octets): Address Family Identifier
+    /// - SAFI (1 octet): Subsequent Address Family Identifier
+    /// - Next Hop Length (1 octet): Length of next hop address
+    /// - Next Hop (variable): Network address of next hop
+    /// - Reserved (1 octet): Must be 0
+    /// - NLRI (variable): Network Layer Reachability Information
+    ///
+    /// ## Parsing Philosophy
+    ///
+    /// Unsupported AFI/SAFI is a **parsing error**, not a validation error, because:
+    /// 1. We cannot parse NLRI without knowing the address family format
+    /// 2. We cannot skip over NLRI bytes without knowing prefix encoding rules
+    /// 3. Per RFC 7606, malformed attributes that prevent NLRI location determination
+    ///    should trigger session reset or AFI/SAFI disable
+    ///
+    /// Therefore, this method validates that the AFI/SAFI tuple is supported during
+    /// parsing. The resulting `MpReach` is guaranteed to contain a valid, supported
+    /// address family.
+    ///
+    /// ## Parse Failures
+    ///
+    /// Parsing fails (returns `Err`) when:
+    /// - Buffer is too small for fixed-size fields
+    /// - Next-hop length is invalid for the given AFI
+    /// - AFI/SAFI combination is unsupported (structural requirement for parsing)
+    ///
+    /// ## Session-Level Validation
+    ///
+    /// After successful parsing, session-level code must still validate that this
+    /// address family was negotiated with the peer via capability exchange.
+    ///
+    /// # Arguments
+    /// * `input` - Wire format bytes to parse
+    ///
+    /// # Returns
+    /// `Ok((remaining_bytes, MpReach))` on successful parse
+    /// `Err(Error)` if wire format is malformed or address family is unsupported
+    pub fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Error> {
+        // Parse AFI (2 bytes) - DON'T VALIDATE (store raw value)
+        let (input, afi_raw) = be_u16(input)?;
+
+        // Parse SAFI (1 byte) - DON'T VALIDATE (store raw value)
+        let (input, safi_raw) = be_u8(input)?;
+
+        // Parse Next-hop Length (1 byte)
+        let (input, nh_len) = be_u8(input)?;
+
+        // Extract next-hop bytes (structural bounds check only - don't parse/validate)
+        if input.len() < nh_len as usize {
+            return Err(Error::TooSmall(format!(
+                "next-hop field too short: need {} bytes, have {}",
+                nh_len,
+                input.len()
+            )));
+        }
+        let nh_bytes = input[..nh_len as usize].to_vec();
+        let input = &input[nh_len as usize..];
+
+        // Parse Reserved byte (1 byte)
+        let (input, reserved) = be_u8(input)?;
+
+        // Store remaining bytes as raw NLRI (don't parse)
+        let nlri_bytes = input.to_vec();
+
+        Ok((
+            &[], // All remaining bytes consumed
+            MpReach {
+                afi: afi_raw,
+                safi: safi_raw,
+                nh_len,
+                nh_bytes,
+                reserved,
+                nlri_bytes,
+            },
+        ))
+    }
+
+    /// Serialize MP_REACH_NLRI to wire format.
+    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+        let mut buf = Vec::new();
+
+        // AFI (2 bytes)
+        buf.extend_from_slice(&self.afi.to_be_bytes());
+
+        // SAFI (1 byte)
+        buf.push(self.safi);
+
+        // Next-hop Length (1 byte)
+        buf.push(self.nh_len);
+
+        // Next-hop (raw bytes)
+        buf.extend_from_slice(&self.nh_bytes);
+
+        // Reserved (1 byte)
+        buf.push(self.reserved);
+
+        // NLRI (raw bytes)
+        buf.extend_from_slice(&self.nlri_bytes);
+
+        Ok(buf)
+    }
+}
+
+impl Display for MpReach {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MpReach[AFI={}, SAFI={}, nh_len={}, nlri_bytes={}]",
+            self.afi,
+            self.safi,
+            self.nh_len,
+            self.nlri_bytes.len()
+        )
+    }
+}
+
+/// ```text
+/// 4.  Multiprotocol Unreachable NLRI - MP_UNREACH_NLRI (Type Code 15):
+///
+///    This is an optional non-transitive attribute that can be used for the
+///    purpose of withdrawing multiple unfeasible routes from service.
+///
+///    The attribute is encoded as shown below:
+///
+///         +---------------------------------------------------------+
+///         | Address Family Identifier (2 octets)                    |
+///         +---------------------------------------------------------+
+///         | Subsequent Address Family Identifier (1 octet)          |
+///         +---------------------------------------------------------+
+///         | Withdrawn Routes (variable)                             |
+///         +---------------------------------------------------------+
+/// ```
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MpUnreach {
+    /// Raw AFI value (not validated during parsing - validation deferred to session layer)
+    pub afi_raw: u16,
+
+    /// Raw SAFI value (not validated during parsing - validation deferred to session layer)
+    pub safi_raw: u8,
+
+    /// Withdrawn routes bytes (raw, not parsed - parsing deferred to session layer)
+    pub withdrawn_bytes: Vec<u8>,
+}
+
+impl MpUnreach {
+    pub fn new(afi: Afi, _nh: BgpNexthop, withdrawn: Vec<Prefix>) -> Self {
+        // Convert withdrawn routes to bytes
+        let mut withdrawn_bytes = Vec::new();
+        for prefix in &withdrawn {
+            match prefix {
+                Prefix::V4(p) => {
+                    withdrawn_bytes.extend_from_slice(&p.to_wire())
+                }
+                Prefix::V6(p) => {
+                    withdrawn_bytes.extend_from_slice(&p.to_wire())
+                }
+            }
+        }
+
+        Self {
+            afi_raw: afi as u16,
+            safi_raw: Safi::Unicast as u8,
+            withdrawn_bytes,
+        }
+    }
+
+    /// Create an MpUnreach for IPv6 unicast withdrawn routes.
+    /// This is the type-safe version that takes Vec<Prefix6> directly,
+    /// avoiding the need for runtime type validation.
+    pub fn new_v6(withdrawn: Vec<Prefix6>) -> Self {
+        // Convert withdrawn routes to bytes - no match needed, we know it's V6
+        let mut withdrawn_bytes = Vec::new();
+        for prefix in &withdrawn {
+            withdrawn_bytes.extend_from_slice(&prefix.to_wire());
+        }
+
+        Self {
+            afi_raw: Afi::Ipv6 as u16,
+            safi_raw: Safi::Unicast as u8,
+            withdrawn_bytes,
+        }
+    }
+
+    /// Parse MP_UNREACH_NLRI from wire format.
+    ///
+    /// ## RFC 4760 Section 4: MP_UNREACH_NLRI Encoding
+    ///
+    /// This attribute is optional and non-transitive. It carries:
+    /// - AFI (2 octets): Address Family Identifier
+    /// - SAFI (1 octet): Subsequent Address Family Identifier
+    /// - Withdrawn Routes (variable): Routes to withdraw
+    ///
+    /// Per RFC 7606: Attribute length must be at least 3 octets (AFI + SAFI minimum).
+    ///
+    /// ## Parsing Philosophy
+    ///
+    /// Like MP_REACH_NLRI, unsupported AFI/SAFI is a parsing error because we cannot
+    /// parse withdrawn routes without knowing the address family format. The resulting
+    /// `MpUnreach` is guaranteed to contain a valid, supported address family.
+    ///
+    /// Session-level validation must still check that this address family was
+    /// negotiated with the peer.
+    pub fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Error> {
+        // Parse AFI (2 bytes) - DON'T VALIDATE (store raw value)
+        let (input, afi_raw) = be_u16(input)?;
+
+        // Parse SAFI (1 byte) - DON'T VALIDATE (store raw value)
+        let (input, safi_raw) = be_u8(input)?;
+
+        // Store remaining bytes as raw withdrawn routes (don't parse)
+        let withdrawn_bytes = input.to_vec();
+
+        Ok((
+            &[], // All remaining bytes consumed
+            MpUnreach {
+                afi_raw,
+                safi_raw,
+                withdrawn_bytes,
+            },
+        ))
+    }
+
+    /// Serialize MP_UNREACH_NLRI to wire format.
+    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+        let mut buf = Vec::new();
+
+        // AFI (2 bytes)
+        buf.extend_from_slice(&self.afi_raw.to_be_bytes());
+
+        // SAFI (1 byte)
+        buf.push(self.safi_raw);
+
+        // Withdrawn routes (raw bytes)
+        buf.extend_from_slice(&self.withdrawn_bytes);
+
+        Ok(buf)
+    }
+}
+
+impl Display for MpUnreach {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MpUnreach[AFI={}, SAFI={}, withdrawn_bytes={}]",
+            self.afi_raw,
+            self.safi_raw,
+            self.withdrawn_bytes.len()
+        )
+    }
 }
 
 /// Notification messages are exchanged between BGP peers when an exceptional
@@ -2744,6 +3546,22 @@ impl Capability {
             }
         }
     }
+
+    /// Helper function to generate an IPv4 Unicast MP-BGP capability.
+    pub fn ipv4_unicast() -> Self {
+        Self::MultiprotocolExtensions {
+            afi: Afi::Ipv4 as u16,
+            safi: Safi::Unicast as u8,
+        }
+    }
+
+    /// Helper function to generate an IPv6 Unicast MP-BGP capability.
+    pub fn ipv6_unicast() -> Self {
+        Self::MultiprotocolExtensions {
+            afi: Afi::Ipv6 as u16,
+            safi: Safi::Unicast as u8,
+        }
+    }
 }
 
 /// The set of capability codes supported by this BGP implementation
@@ -2997,6 +3815,17 @@ impl From<Capability> for CapabilityCode {
 }
 
 /// Address families supported by Maghemite BGP.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    TryFromPrimitive,
+    JsonSchema,
+)]
 #[repr(u16)]
 pub enum Afi {
     /// Internet protocol version 4
@@ -3005,36 +3834,78 @@ pub enum Afi {
     Ipv6 = 2,
 }
 
+impl From<Afi> for AddressFamily {
+    fn from(value: Afi) -> Self {
+        match value {
+            Afi::Ipv4 => AddressFamily::Ipv4,
+            Afi::Ipv6 => AddressFamily::Ipv6,
+        }
+    }
+}
+
+impl From<AddressFamily> for Afi {
+    fn from(value: AddressFamily) -> Self {
+        match value {
+            AddressFamily::Ipv4 => Afi::Ipv4,
+            AddressFamily::Ipv6 => Afi::Ipv6,
+        }
+    }
+}
+
+impl Display for Afi {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Afi::Ipv4 => write!(f, "IPv4"),
+            Afi::Ipv6 => write!(f, "IPv6"),
+        }
+    }
+}
+
+impl slog::Value for Afi {
+    fn serialize(
+        &self,
+        _record: &slog::Record,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_str(key, &self.to_string())
+    }
+}
+
 /// Subsequent address families supported by Maghemite BGP.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    TryFromPrimitive,
+    JsonSchema,
+)]
 #[repr(u8)]
 pub enum Safi {
     /// Network Layer Reachability Information used for unicast forwarding
-    NlriUnicast = 1,
+    Unicast = 1,
 }
 
-/// Decode prefix from BGP wire format with explicit address family.
-///
-/// The address family parameter must match the AFI/SAFI context where this
-/// prefix was encoded. This is required because prefixes <= 32 bits long (e.g.
-/// default routes) encode identically for both IPv4 and IPv6, so external
-/// context is needed to disambiguate.
-///
-/// Returns (remaining_bytes, prefix)
-fn prefix_from_wire(
-    input: &[u8],
-    afi: AddressFamily,
-) -> Result<(&[u8], Prefix), Error> {
-    match afi {
-        AddressFamily::Ipv4 => {
-            let (remaining, prefix4) = Prefix4::from_wire(input)
-                .map_err(|_| Error::InvalidNlriPrefix(input.to_vec()))?;
-            Ok((remaining, prefix4.into()))
+impl Display for Safi {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Safi::Unicast => write!(f, "Unicast"),
         }
-        AddressFamily::Ipv6 => {
-            let (remaining, prefix6) = Prefix6::from_wire(input)
-                .map_err(|_| Error::InvalidNlriPrefix(input.to_vec()))?;
-            Ok((remaining, prefix6.into()))
-        }
+    }
+}
+
+impl slog::Value for Safi {
+    fn serialize(
+        &self,
+        _record: &slog::Record,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_str(key, &self.to_string())
     }
 }
 
@@ -3089,9 +3960,17 @@ pub struct UpdateMessageV1 {
 impl From<UpdateMessage> for UpdateMessageV1 {
     fn from(msg: UpdateMessage) -> Self {
         Self {
-            withdrawn: msg.withdrawn.into_iter().map(PrefixV1::from).collect(),
+            withdrawn: msg
+                .withdrawn
+                .into_iter()
+                .map(|p| PrefixV1::from(Prefix::V4(p)))
+                .collect(),
             path_attributes: msg.path_attributes,
-            nlri: msg.nlri.into_iter().map(PrefixV1::from).collect(),
+            nlri: msg
+                .nlri
+                .into_iter()
+                .map(|p| PrefixV1::from(Prefix::V4(p)))
+                .collect(),
         }
     }
 }
@@ -3210,10 +4089,10 @@ mod tests {
     #[test]
     fn update_round_trip() {
         let um0 = UpdateMessage {
-            withdrawn: vec![rdb::Prefix::V4(rdb::Prefix4::new(
+            withdrawn: vec![rdb::Prefix4::new(
                 std::net::Ipv4Addr::new(0, 23, 1, 12),
                 32,
-            ))],
+            )],
             path_attributes: vec![PathAttribute {
                 typ: PathAttributeType {
                     flags: path_attribute_flags::OPTIONAL
@@ -3226,14 +4105,8 @@ mod tests {
                 }]),
             }],
             nlri: vec![
-                rdb::Prefix::V4(rdb::Prefix4::new(
-                    std::net::Ipv4Addr::new(0, 23, 1, 13),
-                    32,
-                )),
-                rdb::Prefix::V4(rdb::Prefix4::new(
-                    std::net::Ipv4Addr::new(0, 23, 1, 14),
-                    32,
-                )),
+                rdb::Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 13), 32),
+                rdb::Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 14), 32),
             ],
         };
 
@@ -3567,5 +4440,452 @@ mod tests {
             }
             other => panic!("Expected BadLength error, got: {:?}", other),
         }
+    }
+
+    // =========================================================================
+    // BgpNexthop tests
+    // =========================================================================
+
+    #[test]
+    fn bgp_nexthop_ipv4_from_bytes() {
+        let bytes = [192, 0, 2, 1];
+        let nh = BgpNexthop::from_bytes(&bytes, 4, Afi::Ipv4)
+            .expect("valid IPv4 nexthop");
+        assert_eq!(nh, BgpNexthop::Ipv4(Ipv4Addr::new(192, 0, 2, 1)));
+    }
+
+    #[test]
+    fn bgp_nexthop_ipv6_single_from_bytes() {
+        let addr = Ipv6Addr::from_str("2001:db8::1").unwrap();
+        let bytes = addr.octets();
+        let nh = BgpNexthop::from_bytes(&bytes, 16, Afi::Ipv6)
+            .expect("valid IPv6 single nexthop");
+        assert_eq!(nh, BgpNexthop::Ipv6Single(addr));
+    }
+
+    #[test]
+    fn bgp_nexthop_ipv6_double_from_bytes() {
+        let global = Ipv6Addr::from_str("2001:db8::1").unwrap();
+        let link_local = Ipv6Addr::from_str("fe80::1").unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&global.octets());
+        bytes.extend_from_slice(&link_local.octets());
+
+        let nh = BgpNexthop::from_bytes(&bytes, 32, Afi::Ipv6)
+            .expect("valid IPv6 double nexthop");
+        assert_eq!(nh, BgpNexthop::Ipv6Double((global, link_local)));
+    }
+
+    #[test]
+    fn bgp_nexthop_invalid_length() {
+        // IPv4 AFI with wrong length
+        let bytes = [192, 0, 2, 1, 0, 0]; // 6 bytes instead of 4
+        let result = BgpNexthop::from_bytes(&bytes, 6, Afi::Ipv4);
+        assert!(result.is_err());
+
+        // IPv6 AFI with wrong length (neither 16 nor 32)
+        let bytes = [0u8; 20];
+        let result = BgpNexthop::from_bytes(&bytes, 20, Afi::Ipv6);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn bgp_nexthop_length_mismatch() {
+        // nh_bytes.len() != nh_len
+        let bytes = [192, 0, 2, 1];
+        let result = BgpNexthop::from_bytes(&bytes, 8, Afi::Ipv4);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn bgp_nexthop_byte_len() {
+        let ipv4 = BgpNexthop::Ipv4(Ipv4Addr::new(192, 0, 2, 1));
+        assert_eq!(ipv4.byte_len(), 4);
+
+        let ipv6_single =
+            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
+        assert_eq!(ipv6_single.byte_len(), 16);
+
+        let ipv6_double = BgpNexthop::Ipv6Double((
+            Ipv6Addr::from_str("2001:db8::1").unwrap(),
+            Ipv6Addr::from_str("fe80::1").unwrap(),
+        ));
+        assert_eq!(ipv6_double.byte_len(), 32);
+    }
+
+    // =========================================================================
+    // MpReach tests
+    // =========================================================================
+
+    #[test]
+    fn mp_reach_new_v4() {
+        let nh = BgpNexthop::Ipv4(Ipv4Addr::new(192, 0, 2, 1));
+        let nlri = vec![
+            Prefix::V4(rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)),
+            Prefix::V4(rdb::Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12)),
+        ];
+
+        let mp_reach = MpReach::new(Afi::Ipv4, nh, nlri);
+
+        assert_eq!(mp_reach.afi, Afi::Ipv4 as u16);
+        assert_eq!(mp_reach.safi, Safi::Unicast as u8);
+        assert_eq!(mp_reach.nh_len, 4);
+        assert_eq!(mp_reach.reserved, 0);
+    }
+
+    #[test]
+    fn mp_reach_new_v6() {
+        let nh =
+            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
+        let nlri = vec![
+            rdb::Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48),
+            rdb::Prefix6::new(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
+        ];
+
+        let mp_reach = MpReach::new_v6(nh, nlri);
+
+        assert_eq!(mp_reach.afi, Afi::Ipv6 as u16);
+        assert_eq!(mp_reach.safi, Safi::Unicast as u8);
+        assert_eq!(mp_reach.nh_len, 16);
+        assert_eq!(mp_reach.reserved, 0);
+    }
+
+    #[test]
+    fn mp_reach_round_trip() {
+        let nh =
+            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
+        let nlri = vec![rdb::Prefix6::new(
+            Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+            48,
+        )];
+
+        let original = MpReach::new_v6(nh, nlri);
+        let wire = original.to_wire().expect("to_wire should succeed");
+        let (remaining, parsed) =
+            MpReach::from_wire(&wire).expect("from_wire should succeed");
+
+        assert!(remaining.is_empty(), "all bytes should be consumed");
+        assert_eq!(original.afi, parsed.afi);
+        assert_eq!(original.safi, parsed.safi);
+        assert_eq!(original.nh_len, parsed.nh_len);
+        assert_eq!(original.nh_bytes, parsed.nh_bytes);
+        assert_eq!(original.nlri_bytes, parsed.nlri_bytes);
+    }
+
+    // =========================================================================
+    // MpUnreach tests
+    // =========================================================================
+
+    #[test]
+    fn mp_unreach_new_v6() {
+        let withdrawn = vec![
+            rdb::Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48),
+            rdb::Prefix6::new(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
+        ];
+
+        let mp_unreach = MpUnreach::new_v6(withdrawn);
+
+        assert_eq!(mp_unreach.afi_raw, Afi::Ipv6 as u16);
+        assert_eq!(mp_unreach.safi_raw, Safi::Unicast as u8);
+    }
+
+    #[test]
+    fn mp_unreach_round_trip() {
+        let withdrawn = vec![rdb::Prefix6::new(
+            Ipv6Addr::from_str("2001:db8:dead::").unwrap(),
+            48,
+        )];
+
+        let original = MpUnreach::new_v6(withdrawn);
+        let wire = original.to_wire().expect("to_wire should succeed");
+        let (remaining, parsed) =
+            MpUnreach::from_wire(&wire).expect("from_wire should succeed");
+
+        assert!(remaining.is_empty(), "all bytes should be consumed");
+        assert_eq!(original.afi_raw, parsed.afi_raw);
+        assert_eq!(original.safi_raw, parsed.safi_raw);
+        assert_eq!(original.withdrawn_bytes, parsed.withdrawn_bytes);
+    }
+
+    // =========================================================================
+    // RFC 7606 validation tests
+    // =========================================================================
+
+    #[test]
+    fn check_duplicate_mp_attributes_none() {
+        let update = UpdateMessage::default();
+        assert!(update.check_duplicate_mp_attributes().is_ok());
+    }
+
+    #[test]
+    fn check_duplicate_mp_attributes_single_reach() {
+        let mp_reach = MpReach::new_v6(
+            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
+            vec![],
+        );
+
+        let update = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: vec![PathAttribute {
+                typ: PathAttributeType {
+                    flags: path_attribute_flags::OPTIONAL,
+                    type_code: PathAttributeTypeCode::MpReachNlri,
+                },
+                value: PathAttributeValue::MpReachNlri(mp_reach),
+            }],
+            nlri: vec![],
+        };
+
+        assert!(update.check_duplicate_mp_attributes().is_ok());
+    }
+
+    #[test]
+    fn check_duplicate_mp_attributes_duplicate_reach() {
+        let mp_reach1 = MpReach::new_v6(
+            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
+            vec![],
+        );
+        let mp_reach2 = MpReach::new_v6(
+            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::2").unwrap()),
+            vec![],
+        );
+
+        let update = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: vec![
+                PathAttribute {
+                    typ: PathAttributeType {
+                        flags: path_attribute_flags::OPTIONAL,
+                        type_code: PathAttributeTypeCode::MpReachNlri,
+                    },
+                    value: PathAttributeValue::MpReachNlri(mp_reach1),
+                },
+                PathAttribute {
+                    typ: PathAttributeType {
+                        flags: path_attribute_flags::OPTIONAL,
+                        type_code: PathAttributeTypeCode::MpReachNlri,
+                    },
+                    value: PathAttributeValue::MpReachNlri(mp_reach2),
+                },
+            ],
+            nlri: vec![],
+        };
+
+        assert!(update.check_duplicate_mp_attributes().is_err());
+    }
+
+    /// Test that MP-BGP attributes are always encoded first in the wire format,
+    /// regardless of their position in the path_attributes vector.
+    ///
+    /// RFC 7606 Section 5.1 requires:
+    /// "The MP_REACH_NLRI or MP_UNREACH_NLRI attribute (if present) SHALL
+    ///  be encoded as the very first path attribute in an UPDATE message."
+    #[test]
+    fn mp_bgp_attributes_encoded_first() {
+        let mp_reach = MpReach::new_v6(
+            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
+            vec![],
+        );
+
+        // Create an UpdateMessage with MP-BGP attribute NOT first in the vector
+        let update = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: vec![
+                PathAttribute {
+                    typ: PathAttributeType {
+                        flags: path_attribute_flags::TRANSITIVE,
+                        type_code: PathAttributeTypeCode::Origin,
+                    },
+                    value: PathAttributeValue::Origin(PathOrigin::Igp),
+                },
+                PathAttribute {
+                    typ: PathAttributeType {
+                        flags: path_attribute_flags::OPTIONAL,
+                        type_code: PathAttributeTypeCode::MpReachNlri,
+                    },
+                    value: PathAttributeValue::MpReachNlri(mp_reach),
+                },
+            ],
+            nlri: vec![],
+        };
+
+        // Encode to wire format
+        let wire = update.to_wire().expect("encoding should succeed");
+
+        // Skip withdrawn routes length (2 bytes) and empty withdrawn routes (0 bytes)
+        // Skip path attributes length (2 bytes)
+        // First path attribute should be MP_REACH_NLRI
+        let path_attrs_start = 4; // 2 (withdrawn len) + 0 (withdrawn) + 2 (attrs len)
+
+        // Read the first attribute's type code (flags byte + type code byte)
+        let first_attr_type_code = wire[path_attrs_start + 1];
+        assert_eq!(
+            first_attr_type_code,
+            PathAttributeTypeCode::MpReachNlri as u8,
+            "MP_REACH_NLRI should be encoded as the first path attribute"
+        );
+    }
+
+    /// Test that decoding accepts both traditional NLRI and MP-BGP encoding
+    /// in the same UPDATE message (RFC 7606 Section 5.1 interoperability).
+    #[test]
+    fn decoding_accepts_mixed_nlri_encoding() {
+        // Create an UPDATE with both traditional NLRI and MP_REACH_NLRI
+        let mp_reach = MpReach::new_v6(
+            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
+            vec![rdb::Prefix6::new(
+                Ipv6Addr::from_str("2001:db8::").unwrap(),
+                32,
+            )],
+        );
+
+        let update = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: vec![PathAttribute {
+                typ: PathAttributeType {
+                    flags: path_attribute_flags::OPTIONAL,
+                    type_code: PathAttributeTypeCode::MpReachNlri,
+                },
+                value: PathAttributeValue::MpReachNlri(mp_reach),
+            }],
+            nlri: vec![rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)],
+        };
+
+        // Encode to wire and decode back - should succeed
+        let wire = update.to_wire().expect("encoding should succeed");
+        let decoded = UpdateMessage::from_wire(&wire);
+        assert!(
+            decoded.is_ok(),
+            "decoding mixed traditional+MP-BGP should succeed"
+        );
+
+        let decoded = decoded.unwrap();
+        // Verify both encodings are present
+        assert_eq!(decoded.nlri.len(), 1, "traditional NLRI should be present");
+        assert!(
+            decoded
+                .path_attributes
+                .iter()
+                .any(|a| matches!(a.value, PathAttributeValue::MpReachNlri(_))),
+            "MP_REACH_NLRI should be present"
+        );
+    }
+
+    /// Test that decoding accepts both MP_REACH_NLRI and MP_UNREACH_NLRI
+    /// in the same UPDATE message (RFC 7606 Section 5.1 interoperability).
+    #[test]
+    fn decoding_accepts_reach_and_unreach_together() {
+        let mp_reach = MpReach::new_v6(
+            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
+            vec![rdb::Prefix6::new(
+                Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+                48,
+            )],
+        );
+
+        let mp_unreach = MpUnreach::new_v6(vec![rdb::Prefix6::new(
+            Ipv6Addr::from_str("2001:db8:2::").unwrap(),
+            48,
+        )]);
+
+        let update = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: vec![
+                PathAttribute {
+                    typ: PathAttributeType {
+                        flags: path_attribute_flags::OPTIONAL,
+                        type_code: PathAttributeTypeCode::MpReachNlri,
+                    },
+                    value: PathAttributeValue::MpReachNlri(mp_reach),
+                },
+                PathAttribute {
+                    typ: PathAttributeType {
+                        flags: path_attribute_flags::OPTIONAL,
+                        type_code: PathAttributeTypeCode::MpUnreachNlri,
+                    },
+                    value: PathAttributeValue::MpUnreachNlri(mp_unreach),
+                },
+            ],
+            nlri: vec![],
+        };
+
+        // Encode to wire and decode back - should succeed
+        let wire = update.to_wire().expect("encoding should succeed");
+        let decoded = UpdateMessage::from_wire(&wire);
+        assert!(
+            decoded.is_ok(),
+            "decoding MP_REACH + MP_UNREACH together should succeed"
+        );
+
+        let decoded = decoded.unwrap();
+        // Verify both are present
+        let has_reach = decoded
+            .path_attributes
+            .iter()
+            .any(|a| matches!(a.value, PathAttributeValue::MpReachNlri(_)));
+        let has_unreach = decoded
+            .path_attributes
+            .iter()
+            .any(|a| matches!(a.value, PathAttributeValue::MpUnreachNlri(_)));
+        assert!(has_reach, "MP_REACH_NLRI should be present");
+        assert!(has_unreach, "MP_UNREACH_NLRI should be present");
+    }
+
+    /// Test that duplicate non-MP-BGP path attributes are deduplicated during
+    /// decoding, keeping only the first occurrence (RFC 7606 Section 3g).
+    #[test]
+    fn decoding_deduplicates_non_mp_attributes() {
+        // Manually construct wire bytes with duplicate ORIGIN attributes
+        // to test deduplication during parsing
+        let mut wire = Vec::new();
+
+        // Withdrawn routes length (0)
+        wire.extend_from_slice(&0u16.to_be_bytes());
+
+        // Path attributes: two ORIGIN attributes (second should be discarded)
+        let attrs = vec![
+            // First ORIGIN attribute (IGP = 0)
+            path_attribute_flags::TRANSITIVE, // flags
+            PathAttributeTypeCode::Origin as u8, // type
+            1,                                // length
+            PathOrigin::Igp as u8,            // value
+            // Second ORIGIN attribute (EGP = 1) - should be discarded
+            path_attribute_flags::TRANSITIVE,
+            PathAttributeTypeCode::Origin as u8,
+            1,
+            PathOrigin::Egp as u8,
+        ];
+
+        // Path attributes length
+        wire.extend_from_slice(&(attrs.len() as u16).to_be_bytes());
+        wire.extend_from_slice(&attrs);
+
+        // NLRI (empty)
+
+        let decoded = UpdateMessage::from_wire(&wire);
+        assert!(decoded.is_ok(), "decoding should succeed");
+
+        let decoded = decoded.unwrap();
+
+        // Should only have one ORIGIN attribute (the first one, IGP)
+        let origins: Vec<_> = decoded
+            .path_attributes
+            .iter()
+            .filter_map(|a| match &a.value {
+                PathAttributeValue::Origin(o) => Some(*o),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            origins.len(),
+            1,
+            "should have exactly one ORIGIN after deduplication"
+        );
+        assert_eq!(
+            origins[0],
+            PathOrigin::Igp,
+            "should keep the first ORIGIN (IGP), not the second (EGP)"
+        );
     }
 }
