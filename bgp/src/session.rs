@@ -9,32 +9,34 @@ use crate::{
         BgpConnection, BgpConnector, ConnectionDirection, ConnectionId,
     },
     error::{Error, ExpectationMismatch},
-    fanout::Fanout,
+    fanout::{Fanout4, Fanout6},
     log::{collision_log, session_log, session_log_lite},
     messages::{
-        AddPathElement, Afi, Capability, CeaseErrorSubcode, Community,
-        ErrorCode, ErrorSubcode, Message, MessageKind, NotificationMessage,
-        OpenMessage, PathAttributeValue, RouteRefreshMessage, Safi,
-        UpdateMessage,
+        AddPathElement, Afi, BgpNexthop, Capability, CeaseErrorSubcode,
+        Community, ErrorCode, ErrorSubcode, Message, MessageKind, MpReach,
+        MpUnreach, NotificationMessage, OpenMessage, PathAttributeValue,
+        RouteRefreshMessage, Safi, UpdateErrorSubcode, UpdateMessage,
     },
     policy::{CheckerResult, ShaperResult},
     recv_event_loop, recv_event_return,
     router::Router,
 };
 use mg_common::{lock, read_lock, write_lock};
-use rdb::{Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4};
+use rdb::{
+    Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4, Prefix6,
+};
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
-use std::sync::mpsc::{Receiver, Sender};
 use std::{
     collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{Receiver, Sender},
     },
     time::{Duration, Instant},
 };
@@ -58,6 +60,10 @@ pub struct PeerConnection<Cnx: BgpConnection> {
     pub asn: u32,
     /// The actual capabilities received from the peer (runtime state)
     pub caps: BTreeSet<Capability>,
+    /// The IPv4 Unicast AFI/SAFI was negotiated (advertised by both sides)
+    pub ipv4: bool,
+    /// The IPv6 Unicast AFI/SAFI was negotiated (advertised by both sides)
+    pub ipv6: bool,
 }
 
 impl<Cnx: BgpConnection> Clone for PeerConnection<Cnx> {
@@ -67,6 +73,8 @@ impl<Cnx: BgpConnection> Clone for PeerConnection<Cnx> {
             id: self.id,
             asn: self.asn,
             caps: self.caps.clone(),
+            ipv4: self.ipv4,
+            ipv6: self.ipv6,
         }
     }
 }
@@ -92,6 +100,67 @@ pub enum CollisionConnectionKind<Cnx: BgpConnection> {
     Exist,
     Unexpected(Arc<Cnx>),
     Missing,
+}
+
+/// Pure function to determine which connection wins in a collision.
+///
+/// ```text
+///    RFC 4271 Section 6.8
+///
+///    1) The BGP Identifier of the local system is compared to the BGP
+///       Identifier of the remote system (as specified in the OPEN
+///       message).  Comparing BGP Identifiers is done by converting them
+///       to host byte order and treating them as 4-octet unsigned
+///       integers.
+///
+///    2) If the value of the local BGP Identifier is less than the
+///       remote one, the local system closes the BGP connection that
+///       already exists (the one that is already in the OpenConfirm
+///       state), and accepts the BGP connection initiated by the remote
+///       system.
+///
+///    3) Otherwise, the local system closes the newly created BGP
+///       connection (the one associated with the newly received OPEN
+///       message), and continues to use the existing one (the one that
+///       is already in the OpenConfirm state).
+///
+///       Unless allowed via configuration, a connection collision with an
+///       existing BGP connection that is in the Established state causes
+///       closing of the newly created connection.
+///
+///       Note that a connection collision cannot be detected with connections
+///       that are in Idle, Connect, or Active states.
+///
+///       Closing the BGP connection (that results from the collision
+///       resolution procedure) is accomplished by sending the NOTIFICATION
+///       message with the Error Code Cease.
+/// ```
+///
+/// # Arguments
+/// * `exist_direction` - direction of the existing connection (Inbound or Outbound)
+/// * `local_bgp_id`  - Our BGP Identifier
+/// * `remote_bgp_id` - Peer's BGP Identifier
+///
+/// # Returns
+/// `CollisionResolution` indicating whether exist or new connection wins
+pub fn collision_resolution(
+    exist_direction: ConnectionDirection,
+    local_bgp_id: u32,
+    remote_bgp_id: u32,
+) -> CollisionResolution {
+    if local_bgp_id < remote_bgp_id {
+        // The peer has a higher RID, keep the connection they initiated
+        match exist_direction {
+            ConnectionDirection::Inbound => CollisionResolution::ExistWins,
+            ConnectionDirection::Outbound => CollisionResolution::NewWins,
+        }
+    } else {
+        // The local system has a higher RID, keep the connection we initiated
+        match exist_direction {
+            ConnectionDirection::Inbound => CollisionResolution::NewWins,
+            ConnectionDirection::Outbound => CollisionResolution::ExistWins,
+        }
+    }
 }
 
 /// The states a BGP finite state machine may be at any given time. Many
@@ -219,10 +288,81 @@ impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKind {
     }
 }
 
+/// Type-safe route update that enforces IP version consistency at compile time.
+/// This eliminates the need for runtime Afi validation and prevents
+/// mixing IPv4 routes with IPv6 encoding or vice versa.
+#[derive(Clone, Debug)]
+pub enum RouteUpdate {
+    V4 {
+        withdrawn: Vec<Prefix4>,
+        nlri: Vec<Prefix4>,
+    },
+    V6 {
+        withdrawn: Vec<Prefix6>,
+        nlri: Vec<Prefix6>,
+    },
+}
+
+impl RouteUpdate {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            RouteUpdate::V4 { withdrawn, nlri } => {
+                withdrawn.is_empty() && nlri.is_empty()
+            }
+            RouteUpdate::V6 { withdrawn, nlri } => {
+                withdrawn.is_empty() && nlri.is_empty()
+            }
+        }
+    }
+
+    pub fn afi(&self) -> Afi {
+        match self {
+            RouteUpdate::V4 { .. } => Afi::Ipv4,
+            RouteUpdate::V6 { .. } => Afi::Ipv6,
+        }
+    }
+
+    pub fn nlri_count(&self) -> usize {
+        match self {
+            RouteUpdate::V4 { withdrawn: _, nlri } => nlri.len(),
+            RouteUpdate::V6 { withdrawn: _, nlri } => nlri.len(),
+        }
+    }
+
+    pub fn withdrawn_count(&self) -> usize {
+        match self {
+            RouteUpdate::V4 { withdrawn, .. } => withdrawn.len(),
+            RouteUpdate::V6 { withdrawn, .. } => withdrawn.len(),
+        }
+    }
+}
+
+impl Display for RouteUpdate {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            RouteUpdate::V4 { withdrawn, nlri } => {
+                write!(
+                    f,
+                    "RouteUpdate::V4 {{ nlri: {:?}, withdrawn: {:?} }}",
+                    nlri, withdrawn
+                )
+            }
+            RouteUpdate::V6 { withdrawn, nlri } => {
+                write!(
+                    f,
+                    "RouteUpdate::V6 {{ nlri: {:?}, withdrawn: {:?} }}",
+                    nlri, withdrawn
+                )
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum AdminEvent {
-    // Instructs peer to announce the update
-    Announce(UpdateMessage),
+    /// Announce/withdraw routes for a specific address family.
+    /// The session layer will build the appropriate UPDATE message.
+    Announce(RouteUpdate),
 
     // The shaper for the router has changed. Event contains previous checker.
     // Current shaper is available in the router policy object.
@@ -259,7 +399,7 @@ pub enum AdminEvent {
 impl AdminEvent {
     fn title(&self) -> &'static str {
         match self {
-            AdminEvent::Announce(_) => "announce",
+            AdminEvent::Announce(_) => "announce routes",
             AdminEvent::ShaperChanged(_) => "shaper changed",
             AdminEvent::CheckerChanged(_) => "checker changed",
             AdminEvent::ExportPolicyChanged(_) => "export policy changed",
@@ -560,6 +700,10 @@ pub struct SessionInfo {
     /// resolution even when one connection is already in Established state.
     /// When false, Established connection always wins (timing-based resolution).
     pub deterministic_collision_resolution: bool,
+    /// This session is configured to support the IPv4 Unicast MP-BGP AFI/SAFI
+    pub ipv4_enabled: bool,
+    /// This session is configured to support the IPv6 Unicast MP-BGP AFI/SAFI
+    pub ipv6_enabled: bool,
 }
 
 impl SessionInfo {
@@ -590,6 +734,10 @@ impl SessionInfo {
             connect_retry_jitter: None,
             // XXX: plumb this through to the neighbor API endpoint
             deterministic_collision_resolution: false,
+            // XXX: plumb this through to the neighbor API endpoint
+            ipv4_enabled: true,
+            // XXX: plumb this through to the neighbor API endpoint
+            ipv6_enabled: false,
         }
     }
 }
@@ -884,6 +1032,18 @@ macro_rules! connect_timeout {
     };
 }
 
+macro_rules! active_afi {
+    ($self:expr, $their_caps:ident) => {{
+        let cap4 = Capability::ipv4_unicast();
+        let cap6 = Capability::ipv6_unicast();
+        let our_caps = lock!($self.caps_tx);
+        (
+            our_caps.contains(&cap4) && $their_caps.contains(&cap4),
+            our_caps.contains(&cap6) && $their_caps.contains(&cap6),
+        )
+    }};
+}
+
 /// Registry for tracking active connections
 #[derive(Debug)]
 pub enum ConnectionRegistry<Cnx: BgpConnection> {
@@ -1165,7 +1325,8 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     shutdown: AtomicBool,
     running: AtomicBool,
     db: Db,
-    fanout: Arc<RwLock<Fanout<Cnx>>>,
+    fanout4: Arc<RwLock<Fanout4<Cnx>>>,
+    fanout6: Arc<RwLock<Fanout6<Cnx>>>,
     router: Arc<Router<Cnx>>,
 
     /// Registry of active connections with typestate enforcement
@@ -1192,67 +1353,6 @@ pub enum CollisionResolution {
     NewWins,
 }
 
-/// Pure function to determine which connection wins in a collision.
-///
-/// ```text
-///    RFC 4271 Section 6.8
-///
-///    1) The BGP Identifier of the local system is compared to the BGP
-///       Identifier of the remote system (as specified in the OPEN
-///       message).  Comparing BGP Identifiers is done by converting them
-///       to host byte order and treating them as 4-octet unsigned
-///       integers.
-///
-///    2) If the value of the local BGP Identifier is less than the
-///       remote one, the local system closes the BGP connection that
-///       already exists (the one that is already in the OpenConfirm
-///       state), and accepts the BGP connection initiated by the remote
-///       system.
-///
-///    3) Otherwise, the local system closes the newly created BGP
-///       connection (the one associated with the newly received OPEN
-///       message), and continues to use the existing one (the one that
-///       is already in the OpenConfirm state).
-///
-///       Unless allowed via configuration, a connection collision with an
-///       existing BGP connection that is in the Established state causes
-///       closing of the newly created connection.
-///
-///       Note that a connection collision cannot be detected with connections
-///       that are in Idle, Connect, or Active states.
-///
-///       Closing the BGP connection (that results from the collision
-///       resolution procedure) is accomplished by sending the NOTIFICATION
-///       message with the Error Code Cease.
-/// ```
-///
-/// # Arguments
-/// * `exist_direction` - direction of the existing connection (Inbound or Outbound)
-/// * `local_bgp_id`  - Our BGP Identifier
-/// * `remote_bgp_id` - Peer's BGP Identifier
-///
-/// # Returns
-/// `CollisionResolution` indicating whether exist or new connection wins
-pub fn collision_resolution(
-    exist_direction: ConnectionDirection,
-    local_bgp_id: u32,
-    remote_bgp_id: u32,
-) -> CollisionResolution {
-    if local_bgp_id < remote_bgp_id {
-        // The peer has a higher RID, keep the connection they initiated
-        match exist_direction {
-            ConnectionDirection::Inbound => CollisionResolution::ExistWins,
-            ConnectionDirection::Outbound => CollisionResolution::NewWins,
-        }
-    } else {
-        // The local system has a higher RID, keep the connection we initiated
-        match exist_direction {
-            ConnectionDirection::Inbound => CollisionResolution::NewWins,
-            ConnectionDirection::Outbound => CollisionResolution::ExistWins,
-        }
-    }
-}
-
 impl<Cnx: BgpConnection + 'static> Drop for SessionRunner<Cnx> {
     fn drop(&mut self) {
         let peer_ip = self.neighbor.host.ip();
@@ -1268,18 +1368,12 @@ impl<Cnx: BgpConnection + 'static> Drop for SessionRunner<Cnx> {
 impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Create a new BGP session runner. Only creates the session runner
     /// object. Must call `start` to begin the peering state machine.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         session: Arc<Mutex<SessionInfo>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         event_tx: Sender<FsmEvent<Cnx>>,
         neighbor: NeighborInfo,
-        asn: Asn,
-        id: u32,
-        db: Db,
-        fanout: Arc<RwLock<Fanout<Cnx>>>,
         router: Arc<Router<Cnx>>,
-        log: Logger,
     ) -> SessionRunner<Cnx> {
         let session_info = lock!(session);
         let runner = SessionRunner {
@@ -1287,8 +1381,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             connect_retry_counter: AtomicU64::new(0),
             event_rx,
             event_tx: event_tx.clone(),
-            asn,
-            id,
+            asn: router.config.asn,
+            id: router.config.id,
             neighbor,
             state: Arc::new(Mutex::new(FsmStateKind::Idle)),
             last_state_change: Mutex::new(Instant::now()),
@@ -1299,17 +1393,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 session_info.connect_retry_jitter,
                 session_info.idle_hold_jitter,
                 event_tx.clone(),
-                log.clone(),
+                router.log.clone(),
             )),
-            log,
+            log: router.log.clone(),
             shutdown: AtomicBool::new(false),
             running: AtomicBool::new(false),
-            fanout,
-            router,
+            fanout4: router.fanout4.clone(),
+            fanout6: router.fanout6.clone(),
+            router: router.clone(),
             message_history: Arc::new(Mutex::new(MessageHistory::default())),
             fsm_event_history: Arc::new(Mutex::new(FsmEventHistory::new())),
             counters: Arc::new(SessionCounters::default()),
-            db,
+            db: router.db.clone(),
             caps_tx: Arc::new(Mutex::new(BTreeSet::new())),
             connection_registry: Arc::new(
                 Mutex::new(ConnectionRegistry::new()),
@@ -1778,12 +1873,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     fn initialize_capabilities(&self) {
-        *lock!(self.caps_tx) = BTreeSet::from([
+        let mut caps = BTreeSet::from([
             //Capability::EnhancedRouteRefresh{},
-            Capability::MultiprotocolExtensions {
-                afi: 1,  //IP
-                safi: 1, //NLRI for unicast
-            },
             //Capability::GracefulRestart{},
             Capability::AddPath {
                 elements: BTreeSet::from([AddPathElement {
@@ -1794,6 +1885,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             },
             Capability::RouteRefresh {},
         ]);
+        if lock!(self.session).ipv4_enabled {
+            caps.insert(Capability::ipv4_unicast());
+        }
+        if lock!(self.session).ipv6_enabled {
+            caps.insert(Capability::ipv6_unicast());
+        }
+        *lock!(self.caps_tx) = caps;
     }
 
     /// Initial state. Refuse all incoming BGP connections. No resources
@@ -3234,11 +3332,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // hold_timer set in handle_open(), enable it here
         conn_timer!(conn, hold).enable();
 
+        let caps = om.get_capabilities();
+        let (ipv4, ipv6) = active_afi!(self, caps);
+
         let pc = PeerConnection {
             conn,
             id: om.id,
             asn: om.asn(),
-            caps: om.get_capabilities(),
+            caps,
+            ipv4,
+            ipv6,
         };
 
         // Upgrade this connection from Partial to Full in the registry
@@ -4372,11 +4475,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
 
+                let caps = om.get_capabilities();
+                let (ipv4, ipv6) = active_afi!(self, caps);
+
                 let new_pc = PeerConnection {
                     conn: new,
                     id: om.id,
                     asn: om.asn(),
-                    caps: om.get_capabilities(),
+                    caps,
+                    ipv4,
+                    ipv6,
                 };
 
                 conn_timer!(new_pc.conn, hold).restart();
@@ -4682,11 +4790,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 conn_timer!(exist, hold).restart();
                                                 conn_timer!(exist, keepalive).restart();
 
+                                                let caps = om.get_capabilities();
+                                                let (ipv4, ipv6) = active_afi!(self, caps);
+
                                                 let exist_pc = PeerConnection {
                                                     conn: exist.clone(),
                                                     id: om.id,
                                                     asn: om.asn(),
-                                                    caps: om.get_capabilities(),
+                                                    caps,
+                                                    ipv4,
+                                                    ipv6,
                                                 };
 
                                                 // Upgrade existing connection from Partial to Full in the registry
@@ -4813,12 +4926,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                                                 self.stop(Some(&exist), None, StopReason::CollisionResolution);
 
+                                                let caps = om.get_capabilities();
+                                                let (ipv4, ipv6) = active_afi!(self, caps);
+
                                                 let new_pc = PeerConnection {
                                                     conn: new.clone(),
                                                     id: om.id,
                                                     asn: om.asn(),
-                                                    caps: om.get_capabilities(),
+                                                    caps,
+                                                    ipv4,
+                                                    ipv6
                                                 };
+
                                                 conn_timer!(new, hold).restart();
                                                 conn_timer!(new, keepalive).restart();
 
@@ -5050,55 +5169,108 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         // Collect the prefixes this router is originating.
-        let originated = match self.db.get_origin4() {
-            Ok(value) => value,
-            Err(e) => {
-                //TODO possible death loop. Should we just panic here?
-                session_log!(
-                    self,
-                    error,
-                    pc.conn,
-                    "failed to get originated routes from db";
-                    "error" => format!("{e}")
-                );
-                return FsmState::SessionSetup(pc);
+        let originated4 = if pc.ipv4 {
+            match self.db.get_origin4() {
+                Ok(value) => value,
+                Err(e) => {
+                    //TODO possible death loop. Should we just panic here?
+                    session_log!(
+                        self,
+                        error,
+                        pc.conn,
+                        "failed to get originated routes from db";
+                        "error" => format!("{e}")
+                    );
+                    return FsmState::SessionSetup(pc);
+                }
             }
+        } else {
+            Vec::new()
+        };
+
+        let originated6 = if pc.ipv6 {
+            match self.db.get_origin6() {
+                Ok(value) => value,
+                Err(e) => {
+                    //TODO possible death loop. Should we just panic here?
+                    session_log!(
+                        self,
+                        error,
+                        pc.conn,
+                        "failed to get originated routes from db";
+                        "error" => format!("{e}")
+                    );
+                    return FsmState::SessionSetup(pc);
+                }
+            }
+        } else {
+            Vec::new()
         };
 
         // Ensure the router has a fanout entry for this peer.
-        write_lock!(self.fanout).add_egress(
-            self.neighbor.host.ip(),
-            crate::fanout::Egress {
-                event_tx: Some(self.event_tx.clone()),
-                log: self.log.clone(),
-            },
-        );
+        if pc.ipv4 {
+            write_lock!(self.fanout4).add_egress(
+                self.neighbor.host.ip(),
+                crate::fanout::Egress {
+                    event_tx: Some(self.event_tx.clone()),
+                    log: self.log.clone(),
+                },
+            );
+        }
+        if pc.ipv6 {
+            write_lock!(self.fanout6).add_egress(
+                self.neighbor.host.ip(),
+                crate::fanout::Egress {
+                    event_tx: Some(self.event_tx.clone()),
+                    log: self.log.clone(),
+                },
+            );
+        }
 
         self.send_keepalive(&pc.conn);
         conn_timer!(pc.conn, keepalive).restart();
 
-        // Send an update to our peer with the prefixes this router is
-        // originating.
-        if !originated.is_empty() {
-            let mut update = UpdateMessage {
-                path_attributes: self.router.base_attributes(),
-                ..Default::default()
-            };
-            for p in originated {
-                update.nlri.push(p.into());
-            }
-            if let Err(e) =
-                self.send_update(update, &pc, ShaperApplication::Current)
-            {
-                session_log!(
-                    self,
-                    error,
-                    pc.conn,
-                    "failed to send update, fsm transition to idle";
-                    "error" => format!("{e}")
-                );
-                return self.exit_established(pc);
-            }
+        // Send an update to our peer with the IPv4 Unicast prefixes this router
+        // is originating.
+        if !originated4.is_empty()
+            && let Err(e) = self.send_update(
+                RouteUpdate::V4 {
+                    nlri: originated4,
+                    withdrawn: vec![],
+                },
+                &pc,
+                ShaperApplication::Current,
+            )
+        {
+            session_log!(
+                self,
+                error,
+                pc.conn,
+                "failed to send originated IPv4 routes: {e}";
+                "error" => format!("{e}")
+            );
+            return self.exit_established(pc);
+        }
+
+        // Send IPv6 Unicast prefixes using MP-BGP encoding
+        if !originated6.is_empty()
+            && let Err(e) = self.send_update(
+                RouteUpdate::V6 {
+                    nlri: originated6,
+                    withdrawn: vec![],
+                },
+                &pc,
+                ShaperApplication::Current,
+            )
+        {
+            session_log!(
+                self,
+                error,
+                pc.conn,
+                "failed to send originated IPv6 routes: {e}";
+                "error" => format!("{e}")
+            );
+            return self.exit_established(pc);
         }
 
         // Transition to the established state.
@@ -5108,25 +5280,46 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn originate_update(
         &self,
         pc: &PeerConnection<Cnx>,
-        sa: ShaperApplication,
+        _sa: ShaperApplication,
     ) -> anyhow::Result<()> {
-        let originated = match self.db.get_origin4() {
-            Ok(value) => value,
+        // Get originated IPv4 routes
+        let originated4 = match self.db.get_origin4() {
+            Ok(originated) => originated,
             Err(e) => {
-                //TODO possible death loop. Should we just panic here?
-                anyhow::bail!("failed to get originated from db: {e}");
+                anyhow::bail!("failed to get originated IPv4 from db: {e}");
             }
         };
-        let mut update = UpdateMessage {
-            path_attributes: self.router.base_attributes(),
-            ..Default::default()
+
+        if !originated4.is_empty() {
+            self.send_update(
+                RouteUpdate::V4 {
+                    nlri: originated4,
+                    withdrawn: vec![],
+                },
+                pc,
+                ShaperApplication::Current,
+            )?;
+        }
+
+        // Get originated IPv6 routes
+        let originated6 = match self.db.get_origin6() {
+            Ok(originated) => originated,
+            Err(e) => {
+                anyhow::bail!("failed to get originated IPv6 from db: {e}");
+            }
         };
-        for p in originated {
-            update.nlri.push(p.into());
+
+        if !originated6.is_empty() {
+            self.send_update(
+                RouteUpdate::V6 {
+                    nlri: originated6,
+                    withdrawn: vec![],
+                },
+                pc,
+                ShaperApplication::Current,
+            )?;
         }
-        if let Err(e) = self.send_update(update, pc, sa) {
-            anyhow::bail!("shaper changed: sending update to peer failed {e}");
-        }
+
         Ok(())
     }
 
@@ -5155,10 +5348,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.exit_established(pc)
                 }
 
-                // An announce request has come from the administrative API or
-                // another peer session (redistribution). Send the update to our
-                // peer.
-                AdminEvent::Announce(update) => {
+                // Handle route announcements from fanout layer
+                AdminEvent::Announce(route_update) => {
                     // XXX: Send a route-refresh to our peer in the event we
                     //      remove an originated route. This is needed if our
                     //      peer is advertising a route that we're originating,
@@ -5170,8 +5361,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     //      adj-rib-in pre-policy, so a route-refresh is the
                     //      only mechanism we really have to trigger a re-learn
                     //      of the route without changing the current design.
+                    let (afi, nlri_count, withdrawn_count) = match &route_update
+                    {
+                        RouteUpdate::V4 { nlri, withdrawn } => {
+                            (Afi::Ipv4, nlri.len(), withdrawn.len())
+                        }
+                        RouteUpdate::V6 { nlri, withdrawn } => {
+                            (Afi::Ipv6, nlri.len(), withdrawn.len())
+                        }
+                    };
+
+                    session_log!(
+                        self,
+                        debug,
+                        pc.conn,
+                        "received announce-routes event: afi={}, nlri={}, withdrawn={}",
+                        afi,
+                        nlri_count,
+                        withdrawn_count;
+                    );
+
                     if let Err(e) = self.send_update(
-                        update,
+                        route_update,
                         &pc,
                         ShaperApplication::Current,
                     ) {
@@ -5179,11 +5390,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             self,
                             error,
                             pc.conn,
-                            "failed to send update, fsm transition to idle";
+                            "failed to send update from announce-routes: {e}";
                             "error" => format!("{e}")
                         );
                         return self.exit_established(pc);
                     }
+
                     FsmState::Established(pc)
                 }
 
@@ -5210,79 +5422,74 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let originated = match self.db.get_origin4() {
                         Ok(value) => value,
                         Err(e) => {
-                            //TODO possible death loop. Should we just panic here?
                             session_log!(
                                 self,
                                 error,
                                 pc.conn,
-                                "failed to get originated routes from db";
+                                "failed to get originated IPv4 routes from db";
                                 "error" => format!("{e}")
                             );
                             return FsmState::SessionSetup(pc);
                         }
                     };
+
+                    // Determine which routes to announce/withdraw based on policy change
+                    let session = lock!(self.session);
                     let originated_before: BTreeSet<Prefix4> = match previous {
                         ImportExportPolicy::NoFiltering => {
                             originated.iter().cloned().collect()
                         }
-                        ImportExportPolicy::Allow(list) => originated
+                        ImportExportPolicy::Allow(ref list) => originated
                             .clone()
                             .into_iter()
                             .filter(|x| list.contains(&Prefix::from(*x)))
                             .collect(),
                     };
-                    let session = lock!(self.session);
-                    let current = &session.allow_export;
-                    let originated_after: BTreeSet<Prefix4> = match current {
-                        ImportExportPolicy::NoFiltering => {
-                            originated.iter().cloned().collect()
-                        }
-                        ImportExportPolicy::Allow(list) => originated
-                            .clone()
-                            .into_iter()
-                            .filter(|x| list.contains(&Prefix::from(*x)))
-                            .collect(),
-                    };
+
+                    let originated_after: BTreeSet<Prefix4> =
+                        match &session.allow_export {
+                            ImportExportPolicy::NoFiltering => {
+                                originated.iter().cloned().collect()
+                            }
+                            ImportExportPolicy::Allow(list) => originated
+                                .clone()
+                                .into_iter()
+                                .filter(|x| list.contains(&Prefix::from(*x)))
+                                .collect(),
+                        };
                     drop(session);
 
-                    let to_withdraw: BTreeSet<&Prefix4> = originated_before
+                    let to_withdraw: Vec<Prefix4> = originated_before
                         .difference(&originated_after)
+                        .cloned()
                         .collect();
 
-                    let to_announce: BTreeSet<&Prefix4> = originated_after
+                    let to_announce: Vec<Prefix4> = originated_after
                         .difference(&originated_before)
+                        .cloned()
                         .collect();
 
-                    if to_withdraw.is_empty() && to_announce.is_empty() {
-                        return FsmState::Established(pc);
-                    }
-
-                    let update = UpdateMessage {
-                        path_attributes: self.router.base_attributes(),
-                        withdrawn: to_withdraw
-                            .into_iter()
-                            .map(|x| crate::messages::Prefix::from(*x))
-                            .collect(),
-                        nlri: to_announce
-                            .into_iter()
-                            .map(|x| crate::messages::Prefix::from(*x))
-                            .collect(),
-                    };
-
-                    if let Err(e) = self.send_update(
-                        update,
-                        &pc,
-                        ShaperApplication::Current,
-                    ) {
+                    if (!to_withdraw.is_empty() || !to_announce.is_empty())
+                        && let Err(e) = self.send_update(
+                            RouteUpdate::V4 {
+                                nlri: to_announce,
+                                withdrawn: to_withdraw,
+                            },
+                            &pc,
+                            ShaperApplication::Current,
+                        )
+                    {
                         session_log!(
                             self,
                             error,
                             pc.conn,
-                            "failed to send update, fsm transition to idle";
+                            "failed to send export policy update: {e}";
                             "error" => format!("{e}")
                         );
                         return self.exit_established(pc);
                     }
+
+                    // TODO: Also handle IPv6 originated routes when needed
 
                     FsmState::Established(pc)
                 }
@@ -5300,7 +5507,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 AdminEvent::ReAdvertiseRoutes => {
-                    if let Err(e) = self.refresh_react(&pc) {
+                    if let Err(e) = self.refresh_react4(&pc) {
                         session_log!(
                             self,
                             error,
@@ -5639,11 +5846,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 msg_kind, false,
                                             );
 
+                                            let caps = om.get_capabilities();
+                                            let (ipv4, ipv6) =
+                                                active_afi!(self, caps);
+
                                             let new_pc = PeerConnection {
                                                 conn: incoming_conn.clone(),
                                                 id: om.id,
                                                 asn: om.asn(),
-                                                caps: om.get_capabilities(),
+                                                caps,
+                                                ipv4,
+                                                ipv6,
                                             };
 
                                             // Clean up the old established connection
@@ -6047,7 +6260,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         );
         if let Err(e) = conn.send(Message::RouteRefresh(RouteRefreshMessage {
             afi: Afi::Ipv4 as u16,
-            safi: Safi::NlriUnicast as u8,
+            safi: Safi::Unicast as u8,
         })) {
             session_log!(
                 self,
@@ -6305,81 +6518,303 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         Ok(former.difference(&current))
     }
 
-    /// Send an update message to the session peer.
-    fn send_update(
+    /// Derive peer-specific next-hop based on AFI and negotiated capabilities.
+    fn derive_nexthop(
         &self,
-        mut update: UpdateMessage,
+        afi: Afi,
         pc: &PeerConnection<Cnx>,
-        shaper_application: ShaperApplication,
+    ) -> Result<BgpNexthop, Error> {
+        let local_ip = pc.conn.local().ip().to_canonical();
+
+        // Future: Check for Extended Next-Hop capability here
+        // if afi == Afi::Ipv4 && pc.caps.contains(&Capability::ExtendedNextHop) {
+        //     if let IpAddr::V6(ipv6) = local_ip {
+        //         return Ok(BgpNexthop::Ipv6Single(ipv6));
+        //     }
+        // }
+
+        // Standard behavior: use local IP as next-hop
+        match (afi, local_ip) {
+            (Afi::Ipv4, std::net::IpAddr::V4(ipv4)) => Ok(BgpNexthop::Ipv4(ipv4)),
+            (Afi::Ipv6, std::net::IpAddr::V6(ipv6)) => Ok(BgpNexthop::Ipv6Single(ipv6)),
+            (Afi::Ipv4, std::net::IpAddr::V6(_)) => {
+                Err(Error::InvalidAddress(
+                    "IPv4 routes require IPv4 next-hop (Extended Next-Hop not negotiated)".into()
+                ))
+            }
+            (Afi::Ipv6, std::net::IpAddr::V4(_)) => {
+                Err(Error::InvalidAddress(
+                    "IPv6 routes require IPv6 next-hop".into()
+                ))
+            }
+        }
+    }
+
+    /// Add peer-specific path attributes to an UPDATE message.
+    /// This adds MED, LOCAL_PREF, and Communities based on session configuration.
+    fn enrich_update(
+        &self,
+        update: &mut UpdateMessage,
+        _pc: &PeerConnection<Cnx>,
     ) -> Result<(), Error> {
-        let nexthop = pc.conn.local().ip().to_canonical();
+        let session = lock!(self.session);
 
-        update
-            .path_attributes
-            .push(PathAttributeValue::NextHop(nexthop).into());
-
-        if let Some(med) = lock!(self.session).multi_exit_discriminator {
+        // Add MED if configured
+        if let Some(med) = session.multi_exit_discriminator {
             update
                 .path_attributes
                 .push(PathAttributeValue::MultiExitDisc(med).into());
         }
 
+        // Add LOCAL_PREF for iBGP
         if self.is_ibgp().unwrap_or(false) {
-            update.path_attributes.push(
-                PathAttributeValue::LocalPref(
-                    lock!(self.session).local_pref.unwrap_or(0),
-                )
-                .into(),
-            );
+            let local_pref = session.local_pref.unwrap_or(0);
+            update
+                .path_attributes
+                .push(PathAttributeValue::LocalPref(local_pref).into());
         }
 
-        let cs: Vec<Community> = lock!(self.session)
+        // Add communities
+        let communities: Vec<Community> = session
             .communities
             .clone()
             .into_iter()
             .map(Community::from)
             .collect();
 
-        if !cs.is_empty() {
+        if !communities.is_empty() {
             update
                 .path_attributes
-                .push(PathAttributeValue::Communities(cs).into())
+                .push(PathAttributeValue::Communities(communities).into());
         }
 
+        Ok(())
+    }
+
+    /// Apply export policy filtering to UPDATE message.
+    /// Filters NLRI based on allow_export configuration.
+    fn apply_export_policy(
+        &self,
+        update: &mut UpdateMessage,
+    ) -> Result<(), Error> {
         if let ImportExportPolicy::Allow(ref policy) =
             lock!(self.session).allow_export
         {
-            let message_policy = policy
-                .iter()
-                .filter_map(|x| match x {
-                    rdb::Prefix::V4(x) => Some(x),
-                    _ => None,
-                })
-                .map(|x| crate::messages::Prefix::from(*x))
-                .collect::<BTreeSet<crate::messages::Prefix>>();
+            let allowed: BTreeSet<Prefix> = policy.iter().copied().collect();
 
-            update.nlri.retain(|x| message_policy.contains(x));
+            // Filter traditional NLRI field
+            update.nlri.retain(|p| allowed.contains(&Prefix::V4(*p)));
+
+            // TODO: Filter MP-BGP NLRI (if present)
+            // Since MP-BGP attributes now store raw bytes, filtering requires
+            // parsing NLRI first. This should be handled during UPDATE construction
+            // in send_update_v2() instead of post-hoc filtering.
+            // See docs/update-construction-layered-design-plan.md for details.
+        }
+
+        Ok(())
+    }
+
+    /// Build and send a peer-specific UPDATE message.
+    ///
+    /// This constructs UPDATE messages from type-safe routes and handles:
+    /// - Peer-specific next-hop derivation
+    /// - AFI-specific encoding (Traditional for IPv4, MP-BGP for IPv6)
+    /// - Addition of session-specific attributes (MED, LOCAL_PREF, Communities)
+    /// - Export policy filtering
+    /// - Shaper policy application
+    ///
+    /// # Arguments
+    /// * `route_update` - Type-safe route update (V4 or V6)
+    /// * `pc` - Peer connection (provides next-hop and enrichment context)
+    /// * `shaper_application` - How to apply export shaper policy
+    fn send_update(
+        &self,
+        route_update: RouteUpdate,
+        pc: &PeerConnection<Cnx>,
+        shaper_application: ShaperApplication,
+    ) -> Result<(), Error> {
+        // Early exit if nothing to send
+        if route_update.is_empty() {
+            return Ok(());
+        }
+
+        // Extract AFI and build the UpdateMessage based on variant
+        let (afi, mut update) = match route_update {
+            RouteUpdate::V4 { nlri, withdrawn } => {
+                session_log!(
+                    self,
+                    debug,
+                    pc.conn,
+                    "building IPv4 update: nlri={}, withdrawn={}",
+                    nlri.len(),
+                    withdrawn.len();
+                );
+
+                // Derive IPv4 next-hop
+                let nexthop = self.derive_nexthop(Afi::Ipv4, pc)?;
+                let nh4 = match nexthop {
+                    BgpNexthop::Ipv4(addr) => addr,
+                    _ => {
+                        return Err(Error::InvalidAddress(
+                            "IPv4 routes require IPv4 next-hop".into(),
+                        ));
+                    }
+                };
+
+                session_log!(
+                    self,
+                    debug,
+                    pc.conn,
+                    "derived next-hop: {}",
+                    nh4;
+                );
+
+                // Build UpdateMessage directly with type-safe Vec<Prefix4>
+                let mut path_attrs = self.router.base_attributes();
+                path_attrs.push(PathAttributeValue::NextHop(nh4).into());
+
+                let update = UpdateMessage {
+                    withdrawn,
+                    nlri,
+                    path_attributes: path_attrs,
+                };
+
+                (Afi::Ipv4, update)
+            }
+            RouteUpdate::V6 { nlri, withdrawn } => {
+                session_log!(
+                    self,
+                    debug,
+                    pc.conn,
+                    "building IPv6 update: nlri={}, withdrawn={}",
+                    nlri.len(),
+                    withdrawn.len();
+                );
+
+                // Derive IPv6 next-hop
+                let nexthop = self.derive_nexthop(Afi::Ipv6, pc)?;
+
+                session_log!(
+                    self,
+                    debug,
+                    pc.conn,
+                    "derived next-hop: {:?}",
+                    nexthop;
+                );
+
+                // Build UpdateMessage with MP-BGP attributes
+                let mut path_attrs = self.router.base_attributes();
+
+                // Add MP_REACH_NLRI for announcements
+                if !nlri.is_empty() {
+                    let reach = MpReach::new_v6(nexthop, nlri);
+                    path_attrs
+                        .push(PathAttributeValue::MpReachNlri(reach).into());
+                }
+
+                // Add MP_UNREACH_NLRI for withdrawals
+                if !withdrawn.is_empty() {
+                    let unreach = MpUnreach::new_v6(withdrawn);
+                    path_attrs.push(
+                        PathAttributeValue::MpUnreachNlri(unreach).into(),
+                    );
+                }
+
+                let update = UpdateMessage {
+                    withdrawn: vec![], // Traditional fields empty for IPv6
+                    nlri: vec![],
+                    path_attributes: path_attrs,
+                };
+
+                (Afi::Ipv6, update)
+            }
         };
 
-        let out = match self.shape_update(update, shaper_application)? {
-            ShaperResult::Emit(msg) => msg,
-            ShaperResult::Drop => return Ok(()),
-        };
+        session_log!(
+            self,
+            debug,
+            pc.conn,
+            "built update skeleton: afi={}, traditional_nlri={}, mp_bgp={}",
+            afi,
+            !update.nlri.is_empty(),
+            update.path_attributes.iter().any(|a| matches!(
+                a.value,
+                PathAttributeValue::MpReachNlri(_) | PathAttributeValue::MpUnreachNlri(_)
+            ));
+        );
 
-        lock!(self.message_history).send(out.clone(), *pc.conn.id());
+        // 3. Add peer-specific enrichments
+        self.enrich_update(&mut update, pc)?;
 
+        // 4. Apply export policy filtering
+        self.apply_export_policy(&mut update)?;
+
+        // Check if update was completely filtered out
+        let has_content = !update.nlri.is_empty()
+            || !update.withdrawn.is_empty()
+            || update.path_attributes.iter().any(|a| {
+                matches!(
+                    a.value,
+                    PathAttributeValue::MpReachNlri(_)
+                        | PathAttributeValue::MpUnreachNlri(_)
+                )
+            });
+
+        if !has_content {
+            session_log!(
+                self,
+                debug,
+                pc.conn,
+                "update completely filtered by export policy";
+            );
+            return Ok(());
+        }
+
+        // 5. Apply shaper policy
+        let shaped_update =
+            match self.shape_update(update, shaper_application)? {
+                ShaperResult::Emit(msg) => msg,
+                ShaperResult::Drop => {
+                    session_log!(
+                        self,
+                        debug,
+                        pc.conn,
+                        "update dropped by shaper policy";
+                    );
+                    return Ok(());
+                }
+            };
+
+        // 6. Send the message
+        self.send_update_message(shaped_update, pc)
+    }
+
+    /// Send a pre-constructed UPDATE message to peer.
+    /// This is the LOW-LEVEL send operation extracted from old send_update().
+    fn send_update_message(
+        &self,
+        update: Message,
+        pc: &PeerConnection<Cnx>,
+    ) -> Result<(), Error> {
+        // Record in message history
+        lock!(self.message_history).send(update.clone(), *pc.conn.id());
+
+        // Update counters
         self.counters.updates_sent.fetch_add(1, Ordering::Relaxed);
 
+        // Log
         session_log!(
             self,
             info,
             pc.conn,
             "sending update";
             "message" => "update",
-            "message_contents" => format!("{out}")
+            "message_contents" => format!("{update}")
         );
 
-        if let Err(e) = pc.conn.send(out) {
+        // Send
+        if let Err(e) = pc.conn.send(update) {
             session_log!(
                 self,
                 error,
@@ -6390,10 +6825,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.counters
                 .update_send_failure
                 .fetch_add(1, Ordering::Relaxed);
-            Err(e)
-        } else {
-            Ok(())
+            return Err(e);
         }
+
+        Ok(())
     }
 
     fn transition_from_idle(&self) -> FsmState<Cnx> {
@@ -6420,7 +6855,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         session_timer!(self, connect_retry).stop();
         self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
 
-        write_lock!(self.fanout).remove_egress(self.neighbor.host.ip());
+        if pc.ipv4 {
+            write_lock!(self.fanout4).remove_egress(self.neighbor.host.ip());
+        }
+        if pc.ipv6 {
+            write_lock!(self.fanout6).remove_egress(self.neighbor.host.ip());
+        }
 
         // remove peer prefixes from db
         self.db.remove_bgp_prefixes_from_peer(&pc.conn.peer().ip());
@@ -6620,6 +7060,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             );
             return;
         }
+
+        // Validate MP-BGP attributes before processing
+        // This now does parsing and validation of MP-BGP attributes from raw bytes
+        if let Err(e) = self.validate_mp_attributes(&mut update, pc) {
+            session_log!(
+                self,
+                error,
+                pc.conn,
+                "MP-BGP attribute validation failed: {e}";
+                "error" => format!("{e}"),
+                "message" => "update"
+            );
+            // Notification already sent by validate_mp_attributes()
+            // Don't process this UPDATE
+            return;
+        }
+
         self.apply_static_update_policy(&mut update);
 
         if let Some(checker) = read_lock!(self.router.policy.checker).as_ref() {
@@ -6660,7 +7117,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .map(|x| crate::messages::Prefix::from(*x))
                 .collect::<BTreeSet<crate::messages::Prefix>>();
 
-            update.nlri.retain(|x| message_policy.contains(x));
+            update
+                .nlri
+                .retain(|x| message_policy.contains(&Prefix::V4(*x)));
         };
 
         self.update_rib(&update, pc);
@@ -6672,8 +7131,318 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         //    self.fanout_update(&update);
     }
 
-    pub fn refresh_react(&self, pc: &PeerConnection<Cnx>) -> Result<(), Error> {
-        // XXX: Update for IPv6
+    /// Validate MP-BGP attributes (MP_REACH_NLRI, MP_UNREACH_NLRI).
+    ///
+    /// This implements RFC 4760 Section 7 and RFC 7606 error handling for MP-BGP.
+    ///
+    /// ## RFC 4760 Section 7: Error Handling
+    ///
+    /// When an UPDATE message with incorrect MP_REACH_NLRI or MP_UNREACH_NLRI
+    /// is received:
+    /// 1. Delete all BGP routes from that peer with the same AFI/SAFI
+    /// 2. Ignore all subsequent routes with that AFI/SAFI for the session duration
+    /// 3. Optionally terminate the session with NOTIFICATION:
+    ///    - Error Code: UPDATE Message Error
+    ///    - Subcode: Optional Attribute Error
+    ///
+    /// ## RFC 7606: Revised Error Handling
+    ///
+    /// The approach used depends on the error severity:
+    /// - **Session reset**: Most severe, terminates BGP session
+    /// - **AFI/SAFI disable**: Ignore subsequent routes for specific address family
+    /// - **Treat-as-withdraw**: Process as route withdrawal
+    /// - **Attribute discard**: Remove attribute, continue processing
+    ///
+    /// For MP_REACH_NLRI/MP_UNREACH_NLRI:
+    /// - Malformed attributes that prevent NLRI location → Session reset or AFI/SAFI disable
+    /// - Unsupported AFI/SAFI → AFI/SAFI disable (our implementation: discard + log)
+    /// - Unnegotiated AFI/SAFI → AFI/SAFI disable (our implementation: discard + log)
+    ///
+    /// ## Implementation Details
+    ///
+    /// This performs semantic validation:
+    /// 1. Check that AFI/SAFI is supported by this implementation
+    /// 2. Check that AFI/SAFI was negotiated with this peer
+    ///
+    /// Invalid attributes are logged and removed from the update message, effectively
+    /// implementing an "AFI/SAFI disable" approach by consistently filtering out
+    /// unsupported/unnegotiated address families.
+    ///
+    /// ## Error Handling at Parse Time
+    ///
+    /// Note that structural errors (duplicate attributes, malformed wire format)
+    /// are caught earlier during parsing in `UpdateMessage::from_wire()` and
+    /// `connection_tcp.rs`, which sends appropriate NOTIFICATION messages per
+    /// RFC 7606 Section 5.2.
+    fn validate_mp_attributes(
+        &self,
+        update: &mut UpdateMessage,
+        pc: &PeerConnection<Cnx>,
+    ) -> Result<(), Error> {
+        use crate::messages::{
+            Afi, BgpNexthop, PathAttributeValue, Safi, UpdateMessage as UM,
+        };
+        use rdb::types::AddressFamily;
+
+        // We'll rebuild the attributes list with validated/parsed MP-BGP attributes
+        let mut validated_attributes = Vec::new();
+        let mut had_error = false;
+
+        for attr in &update.path_attributes {
+            match &attr.value {
+                PathAttributeValue::MpReachNlri(mp_reach) => {
+                    // Step 1: Validate AFI/SAFI support
+                    let afi = match Afi::try_from(mp_reach.afi) {
+                        Ok(afi) => afi,
+                        Err(_) => {
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
+                                "Unsupported AFI {} in MP_REACH_NLRI",
+                                mp_reach.afi;
+                            );
+
+                            // Send notification for unsupported AFI/SAFI
+                            self.send_notification(
+                                &pc.conn,
+                                ErrorCode::Update,
+                                ErrorSubcode::Update(
+                                    UpdateErrorSubcode::OptionalAttribute,
+                                ),
+                            );
+
+                            had_error = true;
+                            continue; // Skip this attribute
+                        }
+                    };
+
+                    let safi = match Safi::try_from(mp_reach.safi) {
+                        Ok(safi) => safi,
+                        Err(_) => {
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
+                                "Unsupported SAFI {} in MP_REACH_NLRI",
+                                mp_reach.safi;
+                            );
+
+                            self.send_notification(
+                                &pc.conn,
+                                ErrorCode::Update,
+                                ErrorSubcode::Update(
+                                    UpdateErrorSubcode::OptionalAttribute,
+                                ),
+                            );
+
+                            had_error = true;
+                            continue;
+                        }
+                    };
+
+                    // Step 2: Check if AFI/SAFI was negotiated
+                    let negotiated = match (afi, safi) {
+                        (Afi::Ipv4, Safi::Unicast) => pc.ipv4,
+                        (Afi::Ipv6, Safi::Unicast) => pc.ipv6,
+                    };
+
+                    if !negotiated {
+                        session_log!(
+                            self,
+                            warn,
+                            pc.conn,
+                            "MP_REACH_NLRI for unnegotiated AFI/SAFI: {}/{}",
+                            afi, safi;
+                        );
+
+                        // Don't send notification - just filter silently per existing pattern
+                        continue;
+                    }
+
+                    // Step 3: Parse next-hop with validated AFI
+                    let _nexthop = match BgpNexthop::from_bytes(
+                        &mp_reach.nh_bytes,
+                        mp_reach.nh_len,
+                        afi,
+                    ) {
+                        Ok(nh) => nh,
+                        Err(e) => {
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
+                                "Invalid next-hop in MP_REACH_NLRI: {e}";
+                            );
+
+                            self.send_notification(
+                                &pc.conn,
+                                ErrorCode::Update,
+                                ErrorSubcode::Update(
+                                    UpdateErrorSubcode::OptionalAttribute,
+                                ),
+                            );
+
+                            had_error = true;
+                            continue;
+                        }
+                    };
+
+                    // Step 4: Parse NLRI with validated AFI
+                    let address_family: AddressFamily = afi.into();
+                    let _nlri = match UM::prefixes_from_wire(
+                        &mp_reach.nlri_bytes,
+                        address_family,
+                    ) {
+                        Ok(prefixes) => prefixes,
+                        Err(e) => {
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
+                                "Invalid NLRI in MP_REACH_NLRI: {e}";
+                            );
+
+                            self.send_notification(
+                                &pc.conn,
+                                ErrorCode::Update,
+                                ErrorSubcode::Update(
+                                    UpdateErrorSubcode::MalformedAttributeList,
+                                ),
+                            );
+
+                            had_error = true;
+                            continue;
+                        }
+                    };
+
+                    // Note: For now, we keep the attribute with raw bytes
+                    // Future enhancement: store parsed values in a new struct variant
+                    validated_attributes.push(attr.clone());
+                }
+
+                PathAttributeValue::MpUnreachNlri(mp_unreach) => {
+                    // Similar validation for MP_UNREACH_NLRI
+                    let afi = match Afi::try_from(mp_unreach.afi_raw) {
+                        Ok(afi) => afi,
+                        Err(_) => {
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
+                                "Unsupported AFI {} in MP_UNREACH_NLRI",
+                                mp_unreach.afi_raw;
+                            );
+
+                            self.send_notification(
+                                &pc.conn,
+                                ErrorCode::Update,
+                                ErrorSubcode::Update(
+                                    UpdateErrorSubcode::OptionalAttribute,
+                                ),
+                            );
+
+                            had_error = true;
+                            continue;
+                        }
+                    };
+
+                    let safi = match Safi::try_from(mp_unreach.safi_raw) {
+                        Ok(safi) => safi,
+                        Err(_) => {
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
+                                "Unsupported SAFI {} in MP_UNREACH_NLRI",
+                                mp_unreach.safi_raw;
+                            );
+
+                            self.send_notification(
+                                &pc.conn,
+                                ErrorCode::Update,
+                                ErrorSubcode::Update(
+                                    UpdateErrorSubcode::OptionalAttribute,
+                                ),
+                            );
+
+                            had_error = true;
+                            continue;
+                        }
+                    };
+
+                    // Check if AFI/SAFI was negotiated
+                    let negotiated = match (afi, safi) {
+                        (Afi::Ipv4, Safi::Unicast) => pc.ipv4,
+                        (Afi::Ipv6, Safi::Unicast) => pc.ipv6,
+                    };
+
+                    if !negotiated {
+                        session_log!(
+                            self,
+                            warn,
+                            pc.conn,
+                            "MP_UNREACH_NLRI for unnegotiated AFI/SAFI: {}/{}",
+                            afi, safi;
+                        );
+
+                        // Don't send notification - just filter silently
+                        continue;
+                    }
+
+                    // Parse withdrawn routes with validated AFI
+                    let address_family: AddressFamily = afi.into();
+                    let _withdrawn = match UM::prefixes_from_wire(
+                        &mp_unreach.withdrawn_bytes,
+                        address_family,
+                    ) {
+                        Ok(prefixes) => prefixes,
+                        Err(e) => {
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
+                                "Invalid withdrawn routes in MP_UNREACH_NLRI: {e}";
+                            );
+
+                            self.send_notification(
+                                &pc.conn,
+                                ErrorCode::Update,
+                                ErrorSubcode::Update(
+                                    UpdateErrorSubcode::MalformedAttributeList,
+                                ),
+                            );
+
+                            had_error = true;
+                            continue;
+                        }
+                    };
+
+                    // Keep the attribute with raw bytes
+                    validated_attributes.push(attr.clone());
+                }
+
+                _ => {
+                    // Keep all other attributes as-is
+                    validated_attributes.push(attr.clone());
+                }
+            }
+        }
+
+        if had_error {
+            return Err(Error::MalformedAttributeList(
+                "MP-BGP attribute validation failed".into(),
+            ));
+        }
+
+        update.path_attributes = validated_attributes;
+        Ok(())
+    }
+
+    pub fn refresh_react4(
+        &self,
+        pc: &PeerConnection<Cnx>,
+    ) -> Result<(), Error> {
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
@@ -6681,22 +7450,55 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self,
                     error,
                     pc.conn,
-                    "failed to get originated routes from db";
+                    "failed to get originated IPv4 routes from db";
                     "error" => format!("{e}")
                 );
                 // This is not a protocol level issue
                 return Ok(());
             }
         };
+
         if !originated.is_empty() {
-            let mut update = UpdateMessage {
-                path_attributes: self.router.base_attributes(),
-                ..Default::default()
-            };
-            for p in originated {
-                update.nlri.push(p.into());
+            self.send_update(
+                RouteUpdate::V4 {
+                    nlri: originated,
+                    withdrawn: vec![],
+                },
+                pc,
+                ShaperApplication::Current,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn refresh_react6(
+        &self,
+        pc: &PeerConnection<Cnx>,
+    ) -> Result<(), Error> {
+        let originated = match self.db.get_origin6() {
+            Ok(value) => value,
+            Err(e) => {
+                session_log!(
+                    self,
+                    error,
+                    pc.conn,
+                    "failed to get originated IPv6 routes from db";
+                    "error" => format!("{e}")
+                );
+                // This is not a protocol level issue
+                return Ok(());
             }
-            self.send_update(update, pc, ShaperApplication::Current)?;
+        };
+
+        if !originated.is_empty() {
+            self.send_update(
+                RouteUpdate::V6 {
+                    nlri: originated,
+                    withdrawn: vec![],
+                },
+                pc,
+                ShaperApplication::Current,
+            )?;
         }
         Ok(())
     }
@@ -6706,37 +7508,82 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         msg: RouteRefreshMessage,
         pc: &PeerConnection<Cnx>,
     ) -> Result<(), Error> {
-        // XXX: Update for IPv6
-        if msg.afi != Afi::Ipv4 as u16 {
-            return Ok(());
+        if msg.safi != Safi::Unicast as u8 {
+            return Err(Error::UnsupportedAddressFamily(msg.afi, msg.safi));
         }
-        self.refresh_react(pc)
+
+        let af = match Afi::try_from(msg.afi) {
+            Ok(afi) => afi,
+            Err(_) => {
+                return Err(Error::UnsupportedAddressFamily(msg.afi, msg.safi));
+            }
+        };
+
+        match af {
+            Afi::Ipv4 => self.refresh_react4(pc),
+            Afi::Ipv6 => self.refresh_react6(pc),
+        }
     }
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, pc: &PeerConnection<Cnx>) {
-        let originated = match self.db.get_origin4() {
+        let originated4 = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
                 session_log!(
                     self,
                     error,
                     pc.conn,
-                    "failed to get originated routes from db";
+                    "failed to get originated ipv4 routes from db";
                     "error" => format!("{e}")
                 );
                 Vec::new()
             }
         };
 
+        let _originated6 = match self.db.get_origin6() {
+            Ok(value) => value,
+            Err(e) => {
+                session_log!(
+                    self,
+                    error,
+                    pc.conn,
+                    "failed to get originated ipv6 routes from db";
+                    "error" => format!("{e}")
+                );
+                Vec::new()
+            }
+        };
+
+        let nexthop = match update.nexthop() {
+            Ok(nh) => match nh {
+                BgpNexthop::Ipv4(ip4) => IpAddr::V4(ip4),
+                BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(ip6),
+                BgpNexthop::Ipv6Double((gua, _ll)) => IpAddr::V6(gua),
+            },
+            Err(e) => {
+                session_log!(
+                    self,
+                    warn,
+                    pc.conn,
+                    "error parsing nexthop from update: {e}";
+                    "error" => format!("{e}"),
+                    "message" => "update",
+                    "message_contents" => format!("{update}").as_str()
+                );
+                self.counters
+                    .update_nexhop_missing
+                    .fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        };
+
         let withdrawn: Vec<Prefix> = update
             .withdrawn
             .iter()
-            .filter(|p| match p {
-                Prefix::V4(p4) => !originated.contains(p4),
-                Prefix::V6(_p6) => false, // XXX: update for v6
-            } && p.valid_for_rib())
+            .filter(|p| !originated4.contains(p) && p.valid_for_rib())
             .copied()
+            .map(Prefix::V4)
             .collect();
 
         self.db
@@ -6745,63 +7592,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let nlri: Vec<Prefix> = update
             .nlri
             .iter()
-            .filter(|p| match p {
-                Prefix::V4(p4) => !originated.contains(p4),
-                Prefix::V6(_p6) => false, // XXX: update for v6
-            } && p.valid_for_rib())
+            .filter(|p| {
+                !originated4.contains(p)
+                    && p.valid_for_rib()
+                    && !self.prefix_via_self(Prefix::V4(**p), nexthop)
+            })
             .copied()
+            .map(Prefix::V4)
             .collect();
 
         if !nlri.is_empty() {
-            // TODO: parse and prefer nexthop in MP_REACH_NLRI
-            //
-            // Per RFC 4760:
-            // """
-            // The next hop information carried in the MP_REACH_NLRI path attribute
-            // defines the Network Layer address of the router that SHOULD be used
-            // as the next hop to the destinations listed in the MP_NLRI attribute
-            // in the UPDATE message.
-            //
-            // [..]
-            //
-            // An UPDATE message that carries no NLRI, other than the one encoded in
-            // the MP_REACH_NLRI attribute, SHOULD NOT carry the NEXT_HOP attribute.
-            // If such a message contains the NEXT_HOP attribute, the BGP speaker
-            // that receives the message SHOULD ignore this attribute.
-            // """
-            //
-            // i.e.
-            // 1) NEXT_HOP SHOULD NOT be sent unless there are no MP_REACH_NLRI
-            // 2) NEXT_HOP SHOULD be ignored unless there are no MP_REACH_NLRI
-            //
-            // The standards do not state whether an implementation can/should send
-            // IPv4 Unicast prefixes embedded in an MP_REACH_NLRI attribute or in the
-            // classic NLRI field of an Update message. If we participate in MP-BGP
-            // and negotiate IPv4 Unicast, it's entirely likely that we'll peer with
-            // other BGP speakers falling into any of the combinations:
-            // a) MP not negotiated, IPv4 Unicast in NLRI, NEXT_HOP included
-            // b) MP negotiated, IPv4 Unicast in NLRI, NEXT_HOP included
-            // c) MP negotiated, IPv4 Unicast in NLRI, NEXT_HOP not included
-            // d) MP negotiated, IPv4 Unicast in MP_REACH_NLRI, NEXT_HOP included
-            // e) MP negotiated, IPv4 Unicast in MP_REACH_NLRI, NEXT_HOP not included
-            let nexthop = match update.nexthop4() {
-                Some(nh) => nh,
-                None => {
-                    session_log!(
-                        self,
-                        warn,
-                        pc.conn,
-                        "recieved update with nlri, but no nexthop";
-                        "message" => "update",
-                        "message_contents" => format!("{update}").as_str()
-                    );
-                    self.counters
-                        .update_nexhop_missing
-                        .fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-            };
-
             let mut as_path = Vec::new();
             if let Some(segments_list) = update.as_path() {
                 for segments in &segments_list {
@@ -6809,7 +7609,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             }
             let path = rdb::Path {
-                nexthop: nexthop.into(),
+                nexthop,
                 shutdown: update.graceful_shutdown(),
                 rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                 bgp: Some(BgpPathProperties {
@@ -6836,8 +7636,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         update: &UpdateMessage,
         peer_as: u32,
     ) -> Result<(), Error> {
+        // RFC 7606 Section 3(g): Reject duplicate MP-BGP attributes
+        update.check_duplicate_mp_attributes()?;
+
+        // Path vector routing and prefix validation
         self.check_for_self_in_path(update)?;
-        self.check_nexthop_self(update)?;
+
+        // Optional enforce-first-AS validation
         let info = lock!(self.session);
         if info.enforce_first_as {
             self.enforce_first_as(update, peer_as)?;
@@ -6879,25 +7684,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         Ok(())
     }
 
-    fn check_nexthop_self(&self, update: &UpdateMessage) -> Result<(), Error> {
-        // nothing to check when no prefixes presnt, and nexthop not required
-        // for pure withdraw
-        if update.nlri.is_empty() {
-            return Ok(());
-        }
-        let nexthop = match update.nexthop4() {
-            Some(nh) => nh,
-            None => return Err(Error::MissingNexthop),
-        };
-        for prefix in &update.nlri {
-            if let rdb::Prefix::V4(p4) = prefix
-                && p4.length == 32
-                && p4.value == nexthop
-            {
-                return Err(Error::NexthopSelf(p4.value.into()));
+    /// Do not accept routes advertised with themselves as the next-hop.
+    /// e.g.
+    /// Do not allow 2001::1/32 with a nexthop of 2001::1
+    fn prefix_via_self(&self, prefix: Prefix, nexthop: IpAddr) -> bool {
+        match (prefix, nexthop) {
+            (Prefix::V4(p4), IpAddr::V4(ip4)) => {
+                p4.length == Prefix4::HOST_MASK && p4.value == ip4
             }
+            (Prefix::V6(p6), IpAddr::V6(ip6)) => {
+                p6.length == Prefix6::HOST_MASK && p6.value == ip6
+            }
+            _ => false,
         }
-        Ok(())
     }
 
     fn enforce_first_as(
@@ -6919,15 +7718,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         Ok(())
-    }
-
-    // NOTE: for now we are only acting as an edge router. This means we
-    //       do not redistribute announcements. So for now this function
-    //       is unused. However, this may change in the future.
-    #[allow(dead_code)]
-    fn fanout_update(&self, update: &UpdateMessage) {
-        let fanout = read_lock!(self.fanout);
-        fanout.send(self.neighbor.host.ip(), update);
     }
 
     /// Return the current BGP peer state of this session runner.
@@ -7346,5 +8136,78 @@ mod tests {
         assert_eq!(record.current_state, FsmStateKind::Connect);
         assert_eq!(record.previous_state, Some(FsmStateKind::Idle));
         assert!(record.details.is_some());
+    }
+
+    // =========================================================================
+    // RouteUpdate tests
+    // =========================================================================
+
+    #[test]
+    fn route_update_is_empty() {
+        // Empty V4
+        let empty_v4 = RouteUpdate::V4 {
+            nlri: vec![],
+            withdrawn: vec![],
+        };
+        assert!(empty_v4.is_empty());
+
+        // Empty V6
+        let empty_v6 = RouteUpdate::V6 {
+            nlri: vec![],
+            withdrawn: vec![],
+        };
+        assert!(empty_v6.is_empty());
+
+        // Non-empty V4 with NLRI
+        let non_empty_v4 = RouteUpdate::V4 {
+            nlri: vec![Prefix4::new(std::net::Ipv4Addr::new(10, 0, 0, 0), 8)],
+            withdrawn: vec![],
+        };
+        assert!(!non_empty_v4.is_empty());
+
+        // Non-empty V6 with withdrawn
+        let non_empty_v6 = RouteUpdate::V6 {
+            nlri: vec![],
+            withdrawn: vec![Prefix6::new(
+                std::net::Ipv6Addr::from([
+                    0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ]),
+                32,
+            )],
+        };
+        assert!(!non_empty_v6.is_empty());
+    }
+
+    #[test]
+    fn route_update_display_v4() {
+        let update = RouteUpdate::V4 {
+            nlri: vec![Prefix4::new(std::net::Ipv4Addr::new(10, 0, 0, 0), 8)],
+            withdrawn: vec![Prefix4::new(
+                std::net::Ipv4Addr::new(192, 168, 0, 0),
+                16,
+            )],
+        };
+        let display = format!("{}", update);
+        // Uses Debug format {:?} for prefix contents, which shows struct fields
+        assert!(display.contains("RouteUpdate::V4"));
+        assert!(display.contains("10.0.0.0"));
+        assert!(display.contains("192.168.0.0"));
+    }
+
+    #[test]
+    fn route_update_display_v6() {
+        let update = RouteUpdate::V6 {
+            nlri: vec![Prefix6::new(
+                std::net::Ipv6Addr::from([
+                    0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                ]),
+                32,
+            )],
+            withdrawn: vec![],
+        };
+        let display = format!("{}", update);
+        // Uses Debug format {:?} for prefix contents
+        assert!(display.contains("RouteUpdate::V6"));
+        assert!(display.contains("2001:db8"));
     }
 }

@@ -1064,6 +1064,8 @@ pub(crate) mod helpers {
             idle_hold_jitter: Some((0.75, 1.0)),
             connect_retry_jitter: None,
             deterministic_collision_resolution: false,
+            ipv4_enabled: true,
+            ipv6_enabled: false,
         };
 
         let start_session = if ensure {
