@@ -19,9 +19,9 @@ use crate::{
         UpdateMessage,
     },
     params::{
-        BgpCapability, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
-        JitterRange, PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo,
-        TimerConfig,
+        BgpCapability, BgpPeerParameters, BgpPeerParametersV1,
+        DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
+        PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo, TimerConfig,
     },
     policy::{CheckerResult, ShaperResult},
     recv_event_loop, recv_event_return,
@@ -898,6 +898,72 @@ impl SessionInfo {
             }),
             connect_retry_jitter: None,
             deterministic_collision_resolution: false,
+        }
+    }
+}
+
+impl From<&BgpPeerParameters> for SessionInfo {
+    fn from(value: &BgpPeerParameters) -> Self {
+        SessionInfo {
+            passive_tcp_establishment: value.passive,
+            remote_asn: value.remote_asn,
+            min_ttl: value.min_ttl,
+            md5_auth_key: value.md5_auth_key.clone(),
+            multi_exit_discriminator: value.multi_exit_discriminator,
+            communities: value.communities.clone().into_iter().collect(),
+            local_pref: value.local_pref,
+            enforce_first_as: value.enforce_first_as,
+            vlan_id: value.vlan_id,
+            remote_id: None,
+            bind_addr: None,
+            connect_retry_time: Duration::from_secs(value.connect_retry),
+            keepalive_time: Duration::from_secs(value.keepalive),
+            hold_time: Duration::from_secs(value.hold_time),
+            idle_hold_time: Duration::from_secs(value.idle_hold_time),
+            delay_open_time: Duration::from_secs(value.delay_open),
+            resolution: Duration::from_millis(value.resolution),
+            idle_hold_jitter: value.idle_hold_jitter,
+            connect_retry_jitter: value.connect_retry_jitter,
+            deterministic_collision_resolution: value
+                .deterministic_collision_resolution,
+            ipv4_unicast: value.ipv4_unicast.clone(),
+            ipv6_unicast: value.ipv6_unicast.clone(),
+        }
+    }
+}
+
+impl From<&BgpPeerParametersV1> for SessionInfo {
+    fn from(value: &BgpPeerParametersV1) -> Self {
+        SessionInfo {
+            passive_tcp_establishment: value.passive,
+            remote_asn: value.remote_asn,
+            min_ttl: value.min_ttl,
+            md5_auth_key: value.md5_auth_key.clone(),
+            multi_exit_discriminator: value.multi_exit_discriminator,
+            communities: value.communities.clone().into_iter().collect(),
+            local_pref: value.local_pref,
+            enforce_first_as: value.enforce_first_as,
+            vlan_id: value.vlan_id,
+            remote_id: None,
+            bind_addr: None,
+            connect_retry_time: Duration::from_secs(value.connect_retry),
+            keepalive_time: Duration::from_secs(value.keepalive),
+            hold_time: Duration::from_secs(value.hold_time),
+            idle_hold_time: Duration::from_secs(value.idle_hold_time),
+            delay_open_time: Duration::from_secs(value.delay_open),
+            resolution: Duration::from_millis(value.resolution),
+            idle_hold_jitter: None,
+            connect_retry_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
+            deterministic_collision_resolution: false,
+            ipv4_unicast: Some(Ipv4UnicastConfig {
+                nexthop: None,
+                import_policy: value.allow_import.as_ipv4_policy().clone(),
+                export_policy: value.allow_export.as_ipv4_policy().clone(),
+            }),
+            ipv6_unicast: None,
         }
     }
 }

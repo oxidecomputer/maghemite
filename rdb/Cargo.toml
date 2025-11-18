@@ -18,6 +18,7 @@ chrono.workspace = true
 clap = { workspace = true, optional = true }
 oxnet.workspace = true
 rdb-types = { workspace = true, features = ["clap"] }
+ndp.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

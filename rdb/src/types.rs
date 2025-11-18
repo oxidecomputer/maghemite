@@ -532,14 +532,28 @@ pub enum TypedImportExportPolicy {
 pub struct BgpNeighborInfo {
     pub asn: u32,
     pub name: String,
+    pub group: String,
     pub host: SocketAddr,
+    pub parameters: BgpNeighborParameters,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+pub struct BgpUnnumberedNeighborInfo {
+    pub asn: u32,
+    pub name: String,
+    pub group: String,
+    pub interface: String,
+    pub parameters: BgpNeighborParameters,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema)]
+pub struct BgpNeighborParameters {
     pub hold_time: u64,
     pub idle_hold_time: u64,
     pub delay_open: u64,
     pub connect_retry: u64,
     pub keepalive: u64,
     pub resolution: u64,
-    pub group: String,
     pub passive: bool,
     pub remote_asn: Option<u32>,
     pub min_ttl: Option<u8>,

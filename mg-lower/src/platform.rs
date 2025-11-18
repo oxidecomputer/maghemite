@@ -19,7 +19,7 @@ pub(crate) trait Dpd {
         &self,
         cidr: &Ipv4Net,
     ) -> Result<
-        dpd_client::ResponseValue<Vec<Ipv4Route>>,
+        dpd_client::ResponseValue<Vec<Route>>,
         progenitor_client::Error<DpdError>,
     >;
     async fn route_ipv6_get(
@@ -77,6 +77,11 @@ pub(crate) trait Dpd {
     async fn route_ipv4_add<'a>(
         &'a self,
         body: &'a Ipv4RouteUpdate,
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>;
+
+    async fn route_ipv4_over_ipv6_add<'a>(
+        &'a self,
+        body: &'a Ipv4OverIpv6RouteUpdate,
     ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>;
 
     async fn route_ipv6_add<'a>(
@@ -157,7 +162,7 @@ impl Dpd for ProductionDpd {
         &self,
         cidr: &Ipv4Net,
     ) -> Result<
-        dpd_client::ResponseValue<Vec<Ipv4Route>>,
+        dpd_client::ResponseValue<Vec<Route>>,
         progenitor_client::Error<DpdError>,
     > {
         self.client.route_ipv4_get(cidr).await
@@ -238,6 +243,14 @@ impl Dpd for ProductionDpd {
     ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>
     {
         self.client.route_ipv4_add(body).await
+    }
+
+    async fn route_ipv4_over_ipv6_add<'a>(
+        &'a self,
+        body: &'a Ipv4OverIpv6RouteUpdate,
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>
+    {
+        self.client.route_ipv4_over_ipv6_add(body).await
     }
 
     async fn route_ipv6_add<'a>(
@@ -368,7 +381,7 @@ pub(crate) mod test {
     /// useful for tests.
     pub(crate) struct TestDpd {
         pub(crate) links: Mutex<Vec<Link>>,
-        pub(crate) v4_routes: Mutex<HashMap<Ipv4Net, Vec<Ipv4Route>>>,
+        pub(crate) v4_routes: Mutex<HashMap<Ipv4Net, Vec<Route>>>,
         pub(crate) v6_routes: Mutex<HashMap<Ipv6Net, Vec<Ipv6Route>>>,
         pub(crate) v4_addrs: HashMap<String, Vec<Ipv4Entry>>,
         pub(crate) v6_addrs: HashMap<String, Vec<Ipv6Entry>>,
@@ -412,7 +425,7 @@ pub(crate) mod test {
             &self,
             cidr: &Ipv4Net,
         ) -> Result<
-            dpd_client::ResponseValue<Vec<Ipv4Route>>,
+            dpd_client::ResponseValue<Vec<Route>>,
             progenitor_client::Error<DpdError>,
         > {
             let result = self
@@ -528,10 +541,35 @@ pub(crate) mod test {
             let mut routes = self.v4_routes.lock().unwrap();
             match routes.get_mut(&body.cidr) {
                 Some(targets) => {
-                    targets.push(body.target.clone());
+                    targets.push(Route::V4(body.target.clone()));
                 }
                 None => {
-                    routes.insert(body.cidr, vec![body.target.clone()]);
+                    routes.insert(
+                        body.cidr,
+                        vec![Route::V4(body.target.clone())],
+                    );
+                }
+            }
+            Ok(dpd_response_ok!(()))
+        }
+
+        async fn route_ipv4_over_ipv6_add<'a>(
+            &'a self,
+            body: &'a Ipv4OverIpv6RouteUpdate,
+        ) -> Result<
+            dpd_client::ResponseValue<()>,
+            progenitor_client::Error<DpdError>,
+        > {
+            let mut routes = self.v4_routes.lock().unwrap();
+            match routes.get_mut(&body.cidr) {
+                Some(targets) => {
+                    targets.push(Route::V6(body.target.clone()));
+                }
+                None => {
+                    routes.insert(
+                        body.cidr,
+                        vec![Route::V6(body.target.clone())],
+                    );
                 }
             }
             Ok(dpd_response_ok!(()))
@@ -569,9 +607,13 @@ pub(crate) mod test {
             let mut routes = self.v4_routes.lock().unwrap();
             if let Some(targets) = routes.get_mut(cidr) {
                 targets.retain(|x| {
-                    !(x.tgt_ip == *tgt_ip
-                        && x.link_id == *link_id
-                        && x.port_id == *port_id)
+                    if let Route::V4(x) = x {
+                        !(x.tgt_ip == *tgt_ip
+                            && x.link_id == *link_id
+                            && x.port_id == *port_id)
+                    } else {
+                        false
+                    }
                 });
             }
             routes.retain(|_, v| !v.is_empty());
