@@ -7,13 +7,14 @@
 #: output_rules = [
 #:   "/work/*",
 #: ]
+# 
+#: enable = false
 #:
 #: [dependencies.build-interop]
 #: job = "build-interop"
 #:
 #: [dependencies.image]
 #: job = "image"
-#:
 
 set -x
 set -e

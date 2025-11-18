@@ -12,7 +12,6 @@
 #:   "=/work/testbed.tar.gz",
 #:   "=/work/dhcp-server",
 #: ]
-#:
 
 set -x
 set -e

@@ -424,7 +424,7 @@ mod test {
         // check that open messages without the 4-octet AS capability code get dropped
         let asn = 47;
         let addr = "198.51.100.1".parse().unwrap();
-        let m = OpenMessage::new2(asn, 30, 1701);
+        let m = OpenMessage::new2(asn, 30, 1701, false);
         let source =
             std::fs::read_to_string("../bgp/policy/policy-check0.rhai")
                 .unwrap();
@@ -435,7 +435,7 @@ mod test {
         assert_eq!(result, CheckerResult::Drop);
 
         // check that open messages with the 4-octet AS capability code get accepted
-        let m = OpenMessage::new4(asn.into(), 30, 1701);
+        let m = OpenMessage::new4(asn.into(), 30, 1701, false);
         let result =
             check_incoming_open(m, &ast, asn.into(), addr, init_logger())
                 .unwrap();
@@ -475,7 +475,7 @@ mod test {
         // check that open messages without the 4-octet AS capability code get dropped
         let asn = 100;
         let addr = "198.51.100.1".parse().unwrap();
-        let mut m = OpenMessage::new2(asn, 30, 1701);
+        let mut m = OpenMessage::new2(asn, 30, 1701, false);
         let source =
             std::fs::read_to_string("../bgp/policy/policy-shape0.rhai")
                 .unwrap();

@@ -4,7 +4,7 @@ use ddm_admin_client::types::TunnelOrigin;
 use dpd_client::types::{
     Ipv4Route, LinkId, LinkState, PortId, PortMedia, PortPrbsMode, PortSpeed,
 };
-use rdb::{Path, Prefix4, db::Rib};
+use rdb::{Path, Prefix4, db::Rib, test::get_test_db};
 
 use crate::platform::test::{TestDdm, TestDpd, TestSwitchZone};
 
@@ -42,6 +42,7 @@ async fn sync_prefix_test() {
         );
 
         let log = util::test::logger();
+        let db = get_test_db("sync_prefix_test", log.clone()).expect("new db");
 
         crate::sync_prefix(
             tep,
@@ -50,6 +51,7 @@ async fn sync_prefix_test() {
             &dpd,
             &ddm,
             &sw,
+            &db,
             &log,
             &rt,
         )
@@ -90,6 +92,11 @@ async fn sync_link_down_test() {
 
         let log = util::test::logger();
         let mut rib = Rib::default();
+        let db = rdb::Db::new(
+            &format!("/tmp/{}.db", uuid::Uuid::new_v4()),
+            log.clone(),
+        )
+        .expect("new db");
 
         test_setup(tep, &dpd, &ddm, &mut rib);
 
@@ -101,6 +108,7 @@ async fn sync_link_down_test() {
                 &dpd,
                 &ddm,
                 &sw,
+                &db,
                 &log,
                 &rt,
             )
@@ -181,33 +189,33 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
     // Add three initial prefixes to dpd
     dpd.v4_routes.lock().unwrap().insert(
         "1.0.0.0/24".parse().unwrap(),
-        vec![Ipv4Route {
+        vec![dpd_client::types::Route::V4(Ipv4Route {
             link_id: LinkId(0),
             port_id: PortId::Qsfp("qsfp0".parse().unwrap()),
             tag: String::from("mg_lower_test"),
             tgt_ip: "1.0.0.1".parse().unwrap(),
             vlan_id: None,
-        }],
+        })],
     );
     dpd.v4_routes.lock().unwrap().insert(
         "2.0.0.0/24".parse().unwrap(),
-        vec![Ipv4Route {
+        vec![dpd_client::types::Route::V4(Ipv4Route {
             link_id: LinkId(0),
             port_id: PortId::Qsfp("qsfp0".parse().unwrap()),
             tag: String::from("mg_lower_test"),
             tgt_ip: "2.0.0.1".parse().unwrap(),
             vlan_id: None,
-        }],
+        })],
     );
     dpd.v4_routes.lock().unwrap().insert(
         "3.0.0.0/24".parse().unwrap(),
-        vec![Ipv4Route {
+        vec![dpd_client::types::Route::V4(Ipv4Route {
             link_id: LinkId(0),
             port_id: PortId::Qsfp("qsfp1".parse().unwrap()),
             tag: String::from("mg_lower_test"),
             tgt_ip: "3.0.0.1".parse().unwrap(),
             vlan_id: None,
-        }],
+        })],
     );
 
     // Add three initial prefixes to ddm
