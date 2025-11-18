@@ -157,7 +157,7 @@ pub enum Error {
     #[error("Enforce-first-AS check failed: expected: {0}, found: {1:?}")]
     EnforceAsFirst(u32, Vec<u32>),
 
-    #[error("Invalid address")]
+    #[error("Invalid address: {0}")]
     InvalidAddress(String),
 
     #[error("Datastore error: {0}")]

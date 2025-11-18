@@ -13,7 +13,8 @@ use bgp::{
     params::{
         ApplyRequest, ApplyRequestV1, CheckerSource, Neighbor, NeighborResetOp,
         NeighborResetOpV1, NeighborV1, Origin4, Origin6, PeerInfo, PeerInfoV1,
-        PeerInfoV2, Router, ShaperSource,
+        PeerInfoV2, PendingUnnumberedNeighbor, Router, ShaperSource,
+        UnnumberedNeighbor,
     },
     session::{FsmEventRecord, MessageHistory, MessageHistoryV1},
 };
@@ -41,6 +42,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (5, UNNUMBERED),
     (4, MP_BGP),
     (3, SWITCH_IDENTIFIERS),
     (2, IPV6_BASIC),
@@ -116,6 +118,9 @@ pub trait MgAdminApi {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     // V1/V2 API - legacy Neighbor type with combined import/export policies
+
+    // Neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
     #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
     async fn create_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -190,6 +195,80 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<NeighborResetRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/unnumbered-pending",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn read_pending_unnumbered_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<PendingUnnumberedNeighbor>>, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/unnumbered-neighbors",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn read_unnumbered_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<UnnumberedNeighbor>>, HttpError>;
+
+    #[endpoint {
+        method = PUT,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn create_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn read_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseOk<UnnumberedNeighbor>, HttpError>;
+
+    #[endpoint {
+        method = POST,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn update_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = DELETE,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn delete_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    #[endpoint {
+        method = POST,
+        path = "/bgp/clear/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn clear_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighborResetRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // IPv4 origin ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     #[endpoint { method = PUT, path = "/bgp/config/origin4" }]
     async fn create_origin4(
@@ -484,6 +563,12 @@ pub struct NeighborResetRequestV1 {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct UnnumberedNeighborSelector {
+    pub asn: u32,
+    pub interface: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct NeighborResetRequest {
     pub asn: u32,
     pub addr: IpAddr,
@@ -508,6 +593,13 @@ impl From<NeighborResetRequestV1> for NeighborResetRequest {
             op: req.op.into(),
         }
     }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct UnnumberedNeighborResetRequest {
+    pub asn: u32,
+    pub interface: String,
+    pub op: NeighborResetOp,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
