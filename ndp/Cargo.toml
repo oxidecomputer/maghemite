@@ -1,0 +1,16 @@
+[package]
+name = "ndp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ispf.workspace = true
+serde.workspace = true
+oxnet.workspace = true
+socket2.workspace = true
+slog.workspace = true
+internet-checksum.workspace = true
+network-interface.workspace = true
+thiserror.workspace = true
+mg-common.workspace = true
+libc.workspace = true

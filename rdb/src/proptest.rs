@@ -8,9 +8,12 @@
 //! correctness and consistency of prefix operations (excluding wire format
 //! tests, which are in bgp/src/proptest.rs since they test BgpWireFormat).
 
-use crate::types::{
-    BgpNeighborInfo, ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4,
-    Prefix6, StaticRouteKey,
+use crate::{
+    BgpNeighborParameters,
+    types::{
+        BgpNeighborInfo, ImportExportPolicy4, ImportExportPolicy6, Prefix,
+        Prefix4, Prefix6, StaticRouteKey,
+    },
 };
 use proptest::{prelude::*, strategy::Just};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -168,30 +171,32 @@ fn bgp_neighbor_info_strategy() -> impl Strategy<Value = BgpNeighborInfo> {
                     asn,
                     name,
                     host,
-                    hold_time: 90,
-                    idle_hold_time: 60,
-                    delay_open: 0,
-                    connect_retry: 30,
-                    keepalive: 30,
-                    resolution: 1000,
                     group: "test".into(),
-                    passive: false,
-                    remote_asn: Some(65001),
-                    min_ttl: Some(1),
-                    md5_auth_key: Some("password".to_string()),
-                    multi_exit_discriminator: Some(100),
-                    communities: vec![],
-                    local_pref: Some(100),
-                    enforce_first_as: false,
-                    ipv4_enabled: true,
-                    ipv6_enabled: true,
-                    allow_import4,
-                    allow_export4,
-                    allow_import6,
-                    allow_export6,
-                    nexthop4,
-                    nexthop6,
-                    vlan_id: Some(1),
+                    parameters: BgpNeighborParameters {
+                        hold_time: 90,
+                        idle_hold_time: 60,
+                        delay_open: 0,
+                        connect_retry: 30,
+                        keepalive: 30,
+                        resolution: 1000,
+                        passive: false,
+                        remote_asn: Some(65001),
+                        min_ttl: Some(1),
+                        md5_auth_key: Some("password".to_string()),
+                        multi_exit_discriminator: Some(100),
+                        communities: vec![],
+                        local_pref: Some(100),
+                        enforce_first_as: false,
+                        ipv4_enabled: true,
+                        ipv6_enabled: true,
+                        allow_import4,
+                        allow_export4,
+                        allow_import6,
+                        allow_export6,
+                        nexthop4,
+                        nexthop6,
+                        vlan_id: Some(1),
+                    },
                 }
             },
         )
@@ -470,47 +475,47 @@ proptest! {
             "Host should survive serialization round-trip"
         );
         prop_assert_eq!(
-            deserialized.nexthop4, neighbor.nexthop4,
+            deserialized.parameters.nexthop4, neighbor.parameters.nexthop4,
             "IPv4 nexthop should survive serialization round-trip"
         );
         prop_assert_eq!(
-            deserialized.nexthop6, neighbor.nexthop6,
+            deserialized.parameters.nexthop6, neighbor.parameters.nexthop6,
             "IPv6 nexthop should survive serialization round-trip"
         );
         prop_assert_eq!(
-            deserialized.ipv4_enabled, neighbor.ipv4_enabled,
+            deserialized.parameters.ipv4_enabled, neighbor.parameters.ipv4_enabled,
             "IPv4 enabled flag should survive serialization round-trip"
         );
         prop_assert_eq!(
-            deserialized.ipv6_enabled, neighbor.ipv6_enabled,
+            deserialized.parameters.ipv6_enabled, neighbor.parameters.ipv6_enabled,
             "IPv6 enabled flag should survive serialization round-trip"
         );
         prop_assert_eq!(
-            deserialized.multi_exit_discriminator, neighbor.multi_exit_discriminator,
+            deserialized.parameters.multi_exit_discriminator, neighbor.parameters.multi_exit_discriminator,
             "MED should survive serialization round-trip"
         );
         prop_assert_eq!(
-            deserialized.local_pref, neighbor.local_pref,
+            deserialized.parameters.local_pref, neighbor.parameters.local_pref,
             "Local preference should survive serialization round-trip"
         );
         prop_assert_eq!(
-            deserialized.remote_asn, neighbor.remote_asn,
+            deserialized.parameters.remote_asn, neighbor.parameters.remote_asn,
             "Remote ASN should survive serialization round-trip"
         );
         prop_assert_eq!(
-            deserialized.allow_import4, neighbor.allow_import4,
+            deserialized.parameters.allow_import4, neighbor.parameters.allow_import4,
             "IPv4 import policy should survive serialization round-trip"
         );
         prop_assert_eq!(
-            deserialized.allow_export4, neighbor.allow_export4,
+            deserialized.parameters.allow_export4, neighbor.parameters.allow_export4,
             "IPv4 export policy should survive serialization round-trip"
         );
         prop_assert_eq!(
-            deserialized.allow_import6, neighbor.allow_import6,
+            deserialized.parameters.allow_import6, neighbor.parameters.allow_import6,
             "IPv6 import policy should survive serialization round-trip"
         );
         prop_assert_eq!(
-            deserialized.allow_export6, neighbor.allow_export6,
+            deserialized.parameters.allow_export6, neighbor.parameters.allow_export6,
             "IPv6 export policy should survive serialization round-trip"
         );
     }

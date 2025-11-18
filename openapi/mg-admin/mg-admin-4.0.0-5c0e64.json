@@ -1875,7 +1875,6 @@
         ]
       },
       "BgpPeerConfig": {
-        "description": "BGP peer configuration (current version with per-address-family policies).",
         "type": "object",
         "properties": {
           "communities": {
@@ -2090,7 +2089,7 @@
             "additionalProperties": false
           },
           {
-            "description": "Multiple nexthop encoding capability as defined in RFC 8950. Note this capability is not yet implemented.",
+            "description": "Multiple nexthop encoding capability as defined in RFC 8950.",
             "type": "object",
             "properties": {
               "extended_next_hop_encoding": {
@@ -3398,6 +3397,7 @@
           },
           "connect_retry_jitter": {
             "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -3410,6 +3410,7 @@
             "minimum": 0
           },
           "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
           "enforce_first_as": {
@@ -3428,6 +3429,7 @@
           },
           "idle_hold_jitter": {
             "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"

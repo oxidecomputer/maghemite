@@ -15,10 +15,11 @@ use crate::log::rdb_log;
 use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
+use ndp::Ipv6NetworkInterface;
 use sled::Tree;
 use slog::{Logger, error};
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU8;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -44,6 +45,10 @@ const BGP_ROUTER: &str = "bgp_router";
 /// The handle used to open a persistent key-value tree for BGP neighbor
 /// information.
 const BGP_NEIGHBOR: &str = "bgp_neighbor";
+
+/// The handle used to open a persistent key-value tree for BGP neighbor
+/// information.
+const BGP_UNNUMBERED_NEIGHBOR: &str = "bgp_unnumbered_neighbor";
 
 /// The handle used to open a persistent key-value tree for settings
 /// information.
@@ -101,12 +106,15 @@ pub struct Db {
     /// A set of watchers that are notified when changes to the data store occur.
     watchers: Arc<RwLock<Vec<Watcher>>>,
 
-    /// Reaps expired routes from the local RIB
+    /// Reaps expired routes from the local RIB.
     reaper: Arc<Reaper>,
 
     /// Switch slot reported from MGS.
     /// Information is not available until first successful communication with MGS.
     slot: Arc<RwLock<Option<u16>>>,
+
+    /// A map from peer addresses to the corresponding local interface.
+    unnumbered_nexthop: Arc<Mutex<HashMap<Ipv6Addr, Ipv6NetworkInterface>>>,
 
     log: Logger,
 }
@@ -134,6 +142,7 @@ impl Db {
             watchers: Arc::new(RwLock::new(Vec::new())),
             reaper: Reaper::new(rib_loc),
             slot: Arc::new(RwLock::new(None)),
+            unnumbered_nexthop: Arc::new(Mutex::new(HashMap::new())),
             log,
         })
     }
@@ -318,6 +327,28 @@ impl Db {
         Ok(())
     }
 
+    pub fn add_unnumbered_bgp_neighbor(
+        &self,
+        nbr: BgpUnnumberedNeighborInfo,
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
+        let key = nbr.interface.clone();
+        let value = serde_json::to_string(&nbr)?;
+        tree.insert(key.as_str(), value.as_str())?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn remove_unnumbered_bgp_neighbor(
+        &self,
+        interface: &str,
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
+        tree.remove(interface)?;
+        tree.flush()?;
+        Ok(())
+    }
+
     pub fn remove_bgp_neighbor(&self, addr: IpAddr) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
         let key = addr.to_string();
@@ -352,6 +383,45 @@ impl Db {
                             self,
                             error,
                             "error parsing bgp neighbor entry value {value:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
+                        );
+                        return None;
+                    }
+                };
+                Some(value)
+            })
+            .collect();
+        Ok(result)
+    }
+
+    pub fn get_unnumbered_bgp_neighbors(
+        &self,
+    ) -> Result<Vec<BgpUnnumberedNeighborInfo>, Error> {
+        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
+        let result = tree
+            .scan_prefix(vec![])
+            .filter_map(|item| {
+                let (_key, value) = match item {
+                    Ok(item) => item,
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error fetching unnumbered bgp neighbor entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
+                        );
+                        return None;
+                    }
+                };
+                let value = String::from_utf8_lossy(&value);
+                let value: BgpUnnumberedNeighborInfo = match serde_json::from_str(&value)
+                {
+                    Ok(item) => item,
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing unnumbered bgp neighbor entry value {value:?}: {e}";
                             "unit" => UNIT_PERSISTENT
                         );
                         return None;
@@ -1292,6 +1362,38 @@ impl Db {
             AddressFamily::Ipv4 => self.mark_bgp_peer_stale4(peer),
             AddressFamily::Ipv6 => self.mark_bgp_peer_stale6(peer),
         }
+    }
+
+    pub fn add_unnumbered_nexthop(
+        &self,
+        nexthop: Ipv6Addr,
+        interface: Ipv6NetworkInterface,
+    ) {
+        self.unnumbered_nexthop
+            .lock()
+            .unwrap()
+            .insert(nexthop, interface);
+    }
+
+    pub fn remove_unnumbered_nexthop_for_interface(
+        &self,
+        interface: &Ipv6NetworkInterface,
+    ) {
+        self.unnumbered_nexthop
+            .lock()
+            .unwrap()
+            .retain(|_k, v| v != interface);
+    }
+
+    pub fn get_interface_for_unnumbered_nexthop(
+        &self,
+        nexthop: Ipv6Addr,
+    ) -> Option<Ipv6NetworkInterface> {
+        self.unnumbered_nexthop
+            .lock()
+            .unwrap()
+            .get(&nexthop)
+            .cloned()
     }
 }
 

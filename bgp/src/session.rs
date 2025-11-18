@@ -19,9 +19,9 @@ use crate::{
         Safi, UpdateMessage,
     },
     params::{
-        BgpCapability, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
-        JitterRange, PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo,
-        TimerConfig,
+        BgpCapability, BgpPeerParameters, BgpPeerParametersV1,
+        DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
+        PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo, TimerConfig,
     },
     policy::{CheckerResult, ShaperResult},
     recv_event_loop, recv_event_return,
@@ -219,6 +219,7 @@ fn select_nexthop(
     nlri_afi: Afi,
     local_ip: IpAddr,
     configured_nexthop: Option<IpAddr>,
+    caps: &BTreeSet<Capability>,
 ) -> Result<BgpNexthop, Error> {
     // Canonicalize the local_ip to handle IPv4-mapped IPv6 addresses
     let local_ip = local_ip.to_canonical();
@@ -228,16 +229,8 @@ fn select_nexthop(
         return match (nlri_afi, nexthop) {
             (Afi::Ipv4, IpAddr::V4(ipv4)) => Ok(BgpNexthop::Ipv4(ipv4)),
             (Afi::Ipv6, IpAddr::V6(ipv6)) => Ok(BgpNexthop::Ipv6Single(ipv6)),
-            // XXX: Extended Next-Hop
-            (Afi::Ipv4, IpAddr::V6(_)) => Err(Error::InvalidAddress(
-                "IPv4 routes require IPv4 next-hop (configured mismatch)"
-                    .into(),
-            )),
-            // XXX: Extended Next-Hop
-            (Afi::Ipv6, IpAddr::V4(_)) => Err(Error::InvalidAddress(
-                "IPv6 routes require IPv6 next-hop (configured mismatch)"
-                    .into(),
-            )),
+            (Afi::Ipv4, IpAddr::V6(ipv6)) => v4_over_v6_nexthop(caps, ipv6),
+            (Afi::Ipv6, IpAddr::V4(ipv4)) => v6_over_v4_nexthop(caps, ipv4),
         };
     }
 
@@ -245,16 +238,36 @@ fn select_nexthop(
     match (nlri_afi, local_ip) {
         (Afi::Ipv4, IpAddr::V4(ipv4)) => Ok(BgpNexthop::Ipv4(ipv4)),
         (Afi::Ipv6, IpAddr::V6(ipv6)) => Ok(BgpNexthop::Ipv6Single(ipv6)),
-        (Afi::Ipv4, IpAddr::V6(_)) => {
-            Err(Error::InvalidAddress(
-                "IPv4 routes require IPv4 next-hop (Extended Next-Hop not negotiated)".into()
-            ))
-        }
-        (Afi::Ipv6, IpAddr::V4(_)) => {
-            Err(Error::InvalidAddress(
-                "IPv6 routes require IPv6 next-hop".into()
-            ))
-        }
+        (Afi::Ipv4, IpAddr::V6(ipv6)) => v4_over_v6_nexthop(caps, ipv6),
+        (Afi::Ipv6, IpAddr::V4(ipv4)) => v6_over_v4_nexthop(caps, ipv4),
+    }
+}
+
+fn v4_over_v6_nexthop(
+    caps: &BTreeSet<Capability>,
+    nexthop: Ipv6Addr,
+) -> Result<BgpNexthop, Error> {
+    let v4_over_v6 = caps.iter().any(|x| x.extended_nh_v4_over_v6());
+    if v4_over_v6 {
+        Ok(BgpNexthop::Ipv6Single(nexthop))
+    } else {
+        Err(Error::InvalidAddress(format!(
+            "Ipv6 nexthop {nexthop} without extended NH v4 over v6 negotiated"
+        )))
+    }
+}
+
+fn v6_over_v4_nexthop(
+    caps: &BTreeSet<Capability>,
+    nexthop: Ipv4Addr,
+) -> Result<BgpNexthop, Error> {
+    let v6_over_v4 = caps.iter().any(|x| x.extended_nh_v6_over_v4());
+    if v6_over_v4 {
+        Ok(BgpNexthop::Ipv4(nexthop))
+    } else {
+        Err(Error::InvalidAddress(format!(
+            "Ipv4 nexthop {nexthop} without extended NH v6 over v4 negotiated"
+        )))
     }
 }
 
@@ -892,6 +905,72 @@ impl SessionInfo {
             }),
             connect_retry_jitter: None,
             deterministic_collision_resolution: false,
+        }
+    }
+}
+
+impl From<&BgpPeerParameters> for SessionInfo {
+    fn from(value: &BgpPeerParameters) -> Self {
+        SessionInfo {
+            passive_tcp_establishment: value.passive,
+            remote_asn: value.remote_asn,
+            min_ttl: value.min_ttl,
+            md5_auth_key: value.md5_auth_key.clone(),
+            multi_exit_discriminator: value.multi_exit_discriminator,
+            communities: value.communities.clone().into_iter().collect(),
+            local_pref: value.local_pref,
+            enforce_first_as: value.enforce_first_as,
+            vlan_id: value.vlan_id,
+            remote_id: None,
+            bind_addr: None,
+            connect_retry_time: Duration::from_secs(value.connect_retry),
+            keepalive_time: Duration::from_secs(value.keepalive),
+            hold_time: Duration::from_secs(value.hold_time),
+            idle_hold_time: Duration::from_secs(value.idle_hold_time),
+            delay_open_time: Duration::from_secs(value.delay_open),
+            resolution: Duration::from_millis(value.resolution),
+            idle_hold_jitter: value.idle_hold_jitter,
+            connect_retry_jitter: value.connect_retry_jitter,
+            deterministic_collision_resolution: value
+                .deterministic_collision_resolution,
+            ipv4_unicast: value.ipv4_unicast.clone(),
+            ipv6_unicast: value.ipv6_unicast.clone(),
+        }
+    }
+}
+
+impl From<&BgpPeerParametersV1> for SessionInfo {
+    fn from(value: &BgpPeerParametersV1) -> Self {
+        SessionInfo {
+            passive_tcp_establishment: value.passive,
+            remote_asn: value.remote_asn,
+            min_ttl: value.min_ttl,
+            md5_auth_key: value.md5_auth_key.clone(),
+            multi_exit_discriminator: value.multi_exit_discriminator,
+            communities: value.communities.clone().into_iter().collect(),
+            local_pref: value.local_pref,
+            enforce_first_as: value.enforce_first_as,
+            vlan_id: value.vlan_id,
+            remote_id: None,
+            bind_addr: None,
+            connect_retry_time: Duration::from_secs(value.connect_retry),
+            keepalive_time: Duration::from_secs(value.keepalive),
+            hold_time: Duration::from_secs(value.hold_time),
+            idle_hold_time: Duration::from_secs(value.idle_hold_time),
+            delay_open_time: Duration::from_secs(value.delay_open),
+            resolution: Duration::from_millis(value.resolution),
+            idle_hold_jitter: None,
+            connect_retry_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
+            deterministic_collision_resolution: false,
+            ipv4_unicast: Some(Ipv4UnicastConfig {
+                nexthop: None,
+                import_policy: value.allow_import.as_ipv4_policy().clone(),
+                export_policy: value.allow_export.as_ipv4_policy().clone(),
+            }),
+            ipv6_unicast: None,
         }
     }
 }
@@ -7159,13 +7238,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let capabilities = lock!(self.caps_tx).clone();
         // pull hold_time from config, not the clock
         let hold_time = lock!(self.session).hold_time;
+        let extended_nexthop = match self.get_peer_info().remote_ip {
+            IpAddr::V6(addr) => addr.is_unicast_link_local(),
+            _ => false,
+        };
         let mut msg = match self.asn {
-            Asn::FourOctet(asn) => {
-                OpenMessage::new4(asn, hold_time.as_secs() as u16, self.id)
-            }
-            Asn::TwoOctet(asn) => {
-                OpenMessage::new2(asn, hold_time.as_secs() as u16, self.id)
-            }
+            Asn::FourOctet(asn) => OpenMessage::new4(
+                asn,
+                hold_time.as_secs() as u16,
+                self.id,
+                extended_nexthop,
+            ),
+            Asn::TwoOctet(asn) => OpenMessage::new2(
+                asn,
+                hold_time.as_secs() as u16,
+                self.id,
+                extended_nexthop,
+            ),
         };
         msg.add_capabilities(&capabilities);
 
@@ -7320,7 +7409,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .and_then(|cfg| cfg.nexthop),
         };
 
-        select_nexthop(nlri_afi, pc.conn.local().ip(), configured_nexthop)
+        select_nexthop(
+            nlri_afi,
+            pc.conn.local().ip(),
+            configured_nexthop,
+            &pc.caps,
+        )
     }
 
     /// Add peer-specific path attributes to an UPDATE message.
@@ -7431,23 +7525,34 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // Each RouteUpdate is either an announcement OR withdrawal, never both.
         let mut update = match route_update {
             RouteUpdate::V4(RouteUpdate4::Announce(nlri)) => {
-                let nh4 = match self.derive_nexthop(Afi::Ipv4, pc)? {
-                    BgpNexthop::Ipv4(addr) => addr,
-                    _ => {
-                        return Err(Error::InvalidAddress(
-                            "IPv4 routes require IPv4 next-hop".into(),
-                        ));
+                match self.derive_nexthop(Afi::Ipv4, pc)? {
+                    BgpNexthop::Ipv4(nh4) => {
+                        let mut path_attributes = self.router.base_attributes();
+                        path_attributes
+                            .push(PathAttributeValue::NextHop(nh4).into());
+
+                        UpdateMessage {
+                            withdrawn: vec![],
+                            path_attributes,
+                            nlri,
+                            ..Default::default()
+                        }
                     }
-                };
+                    nh6 @ BgpNexthop::Ipv6Single(_)
+                    | nh6 @ BgpNexthop::Ipv6Double(_) => {
+                        let mut path_attrs = self.router.base_attributes();
+                        let reach = MpReachNlri::ipv4_unicast(nh6, nlri);
+                        path_attrs.push(
+                            PathAttributeValue::MpReachNlri(reach).into(),
+                        );
 
-                let mut path_attributes = self.router.base_attributes();
-                path_attributes.push(PathAttributeValue::NextHop(nh4).into());
-
-                UpdateMessage {
-                    withdrawn: vec![],
-                    path_attributes,
-                    nlri,
-                    ..Default::default()
+                        UpdateMessage {
+                            withdrawn: vec![],
+                            path_attributes: path_attrs,
+                            nlri: vec![],
+                            ..Default::default()
+                        }
+                    }
                 }
             }
             RouteUpdate::V4(RouteUpdate4::Withdraw(withdrawn)) => {
@@ -7965,8 +8070,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             self,
                             warn,
                             pc.conn,
-                            "MP_REACH_NLRI for unnegotiated AFI/SAFI: {}/{}",
-                            afi, safi;
+                            "MP_REACH_NLRI for unnegotiated AFI/SAFI: {}/{}: {:?}",
+                            afi,
+                            safi,
+                            afi_state;
                         );
 
                         self.counters
@@ -9184,7 +9291,12 @@ mod tests {
         let configured_nh = ip!("10.0.0.1");
         let local_ip = ip!("10.0.0.2");
 
-        let result = select_nexthop(Afi::Ipv4, local_ip, Some(configured_nh));
+        let result = select_nexthop(
+            Afi::Ipv4,
+            local_ip,
+            Some(configured_nh),
+            &BTreeSet::default(),
+        );
         assert!(result.is_ok());
         match result.unwrap() {
             BgpNexthop::Ipv4(addr) => {
@@ -9201,7 +9313,12 @@ mod tests {
         let configured_nh = ip!("2001:db8::1");
         let local_ip = ip!("2001:db8::2");
 
-        let result = select_nexthop(Afi::Ipv6, local_ip, Some(configured_nh));
+        let result = select_nexthop(
+            Afi::Ipv6,
+            local_ip,
+            Some(configured_nh),
+            &BTreeSet::default(),
+        );
         assert!(result.is_ok());
         match result.unwrap() {
             BgpNexthop::Ipv6Single(addr) => {
@@ -9217,7 +9334,8 @@ mod tests {
         // No nexthop configured, pure IPv4 local_ip should be used for IPv4 routes
         let local_ip = ip!("10.0.0.1");
 
-        let result = select_nexthop(Afi::Ipv4, local_ip, None);
+        let result =
+            select_nexthop(Afi::Ipv4, local_ip, None, &BTreeSet::default());
         assert!(result.is_ok());
         match result.unwrap() {
             BgpNexthop::Ipv4(addr) => {
@@ -9235,7 +9353,8 @@ mod tests {
         // [::]:179 with v6_only=false.
         let mapped = ip!("::ffff:10.0.0.1");
 
-        let result = select_nexthop(Afi::Ipv4, mapped, None);
+        let result =
+            select_nexthop(Afi::Ipv4, mapped, None, &BTreeSet::default());
         assert!(result.is_ok());
         match result.unwrap() {
             BgpNexthop::Ipv4(addr) => {
@@ -9251,7 +9370,8 @@ mod tests {
         // No nexthop configured, pure IPv6 local_ip should be used for IPv6 routes
         let local_ip = ip!("2001:db8::1");
 
-        let result = select_nexthop(Afi::Ipv6, local_ip, None);
+        let result =
+            select_nexthop(Afi::Ipv6, local_ip, None, &BTreeSet::default());
         assert!(result.is_ok());
         match result.unwrap() {
             BgpNexthop::Ipv6Single(addr) => {
@@ -9268,7 +9388,12 @@ mod tests {
         let nexthop = ip!("2001:db8::1");
         let local_ip = ip!("10.0.0.1");
 
-        let result = select_nexthop(Afi::Ipv4, local_ip, Some(nexthop));
+        let result = select_nexthop(
+            Afi::Ipv4,
+            local_ip,
+            Some(nexthop),
+            &BTreeSet::default(),
+        );
         // Should error because IPv4 route needs IPv4 nexthop
         assert!(result.is_err());
     }
@@ -9279,7 +9404,12 @@ mod tests {
         let nexthop = ip!("10.0.0.1");
         let local_ip = ip!("2001:db8::1");
 
-        let result = select_nexthop(Afi::Ipv6, local_ip, Some(nexthop));
+        let result = select_nexthop(
+            Afi::Ipv6,
+            local_ip,
+            Some(nexthop),
+            &BTreeSet::default(),
+        );
         // Should error because IPv6 route needs IPv6 nexthop
         assert!(result.is_err());
     }
@@ -9289,7 +9419,8 @@ mod tests {
         // IPv4 route with pure IPv6 local_ip and no configured nexthop = error
         let local_ip = ip!("2001:db8::1");
 
-        let result = select_nexthop(Afi::Ipv4, local_ip, None);
+        let result =
+            select_nexthop(Afi::Ipv4, local_ip, None, &BTreeSet::default());
         // Should error because cannot derive IPv4 nexthop from IPv6 connection
         assert!(result.is_err());
     }
@@ -9299,7 +9430,8 @@ mod tests {
         // IPv6 route with pure IPv4 local_ip and no configured nexthop = error
         let local_ip = ip!("10.0.0.1");
 
-        let result = select_nexthop(Afi::Ipv6, local_ip, None);
+        let result =
+            select_nexthop(Afi::Ipv6, local_ip, None, &BTreeSet::default());
         // Should error because cannot derive IPv6 nexthop from IPv4 connection
         assert!(result.is_err());
     }

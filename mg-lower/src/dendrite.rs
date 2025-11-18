@@ -9,7 +9,7 @@ use crate::{
 };
 use dpd_client::{Client as DpdClient, types, types::LinkState};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
-use rdb::{Path, Prefix};
+use rdb::{Db, Path, Prefix};
 use slog::Logger;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -57,8 +57,9 @@ impl RouteHash {
         sw: &impl SwitchZone,
         prefix: Prefix,
         path: Path,
+        db: &Db,
     ) -> Result<RouteHash, Error> {
-        let (port_id, link_id) = get_port_and_link(sw, path.nexthop)?;
+        let (port_id, link_id) = get_port_and_link(sw, path.nexthop, db)?;
 
         let rh = RouteHash {
             cidr: match prefix {
@@ -249,8 +250,32 @@ where
                     return Err(e.into());
                 }
             }
+            (IpNet::V4(c), IpAddr::V6(tgt_ip)) => {
+                let target = types::Ipv6Route {
+                    tag,
+                    port_id,
+                    link_id,
+                    tgt_ip,
+                    vlan_id,
+                };
+
+                let update = types::Ipv4OverIpv6RouteUpdate {
+                    cidr: c,
+                    target,
+                    replace: false,
+                };
+                if let Err(e) = rt.block_on(async {
+                    dpd.route_ipv4_over_ipv6_add(&update).await
+                }) {
+                    dpd_log!(log,
+                        error,
+                        "failed to create route {r:?} {e}";
+                        "error" => format!("{e}")
+                    );
+                    return Err(e.into());
+                }
+            }
             _ => {
-                // XXX: re-evaluate for RFC 8950 (BGP unnumbered) support
                 dpd_log!(log,
                     error,
                     "mismatched address-family for subnet {} and target {}", r.cidr, r.nexthop;
@@ -357,6 +382,32 @@ fn test_tfport_parser() {
 fn get_port_and_link(
     sw: &impl SwitchZone,
     nexthop: IpAddr,
+    db: &Db,
+) -> Result<(types::PortId, types::LinkId), Error> {
+    if let IpAddr::V6(nh6) = nexthop
+        && nh6.is_unicast_link_local()
+        && let Some(ifx) = db.get_interface_for_unnumbered_nexthop(nh6)
+    {
+        let (port, link, _vlan) = parse_tfport_name(&ifx.name)?;
+        let port_name = format!("qsfp{port}");
+        let port_id = types::Qsfp::try_from(&port_name)
+            .map(types::PortId::Qsfp)
+            .map_err(|e| {
+                Error::Tfport(format!(
+                    "bad port name ifname: {}  port name: {port_name}: {e}",
+                    ifx.name
+                ))
+            })?;
+        // TODO breakout considerations
+        let link_id = types::LinkId(link);
+        return Ok((port_id, link_id));
+    }
+    resolve_port_and_link(sw, nexthop)
+}
+
+fn resolve_port_and_link(
+    sw: &impl SwitchZone,
+    nexthop: IpAddr,
 ) -> Result<(types::PortId, types::LinkId), Error> {
     let prefix = IpNet::host_net(nexthop);
     let sys_route = sw.get_route(prefix, Some(Duration::from_secs(1)))?;
@@ -409,6 +460,10 @@ pub(crate) fn get_routes_for_prefix(
 
             let mut result: Vec<RouteHash> = Vec::new();
             for r in dpd_routes.iter() {
+                let dpd_client::types::Route::V4(r) = r else {
+                    // TODO v6 nexthop?
+                    continue;
+                };
                 if r.tag != MG_LOWER_TAG {
                     continue;
                 }

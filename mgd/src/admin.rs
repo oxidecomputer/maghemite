@@ -149,6 +149,8 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::read_neighbors(ctx, request).await
     }
 
+    // Neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
     async fn create_neighbor(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<NeighborV1>,
@@ -225,6 +227,59 @@ impl MgAdminApi for MgAdminApiImpl {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::clear_neighbor_v2(ctx, request).await
     }
+
+    // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    async fn read_pending_unnumbered_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<PendingUnnumberedNeighbor>>, HttpError> {
+        bgp_admin::read_pending_unnumbered_neighbors(rqctx, request).await
+    }
+
+    async fn read_unnumbered_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<UnnumberedNeighbor>>, HttpError> {
+        bgp_admin::read_unnumbered_neighbors(rqctx, request).await
+    }
+
+    async fn create_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::create_unnumbered_neighbor(rqctx, request).await
+    }
+
+    async fn read_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseOk<UnnumberedNeighbor>, HttpError> {
+        bgp_admin::read_unnumbered_neighbor(rqctx, request).await
+    }
+
+    async fn update_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::update_unnumbered_neighbor(rqctx, request).await
+    }
+
+    async fn delete_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        bgp_admin::delete_unnumbered_neighbor(rqctx, request).await
+    }
+
+    async fn clear_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighborResetRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::clear_unnumbered_neighbor(rqctx, request).await
+    }
+
+    // IPv4 origin ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     async fn create_origin4(
         ctx: RequestContext<Self::Context>,
