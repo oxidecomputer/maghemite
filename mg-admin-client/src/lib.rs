@@ -17,17 +17,16 @@ progenitor::generate_api!(
     }),
     derives = [schemars::JsonSchema],
     replace = {
-        Prefix4 = rdb::Prefix4,
-        Prefix6 = rdb::Prefix6,
-        Prefix = rdb::Prefix,
-        AddressFamily = rdb::types::AddressFamily,
-        ProtocolFilter = rdb::types::ProtocolFilter,
+        Prefix4 = rdb_types::Prefix4,
+        Prefix6 = rdb_types::Prefix6,
+        Prefix = rdb_types::Prefix,
+        AddressFamily = rdb_types::AddressFamily,
+        ProtocolFilter = rdb_types::ProtocolFilter,
     }
 );
 
 use colored::*;
-use rdb::Prefix;
-use rdb::types::{AddressFamily, ProtocolFilter};
+use rdb_types::{AddressFamily, Prefix, ProtocolFilter};
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
 use std::net::Ipv4Addr;

@@ -14,6 +14,7 @@ default-members = [
     "mg-ddm-verify",
     "tests",
     "rdb",
+    "rdb-types",
     "bgp",
     "mg-api",
     "mg-admin-client",
@@ -43,6 +44,7 @@ members = [
     "mg-admin-client",
     "mgadm",
     "rdb",
+    "rdb-types",
     "mgd",
     "mg-lower",
     "mg-common",
@@ -95,6 +97,7 @@ rand = "0.8.5"
 backoff = "0.4"
 mg-api = { path = "mg-api" }
 mg-common = { path = "mg-common" }
+rdb-types = { path = "rdb-types" }
 chrono = { version = "0.4.42", features = ["serde"] }
 oxide-tokio-rt = "0.1.2"
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}

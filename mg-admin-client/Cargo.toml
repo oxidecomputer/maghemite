@@ -15,6 +15,6 @@ progenitor.workspace = true
 schemars.workspace = true
 chrono.workspace = true
 uuid.workspace = true
-rdb = { version = "0.1.0", path = "../rdb" }
+rdb-types.workspace = true
 tabwriter.workspace = true
 colored.workspace = true

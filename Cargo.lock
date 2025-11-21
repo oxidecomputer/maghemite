@@ -3241,7 +3241,7 @@ dependencies = [
  "chrono",
  "colored",
  "progenitor 0.11.1",
- "rdb",
+ "rdb-types",
  "reqwest",
  "schemars",
  "serde",
@@ -5158,12 +5158,23 @@ dependencies = [
  "mg-common",
  "oxnet",
  "proptest",
+ "rdb-types",
  "schemars",
  "serde",
  "serde_json",
  "sled",
  "slog",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "rdb-types"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "oxnet",
+ "schemars",
+ "serde",
 ]
 
 [[package]]

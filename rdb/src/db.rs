@@ -1322,7 +1322,7 @@ impl Reaper {
 mod test {
     use crate::{
         AddressFamily, DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4,
-        Prefix6, StaticRouteKey, db::Db, test::TestDb,
+        Prefix6, StaticRouteKey, db::Db, test::TestDb, types::PrefixDbKey,
     };
     use mg_common::log::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
