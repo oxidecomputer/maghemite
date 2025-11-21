@@ -3253,7 +3253,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "colored",
- "mg-common",
  "percent-encoding",
  "progenitor 0.11.1",
  "rdb",
