@@ -3304,7 +3304,6 @@ dependencies = [
  "clap",
  "libc",
  "libnet",
- "omicron-common",
  "oximeter",
  "oximeter-producer",
  "oxnet",

@@ -2,8 +2,24 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use backoff::{
+    Error as BackoffError, ExponentialBackoff, future::retry_notify,
+};
 use slog::{Logger, warn};
 use std::net::IpAddr;
+use std::time::Duration;
+
+/// Returns an aggressive retry policy for internal services.
+/// Retries forever with exponential backoff starting at 100ms, maxing at 10s.
+fn retry_policy_internal_service_aggressive() -> ExponentialBackoff {
+    ExponentialBackoff {
+        initial_interval: Duration::from_millis(100),
+        max_interval: Duration::from_secs(10),
+        max_elapsed_time: None, // Retry forever
+        multiplier: 2.0,
+        ..Default::default()
+    }
+}
 
 pub async fn run_oximeter(
     registry: oximeter::types::ProducerRegistry,
@@ -12,17 +28,15 @@ pub async fn run_oximeter(
 ) {
     let op = || async {
         oximeter_producer::Server::with_registry(registry.clone(), &config)
-            .map_err(|e| {
-                omicron_common::backoff::BackoffError::transient(e.to_string())
-            })
+            .map_err(|e| BackoffError::transient(e.to_string()))
     };
 
     let log_failure = |e, delay| {
         warn!(log, "stats server not created yet, {e} waiting {delay:?}");
     };
 
-    let server = omicron_common::backoff::retry_notify(
-        omicron_common::backoff::retry_policy_internal_service_aggressive(),
+    let server = retry_notify(
+        retry_policy_internal_service_aggressive(),
         op,
         log_failure,
     )

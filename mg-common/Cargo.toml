@@ -13,7 +13,6 @@ thiserror.workspace = true
 slog.workspace = true
 slog-bunyan.workspace = true
 slog-async.workspace = true
-omicron-common.workspace = true
 tokio.workspace = true
 oximeter-producer.workspace = true
 oximeter.workspace = true
