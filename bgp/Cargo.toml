@@ -11,7 +11,6 @@ slog.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 schemars.workspace = true
-sled.workspace = true
 anyhow.workspace = true
 mg-common.workspace = true
 chrono.workspace = true

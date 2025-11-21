@@ -12,4 +12,3 @@ ddm-api.workspace = true
 dropshot-api-manager-types.workspace = true
 dropshot-api-manager.workspace = true
 mg-api.workspace = true
-semver.workspace = true

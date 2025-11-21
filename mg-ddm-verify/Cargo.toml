@@ -9,9 +9,7 @@ edition = "2024"
 anyhow.workspace = true
 reqwest.workspace = true
 oxide-tokio-rt.workspace = true
-tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-ddm = { version = "0.1.0", path = "../ddm" }
 oxnet.workspace = true
 ddm-types.workspace = true

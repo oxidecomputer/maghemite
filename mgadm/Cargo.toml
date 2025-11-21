@@ -7,7 +7,6 @@ edition = "2024"
 bgp = { path = "../bgp" }
 mg-common = { path = "../mg-common" }
 mg-admin-client = { path = "../mg-admin-client" }
-tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 oxide-tokio-rt.workspace = true
@@ -18,7 +17,6 @@ slog-envlogger.workspace = true
 colored.workspace = true
 humantime.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 oxnet.workspace = true
 tabwriter.workspace = true
 rdb = { version = "0.1.0", path = "../rdb", features = ["clap"] }

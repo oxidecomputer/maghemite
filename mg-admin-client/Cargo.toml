@@ -3,12 +3,13 @@ name = "mg-admin-client"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata.cargo-machete]
+ignored = ["chrono", "serde", "serde_json", "uuid"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 slog.workspace = true
-anyhow.workspace = true
-percent-encoding.workspace = true
 reqwest.workspace = true
 progenitor.workspace = true
 schemars.workspace = true

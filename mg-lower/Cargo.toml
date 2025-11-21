@@ -9,13 +9,11 @@ util  = { path = "../util" }
 [dependencies]
 ddm-admin-client = { path = "../ddm-admin-client" }
 rdb = { path = "../rdb" }
-anyhow.workspace = true
 dpd-client.workspace = true
 slog.workspace = true
 libnet.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
-http.workspace = true
 mg-common.workspace = true
 oxnet.workspace = true
 reqwest.workspace = true
