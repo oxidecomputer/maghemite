@@ -60,7 +60,7 @@ slog-bunyan = "2.5"
 socket2 = { version = "0.5", features = ["all"] }
 ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.219", features = ["derive"] }
-hostname = "0.3"
+hostname = "0.4"
 thiserror = "1.0"
 dropshot = { version = "0.16.4", features = [ "usdt-probes" ] }
 dropshot-api-manager = "0.2.2"
