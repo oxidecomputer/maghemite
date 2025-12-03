@@ -11,10 +11,12 @@
 //! sets.
 use crate::bestpath::bestpaths;
 use crate::error::Error;
+use crate::log::rdb_log;
 use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
-use slog::{Logger, error};
+use sled::Tree;
+use slog::Logger;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
@@ -24,9 +26,16 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{sleep, spawn};
 
-/// The handle used to open a persistent key-value tree for BGP origin
+const UNIT_PERSISTENT: &str = "persistent";
+const UNIT_RIB: &str = "rib";
+
+/// The handle used to open a persistent key-value tree for BGP IPv4 origin
 /// information.
-const BGP_ORIGIN: &str = "bgp_origin";
+const BGP_ORIGIN4: &str = "bgp_origin";
+
+/// The handle used to open a persistent key-value tree for BGP IPv6 origin
+/// information.
+const BGP_ORIGIN6: &str = "bgp_origin6";
 
 /// The handle used to open a persistent key-value tree for BGP router
 /// information.
@@ -40,8 +49,11 @@ const BGP_NEIGHBOR: &str = "bgp_neighbor";
 /// information.
 const SETTINGS: &str = "settings";
 
-/// The handle used to open a persistent key-value tree for static routes.
+/// The handle used to open a persistent key-value tree for IPv4 static routes.
 const STATIC4_ROUTES: &str = "static4_routes";
+
+/// The handle used to open a persistent key-value tree for IPv6 static routes.
+const STATIC6_ROUTES: &str = "static6_routes";
 
 /// Key used in settings tree for tunnel endpoint setting
 const TEP_KEY: &str = "tep";
@@ -57,6 +69,8 @@ const BESTPATH_FANOUT: &str = "bestpath_fanout";
 const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
 pub type Rib = BTreeMap<Prefix, BTreeSet<Path>>;
+pub type Rib4 = BTreeMap<Prefix4, BTreeSet<Path>>;
+pub type Rib6 = BTreeMap<Prefix6, BTreeSet<Path>>;
 
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
@@ -65,13 +79,21 @@ pub struct Db {
     /// A sled database handle where persistent routing information is stored.
     persistent: sled::Db,
 
-    /// Routes learned from BGP update messages or administratively added
-    /// static routes. These are volatile.
-    rib_in: Arc<Mutex<Rib>>,
+    /// IPv4 Unicast routes learned from BGP update messages or administratively
+    /// added static routes. These are volatile.
+    rib4_in: Arc<Mutex<Rib4>>,
 
-    /// Routes selected from rib_in according to local policy and added to the
-    /// lower half forwarding plane.
-    rib_loc: Arc<Mutex<Rib>>,
+    /// IPv4 Unicast routes selected from rib_in according to local policy and
+    /// added to the lower half forwarding plane.
+    rib4_loc: Arc<Mutex<Rib4>>,
+
+    /// IPv6 Unicast routes learned from BGP update messages or administratively
+    /// added static routes. These are volatile.
+    rib6_in: Arc<Mutex<Rib6>>,
+
+    /// IPv6 Unicast routes selected from rib_in according to local policy and
+    /// added to the lower half forwarding plane.
+    rib6_loc: Arc<Mutex<Rib6>>,
 
     /// A generation number for the overall data store.
     generation: Arc<AtomicU64>,
@@ -100,8 +122,10 @@ impl Db {
         let rib_loc = Arc::new(Mutex::new(Rib::new()));
         Ok(Self {
             persistent: sled::open(path)?,
-            rib_in: Arc::new(Mutex::new(Rib::new())),
-            rib_loc: rib_loc.clone(),
+            rib4_in: Arc::new(Mutex::new(BTreeMap::new())),
+            rib4_loc: Arc::new(Mutex::new(BTreeMap::new())),
+            rib6_in: Arc::new(Mutex::new(BTreeMap::new())),
+            rib6_loc: Arc::new(Mutex::new(BTreeMap::new())),
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
             reaper: Reaper::new(rib_loc),
@@ -125,36 +149,91 @@ impl Db {
     fn notify(&self, n: PrefixChangeNotification) {
         for Watcher { tag, sender } in read_lock!(self.watchers).iter() {
             if let Err(e) = sender.send(n.clone()) {
-                error!(
-                    self.log,
-                    "failed to send notification to watcher '{tag}': {e}"
+                rdb_log!(
+                    self,
+                    error,
+                    "failed to send prefix change notification to watcher {tag}: {e}";
+                    "unit" => UNIT_RIB,
+                    "message" => "prefix_change_notification",
+                    "message_contents" => format!("{n}"),
+                    "error" => format!("{e}")
                 );
             }
         }
     }
 
-    pub fn loc_rib(&self) -> Rib {
-        lock!(self.rib_loc).clone()
+    fn loc_rib4(&self) -> Rib4 {
+        lock!(self.rib4_loc).clone()
     }
 
-    pub fn full_rib(&self) -> Rib {
-        lock!(self.rib_in).clone()
+    fn loc_rib6(&self) -> Rib6 {
+        lock!(self.rib6_loc).clone()
     }
 
-    pub fn static_rib(&self) -> Rib {
-        let mut rib = lock!(self.rib_in).clone();
-        for (_prefix, paths) in rib.iter_mut() {
-            paths.retain(|x| x.bgp.is_none())
+    pub fn loc_rib(&self, af: Option<AddressFamily>) -> Rib {
+        match af {
+            Some(AddressFamily::Ipv4) => self
+                .loc_rib4()
+                .into_iter()
+                .map(|(p4, paths)| (Prefix::from(p4), paths))
+                .collect(),
+
+            Some(AddressFamily::Ipv6) => self
+                .loc_rib6()
+                .into_iter()
+                .map(|(p6, paths)| (Prefix::from(p6), paths))
+                .collect(),
+
+            None => {
+                let mut rib: Rib = self
+                    .loc_rib4()
+                    .into_iter()
+                    .map(|(p4, paths)| (Prefix::from(p4), paths))
+                    .collect();
+                rib.extend(
+                    self.loc_rib6()
+                        .into_iter()
+                        .map(|(p6, paths)| (Prefix::from(p6), paths)),
+                );
+                rib
+            }
         }
-        rib
     }
 
-    pub fn bgp_rib(&self) -> Rib {
-        let mut rib = lock!(self.rib_in).clone();
-        for (_prefix, paths) in rib.iter_mut() {
-            paths.retain(|x| x.bgp.is_some())
+    fn full_rib4(&self) -> Rib4 {
+        lock!(self.rib4_in).clone()
+    }
+
+    fn full_rib6(&self) -> Rib6 {
+        lock!(self.rib6_in).clone()
+    }
+
+    pub fn full_rib(&self, af: Option<AddressFamily>) -> Rib {
+        match af {
+            Some(AddressFamily::Ipv4) => self
+                .full_rib4()
+                .into_iter()
+                .map(|(p4, paths)| (Prefix::from(p4), paths))
+                .collect(),
+            Some(AddressFamily::Ipv6) => self
+                .full_rib6()
+                .into_iter()
+                .map(|(p6, paths)| (Prefix::from(p6), paths))
+                .collect(),
+            None => {
+                let mut rib: Rib = self
+                    .full_rib4()
+                    .into_iter()
+                    .map(|(p4, paths)| (Prefix::from(p4), paths))
+                    .collect();
+                rib.extend(
+                    self.full_rib6()
+                        .into_iter()
+                        .map(|(p6, paths)| (Prefix::from(p6), paths)),
+                );
+                rib
+            }
         }
-        rib
     }
 
     pub fn add_bgp_router(
@@ -187,10 +266,11 @@ impl Db {
             .filter_map(|item| {
                 let (key, value) = match item {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching bgp router entry: {e}"
+                    Err(ref e) => {
+                        rdb_log!(self,
+                            error,
+                            "error fetching bgp router entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -198,9 +278,10 @@ impl Db {
                 let key = match String::from_utf8_lossy(&key).parse() {
                     Ok(item) => item,
                     Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing bgp router entry key: {e}"
+                        rdb_log!(self,
+                            error,
+                            "error parsing bgp router entry key {key:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -209,9 +290,10 @@ impl Db {
                 let value: BgpRouterInfo = match serde_json::from_str(&value) {
                     Ok(item) => item,
                     Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing bgp router entry value: {e}"
+                        rdb_log!(self,
+                            error,
+                            "error parsing bgp router entry value {value:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -246,10 +328,12 @@ impl Db {
             .filter_map(|item| {
                 let (_key, value) = match item {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching bgp neighbor entry: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error fetching bgp neighbor entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -258,10 +342,12 @@ impl Db {
                 let value: BgpNeighborInfo = match serde_json::from_str(&value)
                 {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing bgp neighbor entry value: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing bgp neighbor entry value {value:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -296,18 +382,26 @@ impl Db {
             .filter_map(|item| {
                 let (_key, value) = match item {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(self.log, "db: error fetching bfd entry: {e}");
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing bfd entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
+                        );
                         return None;
                     }
                 };
                 let value = String::from_utf8_lossy(&value);
                 let value: BfdPeerConfig = match serde_json::from_str(&value) {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing bfd neighbor entry value: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing bfd entry value {value:?}: {e}";
+                            "unit" => UNIT_PERSISTENT,
+                            "error" => format!("{e}")
                         );
                         return None;
                     }
@@ -319,6 +413,11 @@ impl Db {
     }
 
     pub fn create_origin4(&self, ps: &[Prefix4]) -> Result<(), Error> {
+        rdb_log!(self, info,
+            "create origin4: {ps:?}";
+            "unit" => UNIT_PERSISTENT
+        );
+
         let current = self.get_origin4()?;
         if !current.is_empty() {
             return Err(Error::Conflict("origin already exists".to_string()));
@@ -328,7 +427,7 @@ impl Db {
     }
 
     pub fn set_origin4(&self, ps: &[Prefix4]) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN)?;
+        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
         tree.clear()?;
         for p in ps.iter() {
             tree.insert(p.db_key(), "")?;
@@ -338,33 +437,97 @@ impl Db {
     }
 
     pub fn clear_origin4(&self) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN)?;
+        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
         tree.clear()?;
         tree.flush()?;
         Ok(())
     }
 
     pub fn get_origin4(&self) -> Result<Vec<Prefix4>, Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN)?;
+        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
         let result = tree
             .scan_prefix(vec![])
             .filter_map(|item| {
                 let (key, _value) = match item {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching bgp origin entry: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error fetching bgp origin entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
                 };
                 Some(match Prefix4::from_db_key(&key) {
                     Ok(item) => item,
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing bgp origin entry value {key:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
+                        );
+                        return None;
+                    }
+                })
+            })
+            .collect();
+        Ok(result)
+    }
+
+    pub fn create_origin6(&self, ps: &[Prefix6]) -> Result<(), Error> {
+        let current = self.get_origin6()?;
+        if !current.is_empty() {
+            return Err(Error::Conflict("origin already exists".to_string()));
+        }
+
+        self.set_origin6(ps)
+    }
+
+    pub fn set_origin6(&self, ps: &[Prefix6]) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
+        tree.clear()?;
+        for p in ps.iter() {
+            tree.insert(p.db_key(), "")?;
+        }
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn clear_origin6(&self) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
+        tree.clear()?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn get_origin6(&self) -> Result<Vec<Prefix6>, Error> {
+        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
+        let result = tree
+            .scan_prefix(vec![])
+            .filter_map(|item| {
+                let (key, _value) = match item {
+                    Ok(item) => item,
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error fetching bgp origin entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
+                        );
+                        return None;
+                    }
+                };
+                Some(match Prefix6::from_db_key(&key) {
+                    Ok(item) => item,
                     Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing bgp origin entry value: {e}"
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing bgp origin entry value {key:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -375,40 +538,113 @@ impl Db {
     }
 
     pub fn get_prefix_paths(&self, prefix: &Prefix) -> Vec<Path> {
-        let rib = lock!(self.rib_in);
-        let paths = rib.get(prefix);
-        match paths {
-            None => Vec::new(),
-            Some(p) => p.iter().cloned().collect(),
+        match prefix {
+            Prefix::V4(p4) => {
+                let rib = lock!(self.rib4_in);
+                match rib.get(p4) {
+                    None => Vec::new(),
+                    Some(p) => p.iter().cloned().collect(),
+                }
+            }
+            Prefix::V6(p6) => {
+                let rib = lock!(self.rib6_in);
+                match rib.get(p6) {
+                    None => Vec::new(),
+                    Some(p) => p.iter().cloned().collect(),
+                }
+            }
         }
     }
 
     pub fn get_selected_prefix_paths(&self, prefix: &Prefix) -> Vec<Path> {
-        let rib = lock!(self.rib_loc);
-        let paths = rib.get(prefix);
-        match paths {
-            None => Vec::new(),
-            Some(p) => p.iter().cloned().collect(),
+        match prefix {
+            Prefix::V4(p4) => {
+                let rib = lock!(self.rib4_loc);
+                match rib.get(p4) {
+                    None => Vec::new(),
+                    Some(p) => p.iter().cloned().collect(),
+                }
+            }
+            Prefix::V6(p6) => {
+                let rib = lock!(self.rib6_loc);
+                match rib.get(p6) {
+                    None => Vec::new(),
+                    Some(p) => p.iter().cloned().collect(),
+                }
+            }
         }
     }
 
-    pub fn update_loc_rib(
+    pub fn update_rib4_loc(
         &self,
-        rib_in: &Rib,
-        rib_loc: &mut Rib,
-        prefix: Prefix,
+        rib_in: &Rib4,
+        rib_loc: &mut Rib4,
+        prefix: &Prefix4,
     ) {
         let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
-            error!(self.log, "failed to get bestpath fanout: {e}");
+            rdb_log!(
+                self,
+                error,
+                "failed to get bestpath fanout: {e}";
+                "unit" => UNIT_PERSISTENT
+            );
             NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
         });
-        let bp = bestpaths(prefix, rib_in, fanout.get() as usize);
-        match bp {
-            Some(bp) => {
-                rib_loc.insert(prefix, bp.clone());
+
+        match rib_in.get(prefix) {
+            // rib-in has paths worth evaluating for loc-rib
+            Some(paths) => {
+                match bestpaths(paths, fanout.get() as usize) {
+                    // bestpath found at least 1 path for loc-rib
+                    Some(bp) => {
+                        rib_loc.insert(*prefix, bp.clone());
+                    }
+                    // bestpath found no suitable paths
+                    None => {
+                        rib_loc.remove(prefix);
+                    }
+                }
             }
+            // rib-in has no worthy paths
             None => {
-                rib_loc.remove(&prefix);
+                rib_loc.remove(prefix);
+            }
+        }
+    }
+
+    pub fn update_rib6_loc(
+        &self,
+        rib_in: &Rib6,
+        rib_loc: &mut Rib6,
+        prefix: &Prefix6,
+    ) {
+        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
+            rdb_log!(
+                self,
+                error,
+                "failed to get bestpath fanout: {e}";
+                "unit" => UNIT_PERSISTENT
+            );
+            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
+        });
+
+        match rib_in.get(prefix) {
+            // rib-in has paths worth evaluating for loc-rib
+            Some(paths) => {
+                match bestpaths(paths, fanout.get() as usize) {
+                    // bestpath found at least 1 path for loc-rib
+                    Some(bp) => {
+                        rib_loc.insert(*prefix, bp.clone());
+                    }
+                    // bestpath found no suitable paths
+                    None => {
+                        rib_loc.remove(prefix);
+                    }
+                }
+            }
+            // rib-in has no worthy paths
+            None => {
+                rib_loc.remove(prefix);
             }
         }
     }
@@ -420,39 +656,90 @@ impl Db {
     where
         F: Fn(&Prefix, &BTreeSet<Path>) -> bool,
     {
-        for (prefix, paths) in self.full_rib().iter() {
-            if bestpath_needed(prefix, paths) {
-                self.update_loc_rib(
-                    &lock!(self.rib_in),
-                    &mut lock!(self.rib_loc),
-                    *prefix,
-                );
+        {
+            // only grab the lock once, release it once the loop ends
+            let rib4_in = lock!(self.rib4_in);
+            let mut rib4_loc = lock!(self.rib4_loc);
+            for (prefix, paths) in self.full_rib4().iter() {
+                if bestpath_needed(&Prefix::from(*prefix), paths) {
+                    self.update_rib4_loc(&rib4_in, &mut rib4_loc, prefix);
+                }
+            }
+        }
+
+        {
+            // only grab the lock once, release it once the loop ends
+            let rib6_in = lock!(self.rib6_in);
+            let mut rib6_loc = lock!(self.rib6_loc);
+            for (prefix, paths) in self.full_rib6().iter() {
+                if bestpath_needed(&Prefix::from(*prefix), paths) {
+                    self.update_rib6_loc(&rib6_in, &mut rib6_loc, prefix);
+                }
             }
         }
     }
 
-    pub fn add_prefix_path(&self, prefix: Prefix, path: &Path) {
-        let mut rib = lock!(self.rib_in);
-        match rib.get_mut(&prefix) {
+    fn add_prefix4_path(
+        &self,
+        p4: &Prefix4,
+        path: &Path,
+        rib_in: &mut Rib4,
+        rib_loc: &mut Rib4,
+    ) {
+        match rib_in.get_mut(p4) {
             Some(paths) => {
                 paths.replace(path.clone());
             }
             None => {
-                rib.insert(prefix, BTreeSet::from([path.clone()]));
+                rib_in.insert(*p4, BTreeSet::from([path.clone()]));
             }
         }
-        self.update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
+        self.update_rib4_loc(rib_in, rib_loc, p4);
     }
 
-    pub fn add_static_routes(
+    fn add_prefix6_path(
         &self,
-        routes: &Vec<StaticRouteKey>,
-    ) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+        p6: &Prefix6,
+        path: &Path,
+        rib_in: &mut Rib6,
+        rib_loc: &mut Rib6,
+    ) {
+        match rib_in.get_mut(p6) {
+            Some(paths) => {
+                paths.replace(path.clone());
+            }
+            None => {
+                rib_in.insert(*p6, BTreeSet::from([path.clone()]));
+            }
+        }
+        self.update_rib6_loc(rib_in, rib_loc, p6);
+    }
 
+    pub fn add_prefix_path(&self, prefix: &Prefix, path: &Path) {
+        match prefix {
+            Prefix::V4(p4) => {
+                let mut rib_in = lock!(self.rib4_in);
+                let mut rib_loc = lock!(self.rib4_loc);
+                self.add_prefix4_path(p4, path, &mut rib_in, &mut rib_loc);
+            }
+            Prefix::V6(p6) => {
+                let mut rib_in = lock!(self.rib6_in);
+                let mut rib_loc = lock!(self.rib6_loc);
+                self.add_prefix6_path(p6, path, &mut rib_in, &mut rib_loc);
+            }
+        };
+    }
+
+    fn add_static_routes_to_tree(
+        &self,
+        tree: Tree,
+        routes: &[StaticRouteKey],
+        pcn: &mut PrefixChangeNotification,
+    ) -> Result<(), Error> {
         let mut route_keys = Vec::new();
+
         for route in routes {
-            let key = serde_json::to_string(route)?;
+            let key = serde_json::to_string(&route)?;
             route_keys.push(key);
         }
 
@@ -464,48 +751,84 @@ impl Db {
         })?;
         tree.flush()?;
 
-        let mut pcn = PrefixChangeNotification::default();
         for route in routes {
-            self.add_prefix_path(route.prefix, &Path::from(*route));
+            self.add_prefix_path(&route.prefix, &Path::from(*route));
             pcn.changed.insert(route.prefix);
+        }
+
+        Ok(())
+    }
+
+    pub fn add_static_routes(
+        &self,
+        routes: &[StaticRouteKey],
+    ) -> Result<(), Error> {
+        let mut pcn = PrefixChangeNotification::default();
+        let (routes4, routes6) = routes.iter().cloned().fold(
+            (Vec::new(), Vec::new()),
+            |(mut v4, mut v6), srk| {
+                match srk.prefix {
+                    Prefix::V4(_) => v4.push(srk),
+                    Prefix::V6(_) => v6.push(srk),
+                }
+                (v4, v6)
+            },
+        );
+
+        {
+            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+            self.add_static_routes_to_tree(tree, &routes4, &mut pcn)?;
+        }
+
+        {
+            let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
+            self.add_static_routes_to_tree(tree, &routes6, &mut pcn)?;
         }
 
         self.notify(pcn);
         Ok(())
     }
 
-    pub fn add_bgp_prefixes(&self, prefixes: Vec<Prefix>, path: Path) {
+    pub fn add_bgp_prefixes(&self, prefixes: &[Prefix], path: Path) {
         let mut pcn = PrefixChangeNotification::default();
         for prefix in prefixes {
             self.add_prefix_path(prefix, &path);
-            pcn.changed.insert(prefix);
+            pcn.changed.insert(*prefix);
         }
         self.notify(pcn);
     }
 
-    pub fn get_static4(&self) -> Result<Vec<StaticRouteKey>, Error> {
-        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+    fn get_static_from_tree(
+        &self,
+        tree: Tree,
+    ) -> Result<Vec<StaticRouteKey>, Error> {
         Ok(tree
             .scan_prefix(vec![])
             .filter_map(|item| {
                 let (key, _) = match item {
                     Ok(item) => item,
-                    Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error fetching static route entry: {e}"
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error fetching static route entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
                 };
 
                 let key = String::from_utf8_lossy(&key);
+                // XXX: figure out how to handle removal of old static routes
+                //      where the host bits aren't zeroed out
                 let rkey: StaticRouteKey = match serde_json::from_str(&key) {
                     Ok(item) => item,
                     Err(e) => {
-                        error!(
-                            self.log,
-                            "db: error parsing static router entry: {e}"
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing static route entry {key:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
                         );
                         return None;
                     }
@@ -515,13 +838,50 @@ impl Db {
             .collect())
     }
 
+    pub fn get_static(
+        &self,
+        af: Option<AddressFamily>,
+    ) -> Result<Vec<StaticRouteKey>, Error> {
+        match af {
+            Some(AddressFamily::Ipv4) => {
+                let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+                self.get_static_from_tree(tree)
+            }
+            Some(AddressFamily::Ipv6) => {
+                let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
+                self.get_static_from_tree(tree)
+            }
+            None => {
+                let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+                let mut routes = self.get_static_from_tree(tree)?;
+                let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
+                routes.extend(self.get_static_from_tree(tree)?);
+                Ok(routes)
+            }
+        }
+    }
+
     pub fn get_static4_count(&self) -> Result<usize, Error> {
         let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
         Ok(tree.len())
     }
 
     pub fn get_static_nexthop4_count(&self) -> Result<usize, Error> {
-        let entries = self.get_static4()?;
+        let entries = self.get_static(Some(AddressFamily::Ipv4))?;
+        let mut nexthops = BTreeSet::new();
+        for e in entries {
+            nexthops.insert(e.nexthop);
+        }
+        Ok(nexthops.len())
+    }
+
+    pub fn get_static6_count(&self) -> Result<usize, Error> {
+        let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
+        Ok(tree.len())
+    }
+
+    pub fn get_static_nexthop6_count(&self) -> Result<usize, Error> {
+        let entries = self.get_static(Some(AddressFamily::Ipv6))?;
         let mut nexthops = BTreeSet::new();
         for e in entries {
             nexthops.insert(e.nexthop);
@@ -530,50 +890,202 @@ impl Db {
     }
 
     pub fn set_nexthop_shutdown(&self, nexthop: IpAddr, shutdown: bool) {
-        let mut rib = lock!(self.rib_in);
         let mut pcn = PrefixChangeNotification::default();
-        for (prefix, paths) in rib.iter_mut() {
-            for p in paths.clone().into_iter() {
-                if p.nexthop == nexthop && p.shutdown != shutdown {
-                    let mut replacement = p.clone();
-                    replacement.shutdown = shutdown;
-                    paths.insert(replacement);
-                    pcn.changed.insert(*prefix);
+        let mut pcn6 = PrefixChangeNotification::default();
+        {
+            let mut rib4_in = lock!(self.rib4_in);
+            let mut rib4_loc = lock!(self.rib4_loc);
+            for (prefix, paths) in rib4_in.iter_mut() {
+                for p in paths.clone().into_iter() {
+                    if p.nexthop == nexthop && p.shutdown != shutdown {
+                        let mut replacement = p.clone();
+                        replacement.shutdown = shutdown;
+                        paths.insert(replacement);
+                        pcn.changed.insert(Prefix::from(*prefix));
+                    }
+                }
+            }
+            for prefix in pcn.changed.iter() {
+                if let Prefix::V4(p4) = prefix {
+                    self.update_rib4_loc(&rib4_in, &mut rib4_loc, p4);
                 }
             }
         }
 
-        for prefix in pcn.changed.iter() {
-            self.update_loc_rib(&rib, &mut lock!(self.rib_loc), *prefix);
-        }
-        self.notify(pcn);
-    }
-
-    pub fn remove_prefix_path<F>(&self, prefix: Prefix, prefix_cmp: F)
-    where
-        F: Fn(&Path) -> bool,
-    {
-        let mut rib = lock!(self.rib_in);
-        if let Some(paths) = rib.get_mut(&prefix) {
-            paths.retain(|p| !prefix_cmp(p));
-            if paths.is_empty() {
-                rib.remove(&prefix);
+        {
+            let mut rib6_in = lock!(self.rib6_in);
+            let mut rib6_loc = lock!(self.rib6_loc);
+            for (prefix, paths) in rib6_in.iter_mut() {
+                for p in paths.clone().into_iter() {
+                    if p.nexthop == nexthop && p.shutdown != shutdown {
+                        let mut replacement = p.clone();
+                        replacement.shutdown = shutdown;
+                        paths.insert(replacement);
+                        pcn6.changed.insert(Prefix::from(*prefix));
+                    }
+                }
+            }
+            for prefix in pcn6.changed.iter() {
+                if let Prefix::V6(p6) = prefix {
+                    self.update_rib6_loc(&rib6_in, &mut rib6_loc, p6);
+                }
             }
         }
 
-        self.update_loc_rib(&rib, &mut lock!(self.rib_loc), prefix);
+        pcn.changed.extend(pcn6.changed);
+        self.notify(pcn);
     }
 
-    pub fn remove_static_routes(
+    fn remove_prefix4_path<F>(
         &self,
-        routes: &Vec<StaticRouteKey>,
+        prefix: &Prefix4,
+        prefix_cmp: F,
+        rib_in: &mut Rib4,
+        rib_loc: &mut Rib4,
+    ) where
+        F: Fn(&Path) -> bool,
+    {
+        if let Some(paths) = rib_in.get_mut(prefix) {
+            paths.retain(|p| !prefix_cmp(p));
+            if paths.is_empty() {
+                rib_in.remove(prefix);
+            }
+        }
+
+        self.update_rib4_loc(rib_in, rib_loc, prefix);
+    }
+
+    fn remove_prefix6_path<F>(
+        &self,
+        prefix: &Prefix6,
+        prefix_cmp: F,
+        rib_in: &mut Rib6,
+        rib_loc: &mut Rib6,
+    ) where
+        F: Fn(&Path) -> bool,
+    {
+        if let Some(paths) = rib_in.get_mut(prefix) {
+            paths.retain(|p| !prefix_cmp(p));
+            if paths.is_empty() {
+                rib_in.remove(prefix);
+            }
+        }
+
+        self.update_rib6_loc(rib_in, rib_loc, prefix);
+    }
+
+    fn remove_prefix_path<F>(&self, prefix: &Prefix, prefix_cmp: F)
+    where
+        F: Fn(&Path) -> bool,
+    {
+        match prefix {
+            Prefix::V4(p4) => {
+                let mut rib_in = lock!(self.rib4_in);
+                let mut rib_loc = lock!(self.rib4_loc);
+                self.remove_prefix4_path(
+                    p4,
+                    prefix_cmp,
+                    &mut rib_in,
+                    &mut rib_loc,
+                );
+            }
+            Prefix::V6(p6) => {
+                let mut rib_in = lock!(self.rib6_in);
+                let mut rib_loc = lock!(self.rib6_loc);
+                self.remove_prefix6_path(
+                    p6,
+                    prefix_cmp,
+                    &mut rib_in,
+                    &mut rib_loc,
+                );
+            }
+        }
+    }
+
+    fn remove_path_for_prefixes4<F>(
+        &self,
+        prefixes: &[Prefix4],
+        prefix_cmp: F,
+        rib_in: &mut Rib4,
+        rib_loc: &mut Rib4,
+    ) where
+        F: Fn(&Path) -> bool,
+    {
+        for prefix in prefixes.iter() {
+            self.remove_prefix4_path(prefix, &prefix_cmp, rib_in, rib_loc);
+        }
+    }
+
+    fn remove_path_for_prefixes6<F>(
+        &self,
+        prefixes: &[Prefix6],
+        prefix_cmp: F,
+        rib_in: &mut Rib6,
+        rib_loc: &mut Rib6,
+    ) where
+        F: Fn(&Path) -> bool,
+    {
+        for prefix in prefixes.iter() {
+            self.remove_prefix6_path(prefix, &prefix_cmp, rib_in, rib_loc);
+        }
+    }
+
+    pub fn remove_path_for_prefixes<F>(
+        &self,
+        prefixes: &[Prefix],
+        prefix_cmp: F,
+    ) where
+        F: Fn(&Path) -> bool,
+    {
+        // split prefixes into v4 and v6 groups. this allows us to lock the v4
+        // and v6 RIBs independently, preventing operations for one protocol
+        // from inhibiting the other.
+        let (prefixes4, prefixes6) = prefixes.iter().cloned().fold(
+            (Vec::new(), Vec::new()),
+            |(mut v4, mut v6), prefix| {
+                match prefix {
+                    Prefix::V4(p4) => v4.push(p4),
+                    Prefix::V6(p6) => v6.push(p6),
+                }
+                (v4, v6)
+            },
+        );
+
+        {
+            let mut rib_in = lock!(self.rib4_in);
+            let mut rib_loc = lock!(self.rib4_loc);
+            self.remove_path_for_prefixes4(
+                &prefixes4,
+                &prefix_cmp,
+                &mut rib_in,
+                &mut rib_loc,
+            );
+        }
+
+        {
+            let mut rib_in = lock!(self.rib6_in);
+            let mut rib_loc = lock!(self.rib6_loc);
+            self.remove_path_for_prefixes6(
+                &prefixes6,
+                &prefix_cmp,
+                &mut rib_in,
+                &mut rib_loc,
+            );
+        }
+    }
+
+    fn remove_static_routes_from_tree(
+        &self,
+        tree: Tree,
+        routes: &[StaticRouteKey],
     ) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+        let mut pcn = PrefixChangeNotification::default();
 
         let mut route_keys = Vec::new();
         for route in routes {
             let key = serde_json::to_string(route)?;
             route_keys.push(key);
+            pcn.changed.insert(route.prefix);
         }
 
         tree.transaction(|tx_db| {
@@ -584,39 +1096,74 @@ impl Db {
         })?;
         tree.flush()?;
 
-        let mut pcn = PrefixChangeNotification::default();
         for route in routes {
-            self.remove_prefix_path(route.prefix, |rib_path: &Path| {
+            self.remove_prefix_path(&route.prefix, |rib_path: &Path| {
                 rib_path.cmp(&Path::from(*route)) == CmpOrdering::Equal
             });
-            pcn.changed.insert(route.prefix);
         }
 
         self.notify(pcn);
         Ok(())
     }
 
-    pub fn remove_bgp_prefixes(&self, prefixes: Vec<Prefix>, peer: &IpAddr) {
-        let mut pcn = PrefixChangeNotification::default();
-        for prefix in prefixes {
-            self.remove_prefix_path(prefix, |rib_path: &Path| {
-                match rib_path.bgp {
-                    Some(ref bgp) => bgp.peer == *peer,
-                    None => false,
+    pub fn remove_static_routes(
+        &self,
+        routes: &[StaticRouteKey],
+    ) -> Result<(), Error> {
+        let (routes4, routes6) = routes.iter().fold(
+            (Vec::new(), Vec::new()),
+            |(mut r4, mut r6), srk| {
+                match srk.prefix {
+                    Prefix::V4(_) => r4.push(*srk),
+                    Prefix::V6(_) => r6.push(*srk),
                 }
-            });
-            pcn.changed.insert(prefix);
+                (r4, r6)
+            },
+        );
+
+        {
+            let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+            self.remove_static_routes_from_tree(tree, &routes4)?;
         }
+        {
+            let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
+            self.remove_static_routes_from_tree(tree, &routes6)?;
+        }
+
+        Ok(())
+    }
+
+    // for each route in @prefixes, remove all bgp paths learned from @peer
+    pub fn remove_bgp_prefixes(&self, prefixes: &[Prefix], peer: &IpAddr) {
+        let mut pcn = PrefixChangeNotification::default();
+        self.remove_path_for_prefixes(
+            prefixes,
+            |rib_path: &Path| match rib_path.bgp {
+                Some(ref bgp) => bgp.peer == *peer,
+                None => false,
+            },
+        );
+        pcn.changed.extend(prefixes);
         self.notify(pcn);
     }
 
-    // helper function to remove all routes learned from a given peer
+    // wrapper for remove_bgp_prefixes to handle the "all routes" corner case.
     // e.g. when peer is deleted or exits Established state
-    pub fn remove_bgp_peer_prefixes(&self, peer: &IpAddr) {
-        self.remove_bgp_prefixes(
-            self.full_rib().keys().copied().collect(),
-            peer,
-        );
+    pub fn remove_bgp_prefixes_from_peer(&self, peer: &IpAddr) {
+        // TODO(ipv6): call this just for enabled address-families.
+        // no need to walk the full rib for an AF that isn't affected
+        let peer_routes4: Vec<_> = self
+            .full_rib(Some(AddressFamily::Ipv4))
+            .keys()
+            .copied()
+            .collect();
+        let peer_routes6: Vec<_> = self
+            .full_rib(Some(AddressFamily::Ipv4))
+            .keys()
+            .copied()
+            .collect();
+        self.remove_bgp_prefixes(&peer_routes4, peer);
+        self.remove_bgp_prefixes(&peer_routes6, peer);
     }
 
     pub fn generation(&self) -> u64 {
@@ -677,7 +1224,29 @@ impl Db {
     }
 
     pub fn mark_bgp_peer_stale(&self, peer: IpAddr) {
-        let mut rib = lock!(self.rib_loc);
+        // TODO(ipv6): call this just for enabled address-families.
+        // no need to walk the full rib for an AF that isn't affected
+        let mut rib = lock!(self.rib4_loc);
+        rib.iter_mut().for_each(|(_prefix, path)| {
+            let targets: Vec<Path> = path
+                .iter()
+                .filter_map(|p| {
+                    if let Some(bgp) = p.bgp.as_ref()
+                        && bgp.peer == peer
+                    {
+                        let mut marked = p.clone();
+                        marked.bgp = Some(bgp.as_stale());
+                        return Some(marked);
+                    }
+                    None
+                })
+                .collect();
+            for t in targets.into_iter() {
+                path.replace(t);
+            }
+        });
+
+        let mut rib = lock!(self.rib6_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
                 .iter()
@@ -751,10 +1320,18 @@ impl Reaper {
 
 #[cfg(test)]
 mod test {
-    use crate::{Path, Prefix, db::Db};
+    use crate::{
+        AddressFamily, DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4,
+        Prefix6, StaticRouteKey, db::Db, test::TestDb, types::PrefixDbKey,
+    };
     use mg_common::log::*;
-    use std::net::IpAddr;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
+
+    fn get_test_db() -> TestDb {
+        let log = init_file_logger("rib.log");
+        crate::test::get_test_db("rib_test", log).expect("create db")
+    }
 
     pub fn check_prefix_path(
         db: &Db,
@@ -868,15 +1445,14 @@ mod test {
         // Start test cases
 
         // start from empty rib
-        assert!(db.full_rib().is_empty());
-        assert!(db.loc_rib().is_empty());
+        assert!(db.full_rib(None).is_empty());
+        assert!(db.loc_rib(None).is_empty());
 
         // both paths have the same next-hop, but not all fields
         // from StaticRouteKey match (rib_priority is different).
-        db.add_static_routes(&vec![static_key0, static_key1])
-            .expect(
-                "add_static_routes failed for {static_key0} and {static_key1}",
-            );
+        db.add_static_routes(&[static_key0, static_key1]).expect(
+            "add_static_routes failed for {static_key0} and {static_key1}",
+        );
 
         // expected current state
         // rib_in:
@@ -889,16 +1465,16 @@ mod test {
 
         // rib_priority differs, so removal of static_key0
         // should not affect path from static_key1
-        db.remove_static_routes(&vec![static_key0])
+        db.remove_static_routes(&[static_key0])
             .expect("remove_static_routes_failed for {static_key0}");
         let rib_in_paths = vec![static_path1.clone()];
         let loc_rib_paths = vec![static_path1.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
 
         // install bgp routes
-        db.add_bgp_prefixes(vec![p0, p1], bgp_path0.clone());
-        db.add_bgp_prefixes(vec![p1, p2], bgp_path1.clone());
-        db.add_bgp_prefixes(vec![p1, p2], bgp_path2.clone());
+        db.add_bgp_prefixes(&[p0, p1], bgp_path0.clone());
+        db.add_bgp_prefixes(&[p1, p2], bgp_path1.clone());
+        db.add_bgp_prefixes(&[p1, p2], bgp_path2.clone());
 
         // expected current state
         // rib_in:
@@ -921,7 +1497,7 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // withdrawal of p2 via bgp_path1
-        db.remove_bgp_prefixes(vec![p2], &bgp_path1.clone().bgp.unwrap().peer);
+        db.remove_bgp_prefixes(&[p2], &bgp_path1.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
         // - p0 via static_path1, bgp_path0
@@ -943,7 +1519,7 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // yank all routes from bgp_path0, simulating peer shutdown
-        db.remove_bgp_peer_prefixes(&bgp_path0.bgp.unwrap().peer);
+        db.remove_bgp_prefixes_from_peer(&bgp_path0.bgp.unwrap().peer);
         // expected current state
         // rib_in:
         // - p0 via static_path1
@@ -965,7 +1541,7 @@ mod test {
 
         // yank all routes from bgp_path2, simulating peer shutdown
         // bgp_path2 should be unaffected, despite also having the same RID
-        db.remove_bgp_peer_prefixes(&bgp_path2.clone().bgp.unwrap().peer);
+        db.remove_bgp_prefixes_from_peer(&bgp_path2.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
         // - p0 via static_path1
@@ -985,7 +1561,7 @@ mod test {
 
         // yank all routes from bgp_path1, simulating peer shutdown
         // p0 should be unaffected, still retaining the static path
-        db.remove_bgp_peer_prefixes(&bgp_path1.clone().bgp.unwrap().peer);
+        db.remove_bgp_prefixes_from_peer(&bgp_path1.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
         // - p0 via static_path1
@@ -1003,7 +1579,7 @@ mod test {
 
         // removal of final static route (from static_key1) should result
         // in the prefix being completely deleted
-        db.remove_static_routes(&vec![static_key1])
+        db.remove_static_routes(&[static_key1])
             .expect("remove_static_routes_failed for {static_key1}");
         // expected current state
         // rib_in: (empty)
@@ -1019,7 +1595,458 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // rib should be empty again
-        assert!(db.full_rib().is_empty());
-        assert!(db.loc_rib().is_empty());
+        assert!(db.full_rib(None).is_empty());
+        assert!(db.loc_rib(None).is_empty());
+    }
+
+    #[test]
+    fn test_static_routing_ipv4_basic() {
+        let db = get_test_db();
+        let nexthop = IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap());
+
+        // Test adding IPv4 static routes
+        let prefix4 =
+            Prefix4::new(Ipv4Addr::from_str("192.168.1.0").unwrap(), 24);
+        let static_route = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop,
+            vlan_id: Some(100),
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Add the route
+        db.add_static_routes(&[static_route]).unwrap();
+
+        // Verify route was added
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0], static_route);
+
+        // Check that it appears in RIB
+        let rib_routes = db.full_rib(Some(AddressFamily::Ipv4));
+        assert_eq!(rib_routes.len(), 1);
+        assert!(rib_routes.contains_key(&Prefix::V4(prefix4)));
+
+        // Remove the route
+        db.remove_static_routes(&[static_route]).unwrap();
+
+        // Verify route was removed
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert!(routes.is_empty());
+
+        // Check that RIB is empty
+        let rib_routes = db.full_rib(Some(AddressFamily::Ipv4));
+        assert!(rib_routes.is_empty());
+    }
+
+    #[test]
+    fn test_static_routing_ipv6_basic() {
+        let db = get_test_db();
+        let nexthop = IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap());
+
+        // Test adding IPv6 static routes
+        let prefix6 =
+            Prefix6::new(Ipv6Addr::from_str("2001:db8::").unwrap(), 64);
+        let static_route = StaticRouteKey {
+            prefix: Prefix::V6(prefix6),
+            nexthop,
+            vlan_id: Some(200),
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Add the route
+        db.add_static_routes(&[static_route]).unwrap();
+
+        // Verify route was added
+        let routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0], static_route);
+
+        // Check that it appears in RIB
+        let rib_routes = db.full_rib(Some(AddressFamily::Ipv6));
+        assert_eq!(rib_routes.len(), 1);
+        assert!(rib_routes.contains_key(&Prefix::V6(prefix6)));
+
+        // Remove the route
+        db.remove_static_routes(&[static_route]).unwrap();
+
+        // Verify route was removed
+        let routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
+        assert!(routes.is_empty());
+
+        // Check that RIB is empty
+        let rib_routes = db.full_rib(Some(AddressFamily::Ipv6));
+        assert!(rib_routes.is_empty());
+    }
+
+    #[test]
+    fn test_static_routing_ipv6_vlan_id_handling() {
+        let db = get_test_db();
+        let prefix6 =
+            Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48);
+
+        // Test route without VLAN ID
+        let route_no_vlan = StaticRouteKey {
+            prefix: Prefix::V6(prefix6),
+            nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Test route with VLAN ID
+        let route_with_vlan = StaticRouteKey {
+            prefix: Prefix::V6(prefix6),
+            nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::2").unwrap()),
+            vlan_id: Some(4094), // Maximum VLAN ID
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Add both routes
+        db.add_static_routes(&[route_no_vlan, route_with_vlan])
+            .unwrap();
+
+        // Verify both routes were added correctly
+        let routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
+        assert_eq!(routes.len(), 2);
+
+        let no_vlan_route =
+            routes.iter().find(|r| r.vlan_id.is_none()).unwrap();
+        assert_eq!(no_vlan_route.vlan_id, None);
+
+        let vlan_route = routes.iter().find(|r| r.vlan_id.is_some()).unwrap();
+        assert_eq!(vlan_route.vlan_id, Some(4094));
+
+        // Clean up
+        db.remove_static_routes(&[route_no_vlan, route_with_vlan])
+            .unwrap();
+    }
+
+    #[test]
+    fn test_static_routing_mixed_address_families() {
+        let db = get_test_db();
+
+        // Create IPv4 and IPv6 routes
+        let prefix4 = Prefix4::new(Ipv4Addr::from_str("10.0.0.0").unwrap(), 8);
+        let prefix6 = Prefix6::new(Ipv6Addr::from_str("fd00::").unwrap(), 8);
+
+        let route4 = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        let route6 = StaticRouteKey {
+            prefix: Prefix::V6(prefix6),
+            nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
+            vlan_id: Some(300),
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Add both routes
+        db.add_static_routes(&[route4, route6]).unwrap();
+
+        // Test IPv4-only retrieval
+        let ipv4_routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert_eq!(ipv4_routes.len(), 1);
+        assert_eq!(ipv4_routes[0], route4);
+
+        // Test IPv6-only retrieval
+        let ipv6_routes = db.get_static(Some(AddressFamily::Ipv6)).unwrap();
+        assert_eq!(ipv6_routes.len(), 1);
+        assert_eq!(ipv6_routes[0], route6);
+
+        // Test all address families retrieval
+        let all_routes = db.get_static(None).unwrap();
+        assert_eq!(all_routes.len(), 2);
+        assert!(all_routes.contains(&route4));
+        assert!(all_routes.contains(&route6));
+
+        // Test counts
+        assert_eq!(db.get_static4_count().unwrap(), 1);
+        assert_eq!(db.get_static6_count().unwrap(), 1);
+
+        // Remove routes and verify cleanup
+        db.remove_static_routes(&[route4, route6]).unwrap();
+        assert_eq!(db.get_static4_count().unwrap(), 0);
+        assert_eq!(db.get_static6_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_static_routing_multiple_routes_same_prefix() {
+        let db = get_test_db();
+        let prefix4 =
+            Prefix4::new(Ipv4Addr::from_str("172.16.0.0").unwrap(), 16);
+
+        // Create multiple routes to the same prefix with different next-hops and priorities
+        let route1 = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap()),
+            vlan_id: None,
+            rib_priority: 100,
+        };
+
+        let route2 = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.2").unwrap()),
+            vlan_id: Some(100),
+            rib_priority: 200,
+        };
+
+        // Add both routes
+        db.add_static_routes(&[route1, route2]).unwrap();
+
+        // Verify both routes were added
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert_eq!(routes.len(), 2);
+        assert!(routes.contains(&route1));
+        assert!(routes.contains(&route2));
+
+        // Remove one route, other should remain
+        db.remove_static_routes(&[route1]).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0], route2);
+
+        // Remove final route
+        db.remove_static_routes(&[route2]).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert!(routes.is_empty());
+    }
+
+    #[test]
+    fn test_static_routing_vlan_id_handling() {
+        let db = get_test_db();
+        let prefix4 =
+            Prefix4::new(Ipv4Addr::from_str("203.0.113.0").unwrap(), 24);
+
+        // Test route without VLAN ID
+        let route_no_vlan = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("198.51.100.1").unwrap()),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Test route with VLAN ID
+        let route_with_vlan = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("198.51.100.2").unwrap()),
+            vlan_id: Some(4094), // Maximum VLAN ID
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Add both routes
+        db.add_static_routes(&[route_no_vlan, route_with_vlan])
+            .unwrap();
+
+        // Verify both routes were added correctly
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert_eq!(routes.len(), 2);
+
+        let no_vlan_route =
+            routes.iter().find(|r| r.vlan_id.is_none()).unwrap();
+        assert_eq!(no_vlan_route.vlan_id, None);
+
+        let vlan_route = routes.iter().find(|r| r.vlan_id.is_some()).unwrap();
+        assert_eq!(vlan_route.vlan_id, Some(4094));
+
+        // Clean up
+        db.remove_static_routes(&[route_no_vlan, route_with_vlan])
+            .unwrap();
+    }
+
+    #[test]
+    fn test_prefix_host_bit_normalization() {
+        let db = get_test_db();
+
+        // Test that Prefix4::new() properly zeros host bits
+        let prefix4_with_host_bits =
+            Prefix4::new(Ipv4Addr::from_str("192.168.1.5").unwrap(), 24);
+        assert_eq!(
+            prefix4_with_host_bits.value,
+            Ipv4Addr::from_str("192.168.1.0").unwrap()
+        );
+        assert_eq!(prefix4_with_host_bits.length, 24);
+
+        // Test that Prefix6::new() properly zeros host bits
+        let prefix6_with_host_bits =
+            Prefix6::new(Ipv6Addr::from_str("2001:db8::1234").unwrap(), 64);
+        assert_eq!(
+            prefix6_with_host_bits.value,
+            Ipv6Addr::from_str("2001:db8::").unwrap()
+        );
+        assert_eq!(prefix6_with_host_bits.length, 64);
+
+        // Test with static route to ensure normalization works through the full stack
+        let route = StaticRouteKey {
+            prefix: Prefix::V4(prefix4_with_host_bits),
+            nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap()),
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        db.add_static_routes(&[route]).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert_eq!(routes.len(), 1);
+
+        // Verify the stored route has normalized prefix
+        if let Prefix::V4(stored_prefix) = routes[0].prefix {
+            assert_eq!(
+                stored_prefix.value,
+                Ipv4Addr::from_str("192.168.1.0").unwrap()
+            );
+        } else {
+            panic!("Expected IPv4 prefix");
+        }
+
+        db.remove_static_routes(&[route]).unwrap();
+    }
+
+    #[test]
+    fn test_ipv4_origin_crud() {
+        let db = get_test_db();
+
+        // Test creating IPv4 origins
+        let prefixes = vec![
+            Prefix4::new(Ipv4Addr::new(192, 168, 1, 0), 24),
+            Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
+        ];
+
+        // Create origin4 - should succeed
+        db.create_origin4(&prefixes).expect("create origin4");
+
+        // Get origin4 - should return created prefixes
+        let retrieved = db.get_origin4().expect("get origin4");
+        assert_eq!(retrieved.len(), 2);
+        assert!(retrieved.contains(&prefixes[0]));
+        assert!(retrieved.contains(&prefixes[1]));
+
+        // Try to create again - should fail with conflict
+        assert!(db.create_origin4(&prefixes).is_err());
+
+        // Update origin4 with different prefixes
+        let new_prefixes = vec![Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12)];
+        db.set_origin4(&new_prefixes).expect("set origin4");
+
+        let updated = db.get_origin4().expect("get updated origin4");
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0], new_prefixes[0]);
+
+        // Clear origin4
+        db.clear_origin4().expect("clear origin4");
+        let empty = db.get_origin4().expect("get empty origin4");
+        assert!(empty.is_empty());
+
+        // Create again after clear - should succeed
+        db.create_origin4(&prefixes).expect("create after clear");
+        let final_result = db.get_origin4().expect("get final origin4");
+        assert_eq!(final_result.len(), 2);
+    }
+
+    #[test]
+    fn test_ipv6_origin_crud() {
+        let db = get_test_db();
+
+        // Test creating IPv6 origins
+        let prefixes = vec![
+            Prefix6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32),
+            Prefix6::new(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 0), 8),
+        ];
+
+        // Create origin6 - should succeed
+        db.create_origin6(&prefixes).expect("create origin6");
+
+        // Get origin6 - should return created prefixes
+        let retrieved = db.get_origin6().expect("get origin6");
+        assert_eq!(retrieved.len(), 2);
+        assert!(retrieved.contains(&prefixes[0]));
+        assert!(retrieved.contains(&prefixes[1]));
+
+        // Try to create again - should fail with conflict
+        assert!(db.create_origin6(&prefixes).is_err());
+
+        // Update origin6 with different prefixes
+        let new_prefixes = vec![Prefix6::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 0),
+            48,
+        )];
+        db.set_origin6(&new_prefixes).expect("set origin6");
+
+        let updated = db.get_origin6().expect("get updated origin6");
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0], new_prefixes[0]);
+
+        // Clear origin6
+        db.clear_origin6().expect("clear origin6");
+        let empty = db.get_origin6().expect("get empty origin6");
+        assert!(empty.is_empty());
+
+        // Create again after clear - should succeed
+        db.create_origin6(&prefixes).expect("create after clear");
+        let final_result = db.get_origin6().expect("get final origin6");
+        assert_eq!(final_result.len(), 2);
+    }
+
+    #[test]
+    fn test_prefix4_db_key_serialization() {
+        let prefix = Prefix4::new(Ipv4Addr::new(192, 168, 100, 0), 24);
+        let key = prefix.db_key();
+
+        // IPv4 address should be 4 bytes + 1 byte for length
+        assert_eq!(key.len(), 5);
+        assert_eq!(key[4], 24); // length byte
+
+        // Test round-trip serialization
+        let recovered =
+            Prefix4::from_db_key(&key).expect("recover from db key");
+        assert_eq!(recovered, prefix);
+    }
+
+    #[test]
+    fn test_prefix6_db_key_serialization() {
+        let prefix = Prefix6::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0xdead, 0xbeef, 0, 0, 0, 0),
+            64,
+        );
+        let key = prefix.db_key();
+
+        // IPv6 address should be 16 bytes + 1 byte for length
+        assert_eq!(key.len(), 17);
+        assert_eq!(key[16], 64); // length byte
+
+        // Test round-trip serialization
+        let recovered =
+            Prefix6::from_db_key(&key).expect("recover from db key");
+        assert_eq!(recovered, prefix);
+    }
+
+    #[test]
+    fn test_prefix4_from_str() {
+        let prefix_str = "192.168.1.0/24";
+        let prefix: Prefix4 = prefix_str.parse().expect("parse IPv4 prefix");
+        assert_eq!(prefix.value, Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(prefix.length, 24);
+
+        // Test invalid format
+        assert!("invalid".parse::<Prefix4>().is_err());
+        assert!("192.168.1".parse::<Prefix4>().is_err());
+        assert!("192.168.1.0/abc".parse::<Prefix4>().is_err());
+    }
+
+    #[test]
+    fn test_prefix6_from_str() {
+        let prefix_str = "2001:db8::/32";
+        let prefix: Prefix6 = prefix_str.parse().expect("parse IPv6 prefix");
+        assert_eq!(
+            prefix.value,
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0)
+        );
+        assert_eq!(prefix.length, 32);
+
+        // Test invalid format
+        assert!("invalid".parse::<Prefix6>().is_err());
+        assert!("2001:db8:".parse::<Prefix6>().is_err());
+        assert!("2001:db8::/abc".parse::<Prefix6>().is_err());
     }
 }

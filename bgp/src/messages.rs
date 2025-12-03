@@ -9,14 +9,166 @@ use nom::{
 };
 use num_enum::FromPrimitive;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+pub use rdb::types::Prefix;
+use rdb::types::{AddressFamily, Prefix4, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
+    fmt::{Display, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
 
 pub const MAX_MESSAGE_SIZE: usize = 4096;
+
+/// Trait for encoding/decoding values to/from BGP wire format.
+///
+/// This trait separates serialization/deserialization concerns from semantic
+/// validation. Implementations should perform only structural validation
+/// (buffer bounds, required fields, etc.). Semantic validation (protocol
+/// rules, consistency constraints) should be performed separately via dedicated
+/// validation methods.
+pub trait BgpWireFormat<T>: Sized {
+    type Error;
+
+    /// Encode value to wire format bytes.
+    /// This is infallible as it simply formats existing validated data.
+    fn to_wire(&self) -> Vec<u8>;
+
+    /// Decode value from wire format, returning (remaining_bytes, value).
+    /// This can fail due to malformed input (bounds checking, invalid values).
+    fn from_wire(input: &[u8]) -> Result<(&[u8], T), Self::Error>;
+}
+
+impl BgpWireFormat<Prefix4> for Prefix4 {
+    type Error = Error;
+
+    fn to_wire(&self) -> Vec<u8> {
+        let mut buf = vec![self.length];
+        let n = (self.length as usize).div_ceil(8);
+        buf.extend_from_slice(&self.value.octets()[..n]);
+        buf
+    }
+
+    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error> {
+        if input.is_empty() {
+            return Err(Error::TooSmall("prefix length byte missing".into()));
+        }
+
+        let len = input[0];
+
+        // Validate length bound for IPv4 (structural validation)
+        if len > 32 {
+            return Err(Error::TooLarge(format!(
+                "invalid IPv4 prefix length {} > 32",
+                len
+            )));
+        }
+
+        let byte_count = (len as usize).div_ceil(8);
+        if input.len() < 1 + byte_count {
+            return Err(Error::TooSmall(format!(
+                "prefix data too short: need {} bytes, have {}",
+                1 + byte_count,
+                input.len()
+            )));
+        }
+
+        let mut bytes = [0u8; 4];
+        bytes[..byte_count].copy_from_slice(&input[1..1 + byte_count]);
+
+        // Note: BGP wire format encodes the bitlength of a prefix in the first
+        // byte, followed by the minimum number of bytes required to hold the
+        // prefix's bitlength:
+        //
+        // ```
+        //  The Prefix field contains an IP address prefix, followed by
+        //  enough trailing bits to make the end of the field fall on an
+        //  octet boundary.  Note that the value of the trailing bits is
+        //  irrelevant.
+        // ```
+        //
+        // Example: 192.168.1.0/25 is encoded as follows:
+        //   [25, 192, 168, 1, 128]
+        //     ^
+        //     +--- prefix length in bits
+        //
+        // The last encoded byte carries the 25th bit of the prefix plus 7
+        // padding bits (128 = 0b10000000).
+        //
+        // We make the trailing bits irrelevant by zeroing them during Prefix
+        // type instantiation.
+        Ok((
+            &input[1 + byte_count..],
+            Prefix4::new(Ipv4Addr::from(bytes), len),
+        ))
+    }
+}
+
+impl BgpWireFormat<Prefix6> for Prefix6 {
+    type Error = Error;
+
+    fn to_wire(&self) -> Vec<u8> {
+        let mut buf = vec![self.length];
+        let n = (self.length as usize).div_ceil(8);
+        buf.extend_from_slice(&self.value.octets()[..n]);
+        buf
+    }
+
+    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Error> {
+        if input.is_empty() {
+            return Err(Error::TooSmall("prefix length byte missing".into()));
+        }
+
+        let len = input[0];
+
+        // Validate length bound for IPv6 (structural validation)
+        if len > 128 {
+            return Err(Error::TooLarge(format!(
+                "invalid IPv6 prefix length {} > 128",
+                len
+            )));
+        }
+
+        let byte_count = (len as usize).div_ceil(8);
+        if input.len() < 1 + byte_count {
+            return Err(Error::TooSmall(format!(
+                "prefix data too short: need {} bytes, have {}",
+                1 + byte_count,
+                input.len()
+            )));
+        }
+
+        let mut bytes = [0u8; 16];
+        bytes[..byte_count].copy_from_slice(&input[1..1 + byte_count]);
+
+        // Note: BGP wire format encodes the bitlength of a prefix in the first
+        // byte, followed by the minimum number of bytes required to hold the
+        // prefix's bitlength:
+        //
+        // ```
+        //  The Prefix field contains an IP address prefix, followed by
+        //  enough trailing bits to make the end of the field fall on an
+        //  octet boundary.  Note that the value of the trailing bits is
+        //  irrelevant.
+        // ```
+        //
+        // Example: A /25 prefix (2001:d8::/25) transmits 4 bytes:
+        //   [25, 0x20, 0x01, 0x0d, 0x80]
+        //     ^
+        //     +--- prefix length in bits
+        //
+        // The last encoded byte carries the 25th bit of the prefix plus 7
+        // padding bits (0x80 = 0b10000000).
+        //
+        // We make the trailing bits irrelevant by zeroing them during Prefix
+        // type instantiation.
+        Ok((
+            &input[1 + byte_count..],
+            Prefix6::new(Ipv6Addr::from(bytes), len),
+        ))
+    }
+}
 
 /// BGP Message types.
 ///
@@ -87,6 +239,38 @@ impl Message {
             Self::RouteRefresh(m) => m.to_wire(),
         }
     }
+
+    pub fn title(&self) -> &str {
+        match self {
+            Message::Open(_) => "open",
+            Message::Update(_) => "update",
+            Message::Notification(_) => "notification",
+            Message::KeepAlive => "keepalive",
+            Message::RouteRefresh(_) => "route refresh",
+        }
+    }
+
+    pub fn kind(&self) -> MessageKind {
+        match self {
+            Message::Open(_) => MessageKind::Open,
+            Message::Update(_) => MessageKind::Update,
+            Message::Notification(_) => MessageKind::Notification,
+            Message::KeepAlive => MessageKind::KeepAlive,
+            Message::RouteRefresh(_) => MessageKind::RouteRefresh,
+        }
+    }
+}
+
+impl Display for Message {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            Message::Open(o) => write!(f, "{o}"),
+            Message::Update(u) => write!(f, "{u}"),
+            Message::Notification(n) => write!(f, "{n}"),
+            Message::KeepAlive => write!(f, "Keepalive"),
+            Message::RouteRefresh(r) => write!(f, "{r}"),
+        }
+    }
 }
 
 impl From<OpenMessage> for Message {
@@ -110,6 +294,38 @@ impl From<NotificationMessage> for Message {
 impl From<RouteRefreshMessage> for Message {
     fn from(m: RouteRefreshMessage) -> Message {
         Message::RouteRefresh(m)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum MessageKind {
+    Open,
+    Update,
+    Notification,
+    KeepAlive,
+    RouteRefresh,
+}
+
+impl Display for MessageKind {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            MessageKind::Open => write!(f, "open"),
+            MessageKind::Update => write!(f, "update"),
+            MessageKind::Notification => write!(f, "notification"),
+            MessageKind::KeepAlive => write!(f, "keepalive"),
+            MessageKind::RouteRefresh => write!(f, "route_refresh"),
+        }
+    }
+}
+
+impl slog::Value for MessageKind {
+    fn serialize(
+        &self,
+        _record: &slog::Record,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_str(key, &self.to_string())
     }
 }
 
@@ -347,6 +563,20 @@ impl OpenMessage {
             .any(|x| CapabilityCode::from(x) == code)
     }
 
+    pub fn asn(&self) -> u32 {
+        let mut remote_asn = self.asn as u32;
+        for p in &self.parameters {
+            if let OptionalParameter::Capabilities(caps) = p {
+                for c in caps {
+                    if let Capability::FourOctetAs { asn } = c {
+                        remote_asn = *asn;
+                    }
+                }
+            }
+        }
+        remote_asn
+    }
+
     /// Serialize an open message to wire format.
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
@@ -422,6 +652,22 @@ impl OpenMessage {
         }
 
         Ok(result)
+    }
+}
+
+impl Display for OpenMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let param_string = self
+            .parameters
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(
+            f,
+            "Open [ version: {}, asn: {}, hold_time: {}, id: {}, parameters: [ {param_string}] ]",
+            self.version, self.asn, self.hold_time, self.id
+        )
     }
 }
 
@@ -509,7 +755,11 @@ impl UpdateMessage {
     fn withdrawn_to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
         for w in &self.withdrawn {
-            buf.extend_from_slice(&w.to_wire()?);
+            let wire_bytes = match w {
+                Prefix::V4(p) => p.to_wire(),
+                Prefix::V6(p) => p.to_wire(),
+            };
+            buf.extend_from_slice(&wire_bytes);
         }
         Ok(buf)
     }
@@ -529,7 +779,11 @@ impl UpdateMessage {
         for n in &self.nlri {
             // TODO hacked in ADD_PATH
             //buf.extend_from_slice(&0u32.to_be_bytes());
-            buf.extend_from_slice(&n.to_wire()?);
+            let wire_bytes = match n {
+                Prefix::V4(p) => p.to_wire(),
+                Prefix::V6(p) => p.to_wire(),
+            };
+            buf.extend_from_slice(&wire_bytes);
         }
         Ok(buf)
     }
@@ -537,13 +791,14 @@ impl UpdateMessage {
     pub fn from_wire(input: &[u8]) -> Result<UpdateMessage, Error> {
         let (input, len) = be_u16(input)?;
         let (input, withdrawn_input) = take(len)(input)?;
-        let withdrawn = Self::prefixes_from_wire(withdrawn_input)?;
+        let withdrawn =
+            Self::prefixes_from_wire(withdrawn_input, AddressFamily::Ipv4)?;
 
         let (input, len) = be_u16(input)?;
         let (input, attrs_input) = take(len)(input)?;
         let path_attributes = Self::path_attrs_from_wire(attrs_input)?;
 
-        let nlri = Self::prefixes_from_wire(input)?;
+        let nlri = Self::prefixes_from_wire(input, AddressFamily::Ipv4)?;
 
         Ok(UpdateMessage {
             withdrawn,
@@ -552,10 +807,14 @@ impl UpdateMessage {
         })
     }
 
-    fn prefixes_from_wire(mut buf: &[u8]) -> Result<Vec<Prefix>, Error> {
+    fn prefixes_from_wire(
+        mut buf: &[u8],
+        afi: AddressFamily,
+    ) -> Result<Vec<Prefix>, Error> {
         let mut result = Vec::new();
         while !buf.is_empty() {
-            let (out, pfx) = Prefix::from_wire(buf)?;
+            // XXX: handle error for individual prefix?
+            let (out, pfx) = prefix_from_wire(buf, afi)?;
             result.push(pfx);
             buf = out;
         }
@@ -666,250 +925,35 @@ impl UpdateMessage {
     }
 }
 
-/// This data structure captures a network prefix as it's laid out in a BGP
-/// message. There is a prefix length followed by a variable number of bytes.
-/// Just enough bytes to express the prefix.
-#[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    Clone,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-    Ord,
-    PartialOrd,
-)]
-pub struct Prefix {
-    pub length: u8,
-    pub value: Vec<u8>,
-}
+impl Display for UpdateMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let w_str = self
+            .withdrawn
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
 
-impl Prefix {
-    fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        if self.value.len() > u8::MAX as usize {
-            return Err(Error::TooLarge("prefix too long".into()));
-        }
-        let mut buf = vec![self.length];
-        let n = (self.length as usize).div_ceil(8);
-        buf.extend_from_slice(&self.value[..n]);
-        Ok(buf)
-    }
+        let n_str = self
+            .nlri
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
 
-    fn from_wire(input: &[u8]) -> Result<(&[u8], Prefix), Error> {
-        let (input, len) = parse_u8(input)?;
-        let (input, value) = take(len.div_ceil(8))(input)?;
-        Ok((
-            input,
-            Prefix {
-                value: value.to_owned(),
-                length: len,
-            },
-        ))
-    }
+        let p_str = self
+            .path_attributes
+            .iter()
+            .map(|pa| pa.value.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
 
-    pub fn as_prefix4(&self) -> rdb::Prefix4 {
-        let v = &self.value;
-        match self.length {
-            0 => rdb::Prefix4 {
-                value: Ipv4Addr::UNSPECIFIED,
-                length: 0,
-            },
-            x if x <= 8 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], 0, 0, 0]),
-                length: x,
-            },
-            x if x <= 16 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], 0, 0]),
-                length: x,
-            },
-            x if x <= 24 => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], v[2], 0]),
-                length: x,
-            },
-            x => rdb::Prefix4 {
-                value: Ipv4Addr::from([v[0], v[1], v[2], v[3]]),
-                length: x,
-            },
-        }
-    }
-
-    pub fn as_prefix6(&self) -> rdb::Prefix6 {
-        let v = &self.value;
-        match self.length {
-            0 => rdb::Prefix6 {
-                value: Ipv6Addr::UNSPECIFIED,
-                length: 0,
-            },
-            x if x <= 8 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 16 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 24 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 32 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 40 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0,
-                ]),
-                length: x,
-            },
-            x if x <= 48 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 56 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], 0, 0, 0, 0, 0, 0,
-                    0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 64 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], 0, 0, 0, 0,
-                    0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 72 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], 0, 0,
-                    0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 80 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    0, 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 88 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], 0, 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 96 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], 0, 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 104 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], 0, 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 112 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], v[13], 0, 0,
-                ]),
-                length: x,
-            },
-            x if x <= 120 => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], v[13], v[14], 0,
-                ]),
-                length: x,
-            },
-            x => rdb::Prefix6 {
-                value: Ipv6Addr::from([
-                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9],
-                    v[10], v[11], v[12], v[13], v[14], v[15],
-                ]),
-                length: x,
-            },
-        }
-    }
-
-    pub fn within(&self, x: &Prefix) -> bool {
-        if self.length > 128 || x.length > 128 {
-            return false;
-        }
-        if self.length < x.length {
-            return false;
-        }
-        if self.value.len() > 16 || x.value.len() > 16 {
-            return false;
-        }
-
-        let mut a = self.value.clone();
-        a.resize(16, 0);
-        let mut a = u128::from_le_bytes(a.try_into().unwrap());
-
-        let mut b = x.value.clone();
-        b.resize(16, 0);
-        let mut b = u128::from_le_bytes(b.try_into().unwrap());
-
-        let mask = (1u128 << x.length) - 1;
-        a &= mask;
-        b &= mask;
-
-        a == b
-    }
-}
-
-impl std::str::FromStr for Prefix {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (addr, len) = match s.split_once('/') {
-            Some(split) => split,
-            None => return Err("invalid prefix".to_owned()),
-        };
-        let addr: IpAddr = match addr.parse() {
-            Ok(addr) => addr,
-            Err(_) => return Err("invalid addr".to_owned()),
-        };
-        let length: u8 = match len.parse() {
-            Ok(len) => len,
-            Err(_) => return Err("invalid length".to_owned()),
-        };
-        let value = match addr {
-            IpAddr::V4(a) => a.octets().to_vec(),
-            IpAddr::V6(a) => a.octets().to_vec(),
-        };
-        Ok(Self { value, length })
-    }
-}
-
-impl From<rdb::Prefix4> for Prefix {
-    fn from(p: rdb::Prefix4) -> Self {
-        Self {
-            value: p.value.octets().into(),
-            length: p.length,
-        }
+        write!(
+            f,
+            "Update[ path_attributes: {p_str}) withdrawn({}) nlri({}) ]",
+            if !w_str.is_empty() { &w_str } else { "empty" },
+            if !n_str.is_empty() { &n_str } else { "empty" }
+        )
     }
 }
 
@@ -1175,6 +1219,13 @@ impl PathAttributeValue {
                 Ok(PathAttributeValue::As4Path(segments))
             }
             PathAttributeTypeCode::NextHop => {
+                // For IPv4 unicast, the length of this attribute MUST be 4 octets.
+                if input.len() != 4 {
+                    return Err(Error::BadLength {
+                        expected: 4,
+                        found: input.len() as u8,
+                    });
+                }
                 let (_input, b) = take(4usize)(input)?;
                 Ok(PathAttributeValue::NextHop(
                     Ipv4Addr::new(b[0], b[1], b[2], b[3]).into(),
@@ -1213,6 +1264,55 @@ impl PathAttributeValue {
                 Ok(PathAttributeValue::LocalPref(v))
             }
             x => Err(Error::UnsupportedPathAttributeTypeCode(x)),
+        }
+    }
+}
+
+impl Display for PathAttributeValue {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            PathAttributeValue::Origin(po) => write!(f, "origin: {po}"),
+            PathAttributeValue::AsPath(path_segs) => {
+                let path = path_segs
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "as-path: [{path}]")
+            }
+            PathAttributeValue::NextHop(nh) => write!(f, "next-hop: {nh}"),
+            PathAttributeValue::MultiExitDisc(med) => write!(f, "med: {med}"),
+            PathAttributeValue::LocalPref(pref) => {
+                write!(f, "local-pref: {pref}")
+            }
+            // XXX: Do real formatting
+            PathAttributeValue::Aggregator(agg) => write!(
+                f,
+                "aggregator: [{} {} {} {} {} {}]",
+                agg[0], agg[1], agg[2], agg[3], agg[4], agg[5]
+            ),
+            PathAttributeValue::Communities(comms) => {
+                let comms = comms
+                    .iter()
+                    .map(|c| u32::from(*c).to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "communities: [{comms}]")
+            }
+            PathAttributeValue::As4Path(path_segs) => {
+                let path = path_segs
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "as4-path: [{path}]")
+            }
+            // XXX: Do real formatting
+            PathAttributeValue::As4Aggregator(agg) => write!(
+                f,
+                "as4-aggregator: [{} {} {} {} {} {} {} {}]",
+                agg[0], agg[1], agg[2], agg[3], agg[4], agg[5], agg[6], agg[7]
+            ),
         }
     }
 }
@@ -1284,6 +1384,16 @@ pub enum PathOrigin {
     Incomplete = 2,
 }
 
+impl Display for PathOrigin {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            PathOrigin::Igp => write!(f, "igp"),
+            PathOrigin::Egp => write!(f, "egp"),
+            PathOrigin::Incomplete => write!(f, "incomplete"),
+        }
+    }
+}
+
 // A self describing segment found in path sets and sequences.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct AsPathSegment {
@@ -1338,6 +1448,33 @@ impl As4PathSegment {
             value_input = out;
         }
         Ok((input, segment))
+    }
+}
+
+impl Display for As4PathSegment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.typ {
+            // Wrap an AS-SET in curly braces
+            AsPathType::AsSet => {
+                let set = self
+                    .value
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "{{ {set} }}")
+            }
+            // Wrap an AS-SEQUENCE in nothing
+            AsPathType::AsSequence => {
+                let seq = self
+                    .value
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                write!(f, "{seq}")
+            }
+        }
     }
 }
 
@@ -1495,6 +1632,16 @@ impl NotificationMessage {
     }
 }
 
+impl Display for NotificationMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Notification [ error_code: {}, error_subcode: {}, data: {:?} ]",
+            self.error_code, self.error_subcode, self.data
+        )
+    }
+}
+
 // A message sent between peers to ask for re-advertisement of all outbound
 // routes. Defined in RFC 2918.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1521,6 +1668,16 @@ impl RouteRefreshMessage {
     }
 }
 
+impl Display for RouteRefreshMessage {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Route Refresh [ afi: {}, safi: {} ]",
+            self.afi, self.safi
+        )
+    }
+}
+
 /// This enumeration contains possible notification error codes.
 #[derive(
     Debug,
@@ -1544,8 +1701,26 @@ pub enum ErrorCode {
     Cease,
 }
 
+impl Display for ErrorCode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let val = *self as u8;
+        match self {
+            ErrorCode::Header => write!(f, "{val} (Header)"),
+            ErrorCode::Open => write!(f, "{val} (Open)"),
+            ErrorCode::Update => write!(f, "{val} (Update)"),
+            ErrorCode::HoldTimerExpired => {
+                write!(f, "{val} (HoldTimerExpired)")
+            }
+            ErrorCode::Fsm => write!(f, "{val} (FSM)"),
+            ErrorCode::Cease => write!(f, "{val} (Cease)"),
+        }
+    }
+}
+
 /// This enumeration contains possible notification error subcodes.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorSubcode {
     Header(HeaderErrorSubcode),
@@ -1593,6 +1768,27 @@ impl ErrorSubcode {
     }
 }
 
+impl Display for ErrorSubcode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            ErrorSubcode::Header(header_error_subcode) => {
+                write!(f, "{header_error_subcode}")
+            }
+            ErrorSubcode::Open(open_error_subcode) => {
+                write!(f, "{open_error_subcode}")
+            }
+            ErrorSubcode::Update(update_error_subcode) => {
+                write!(f, "{update_error_subcode}")
+            }
+            ErrorSubcode::HoldTime(i) => write!(f, "{i}"),
+            ErrorSubcode::Fsm(i) => write!(f, "{i}"),
+            ErrorSubcode::Cease(cease_error_subcode) => {
+                write!(f, "{cease_error_subcode}")
+            }
+        }
+    }
+}
+
 /// Header error subcode types
 #[derive(
     Debug,
@@ -1612,6 +1808,24 @@ pub enum HeaderErrorSubcode {
     ConnectionNotSynchronized,
     BadMessageLength,
     BadMessageType,
+}
+
+impl Display for HeaderErrorSubcode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let val = *self as u8;
+        match self {
+            HeaderErrorSubcode::Unspecific => write!(f, "{val}(Unspecific)"),
+            HeaderErrorSubcode::ConnectionNotSynchronized => {
+                write!(f, "{val}(Connection Not Synchronized)")
+            }
+            HeaderErrorSubcode::BadMessageLength => {
+                write!(f, "{val}(Bad Message Length)")
+            }
+            HeaderErrorSubcode::BadMessageType => {
+                write!(f, "{val}(Bad Message Type)")
+            }
+        }
+    }
 }
 
 /// Open message error subcode types
@@ -1637,6 +1851,32 @@ pub enum OpenErrorSubcode {
     Deprecated,
     UnacceptableHoldTime,
     UnsupportedCapability,
+}
+
+impl Display for OpenErrorSubcode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let val = *self as u8;
+        match self {
+            OpenErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
+            OpenErrorSubcode::UnsupportedVersionNumber => {
+                write!(f, "{val} (UnsupportedVersionNumber)")
+            }
+            OpenErrorSubcode::BadPeerAS => write!(f, "{val} (Bad Peer AS)"),
+            OpenErrorSubcode::BadBgpIdentifier => {
+                write!(f, "{val} (Bad BGP Identifier)")
+            }
+            OpenErrorSubcode::UnsupportedOptionalParameter => {
+                write!(f, "{val} (Unsupported Optional Parameter)")
+            }
+            OpenErrorSubcode::Deprecated => write!(f, "{val} (Deprecated)"),
+            OpenErrorSubcode::UnacceptableHoldTime => {
+                write!(f, "{val} (Unacceptable Hold Time)")
+            }
+            OpenErrorSubcode::UnsupportedCapability => {
+                write!(f, "{val} (Unsupported Capability)")
+            }
+        }
+    }
 }
 
 /// Update message error subcode types
@@ -1668,6 +1908,46 @@ pub enum UpdateErrorSubcode {
     MalformedAsPath,
 }
 
+impl Display for UpdateErrorSubcode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let val = *self as u8;
+        match self {
+            UpdateErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
+            UpdateErrorSubcode::MalformedAttributeList => {
+                write!(f, "{val} (Malformed Attribute List)")
+            }
+            UpdateErrorSubcode::UnrecognizedWellKnownAttribute => {
+                write!(f, "{val} (Unrecognized Well-Known Attribute)")
+            }
+            UpdateErrorSubcode::MissingWellKnownAttribute => {
+                write!(f, "{val} (Missing Well-Known Attribute)")
+            }
+            UpdateErrorSubcode::AttributeFlags => {
+                write!(f, "{val} (Attribute Flags)")
+            }
+            UpdateErrorSubcode::AttributeLength => {
+                write!(f, "{val} (Attribute Length)")
+            }
+            UpdateErrorSubcode::InvalidOriginAttribute => {
+                write!(f, "{val} (Invalid Origin Attribute)")
+            }
+            UpdateErrorSubcode::Deprecated => write!(f, "{val} (Deprecated)"),
+            UpdateErrorSubcode::InvalidNexthopAttribute => {
+                write!(f, "{val} (Invalid Nexthop Attribute)")
+            }
+            UpdateErrorSubcode::OptionalAttribute => {
+                write!(f, "{val} (Optional Attribute)")
+            }
+            UpdateErrorSubcode::InvalidNetworkField => {
+                write!(f, "{val} (Invalid Network Field)")
+            }
+            UpdateErrorSubcode::MalformedAsPath => {
+                write!(f, "{val} (Malformed AS Path)")
+            }
+        }
+    }
+}
+
 /// Cease error subcode types from RFC 4486
 #[derive(
     Debug,
@@ -1694,6 +1974,39 @@ pub enum CeaseErrorSubcode {
     OutOfResources,
 }
 
+impl Display for CeaseErrorSubcode {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        let val = *self as u8;
+        match self {
+            CeaseErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
+            CeaseErrorSubcode::MaximumNumberofPrefixesReached => {
+                write!(f, "{val} (Maximum Number of Prefixes Reached)")
+            }
+            CeaseErrorSubcode::AdministrativeShutdown => {
+                write!(f, "{val} (Administrative Shutdown)")
+            }
+            CeaseErrorSubcode::PeerDeconfigured => {
+                write!(f, "{val} (Peer Deconfigured)")
+            }
+            CeaseErrorSubcode::AdministrativeReset => {
+                write!(f, "{val} (Administratively Reset)")
+            }
+            CeaseErrorSubcode::ConnectionRejected => {
+                write!(f, "{val} (Connection Rejected)")
+            }
+            CeaseErrorSubcode::OtherConfigurationChange => {
+                write!(f, "{val} (Other Configuration Rejected)")
+            }
+            CeaseErrorSubcode::ConnectionCollisionResolution => {
+                write!(f, "{val} (Connection Collision Resolution)")
+            }
+            CeaseErrorSubcode::OutOfResources => {
+                write!(f, "{val} (Out of Resources)")
+            }
+        }
+    }
+}
+
 /// The IANA/IETF currently defines the following optional parameter types.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
@@ -1712,6 +2025,28 @@ pub enum OptionalParameter {
 
     /// Code 255: RFC 9072
     ExtendedLength, //TODO
+}
+
+impl Display for OptionalParameter {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            OptionalParameter::Reserved => write!(f, "Reserved (0)"),
+            OptionalParameter::Authentication => {
+                write!(f, "Authentication (1)")
+            }
+            OptionalParameter::Capabilities(caps) => {
+                let mut cap_string = String::new();
+                for cap in caps {
+                    cap_string.push_str(&format!("{cap}, "));
+                }
+                write!(f, "Capabilities [ {cap_string}]")
+            }
+            OptionalParameter::Unassigned => write!(f, "Unassigned"),
+            OptionalParameter::ExtendedLength => {
+                write!(f, "Extended Length (255)")
+            }
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
@@ -1793,6 +2128,16 @@ pub struct AddPathElement {
     /// paths from its peer (value 1), (b) able to send multiple paths to its
     /// peer (value 2), or (c) both (value 3) for the <AFI, SAFI>.
     pub send_receive: u8,
+}
+
+impl Display for AddPathElement {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "AddPathElement {{ afi: {}, safi: {}, send_receive: {} }}",
+            self.afi, self.safi, self.send_receive
+        )
+    }
 }
 
 // An issue tracking the TODOs below is here
@@ -1945,6 +2290,98 @@ pub enum Capability {
     Reserved {
         code: u8,
     },
+}
+
+impl Display for Capability {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            Capability::MultiprotocolExtensions { afi, safi } => {
+                write!(f, "MP-Extensions {afi}/{safi}")
+            }
+            Capability::RouteRefresh {} => {
+                write!(f, "Route Refresh")
+            }
+            Capability::OutboundRouteFiltering {} => {
+                write!(f, "ORF")
+            }
+            Capability::MultipleRoutesToDestination {} => {
+                write!(f, "Multiple Routes to Destination")
+            }
+            Capability::ExtendedNextHopEncoding {} => {
+                write!(f, "Extended Next Hop Encoding")
+            }
+            Capability::BGPExtendedMessage {} => {
+                write!(f, "BGP Extended Message")
+            }
+            Capability::BgpSec {} => {
+                write!(f, "BGP Sec")
+            }
+            Capability::MultipleLabels {} => {
+                write!(f, "Multiple Labels")
+            }
+            Capability::BgpRole {} => {
+                write!(f, "BGP Role")
+            }
+            Capability::GracefulRestart {} => {
+                write!(f, "Graceful Restart")
+            }
+            Capability::FourOctetAs { asn } => {
+                write!(f, "Four Octet ASN {asn}")
+            }
+            Capability::DynamicCapability {} => {
+                write!(f, "Dynamic Capability")
+            }
+            Capability::MultisessionBgp {} => {
+                write!(f, "Multi-session BGP")
+            }
+            Capability::AddPath { elements } => {
+                let mut elements_string = String::new();
+                for e in elements {
+                    elements_string.push_str(&format!("{e}, "));
+                }
+                write!(f, "AddPath [ {elements_string}]")
+            }
+            Capability::EnhancedRouteRefresh {} => {
+                write!(f, "Enhanced Route Refresh")
+            }
+            Capability::LongLivedGracefulRestart {} => {
+                write!(f, "Long-Lived Graceful Restart")
+            }
+            Capability::RoutingPolicyDistribution {} => {
+                write!(f, "Routing Policy Distribution")
+            }
+            Capability::Fqdn {} => {
+                write!(f, "FQDN")
+            }
+            Capability::PrestandardRouteRefresh {} => {
+                write!(f, "Route Refresh (Prestandard)")
+            }
+            Capability::PrestandardOrfAndPd {} => {
+                write!(f, "ORF / Policy Distribution (Prestandard)")
+            }
+            Capability::PrestandardOutboundRouteFiltering {} => {
+                write!(f, "ORF (Prestandard)")
+            }
+            Capability::PrestandardMultisession {} => {
+                write!(f, "Multi-session BGP (Prestandard)")
+            }
+            Capability::PrestandardFqdn {} => {
+                write!(f, "FQDN (Prestandard)")
+            }
+            Capability::PrestandardOperationalMessage {} => {
+                write!(f, "Operational Message (Prestandard)")
+            }
+            Capability::Experimental { code } => {
+                write!(f, "Experimental ({code})")
+            }
+            Capability::Unassigned { code } => {
+                write!(f, "Unassigned ({code})")
+            }
+            Capability::Reserved { code } => {
+                write!(f, "Reserved ({code})")
+            }
+        }
+    }
 }
 
 impl Capability {
@@ -2575,11 +3012,165 @@ pub enum Safi {
     NlriUnicast = 1,
 }
 
+/// Decode prefix from BGP wire format with explicit address family.
+///
+/// The address family parameter must match the AFI/SAFI context where this
+/// prefix was encoded. This is required because prefixes <= 32 bits long (e.g.
+/// default routes) encode identically for both IPv4 and IPv6, so external
+/// context is needed to disambiguate.
+///
+/// Returns (remaining_bytes, prefix)
+fn prefix_from_wire(
+    input: &[u8],
+    afi: AddressFamily,
+) -> Result<(&[u8], Prefix), Error> {
+    match afi {
+        AddressFamily::Ipv4 => {
+            let (remaining, prefix4) = Prefix4::from_wire(input)
+                .map_err(|_| Error::InvalidNlriPrefix(input.to_vec()))?;
+            Ok((remaining, prefix4.into()))
+        }
+        AddressFamily::Ipv6 => {
+            let (remaining, prefix6) = Prefix6::from_wire(input)
+                .map_err(|_| Error::InvalidNlriPrefix(input.to_vec()))?;
+            Ok((remaining, prefix6.into()))
+        }
+    }
+}
+
+// ============================================================================
+// API Compatibility Types (VERSION_INITIAL / v1.0.0)
+// ============================================================================
+// These types maintain backward compatibility with the INITIAL API version.
+// They support IPv4-only prefixes as the INITIAL release predates IPv6 support.
+// Used exclusively for API responses via /bgp/message-history endpoint (v1).
+// Never used internally - always convert from current types at API boundary.
+//
+// Delete these types when VERSION_INITIAL is retired (MGD_API_VERSION_INITIAL
+// is no longer supported by dropping support for v1.0.0 API clients).
+
+/// V1 Prefix type for API compatibility (/bgp/message-history)
+/// Maintains the old serialization format: {"length": u8, "value": Vec<u8>}
+#[derive(
+    Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize, JsonSchema,
+)]
+pub struct PrefixV1 {
+    pub length: u8,
+    pub value: Vec<u8>,
+}
+
+impl From<Prefix> for PrefixV1 {
+    fn from(prefix: Prefix) -> Self {
+        // Convert new Prefix enum to old struct format using wire format:
+        // length byte followed by prefix octets.
+        let wire_bytes = match &prefix {
+            Prefix::V4(p) => p.to_wire(),
+            Prefix::V6(p) => p.to_wire(),
+        };
+
+        // First byte is length, remaining bytes are the address octets
+        let length = wire_bytes[0];
+        let value = wire_bytes[1..].to_vec();
+        Self { length, value }
+    }
+}
+
+/// V1 UpdateMessage type for API compatibility
+/// Uses PrefixV1 for NLRI and withdrawn prefixes
+#[derive(
+    Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
+)]
+pub struct UpdateMessageV1 {
+    pub withdrawn: Vec<PrefixV1>,
+    pub path_attributes: Vec<PathAttribute>,
+    pub nlri: Vec<PrefixV1>,
+}
+
+impl From<UpdateMessage> for UpdateMessageV1 {
+    fn from(msg: UpdateMessage) -> Self {
+        Self {
+            withdrawn: msg.withdrawn.into_iter().map(PrefixV1::from).collect(),
+            path_attributes: msg.path_attributes,
+            nlri: msg.nlri.into_iter().map(PrefixV1::from).collect(),
+        }
+    }
+}
+
+/// V1 Message enum for API compatibility
+/// Uses V1 types for Message variants
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum MessageV1 {
+    Open(OpenMessage),
+    Update(UpdateMessageV1),
+    Notification(NotificationMessage),
+    KeepAlive,
+    RouteRefresh(RouteRefreshMessage),
+}
+
+impl From<Message> for MessageV1 {
+    fn from(msg: Message) -> Self {
+        match msg {
+            Message::Open(open) => Self::Open(open),
+            Message::Update(update) => {
+                Self::Update(UpdateMessageV1::from(update))
+            }
+            Message::Notification(notif) => Self::Notification(notif),
+            Message::KeepAlive => Self::KeepAlive,
+            Message::RouteRefresh(rr) => Self::RouteRefresh(rr),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mg_common::{cidr, ip, parse};
     use pretty_assertions::assert_eq;
     use pretty_hex::*;
+    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::str::FromStr;
+
+    #[derive(Debug)]
+    struct PrefixConversionTestCase {
+        description: &'static str,
+        address_family: AddressFamily,
+        prefix_length: u8,
+        input_bytes: Vec<u8>,
+        expected_address: &'static str,
+    }
+
+    impl PrefixConversionTestCase {
+        fn new_ipv4(
+            description: &'static str,
+            prefix_length: u8,
+            input_addr: Ipv4Addr,
+            expected_address: &'static str,
+        ) -> Self {
+            Self {
+                description,
+                address_family: AddressFamily::Ipv4,
+                prefix_length,
+                input_bytes: input_addr.octets().to_vec(),
+                expected_address,
+            }
+        }
+
+        fn new_ipv6(
+            description: &'static str,
+            prefix_length: u8,
+            input_addr: Ipv6Addr,
+            expected_address: &'static str,
+        ) -> Self {
+            Self {
+                description,
+                address_family: AddressFamily::Ipv6,
+                prefix_length,
+                input_bytes: input_addr.octets().to_vec(),
+                expected_address,
+            }
+        }
+    }
 
     #[test]
     fn header_round_trip() {
@@ -2619,10 +3210,10 @@ mod tests {
     #[test]
     fn update_round_trip() {
         let um0 = UpdateMessage {
-            withdrawn: vec![Prefix {
-                value: vec![0x00, 0x17, 0x01, 0xc],
-                length: 32,
-            }],
+            withdrawn: vec![rdb::Prefix::V4(rdb::Prefix4::new(
+                std::net::Ipv4Addr::new(0, 23, 1, 12),
+                32,
+            ))],
             path_attributes: vec![PathAttribute {
                 typ: PathAttributeType {
                     flags: path_attribute_flags::OPTIONAL
@@ -2635,14 +3226,14 @@ mod tests {
                 }]),
             }],
             nlri: vec![
-                Prefix {
-                    value: vec![0x00, 0x17, 0x01, 0xd],
-                    length: 32,
-                },
-                Prefix {
-                    value: vec![0x00, 0x17, 0x01, 0xe],
-                    length: 32,
-                },
+                rdb::Prefix::V4(rdb::Prefix4::new(
+                    std::net::Ipv4Addr::new(0, 23, 1, 13),
+                    32,
+                )),
+                rdb::Prefix::V4(rdb::Prefix4::new(
+                    std::net::Ipv4Addr::new(0, 23, 1, 14),
+                    32,
+                )),
             ],
         };
 
@@ -2656,31 +3247,325 @@ mod tests {
 
     #[test]
     fn prefix_within() {
-        let prefixes: &[Prefix] = &[
-            "10.10.10.10/32".parse().unwrap(),
-            "10.10.10.0/24".parse().unwrap(),
-            "10.10.0.0/16".parse().unwrap(),
-            "10.0.0.0/8".parse().unwrap(),
+        // Test IPv4 prefix containment
+        let ipv4_prefixes: &[Prefix] = &[
+            cidr!("10.10.10.10/32"),
+            cidr!("10.10.10.0/24"),
+            cidr!("10.10.0.0/16"),
+            cidr!("10.0.0.0/8"),
+            cidr!("0.0.0.0/0"),
         ];
 
-        for i in 0..prefixes.len() {
-            for j in i..prefixes.len() {
+        for i in 0..ipv4_prefixes.len() {
+            for j in i..ipv4_prefixes.len() {
                 // shorter prefixes contain longer or equal
-                assert!(prefixes[i].within(&prefixes[j]));
+                assert!(ipv4_prefixes[i].within(&ipv4_prefixes[j]));
                 if i != j {
                     // longer prefixes should not contain shorter
-                    assert!(!prefixes[j].within(&prefixes[i]))
+                    assert!(!ipv4_prefixes[j].within(&ipv4_prefixes[i]))
                 }
             }
         }
 
-        let a: Prefix = "10.10.0.0/16".parse().unwrap();
-        let b: Prefix = "10.20.0.0/16".parse().unwrap();
+        // Test IPv6 prefix containment
+        let ipv6_prefixes: &[Prefix] = &[
+            cidr!("2001:db8:1:1::1/128"),
+            cidr!("2001:db8:1:1::/64"),
+            cidr!("2001:db8:1::/48"),
+            cidr!("2001:db8::/32"),
+            cidr!("::/0"),
+        ];
+
+        for i in 0..ipv6_prefixes.len() {
+            for j in i..ipv6_prefixes.len() {
+                // shorter prefixes contain longer or equal
+                assert!(ipv6_prefixes[i].within(&ipv6_prefixes[j]));
+                if i != j {
+                    // longer prefixes should not contain shorter
+                    assert!(!ipv6_prefixes[j].within(&ipv6_prefixes[i]))
+                }
+            }
+        }
+
+        // Test non-overlapping prefixes
+        let a: Prefix = cidr!("10.10.0.0/16");
+        let b: Prefix = cidr!("10.20.0.0/16");
         assert!(!a.within(&b));
-        let a: Prefix = "10.10.0.0/24".parse().unwrap();
+        let a: Prefix = cidr!("10.10.0.0/24");
         assert!(!a.within(&b));
 
-        let b: Prefix = "0.0.0.0/0".parse().unwrap();
-        assert!(a.within(&b));
+        let a: Prefix = cidr!("2001:db8:1::/48");
+        let b: Prefix = cidr!("2001:db8:2::/48");
+        assert!(!a.within(&b));
+
+        // Test default routes contain same-family prefixes
+        let ipv4_default: Prefix = cidr!("0.0.0.0/0");
+        let ipv6_default: Prefix = cidr!("::/0");
+
+        let any_ipv4: Prefix = cidr!("192.168.1.0/24");
+        let any_ipv6: Prefix = cidr!("2001:db8::/48");
+
+        assert!(any_ipv4.within(&ipv4_default));
+        assert!(any_ipv6.within(&ipv6_default));
+
+        // Test cross-family default route edge cases
+        // IPv4 prefixes should NOT be within IPv6 default route
+        assert!(!any_ipv4.within(&ipv6_default));
+        assert!(!ipv4_default.within(&ipv6_default));
+
+        // IPv6 prefixes should NOT be within IPv4 default route
+        assert!(!any_ipv6.within(&ipv4_default));
+        assert!(!ipv6_default.within(&ipv4_default));
+    }
+
+    #[test]
+    fn prefix_conversion() {
+        // Test both IPv4 and IPv6 prefix conversions including edge cases and host bit zeroing
+        let test_cases = vec![
+            // IPv4 test cases
+            // Input: 0.0.0.0 (default route)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 default route",
+                0,
+                ip!("0.0.0.0"),
+                "0.0.0.0",
+            ),
+            // Input: 10.255.255.255/8 -> 10.0.0.0/8 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 Class A with host bits",
+                8,
+                ip!("10.255.255.255"),
+                "10.0.0.0",
+            ),
+            // Input: 172.31.255.255/12 -> 172.16.0.0/12 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 large private network with host bits",
+                12,
+                ip!("172.31.255.255"),
+                "172.16.0.0",
+            ),
+            // Input: 172.16.255.255/16 -> 172.16.0.0/16 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 common allocation with host bits",
+                16,
+                ip!("172.16.255.255"),
+                "172.16.0.0",
+            ),
+            // Input: 203.0.113.255/20 -> 203.0.112.0/20 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 prefix with host bits in last 12 bits",
+                20,
+                ip!("203.0.113.255"),
+                "203.0.112.0",
+            ),
+            // Input: 192.168.1.123/24 -> 192.168.1.0/24 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 common subnet with host bits",
+                24,
+                ip!("192.168.1.123"),
+                "192.168.1.0",
+            ),
+            // Input: 198.51.100.7/30 -> 198.51.100.4/30 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 point-to-point link with host bits",
+                30,
+                ip!("198.51.100.7"),
+                "198.51.100.4",
+            ),
+            // Input: 10.0.0.1/32 -> 10.0.0.1/32 (no host bits to zero)
+            PrefixConversionTestCase::new_ipv4(
+                "IPv4 host route - no host bits to zero",
+                32,
+                ip!("10.0.0.1"),
+                "10.0.0.1",
+            ),
+            // IPv6 test cases
+            // Input: :: (all zeros, default route)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 default route",
+                0,
+                ip!("::"),
+                "::",
+            ),
+            // Input: fd00:ffff:ffff:ffff:ffff:ffff:ffff:ffff/8 -> fd00::/8 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 unique local address prefix with host bits",
+                8,
+                ip!("fd00:ffff:ffff:ffff:ffff:ffff:ffff:ffff"),
+                "fd00::",
+            ),
+            // Input: 2001:db8:1234:5678:9abc:def0:1122:3344/32 -> 2001:db8::/32 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 common allocation size with host bits",
+                32,
+                ip!("2001:db8:1234:5678:9abc:def0:1122:3344"),
+                "2001:db8::",
+            ),
+            // Input: 2001:db8:1234:ffff:ffff:ffff:ffff:ffff/48 -> 2001:db8:1234::/48 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 site prefix with host bits in last 80 bits",
+                48,
+                ip!("2001:db8:1234:ffff:ffff:ffff:ffff:ffff"),
+                "2001:db8:1234::",
+            ),
+            // Input: 2001:db8::1234:5678:9abc:def0/64 -> 2001:db8::/64 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 common prefix length with host bits",
+                64,
+                ip!("2001:db8::1234:5678:9abc:def0"),
+                "2001:db8::",
+            ),
+            // Input: 2001:db8::ff/120 -> 2001:db8::/120 (host bits zeroed)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 leaves only 8 host bits",
+                120,
+                ip!("2001:db8::ff"),
+                "2001:db8::",
+            ),
+            // Input: 2001:db8::1/128 -> 2001:db8::1/128 (no host bits to zero)
+            PrefixConversionTestCase::new_ipv6(
+                "IPv6 host route - no host bits to zero",
+                128,
+                ip!("2001:db8::1"),
+                "2001:db8::1",
+            ),
+        ];
+
+        for test_case in test_cases {
+            let prefix = match test_case.address_family {
+                AddressFamily::Ipv4 => {
+                    let mut octets = [0u8; 4];
+                    octets.copy_from_slice(&test_case.input_bytes);
+                    rdb::Prefix::V4(rdb::Prefix4::new(
+                        Ipv4Addr::from(octets),
+                        test_case.prefix_length,
+                    ))
+                }
+                AddressFamily::Ipv6 => {
+                    let mut octets = [0u8; 16];
+                    octets.copy_from_slice(&test_case.input_bytes);
+                    rdb::Prefix::V6(rdb::Prefix6::new(
+                        Ipv6Addr::from(octets),
+                        test_case.prefix_length,
+                    ))
+                }
+            };
+
+            match test_case.address_family {
+                AddressFamily::Ipv4 => {
+                    if let rdb::Prefix::V4(rdb_prefix4) = prefix {
+                        assert_eq!(
+                            rdb_prefix4.length, test_case.prefix_length,
+                            "IPv4 length mismatch for {}",
+                            test_case.description
+                        );
+                        assert_eq!(
+                            rdb_prefix4.value,
+                            Ipv4Addr::from_str(test_case.expected_address)
+                                .unwrap(),
+                            "IPv4 address mismatch for {}: expected {}, got {}",
+                            test_case.description,
+                            test_case.expected_address,
+                            rdb_prefix4.value
+                        );
+                        assert!(
+                            rdb_prefix4.host_bits_are_unset(),
+                            "IPv4 host bits not properly zeroed for {}",
+                            test_case.description
+                        );
+                    } else {
+                        panic!("Expected IPv4 prefix");
+                    }
+                }
+                AddressFamily::Ipv6 => {
+                    if let rdb::Prefix::V6(rdb_prefix6) = prefix {
+                        assert_eq!(
+                            rdb_prefix6.length, test_case.prefix_length,
+                            "IPv6 length mismatch for {}",
+                            test_case.description
+                        );
+                        assert_eq!(
+                            rdb_prefix6.value,
+                            Ipv6Addr::from_str(test_case.expected_address)
+                                .unwrap(),
+                            "IPv6 address mismatch for {}: expected {}, got {}",
+                            test_case.description,
+                            test_case.expected_address,
+                            rdb_prefix6.value
+                        );
+                        assert!(
+                            rdb_prefix6.host_bits_are_unset(),
+                            "IPv6 host bits not properly zeroed for {}",
+                            test_case.description
+                        );
+                    } else {
+                        panic!("Expected IPv6 prefix");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_nexthop_length_validation() {
+        // Test that NEXT_HOP path attribute with incorrect length is rejected
+
+        // Build a minimal valid UPDATE message manually, then corrupt the NEXT_HOP length
+        let mut buf = Vec::new();
+
+        // Withdrawn routes length (0)
+        buf.extend_from_slice(&0u16.to_be_bytes());
+
+        // Path attributes length (will be filled in later)
+        let path_attrs_len_offset = buf.len();
+        buf.extend_from_slice(&0u16.to_be_bytes());
+
+        let path_attrs_start = buf.len();
+
+        // ORIGIN attribute (well-known, transitive, complete)
+        buf.push(0x40); // flags
+        buf.push(1); // type code (ORIGIN)
+        buf.push(1); // length
+        buf.push(0); // IGP
+
+        // AS_PATH attribute (well-known, transitive, complete)
+        buf.push(0x40); // flags
+        buf.push(2); // type code (AS_PATH)
+        buf.push(6); // length
+        buf.push(2); // AS_SEQUENCE
+        buf.push(1); // path segment length
+        buf.extend_from_slice(&(65000u32).to_be_bytes());
+
+        // NEXT_HOP attribute with WRONG LENGTH (16 bytes instead of 4)
+        buf.push(0x40); // flags
+        buf.push(3); // type code (NEXT_HOP)
+        buf.push(16); // length - THIS IS WRONG, should be 4 for IPv4!
+        buf.extend_from_slice(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 0, 2, 1,
+        ]); // :: (IPv6)
+
+        // Fill in path attributes length
+        let path_attrs_len = (buf.len() - path_attrs_start) as u16;
+        buf[path_attrs_len_offset..path_attrs_len_offset + 2]
+            .copy_from_slice(&path_attrs_len.to_be_bytes());
+
+        // NLRI: 198.51.100.0/24
+        buf.push(24); // prefix length
+        buf.extend_from_slice(&[198, 51, 100]); // prefix bytes
+
+        // Try to parse - should fail with BadLength error
+        let result = UpdateMessage::from_wire(&buf);
+        assert!(
+            result.is_err(),
+            "Expected parsing to fail with bad NEXT_HOP length"
+        );
+
+        match result.unwrap_err() {
+            Error::BadLength { expected, found } => {
+                assert_eq!(expected, 4, "Expected length should be 4");
+                assert_eq!(found, 16, "Found length should be 16");
+            }
+            other => panic!("Expected BadLength error, got: {:?}", other),
+        }
     }
 }

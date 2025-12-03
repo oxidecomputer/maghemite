@@ -11,21 +11,26 @@ slog.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 schemars.workspace = true
-sled.workspace = true
 anyhow.workspace = true
 mg-common.workspace = true
 chrono.workspace = true
 libc.workspace = true
 socket2.workspace = true
 rhai.workspace = true
-libnet = { workspace = true, optional = true }
 itertools.workspace = true
 oxnet.workspace = true
+uuid.workspace = true
+rand.workspace = true
+
+[target.'cfg(target_os = "illumos")'.dependencies]
+libnet = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty-hex.workspace = true
 pretty_assertions.workspace = true
 lazy_static.workspace = true
+proptest.workspace = true
+serial_test.workspace = true
 
 [features]
 default = ["libnet"]

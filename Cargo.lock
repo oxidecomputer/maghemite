@@ -339,14 +339,17 @@ dependencies = [
  "oxnet",
  "pretty-hex",
  "pretty_assertions",
+ "proptest",
+ "rand 0.8.5",
  "rdb",
  "rhai",
  "schemars",
  "serde",
- "sled",
+ "serial_test",
  "slog",
  "socket2 0.5.10",
  "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]
@@ -1147,9 +1150,7 @@ dependencies = [
  "oximeter-producer",
  "oxnet",
  "pretty_assertions",
- "reqwest",
  "schemars",
- "semver 1.0.27",
  "serde",
  "serde_json",
  "sled",
@@ -1165,11 +1166,9 @@ name = "ddm-admin-client"
 version = "0.1.0"
 dependencies = [
  "oxnet",
- "percent-encoding",
  "progenitor 0.11.1",
  "reqwest",
  "serde",
- "serde_json",
  "slog",
  "uuid",
 ]
@@ -1203,11 +1202,9 @@ dependencies = [
 name = "ddmadm"
 version = "0.1.0"
 dependencies = [
- "anstyle",
  "anyhow",
  "clap",
  "colored",
- "ddm",
  "ddm-admin-client",
  "mg-common",
  "oxide-tokio-rt",
@@ -1217,7 +1214,6 @@ dependencies = [
  "slog-envlogger",
  "slog-term",
  "tabwriter",
- "tokio",
 ]
 
 [[package]]
@@ -1231,7 +1227,6 @@ dependencies = [
  "ddm-types",
  "dpd-client",
  "hostname 0.3.1",
- "libnet",
  "mg-common",
  "oxide-tokio-rt",
  "slog",
@@ -2930,10 +2925,8 @@ dependencies = [
 name = "lab"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "libfalcon",
  "oxide-tokio-rt",
- "tokio",
 ]
 
 [[package]]
@@ -3184,7 +3177,6 @@ dependencies = [
  "dropshot-api-manager",
  "dropshot-api-manager-types",
  "mg-api",
- "semver 1.0.27",
 ]
 
 [[package]]
@@ -3246,15 +3238,17 @@ dependencies = [
 name = "mg-admin-client"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "chrono",
- "percent-encoding",
+ "colored",
  "progenitor 0.11.1",
+ "rdb-types",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
  "slog",
+ "tabwriter",
+ "uuid",
 ]
 
 [[package]]
@@ -3294,8 +3288,8 @@ dependencies = [
  "anyhow",
  "backoff",
  "clap",
+ "libc",
  "libnet",
- "omicron-common",
  "oximeter",
  "oximeter-producer",
  "oxnet",
@@ -3305,8 +3299,6 @@ dependencies = [
  "slog-async",
  "slog-bunyan",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
- "thiserror 1.0.69",
- "tokio",
  "uuid",
 ]
 
@@ -3315,21 +3307,20 @@ name = "mg-ddm-verify"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ddm-types",
  "oxide-tokio-rt",
+ "oxnet",
  "reqwest",
  "serde",
  "serde_json",
- "tokio",
 ]
 
 [[package]]
 name = "mg-lower"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "ddm-admin-client",
  "dpd-client",
- "http",
  "libnet",
  "mg-common",
  "oxnet",
@@ -3358,8 +3349,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ddm-admin-client",
- "libnet",
- "serde",
  "slog",
  "slog-async",
  "slog-envlogger",
@@ -3382,6 +3371,7 @@ dependencies = [
  "mg-admin-client 0.1.0",
  "mg-common",
  "oxide-tokio-rt",
+ "oxnet",
  "rdb",
  "serde_json",
  "slog",
@@ -3389,8 +3379,6 @@ dependencies = [
  "slog-envlogger",
  "slog-term",
  "tabwriter",
- "thiserror 1.0.69",
- "tokio",
 ]
 
 [[package]]
@@ -3402,7 +3390,6 @@ dependencies = [
  "bgp",
  "chrono",
  "clap",
- "colored",
  "dropshot",
  "hostname 0.3.1",
  "http",
@@ -3413,14 +3400,12 @@ dependencies = [
  "oxide-tokio-rt",
  "oximeter",
  "oximeter-producer",
+ "proptest",
  "rand 0.8.5",
  "rdb",
- "schemars",
- "serde",
  "slog",
- "slog-async",
- "slog-term",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "uuid",
@@ -5168,17 +5153,28 @@ dependencies = [
  "anyhow",
  "chrono",
  "ciborium",
+ "clap",
  "itertools 0.14.0",
  "mg-common",
  "oxnet",
+ "proptest",
+ "rdb-types",
  "schemars",
  "serde",
  "serde_json",
  "sled",
  "slog",
- "slog-async",
- "slog-bunyan",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "rdb-types"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "oxnet",
+ "schemars",
+ "serde",
 ]
 
 [[package]]
@@ -5549,6 +5545,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "scc"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46e6f046b7fef48e2660c57ed794263155d713de679057f2d0c169bfc6e756cc"
+dependencies = [
+ "sdd",
+]
+
+[[package]]
 name = "schemars"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5608,6 +5613,12 @@ dependencies = [
  "quote",
  "syn 2.0.106",
 ]
+
+[[package]]
+name = "sdd"
+version = "3.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 
 [[package]]
 name = "secrecy"
@@ -5817,6 +5828,31 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
+]
+
+[[package]]
+name = "serial_test"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b258109f244e1d6891bf1053a55d63a5cd4f8f4c30cf9a1280989f80e7a1fa9"
+dependencies = [
+ "futures",
+ "log",
+ "once_cell",
+ "parking_lot 0.12.4",
+ "scc",
+ "serial_test_derive",
+]
+
+[[package]]
+name = "serial_test_derive"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d69265a08751de7844521fd15003ae0a888e035773ba05695c5c759a6f89eef"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]
@@ -7370,7 +7406,6 @@ dependencies = [
  "slog-async",
  "slog-envlogger",
  "slog-term",
- "socket2 0.5.10",
 ]
 
 [[package]]
@@ -8049,7 +8084,6 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "camino",
  "clap",
  "tokio",
 ]

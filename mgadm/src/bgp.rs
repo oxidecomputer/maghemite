@@ -5,16 +5,17 @@
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
-use mg_admin_client::Client;
-use mg_admin_client::types::NeighborResetOp as MgdNeighborResetOp;
-use mg_admin_client::types::{
-    self, ImportExportPolicy, NeighborResetRequest, Path, Rib,
+use mg_admin_client::{
+    Client,
+    types::{
+        self, ImportExportPolicy, NeighborResetOp as MgdNeighborResetOp,
+        NeighborResetRequest,
+    },
 };
-use rdb::types::{PolicyAction, Prefix, Prefix4};
-use std::collections::BTreeMap;
+use rdb::types::{PolicyAction, Prefix, Prefix4, Prefix6};
 use std::fs::read_to_string;
 use std::io::{Write, stdout};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use tabwriter::TabWriter;
 
@@ -25,6 +26,9 @@ pub enum Commands {
 
     /// View dynamic router state.
     Status(StatusSubcommand),
+
+    /// View event history for BGP sessions.
+    History(HistorySubcommand),
 
     /// Clear dynamic router state.
     Clear(ClearSubcommand),
@@ -73,17 +77,58 @@ pub enum StatusCmd {
         #[clap(env)]
         asn: u32,
     },
+}
 
-    /// Get the prefixes imported by a BGP router.
-    Imported {
+#[derive(Args, Debug)]
+pub struct HistorySubcommand {
+    #[command(subcommand)]
+    command: HistoryCmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HistoryCmd {
+    /// Get FSM event history for BGP sessions.
+    Fsm {
+        /// Optional: Filter by specific peer address.
+        peer: Option<IpAddr>,
+
+        /// Which buffer to display: 'major' (default) or 'all'.
+        #[clap(default_value = "major")]
+        buffer: String,
+
+        /// BGP Autonomous System number. Can be specified via ASN env var.
         #[clap(env)]
-        asn: u32,
+        asn: Option<u32>,
+
+        /// Number of records to display. Use 'all' or '0' to show everything.
+        #[clap(long, default_value = "20")]
+        limit: String,
+
+        /// Display full details without truncation.
+        #[clap(long)]
+        wide: bool,
     },
 
-    /// Get the selected paths chosen from imported paths.
-    Selected {
+    /// Get BGP message history for sessions.
+    Message {
+        /// Peer address to show history for.
+        peer: IpAddr,
+
+        /// BGP Autonomous System number. Can be specified via ASN env var.
         #[clap(env)]
-        asn: u32,
+        asn: Option<u32>,
+
+        /// Filter by direction: 'sent', 'received', or 'both' (default).
+        #[clap(long, default_value = "both")]
+        direction: String,
+
+        /// Number of records to display. Use 'all' or '0' to show everything.
+        #[clap(long, default_value = "20")]
+        limit: String,
+
+        /// Display full message content without truncation.
+        #[clap(long)]
+        wide: bool,
     },
 }
 
@@ -215,7 +260,7 @@ pub struct OriginSubcommand {
 #[derive(Subcommand, Debug)]
 pub enum OriginCmd {
     Ipv4(Origin4Subcommand),
-    //Ipv6, TODO
+    Ipv6(Origin6Subcommand),
 }
 
 #[derive(Args, Debug)]
@@ -239,6 +284,33 @@ pub enum Origin4Cmd {
     Update(Originate4),
 
     /// Delete a router's originated prefixes.
+    Delete {
+        #[clap(env)]
+        asn: u32,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct Origin6Subcommand {
+    #[command(subcommand)]
+    command: Origin6Cmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Origin6Cmd {
+    /// Originate a set of IPv6 prefixes from a BGP router.
+    Create(Originate6),
+
+    /// Read originated IPv6 prefixes for a BGP router.
+    Read {
+        #[clap(env)]
+        asn: u32,
+    },
+
+    /// Update a router's originated IPv6 prefixes.
+    Update(Originate6),
+
+    /// Delete a router's originated IPv6 prefixes.
     Delete {
         #[clap(env)]
         asn: u32,
@@ -377,6 +449,16 @@ pub struct Originate4 {
 }
 
 #[derive(Args, Debug)]
+pub struct Originate6 {
+    /// Autonomous system number for the router to originated the prefixes from.
+    #[clap(env)]
+    pub asn: u32,
+
+    /// Set of IPv6 prefixes to originate.
+    pub prefixes: Vec<Prefix6>,
+}
+
+#[derive(Args, Debug)]
 pub struct Withdraw4 {
     /// Set of prefixes to originate.
     pub prefixes: Vec<Prefix4>,
@@ -498,12 +580,7 @@ impl From<Neighbor> for types::Neighbor {
                     prefixes
                         .clone()
                         .into_iter()
-                        .map(|x| {
-                            types::Prefix::V4(types::Prefix4 {
-                                length: x.length,
-                                value: x.value,
-                            })
-                        })
+                        .map(|x| Prefix::V4(Prefix4::new(x.value, x.length)))
                         .collect(),
                 ),
                 None => ImportExportPolicy::NoFiltering,
@@ -513,12 +590,7 @@ impl From<Neighbor> for types::Neighbor {
                     prefixes
                         .clone()
                         .into_iter()
-                        .map(|x| {
-                            types::Prefix::V4(types::Prefix4 {
-                                length: x.length,
-                                value: x.value,
-                            })
-                        })
+                        .map(|x| Prefix::V4(Prefix4::new(x.value, x.length)))
                         .collect(),
                 ),
                 None => ImportExportPolicy::NoFiltering,
@@ -564,6 +636,18 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
                         delete_origin4(asn, c).await?
                     }
                 },
+                OriginCmd::Ipv6(cmd) => match cmd.command {
+                    Origin6Cmd::Create(origin) => {
+                        create_origin6(origin, c).await?
+                    }
+                    Origin6Cmd::Read { asn } => read_origin6(asn, c).await?,
+                    Origin6Cmd::Update(origin) => {
+                        update_origin6(origin, c).await?
+                    }
+                    Origin6Cmd::Delete { asn } => {
+                        delete_origin6(asn, c).await?
+                    }
+                },
             },
 
             ConfigCmd::Policy(cmd) => match cmd.command {
@@ -593,8 +677,34 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         Commands::Status(cmd) => match cmd.command {
             StatusCmd::Neighbors { asn } => get_neighbors(c, asn).await?,
             StatusCmd::Exported { asn } => get_exported(c, asn).await?,
-            StatusCmd::Imported { asn } => get_imported(c, asn).await?,
-            StatusCmd::Selected { asn } => get_selected(c, asn).await?,
+        },
+
+        Commands::History(cmd) => match cmd.command {
+            HistoryCmd::Fsm {
+                asn,
+                peer,
+                buffer,
+                limit,
+                wide,
+            } => {
+                let asn = asn.ok_or_else(|| {
+                    anyhow::anyhow!("ASN is required. Specify it on the command line or set the ASN environment variable.")
+                })?;
+                get_fsm_history(c, asn, peer, &buffer, &limit, wide).await?
+            }
+            HistoryCmd::Message {
+                asn,
+                peer,
+                direction,
+                limit,
+                wide,
+            } => {
+                let asn = asn.ok_or_else(|| {
+                    anyhow::anyhow!("ASN is required. Specify it on the command line or set the ASN environment variable.")
+                })?;
+                get_message_history(c, asn, peer, &direction, &limit, wide)
+                    .await?
+            }
         },
 
         Commands::Clear(cmd) => match cmd.command {
@@ -652,8 +762,10 @@ async fn delete_router(asn: u32, c: Client) -> Result<()> {
 }
 
 async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
-    let result = c.get_neighbors(asn).await?;
-    //println!("{result:#?}");
+    let result = c.get_neighbors_v2(asn).await?;
+    let mut sorted: Vec<_> = result.iter().collect();
+    sorted.sort_by_key(|(ip, _)| ip.parse::<IpAddr>().ok());
+
     let mut tw = TabWriter::new(stdout());
     writeln!(
         &mut tw,
@@ -667,7 +779,7 @@ async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
     )
     .unwrap();
 
-    for (addr, info) in result.iter() {
+    for (addr, info) in sorted.iter() {
         writeln!(
             &mut tw,
             "{}\t{:?}\t{:?}\t{:}\t{}/{}\t{}/{}",
@@ -703,26 +815,6 @@ async fn get_exported(c: Client, asn: u32) -> Result<()> {
         .into_inner();
 
     println!("{exported:#?}");
-    Ok(())
-}
-
-async fn get_imported(c: Client, asn: u32) -> Result<()> {
-    let imported = c
-        .get_imported(&types::AsnSelector { asn })
-        .await?
-        .into_inner();
-
-    print_rib(imported);
-    Ok(())
-}
-
-async fn get_selected(c: Client, asn: u32) -> Result<()> {
-    let selected = c
-        .get_selected(&types::AsnSelector { asn })
-        .await?
-        .into_inner();
-
-    print_rib(selected);
     Ok(())
 }
 
@@ -775,10 +867,7 @@ async fn create_origin4(originate: Originate4, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| types::Prefix4 {
-                length: x.length,
-                value: x.value,
-            })
+            .map(|x| Prefix4::new(x.value, x.length))
             .collect(),
     })
     .await?;
@@ -792,10 +881,7 @@ async fn update_origin4(originate: Originate4, c: Client) -> Result<()> {
             .prefixes
             .clone()
             .into_iter()
-            .map(|x| types::Prefix4 {
-                length: x.length,
-                value: x.value,
-            })
+            .map(|x| Prefix4::new(x.value, x.length))
             .collect(),
     })
     .await?;
@@ -813,105 +899,50 @@ async fn read_origin4(asn: u32, c: Client) -> Result<()> {
     Ok(())
 }
 
+async fn create_origin6(originate: Originate6, c: Client) -> Result<()> {
+    c.create_origin6(&types::Origin6 {
+        asn: originate.asn,
+        prefixes: originate
+            .prefixes
+            .clone()
+            .into_iter()
+            .map(|x| Prefix6::new(x.value, x.length))
+            .collect(),
+    })
+    .await?;
+    Ok(())
+}
+
+async fn update_origin6(originate: Originate6, c: Client) -> Result<()> {
+    c.update_origin6(&types::Origin6 {
+        asn: originate.asn,
+        prefixes: originate
+            .prefixes
+            .clone()
+            .into_iter()
+            .map(|x| Prefix6::new(x.value, x.length))
+            .collect(),
+    })
+    .await?;
+    Ok(())
+}
+
+async fn delete_origin6(asn: u32, c: Client) -> Result<()> {
+    c.delete_origin6(asn).await?;
+    Ok(())
+}
+
+async fn read_origin6(asn: u32, c: Client) -> Result<()> {
+    let o6 = c.read_origin6(asn).await?;
+    println!("{o6:#?}");
+    Ok(())
+}
+
 async fn apply(filename: String, c: Client) -> Result<()> {
     let contents = read_to_string(filename)?;
     let request: types::ApplyRequest = serde_json::from_str(&contents)?;
     c.bgp_apply(&request).await?;
     Ok(())
-}
-
-fn print_rib(rib: Rib) {
-    type CliRib = BTreeMap<Prefix, Vec<Path>>;
-
-    let mut static_routes = CliRib::new();
-    let mut bgp_routes = CliRib::new();
-    for (prefix, paths) in rib.0.into_iter() {
-        // TODO: handle Prefix generically when IPv6 support is added
-        // (requires impl std::str::FromStr for Prefix/Prefix6)
-        let pfx: Prefix = Prefix::V4(match prefix.parse::<Prefix4>() {
-            Ok(p4) => p4,
-            Err(e) => {
-                eprintln!("failed to parse prefix [{prefix}]: {e}");
-                continue;
-            }
-        });
-        let (br, sr): (Vec<Path>, Vec<Path>) =
-            paths.into_iter().partition(|p| p.bgp.is_some());
-        if !sr.is_empty() {
-            static_routes.insert(pfx, sr);
-        }
-        if !br.is_empty() {
-            bgp_routes.insert(pfx, br);
-        }
-    }
-
-    if !static_routes.is_empty() {
-        let mut tw = TabWriter::new(stdout());
-        writeln!(
-            &mut tw,
-            "{}\t{}\t{}",
-            "Prefix".dimmed(),
-            "Nexthop".dimmed(),
-            "RIB Priority".dimmed(),
-        )
-        .unwrap();
-
-        for (prefix, paths) in static_routes.into_iter() {
-            write!(&mut tw, "{prefix}").unwrap();
-            for path in paths.into_iter() {
-                writeln!(
-                    &mut tw,
-                    "\t{}\t{:?}",
-                    path.nexthop, path.rib_priority,
-                )
-                .unwrap();
-            }
-        }
-        println!("{}", "Static Routes".dimmed());
-        println!("{}", "=============".dimmed());
-        tw.flush().unwrap();
-    }
-
-    if !bgp_routes.is_empty() {
-        let mut tw = TabWriter::new(stdout());
-        writeln!(
-            &mut tw,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            "Prefix".dimmed(),
-            "Nexthop".dimmed(),
-            "RIB Priority".dimmed(),
-            "Local Pref".dimmed(),
-            "Origin AS".dimmed(),
-            "Peer ID".dimmed(),
-            "MED".dimmed(),
-            "AS Path".dimmed(),
-            "Stale".dimmed(),
-        )
-        .unwrap();
-
-        for (prefix, paths) in bgp_routes.into_iter() {
-            write!(&mut tw, "{prefix}").unwrap();
-            for path in paths.into_iter() {
-                let bgp = path.bgp.as_ref().unwrap();
-                writeln!(
-                    &mut tw,
-                    "\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}",
-                    path.nexthop,
-                    path.rib_priority,
-                    bgp.local_pref,
-                    bgp.origin_as,
-                    Ipv4Addr::from(bgp.id),
-                    bgp.med,
-                    bgp.as_path,
-                    bgp.stale,
-                )
-                .unwrap();
-            }
-        }
-        println!("{}", "BGP Routes".dimmed());
-        println!("{}", "=============".dimmed());
-        tw.flush().unwrap();
-    }
 }
 
 async fn create_chk(filename: String, asn: u32, c: Client) -> Result<()> {
@@ -976,4 +1007,306 @@ async fn update_shp(filename: String, asn: u32, c: Client) -> Result<()> {
 async fn delete_shp(asn: u32, c: Client) -> Result<()> {
     c.delete_shaper(asn).await?;
     Ok(())
+}
+
+async fn get_fsm_history(
+    c: Client,
+    asn: u32,
+    peer: Option<IpAddr>,
+    buffer: &str,
+    limit_str: &str,
+    wide: bool,
+) -> Result<()> {
+    // Parse buffer type for server-side filtering
+    let buffer_type = match buffer {
+        "all" => Some(types::FsmEventBuffer::All),
+        _ => Some(types::FsmEventBuffer::Major), // Default to major
+    };
+
+    let buffer_name = match buffer {
+        "all" => "All Events",
+        _ => "Major Events",
+    };
+
+    let result = c
+        .fsm_history(&types::FsmHistoryRequest {
+            asn,
+            peer,
+            buffer: buffer_type,
+        })
+        .await?
+        .into_inner();
+
+    if result.by_peer.is_empty() {
+        if let Some(peer_addr) = peer {
+            println!("No FSM history found for peer {}", peer_addr);
+        } else {
+            println!("No FSM history found for ASN {}", asn);
+        }
+        return Ok(());
+    }
+
+    // Parse limit ("all" or "0" means unlimited)
+    let limit = if limit_str == "all" {
+        usize::MAX
+    } else {
+        match limit_str.parse::<usize>() {
+            Ok(0) => usize::MAX,
+            Ok(n) => n,
+            Err(_) => 20,
+        }
+    };
+
+    // Display FSM history in tabular format
+    for (peer_addr, events) in result.by_peer.iter() {
+        if events.is_empty() {
+            println!(
+                "\n{}",
+                format!(
+                    "FSM Event History - Peer: {} - {} (empty)",
+                    peer_addr, buffer_name
+                )
+                .dimmed()
+            );
+            continue;
+        }
+
+        println!(
+            "\n{}",
+            format!(
+                "FSM Event History - Peer: {} - {}",
+                peer_addr, buffer_name
+            )
+            .dimmed()
+        );
+        println!("{}", "=".repeat(100).dimmed());
+        println!(
+            "Showing {} of {} events\n",
+            events.len().min(limit),
+            events.len()
+        );
+
+        let mut tw = TabWriter::new(stdout());
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            "Timestamp".dimmed(),
+            "Category".dimmed(),
+            "Event".dimmed(),
+            "State".dimmed(),
+            "Transition".dimmed(),
+            "Details".dimmed(),
+        )?;
+
+        for event in events.iter().take(limit) {
+            let timestamp = event.timestamp.format("%Y-%m-%d %H:%M:%S%.3f");
+            let category = format!("{:?}", event.event_category);
+            let transition = if let Some(prev) = &event.previous_state {
+                format!("{:?} → {:?}", prev, event.current_state)
+            } else {
+                format!("{:?}", event.current_state)
+            };
+            let details = event.details.as_deref().unwrap_or("-");
+
+            // Truncate unless wide mode
+            let details_display = if !wide && details.len() > 50 {
+                format!("{}...", &details[..47])
+            } else {
+                details.to_string()
+            };
+
+            writeln!(
+                &mut tw,
+                "{}\t{}\t{}\t{:?}\t{}\t{}",
+                timestamp,
+                category,
+                event.event_type,
+                event.current_state,
+                transition,
+                details_display,
+            )?;
+        }
+        tw.flush()?;
+
+        if events.len() > limit {
+            println!(
+                "\n... ({} more events not shown, use --limit all to see everything)",
+                events.len() - limit
+            );
+        }
+    }
+
+    Ok(())
+}
+
+async fn get_message_history(
+    c: Client,
+    asn: u32,
+    peer: IpAddr,
+    direction: &str,
+    limit_str: &str,
+    wide: bool,
+) -> Result<()> {
+    // Parse direction filter
+    let dir = match direction {
+        "sent" => Some(types::MessageDirection::Sent),
+        "received" => Some(types::MessageDirection::Received),
+        _ => None, // "both" or any other value means no filter
+    };
+
+    // Parse limit ("all" or "0" means unlimited)
+    let limit = if limit_str == "all" {
+        usize::MAX
+    } else {
+        match limit_str.parse::<usize>() {
+            Ok(0) => usize::MAX,
+            Ok(n) => n,
+            Err(_) => 20,
+        }
+    };
+
+    let result = c
+        .message_history_v2(&types::MessageHistoryRequest {
+            asn,
+            peer: Some(peer),
+            direction: dir,
+        })
+        .await?
+        .into_inner();
+
+    if result.by_peer.is_empty() {
+        println!("No message history found for ASN {} peer {}", asn, peer);
+        return Ok(());
+    }
+
+    // Should only have one peer since we filtered by peer
+    // Note: by_peer uses String keys (from JSON serialization)
+    let history = result.by_peer.get(&peer.to_string()).ok_or_else(|| {
+        anyhow::anyhow!("Peer {} not found in message history", peer)
+    })?;
+
+    // Combine sent and received messages with their direction
+    let mut all_messages = Vec::new();
+
+    for entry in &history.received {
+        all_messages.push((
+            entry.timestamp,
+            "RX",
+            &entry.connection_id,
+            &entry.message,
+        ));
+    }
+
+    for entry in &history.sent {
+        all_messages.push((
+            entry.timestamp,
+            "TX",
+            &entry.connection_id,
+            &entry.message,
+        ));
+    }
+
+    // Sort by timestamp (oldest first)
+    all_messages.sort_by_key(|(ts, _, _, _)| *ts);
+
+    // Apply limit
+    let messages_to_show =
+        all_messages.iter().rev().take(limit).collect::<Vec<_>>();
+    let total_count = all_messages.len();
+
+    println!(
+        "\n{}",
+        format!("BGP Message History - Peer: {}", peer).dimmed()
+    );
+    println!("{}", "=".repeat(80).dimmed());
+    println!(
+        "Showing {} of {} messages ({} RX, {} TX)\n",
+        messages_to_show.len(),
+        total_count,
+        history.received.len(),
+        history.sent.len()
+    );
+
+    // Display messages in reverse chronological order (newest first)
+    for (timestamp, direction, conn_id, message) in
+        messages_to_show.iter().rev()
+    {
+        let ts_str = timestamp.format("%Y-%m-%d %H:%M:%S%.3f");
+        let uuid_str = conn_id.uuid.to_string();
+        let conn_short =
+            format!("{}...{}", &uuid_str[..8], &uuid_str[uuid_str.len() - 4..]);
+
+        // Use Debug formatting for full message content
+        // (client-generated types don't implement Display)
+        let msg_content = format!("{:?}", message);
+
+        // Apply truncation unless wide mode
+        let msg_display = if !wide && msg_content.len() > 100 {
+            format!("{}...", &msg_content[..97])
+        } else {
+            msg_content
+        };
+
+        println!(
+            "{} {} [{}] {}",
+            ts_str.to_string().dimmed(),
+            if *direction == "RX" {
+                "←".green()
+            } else {
+                "→".blue()
+            },
+            conn_short.dimmed(),
+            msg_display
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_ipv4_prefix_parsing_in_cli() {
+        // Test that IPv4 prefixes can be parsed for CLI usage
+        let prefix_str = "192.168.1.0/24";
+        let prefix = Prefix4::from_str(prefix_str).expect("parse IPv4 prefix");
+
+        assert_eq!(prefix.value.to_string(), "192.168.1.0");
+        assert_eq!(prefix.length, 24);
+
+        // Test Originate4 struct creation (simulating CLI argument parsing)
+        let originate4 = Originate4 {
+            asn: 65001,
+            prefixes: vec![prefix],
+        };
+
+        assert_eq!(originate4.asn, 65001);
+        assert_eq!(originate4.prefixes.len(), 1);
+        assert_eq!(originate4.prefixes[0].value.to_string(), "192.168.1.0");
+        assert_eq!(originate4.prefixes[0].length, 24);
+    }
+
+    #[test]
+    fn test_ipv6_prefix_parsing_in_cli() {
+        // Test that IPv6 prefixes can be parsed for CLI usage
+        let prefix_str = "2001:db8::/32";
+        let prefix = Prefix6::from_str(prefix_str).expect("parse IPv6 prefix");
+
+        assert_eq!(prefix.value.to_string(), "2001:db8::");
+        assert_eq!(prefix.length, 32);
+
+        // Test Originate6 struct creation (simulating CLI argument parsing)
+        let originate6 = Originate6 {
+            asn: 65001,
+            prefixes: vec![prefix],
+        };
+
+        assert_eq!(originate6.asn, 65001);
+        assert_eq!(originate6.prefixes.len(), 1);
+        assert_eq!(originate6.prefixes[0].value.to_string(), "2001:db8::");
+        assert_eq!(originate6.prefixes[0].length, 32);
+    }
 }

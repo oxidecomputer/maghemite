@@ -1,0 +1,13 @@
+[package]
+name = "rdb-types"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde.workspace = true
+schemars.workspace = true
+clap = { workspace = true, optional = true }
+oxnet.workspace = true
+
+[features]
+clap = ["dep:clap"]

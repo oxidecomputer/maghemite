@@ -7,7 +7,6 @@ edition = "2024"
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ddm-admin-client = { path = "../ddm-admin-client" }
 
-libnet.workspace = true
 anyhow.workspace = true
 slog.workspace = true
 slog-term.workspace = true
@@ -16,4 +15,3 @@ slog-async.workspace = true
 tokio.workspace = true
 ztest.workspace = true
 uuid.workspace = true
-serde.workspace = true

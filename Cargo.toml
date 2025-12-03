@@ -14,6 +14,7 @@ default-members = [
     "mg-ddm-verify",
     "tests",
     "rdb",
+    "rdb-types",
     "bgp",
     "mg-api",
     "mg-admin-client",
@@ -43,6 +44,7 @@ members = [
     "mg-admin-client",
     "mgadm",
     "rdb",
+    "rdb-types",
     "mgd",
     "mg-lower",
     "mg-common",
@@ -78,7 +80,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 clap = { version = "4.5.47", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "3.0"
-ctrlc = { version = "3.4.7", features = ["termination"] }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anstyle = "1.0.11"
 nom = "7.1"
@@ -96,6 +97,7 @@ rand = "0.8.5"
 backoff = "0.4"
 mg-api = { path = "mg-api" }
 mg-common = { path = "mg-common" }
+rdb-types = { path = "rdb-types" }
 chrono = { version = "0.4.42", features = ["serde"] }
 oxide-tokio-rt = "0.1.2"
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
@@ -108,6 +110,8 @@ libc = "0.2"
 itertools = "0.14"
 rhai = { version = "1", features = ["metadata", "sync"] }
 semver = "1.0"
+proptest = "1.4"
+serial_test = "3.2"
 ddm-api = { path = "ddm-api" }
 ddm-types = { path = "ddm-types" }
 

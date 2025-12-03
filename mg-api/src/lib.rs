@@ -4,7 +4,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     num::NonZeroU8,
 };
 
@@ -12,16 +12,19 @@ use bfd::BfdPeerState;
 use bgp::{
     params::{
         ApplyRequest, CheckerSource, Neighbor, NeighborResetOp, Origin4,
-        PeerInfo, Rib, Router, ShaperSource,
+        Origin6, PeerInfo, PeerInfoV1, Router, ShaperSource,
     },
-    session::MessageHistory,
+    session::{FsmEventRecord, MessageHistory, MessageHistoryV1},
 };
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager_types::api_versions;
-use rdb::{BfdPeerConfig, Prefix, Prefix4, StaticRouteKey};
+use rdb::{
+    BfdPeerConfig, Path as RdbPath, Prefix, Prefix4, Prefix6, StaticRouteKey,
+    types::{AddressFamily, ProtocolFilter},
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +40,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (2, IPV6_BASIC),
     (1, INITIAL),
 ]);
 
@@ -168,26 +172,72 @@ pub trait MgAdminApi {
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
+    #[endpoint { method = PUT, path = "/bgp/config/origin6", versions = VERSION_IPV6_BASIC.. }]
+    async fn create_origin6(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<Origin6>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/config/origin6", versions = VERSION_IPV6_BASIC.. }]
+    async fn read_origin6(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Origin6>, HttpError>;
+
+    #[endpoint { method = POST, path = "/bgp/config/origin6", versions = VERSION_IPV6_BASIC.. }]
+    async fn update_origin6(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<Origin6>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = DELETE, path = "/bgp/config/origin6", versions = VERSION_IPV6_BASIC.. }]
+    async fn delete_origin6(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
     #[endpoint { method = GET, path = "/bgp/status/exported" }]
     async fn get_exported(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/imported" }]
+    // imported moved under /rib/status in VERSION_IPV6_BASIC
+    #[endpoint { method = GET, path = "/bgp/status/imported", versions = ..VERSION_IPV6_BASIC }]
     async fn get_imported(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
     ) -> Result<HttpResponseOk<Rib>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/selected" }]
+    // exported moved under /rib/status in VERSION_IPV6_BASIC
+    #[endpoint { method = GET, path = "/bgp/status/selected", versions = ..VERSION_IPV6_BASIC }]
     async fn get_selected(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
     ) -> Result<HttpResponseOk<Rib>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/neighbors" }]
+    // imported moved under /rib/status in VERSION_IPV6_BASIC
+    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_IPV6_BASIC.. }]
+    async fn get_rib_imported(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError>;
+
+    // exported moved under /rib/status in VERSION_IPV6_BASIC
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_IPV6_BASIC.. }]
+    async fn get_rib_selected(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = ..VERSION_IPV6_BASIC }]
     async fn get_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC.. }]
+    async fn get_neighbors_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError>;
@@ -198,11 +248,23 @@ pub trait MgAdminApi {
         request: TypedBody<ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/message-history" }]
+    #[endpoint { method = GET, path = "/bgp/message-history", versions = ..VERSION_IPV6_BASIC }]
     async fn message_history(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MessageHistoryRequestV1>,
+    ) -> Result<HttpResponseOk<MessageHistoryResponseV1>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_IPV6_BASIC.. }]
+    async fn message_history_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/history/fsm", versions = VERSION_IPV6_BASIC.. }]
+    async fn fsm_history(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<FsmHistoryRequest>,
+    ) -> Result<HttpResponseOk<FsmHistoryResponse>, HttpError>;
 
     #[endpoint { method = PUT, path = "/bgp/config/checker" }]
     async fn create_checker(
@@ -252,13 +314,25 @@ pub trait MgAdminApi {
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = GET, path = "/bestpath/config/fanout" }]
+    #[endpoint { method = GET, path = "/bestpath/config/fanout", versions = ..VERSION_IPV6_BASIC }]
     async fn read_bestpath_fanout(
         rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<BestpathFanoutResponse>, HttpError>;
 
-    #[endpoint { method = POST, path = "/bestpath/config/fanout" }]
+    #[endpoint { method = POST, path = "/bestpath/config/fanout", versions = ..VERSION_IPV6_BASIC }]
     async fn update_bestpath_fanout(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<BestpathFanoutRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // bestpath fanout moved under /rib/config/bestpath in VERSION_IPV6_BASIC
+    #[endpoint { method = GET, path = "/rib/config/bestpath/fanout", versions = VERSION_IPV6_BASIC.. }]
+    async fn read_rib_bestpath_fanout(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<BestpathFanoutResponse>, HttpError>;
+
+    #[endpoint { method = POST, path = "/rib/config/bestpath/fanout", versions = VERSION_IPV6_BASIC.. }]
+    async fn update_rib_bestpath_fanout(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<BestpathFanoutRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
@@ -278,6 +352,24 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/static/route4" }]
     async fn static_list_v4_routes(
         rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
+
+    // IPv6 static routes introduced in VERSION_IPV6_BASIC
+    #[endpoint { method = PUT, path = "/static/route6", versions = VERSION_IPV6_BASIC.. }]
+    async fn static_add_v6_route(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<AddStaticRoute6Request>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = DELETE, path = "/static/route6", versions = VERSION_IPV6_BASIC.. }]
+    async fn static_remove_v6_route(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<DeleteStaticRoute6Request>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    #[endpoint { method = GET, path = "/static/route6", versions = VERSION_IPV6_BASIC.. }]
+    async fn static_list_v6_routes(
+        ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
 }
 
@@ -326,13 +418,66 @@ pub struct DeleteNeighborRequest {
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
-pub struct MessageHistoryRequest {
+pub struct MessageHistoryRequestV1 {
+    /// ASN of the BGP router
     pub asn: u32,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct MessageHistoryResponseV1 {
+    pub by_peer: HashMap<IpAddr, MessageHistoryV1>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageDirection {
+    Sent,
+    Received,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Clone)]
+pub struct MessageHistoryRequest {
+    /// ASN of the BGP router
+    pub asn: u32,
+
+    /// Optional peer filter - if None, returns history for all peers
+    pub peer: Option<IpAddr>,
+
+    /// Optional direction filter - if None, returns both sent and received
+    pub direction: Option<MessageDirection>,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct MessageHistoryResponse {
     pub by_peer: HashMap<IpAddr, MessageHistory>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum FsmEventBuffer {
+    /// All FSM events (high frequency, includes all timers)
+    All,
+    /// Major events only (state transitions, admin, new connections)
+    Major,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Clone)]
+pub struct FsmHistoryRequest {
+    /// ASN of the BGP router
+    pub asn: u32,
+
+    /// Optional peer filter - if None, returns history for all peers
+    pub peer: Option<IpAddr>,
+
+    /// Which buffer to retrieve - if None, returns major buffer
+    pub buffer: Option<FsmEventBuffer>,
+}
+
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct FsmHistoryResponse {
+    /// Events organized by peer address
+    /// Each peer's value contains only the events from the requested buffer
+    pub by_peer: HashMap<IpAddr, Vec<FsmEventRecord>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -379,6 +524,86 @@ impl From<StaticRoute4> for StaticRouteKey {
             nexthop: val.nexthop.into(),
             vlan_id: val.vlan_id,
             rib_priority: val.rib_priority,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AddStaticRoute6Request {
+    pub routes: StaticRoute6List,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DeleteStaticRoute6Request {
+    pub routes: StaticRoute6List,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct StaticRoute6List {
+    pub list: Vec<StaticRoute6>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct StaticRoute6 {
+    pub prefix: Prefix6,
+    pub nexthop: Ipv6Addr,
+    pub vlan_id: Option<u16>,
+    pub rib_priority: u8,
+}
+
+impl From<StaticRoute6> for StaticRouteKey {
+    fn from(val: StaticRoute6) -> Self {
+        StaticRouteKey {
+            prefix: val.prefix.into(),
+            nexthop: val.nexthop.into(),
+            vlan_id: val.vlan_id,
+            rib_priority: val.rib_priority,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct RibQuery {
+    /// Filter by address family (None means all families)
+    #[serde(default)]
+    pub address_family: Option<AddressFamily>,
+    /// Filter by protocol (optional)
+    pub protocol: Option<ProtocolFilter>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct Rib(BTreeMap<String, BTreeSet<RdbPath>>);
+
+impl From<rdb::db::Rib> for Rib {
+    fn from(value: rdb::db::Rib) -> Self {
+        Rib(value.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    }
+}
+
+pub fn filter_rib_by_protocol(
+    rib: BTreeMap<Prefix, BTreeSet<RdbPath>>,
+    protocol_filter: Option<ProtocolFilter>,
+) -> BTreeMap<Prefix, BTreeSet<RdbPath>> {
+    match protocol_filter {
+        None => rib,
+        Some(filter) => {
+            let mut filtered = BTreeMap::new();
+
+            for (prefix, paths) in rib {
+                let filtered_paths: BTreeSet<RdbPath> = paths
+                    .into_iter()
+                    .filter(|path| match filter {
+                        ProtocolFilter::Bgp => path.bgp.is_some(),
+                        ProtocolFilter::Static => path.bgp.is_none(),
+                    })
+                    .collect();
+
+                if !filtered_paths.is_empty() {
+                    filtered.insert(prefix, filtered_paths);
+                }
+            }
+
+            filtered
         }
     }
 }

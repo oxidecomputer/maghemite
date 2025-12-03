@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{bfd_admin, bgp_admin, static_admin};
+use crate::{bfd_admin, bgp_admin, rib_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp::params::*;
 use bgp_admin::BgpContext;
@@ -14,12 +14,13 @@ use dropshot::{
 use mg_api::*;
 use mg_common::stats::MgLowerStats;
 use rdb::{BfdPeerConfig, Db, Prefix};
-use slog::o;
-use slog::{Logger, error, info};
+use slog::{Logger, error, info, o};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
+
+const UNIT_API_SERVER: &str = "api_server";
 
 pub struct HandlerContext {
     pub tep: Ipv6Addr, // tunnel endpoint address
@@ -45,7 +46,11 @@ pub fn start_server(
         ..Default::default()
     };
 
-    let ds_log = log.new(o!("unit" => "api-server"));
+    let ds_log = log.new(o!(
+        "component" => crate::COMPONENT_MGD,
+        "module" => crate::MOD_ADMIN,
+        "unit" => UNIT_API_SERVER
+    ));
 
     let api = api_description();
 
@@ -58,7 +63,7 @@ pub fn start_server(
             ),
         )));
 
-    info!(log, "admin: listening on {}", sa);
+    info!(log, "listening on {sa}");
 
     Ok(tokio::spawn(async move {
         match server.start() {
@@ -66,10 +71,14 @@ pub fn start_server(
                 info!(log, "admin: server started");
                 match server.await {
                     Ok(()) => info!(log, "admin: server exited"),
-                    Err(e) => error!(log, "admin: server error {:?}", e),
+                    Err(e) => error!(log, "admin: server error {e:?}";
+                        "error" => format!("{e}")
+                    ),
                 }
             }
-            Err(e) => error!(log, "admin: server start error {:?}", e),
+            Err(e) => error!(log, "admin: server start error {e:?}";
+                        "error" => format!("{e}")
+            ),
         }
     }))
 }
@@ -203,6 +212,34 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::delete_origin4(ctx, request).await
     }
 
+    async fn create_origin6(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<Origin6>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::create_origin6(ctx, request).await
+    }
+
+    async fn read_origin6(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Origin6>, HttpError> {
+        bgp_admin::read_origin6(ctx, request).await
+    }
+
+    async fn update_origin6(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<Origin6>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::update_origin6(ctx, request).await
+    }
+
+    async fn delete_origin6(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        bgp_admin::delete_origin6(ctx, request).await
+    }
+
     async fn get_exported(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
@@ -224,11 +261,32 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::get_selected(ctx, request).await
     }
 
+    async fn get_rib_imported(
+        ctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        rib_admin::get_rib_imported(ctx, request).await
+    }
+
+    async fn get_rib_selected(
+        ctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        rib_admin::get_rib_selected(ctx, request).await
+    }
+
     async fn get_neighbors(
         ctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError> {
         bgp_admin::get_neighbors(ctx, request).await
+    }
+
+    async fn get_neighbors_v2(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+        bgp_admin::get_neighbors_v2(ctx, request).await
     }
 
     async fn bgp_apply(
@@ -240,9 +298,23 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn message_history(
         ctx: RequestContext<Self::Context>,
+        request: TypedBody<MessageHistoryRequestV1>,
+    ) -> Result<HttpResponseOk<MessageHistoryResponseV1>, HttpError> {
+        bgp_admin::message_history(ctx, request).await
+    }
+
+    async fn message_history_v2(
+        ctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
-        bgp_admin::message_history(ctx, request).await
+        bgp_admin::message_history_v2(ctx, request).await
+    }
+
+    async fn fsm_history(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<FsmHistoryRequest>,
+    ) -> Result<HttpResponseOk<FsmHistoryResponse>, HttpError> {
+        bgp_admin::fsm_history(ctx, request).await
     }
 
     async fn create_checker(
@@ -314,6 +386,19 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::update_bestpath_fanout(ctx, request).await
     }
 
+    async fn read_rib_bestpath_fanout(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<BestpathFanoutResponse>, HttpError> {
+        rib_admin::read_rib_bestpath_fanout(rqctx).await
+    }
+
+    async fn update_rib_bestpath_fanout(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<BestpathFanoutRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        rib_admin::update_rib_bestpath_fanout(rqctx, request).await
+    }
+
     async fn static_add_v4_route(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<AddStaticRoute4Request>,
@@ -332,6 +417,26 @@ impl MgAdminApi for MgAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
         static_admin::static_list_v4_routes(ctx).await
+    }
+
+    async fn static_add_v6_route(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<AddStaticRoute6Request>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        static_admin::static_add_v6_route(ctx, request).await
+    }
+
+    async fn static_remove_v6_route(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<DeleteStaticRoute6Request>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        static_admin::static_remove_v6_route(ctx, request).await
+    }
+
+    async fn static_list_v6_routes(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
+        static_admin::static_list_v6_routes(ctx).await
     }
 }
 

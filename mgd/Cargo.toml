@@ -12,13 +12,8 @@ bgp = { path = "../bgp" }
 rdb = { path = "../rdb" }
 anyhow.workspace = true
 clap.workspace = true
-colored.workspace = true
-dropshot.workspace = true
-schemars.workspace = true
-serde.workspace = true
 slog.workspace = true
-slog-async.workspace = true
-slog-term.workspace = true
+dropshot.workspace = true
 tokio.workspace = true
 http.workspace = true
 thiserror.workspace = true
@@ -31,6 +26,10 @@ omicron-common.workspace = true
 hostname.workspace = true
 uuid.workspace = true
 smf.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+proptest.workspace = true
 
 [features]
 default = ["mg-lower"]

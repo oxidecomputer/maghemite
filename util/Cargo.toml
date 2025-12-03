@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 libnet.workspace = true
-socket2.workspace = true
 anyhow.workspace = true
 slog.workspace = true
 slog-term.workspace = true

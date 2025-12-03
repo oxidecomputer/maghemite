@@ -5,7 +5,6 @@
 use std::{fmt::Display, net::IpAddr};
 
 use num_enum::TryFromPrimitiveError;
-use rdb::Prefix4;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -45,11 +44,8 @@ pub enum Error {
     #[error("bad length")]
     BadLength { expected: u8, found: u8 },
 
-    #[error("io {0}")]
+    #[error("io: {0}")]
     Io(#[from] std::io::Error),
-
-    #[error("channel recv {0}")]
-    ChannelRecv(#[from] std::sync::mpsc::RecvError),
 
     #[error("timeout")]
     Timeout,
@@ -57,7 +53,7 @@ pub enum Error {
     #[error("disconnected")]
     Disconnected,
 
-    #[error("channel send {0}")]
+    #[error("channel send: {0}")]
     ChannelSend(String),
 
     #[error("unexpected end of input")]
@@ -158,20 +154,23 @@ pub enum Error {
     #[error("Invalid address")]
     InvalidAddress(String),
 
-    #[error("Datastore error {0}")]
+    #[error("Datastore error: {0}")]
     Datastore(#[from] rdb::error::Error),
 
-    #[error("Internal communication error {0}")]
+    #[error("Internal communication error: {0}")]
     InternalCommunication(String),
 
-    #[error("Unexpected ASN {0}")]
+    #[error("Unexpected ASN: {0}")]
     UnexpectedAsn(ExpectationMismatch<u32>),
 
     #[error("Hold time too small")]
     HoldTimeTooSmall,
 
-    #[error("Invalid NLRI prefix")]
-    InvalidNlriPrefix(Prefix4),
+    #[error("Invalid NLRI prefix: {0:?}")]
+    InvalidNlriPrefix(Vec<u8>),
+
+    #[error("Invalid prefix length {0}, max is {1}")]
+    InvalidPrefixLength(u8, u8),
 
     #[error("Nexthop cannot equal prefix")]
     NexthopSelf(IpAddr),
@@ -182,8 +181,11 @@ pub enum Error {
     #[error("Drop due to user defined policy")]
     PolicyCheckFailed,
 
-    #[error("Policy error {0}")]
+    #[error("Policy error: {0}")]
     PolicyError(#[from] crate::policy::Error),
+
+    #[error("Unsupported operation: {0}")]
+    UnsupportedOperation(String),
 
     #[error("Message conversion: {0}")]
     MessageConversion(#[from] crate::messages::MessageConvertError),
@@ -202,6 +204,9 @@ pub enum Error {
 
     #[error("Tcpkey database error: {0}")]
     TcpKey(String),
+
+    #[error("Connection registry is full: {0}")]
+    RegistryFull(String),
 }
 
 #[derive(Debug)]

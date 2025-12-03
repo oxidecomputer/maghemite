@@ -60,8 +60,8 @@ net_info() {
 		MGD_IP=$(pfexec ./interop exec mgd "ipadm show-addr $MGD_IF/v4 -p -o addr | cut -d / -f 1")
 	fi
 	ssh root@"$MGD_IP" "/opt/cargo-bay/mgadm bgp status neighbors 65100"
-	ssh root@"$MGD_IP" "/opt/cargo-bay/mgadm bgp status imported 65100"
-	ssh root@"$MGD_IP" "/opt/cargo-bay/mgadm bgp status selected 65100"
+	ssh root@"$MGD_IP" "/opt/cargo-bay/mgadm rib status imported"
+	ssh root@"$MGD_IP" "/opt/cargo-bay/mgadm rib status selected"
 	ssh root@"$MGD_IP" "/opt/cargo-bay/mgadm bgp status exported 65100"
 }
 

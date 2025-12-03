@@ -3,17 +3,20 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::admin::HandlerContext;
+use crate::log::smf_log;
 use mg_common::lock;
 use mg_common::smf::get_stats_server_props;
-use slog::{Logger, error, info, warn};
+use slog::Logger;
 use smf::PropertyGroup;
 use std::sync::Arc;
+
+const UNIT_SMF: &str = "smf";
 
 pub(crate) async fn smf_refresh(
     ctx: Arc<HandlerContext>,
     log: Logger,
 ) -> anyhow::Result<()> {
-    info!(log, "handling smf refresh");
+    smf_log!(log, info, "handling smf refresh");
     let scf = smf::Scf::new()
         .map_err(|e| anyhow::anyhow!("create scf handle: {e}"))?;
 
@@ -32,7 +35,7 @@ pub(crate) async fn smf_refresh(
     let prop_group = match prop_group {
         Some(pg) => pg,
         None => {
-            warn!(log, "smf config properties group is empty");
+            smf_log!(log, warn, "smf config properties group is empty");
             return Ok(());
         }
     };
@@ -55,30 +58,33 @@ fn refresh_stats_server(
     let props = match get_stats_server_props(pg) {
         Ok(props) => props,
         Err(e) => {
-            info!(log, "stats server not running on refresh: {e}");
+            smf_log!(log, info, "stats server not running on refresh: {e}");
             return Ok(());
         }
     };
 
     let mut is_running = lock!(ctx.stats_server_running);
     if !*is_running {
-        info!(log, "starting stats server on smf refresh");
+        smf_log!(log, info, "starting stats server on smf refresh");
         match crate::oxstats::start_server(
             ctx.clone(),
-            hostname,
+            &hostname,
             props.rack_uuid,
             props.sled_uuid,
             log.clone(),
         ) {
             Ok(_) => {
+                smf_log!(log, info, "started stats server on smf refresh");
                 *is_running = true;
             }
             Err(e) => {
-                error!(log, "failed to start stats server on refresh: {e}");
+                smf_log!(log, error, "failed to start stats server on refresh: {e}";
+                    "error" => format!("{e}")
+                );
             }
         }
     } else {
-        info!(log, "stats server already running on smf refresh");
+        smf_log!(log, info, "stats server already running on refresh");
     }
 
     Ok(())

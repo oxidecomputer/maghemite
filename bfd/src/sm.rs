@@ -2,14 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::packet::{Control, State as PacketState};
 use crate::{
-    BfdPeerState, PeerInfo, bidi, inf, packet, trc, util::update_peer_info, wrn,
+    BfdPeerState, PeerInfo, SessionCounters, bidi, log::*, packet,
+    util::update_peer_info,
 };
-use crate::{SessionCounters, err};
 use anyhow::{Result, anyhow};
 use mg_common::lock;
-use slog::{Logger, warn};
+use slog::Logger;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -17,6 +16,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::thread::spawn;
 use std::time::Duration;
+
+pub const UNIT_SESSION: &str = "session";
 
 /// This state machine implements the BFD state machine. The following is taken
 /// directly from RFC 5880. The arrows indicate the state machine transition
@@ -55,7 +56,10 @@ pub struct StateMachine {
 
 impl Drop for StateMachine {
     fn drop(&mut self) {
-        warn!(self.log, "dropping SM for {}", self.peer);
+        sm_log!(self,
+            warn,
+            "dropping SM for {}", self.peer;
+        );
         self.kill_switch.store(true, Ordering::Relaxed);
     }
 }
@@ -167,7 +171,7 @@ impl StateMachine {
                                 .fetch_add(1, Ordering::Relaxed);
                         }
                     }
-                    inf!(log, prev, peer; "transition -> {:?}", new);
+                    sm_log!(log, info, "transition -> {:?}", new; prev, peer);
                 }
             }
         });
@@ -229,7 +233,7 @@ impl StateMachine {
                 pkt.set_state(st);
 
                 if let Err(e) = sender.send((peer, pkt)) {
-                    wrn!(log, st, peer; "send: {}", e);
+                    sm_log!(log, warn, "send error: {e}"; st, peer);
                     counters
                         .control_packet_send_failures
                         .fetch_add(1, Ordering::Relaxed);
@@ -267,7 +271,7 @@ impl Drop for DeferredDelay {
 }
 
 pub enum RecvResult {
-    MessageFrom((IpAddr, Control)),
+    MessageFrom((IpAddr, packet::Control)),
     TransitionTo(Box<dyn State>),
 }
 
@@ -323,7 +327,7 @@ pub(crate) trait State: Sync + Send {
         pkt.set_final();
 
         if let Err(e) = sender.send((peer, pkt)) {
-            wrn!(log, state, peer; "send: {}", e);
+            sm_log!(log, warn, "send error: {e}"; state, peer);
         }
     }
 
@@ -339,30 +343,36 @@ pub(crate) trait State: Sync + Send {
             local.required_min_rx * local.detection_multiplier.into(),
         ) {
             Ok((addr, msg)) => {
-                trc!(log, self.state(), self.peer(); "recv: {:?}", msg);
+                sm_log!(
+                    log,
+                    trace,
+                    "recv msg: {msg:?}";
+                    self.state(),
+                    self.peer()
+                );
 
                 match msg.state() {
-                    PacketState::Peer(BfdPeerState::AdminDown) => {
+                    packet::State::Peer(BfdPeerState::AdminDown) => {
                         counters
                             .admin_down_status_received
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    PacketState::Peer(BfdPeerState::Down) => {
+                    packet::State::Peer(BfdPeerState::Down) => {
                         counters
                             .down_status_received
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    PacketState::Peer(BfdPeerState::Init) => {
+                    packet::State::Peer(BfdPeerState::Init) => {
                         counters
                             .init_status_received
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    PacketState::Peer(BfdPeerState::Up) => {
+                    packet::State::Peer(BfdPeerState::Up) => {
                         counters
                             .up_status_received
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    PacketState::Unknown(_) => {
+                    packet::State::Unknown(_) => {
                         counters
                             .unknown_status_received
                             .fetch_add(1, Ordering::Relaxed);
@@ -384,18 +394,25 @@ pub(crate) trait State: Sync + Send {
                 Ok(RecvResult::MessageFrom((addr, msg)))
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                wrn!(log, self.state(), self.peer(); "timeout expired");
+                sm_log!(
+                    log,
+                    warn,
+                    "recv timeout expired";
+                    self.state(),
+                    self.peer()
+                );
                 counters.timeout_expired.fetch_add(1, Ordering::Relaxed);
                 let next = Down::new(self.peer(), log.clone());
                 Ok(RecvResult::TransitionTo(Box::new(next)))
             }
             Err(e) => {
-                err!(
+                sm_log!(
                     log,
+                    error,
+                    "exiting receive loop on error: {e}";
                     self.state(),
-                    self.peer();
-                    "recv: {}, exiting recieve loop",
-                    e
+                    self.peer(),
+                    "error" => format!("{e}")
                 );
                 counters
                     .message_receive_error
@@ -476,7 +493,7 @@ impl State for Down {
                 }
                 State::Peer(_) => {}
                 State::Unknown(value) => {
-                    wrn!(self; "unknown state: {} - ignoring", value);
+                    state_log!(self, warn, "ignoring unknown state: {value}");
                 }
             }
         }
@@ -556,7 +573,7 @@ impl State for Init {
                     return Ok((Box::new(next), endpoint));
                 }
                 State::Unknown(value) => {
-                    wrn!(self; "unknown state: {} - ignoring", value);
+                    state_log!(self, warn, "ignoring unknown state: {value}");
                 }
             }
         }
@@ -632,7 +649,7 @@ impl State for Up {
                 }
                 State::Peer(_) => {}
                 State::Unknown(value) => {
-                    wrn!(self; "unknown state: {} - ignoring", value);
+                    state_log!(self, warn, "ignoring unknown state: {value}");
                 }
             }
         }

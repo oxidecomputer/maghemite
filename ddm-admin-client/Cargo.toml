@@ -3,12 +3,13 @@ name = "ddm-admin-client"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata.cargo-machete]
+ignored = ["oxnet", "serde", "uuid"]
+
 [dependencies]
 oxnet.workspace = true
-percent-encoding.workspace = true
 progenitor.workspace = true
 reqwest.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 slog.workspace = true
 uuid.workspace = true

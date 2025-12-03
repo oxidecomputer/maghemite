@@ -9,21 +9,19 @@ anyhow.workspace = true
 anstyle.workspace = true
 serde.workspace = true
 schemars.workspace = true
-thiserror.workspace = true
 slog.workspace = true
 slog-bunyan.workspace = true
 slog-async.workspace = true
-omicron-common.workspace = true
-tokio.workspace = true
 oximeter-producer.workspace = true
 oximeter.workspace = true
 oxnet.workspace = true
 backoff.workspace = true
 smf.workspace = true
 uuid.workspace = true
+libc.workspace = true
 
 # We need this on illumos, but must omit it on other platforms
-[dependencies.libnet]
+[target.'cfg(target_os = "illumos")'.dependencies.libnet]
 workspace = true
 optional = true
 

@@ -18,13 +18,14 @@ use ddm::{
 };
 use ddm_admin_client::types::TunnelOrigin;
 use dendrite::{ensure_tep_addr, link_is_up};
+use log::mgl_log;
 use mg_common::stats::MgLowerStats as Stats;
 use platform::{
     Ddm, Dpd, ProductionDdm, ProductionDpd, ProductionSwitchZone, SwitchZone,
 };
 use rdb::db::Rib;
 use rdb::{DEFAULT_ROUTE_PRIORITY, Db, Prefix, PrefixChangeNotification};
-use slog::{Logger, error, info, warn};
+use slog::Logger;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
@@ -35,6 +36,7 @@ use std::time::Duration;
 mod ddm;
 mod dendrite;
 mod error;
+mod log;
 mod platform;
 
 #[cfg(test)]
@@ -42,6 +44,9 @@ mod test;
 
 /// Tag used for managing both dpd and rdb elements.
 const MG_LOWER_TAG: &str = "mg-lower";
+const COMPONENT_MG_LOWER: &str = MG_LOWER_TAG;
+const MOD_SYNC: &str = "sync";
+const UNIT_EVENT_LOOP: &str = "event_loop";
 
 /// This is the primary entry point for the lower half. It loops forever,
 /// observing changes in the routing databse and synchronizing them to the
@@ -75,8 +80,12 @@ pub fn run(
         if let Err(e) =
             full_sync(tep, &db, &log, &dpd, &ddm, &sw, &stats, rt.clone())
         {
-            error!(log, "initializing failed: {e}");
-            info!(log, "restarting sync loop in one second");
+            mgl_log!(log,
+                error,
+                "initialization failed: {e}";
+                "error" => format!("{e}")
+            );
+            mgl_log!(log, info, "restarting sync loop in one second";);
             sleep(Duration::from_secs(1));
             continue;
         };
@@ -95,8 +104,12 @@ pub fn run(
                         &sw,
                         rt.clone(),
                     ) {
-                        error!(log, "handling change failed: {e}");
-                        info!(log, "restarting sync loop");
+                        mgl_log!(log,
+                            error,
+                            "handling change failed: {e}";
+                            "error" => format!("{e}")
+                        );
+                        mgl_log!(log, info, "restarting sync loop";);
                         continue;
                     }
                 }
@@ -113,14 +126,22 @@ pub fn run(
                         &stats,
                         rt.clone(),
                     ) {
-                        error!(log, "initializing failed: {e}");
-                        info!(log, "restarting sync loop in one second");
+                        mgl_log!(log,
+                            error,
+                            "initialization failed: {e}";
+                            "error" => format!("{e}")
+                        );
+                        mgl_log!(log, info, "restarting sync loop in one second";);
                         sleep(Duration::from_secs(1));
                         continue;
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    error!(log, "mg-lower rdb watcher disconnected");
+                    mgl_log!(log,
+                        error,
+                        "mg-lower rdb watcher disconnected";
+                        "error" => format!("{}", RecvTimeoutError::Disconnected)
+                    );
                     break;
                 }
             }
@@ -141,16 +162,16 @@ fn full_sync(
     _stats: &Arc<Stats>, //TODO(ry)
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
-    let rib = db.full_rib();
+    let rib_in = db.full_rib(None);
+    let rib_loc = db.loc_rib(None);
 
     // Make sure our tunnel endpoint address is on the switch ASIC
     ensure_tep_addr(tep, dpd, rt.clone(), log);
 
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
-    let loc_rib = db.loc_rib();
-    for (prefix, _paths) in rib.iter() {
-        sync_prefix(tep, &loc_rib, prefix, dpd, ddm, sw, log, &rt)?;
+    for (prefix, _paths) in rib_in.iter() {
+        sync_prefix(tep, &rib_loc, prefix, dpd, ddm, sw, log, &rt)?;
     }
 
     Ok(())
@@ -168,9 +189,10 @@ fn handle_change(
     sw: &impl SwitchZone,
     rt: Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
-    let loc_rib = db.loc_rib();
+    let rib_loc = db.loc_rib(None);
+
     for prefix in notification.changed.iter() {
-        sync_prefix(tep, &loc_rib, prefix, dpd, ddm, sw, log, &rt)?;
+        sync_prefix(tep, &rib_loc, prefix, dpd, ddm, sw, log, &rt)?
     }
 
     Ok(())
@@ -210,26 +232,29 @@ pub(crate) fn sync_prefix(
     // Remove paths for which the link is down.
     best.retain(|x| match link_is_up(dpd, &x.port_id, &x.link_id, rt) {
         Err(e) => {
-            error!(
-                log,
-                "sync_prefix: failed to get link state for {:?}/{:?} \
-                    not installing route {:?} -> {:?}: {e}",
-                x.port_id,
-                x.link_id,
-                x.cidr,
-                x.nexthop,
+            mgl_log!(log,
+                error,
+                "skipping install of route {} via {} ({}/{}), \
+                error getting link state: {e}",
+                x.cidr, x.nexthop, x.port_id, x.link_id;
+                "prefix" => format!("{}", x.cidr),
+                "nexthop" => format!("{}", x.nexthop),
+                "port" => format!("{}", x.port_id),
+                "link" => format!("{}", x.link_id),
+                "error" => format!("{e}")
             );
             false
         }
         Ok(false) => {
-            warn!(
-                log,
-                "sync_prefix: link {:?}/{:?} is not up, \
-                    not installing route {:?} -> {:?}",
-                x.port_id,
-                x.link_id,
-                x.cidr,
-                x.nexthop,
+            mgl_log!(log,
+                warn,
+                "skipping install of route {} via {} ({}/{}), \
+                link is not up",
+                x.cidr, x.nexthop, x.port_id, x.link_id;
+                "prefix" => format!("{}", x.cidr),
+                "nexthop" => format!("{}", x.nexthop),
+                "port" => format!("{}", x.port_id),
+                "link" => format!("{}", x.link_id)
             );
             false
         }

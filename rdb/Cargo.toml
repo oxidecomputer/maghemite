@@ -12,9 +12,15 @@ schemars.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 slog.workspace = true
-slog-bunyan.workspace = true
-slog-async.workspace = true
 mg-common.workspace = true
 itertools.workspace = true
 chrono.workspace = true
+clap = { workspace = true, optional = true }
 oxnet.workspace = true
+rdb-types = { workspace = true, features = ["clap"] }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[features]
+clap = ["dep:clap"]
