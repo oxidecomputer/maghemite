@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{bfd_admin, bgp_admin, rib_admin, static_admin};
+use crate::{bfd_admin, bgp_admin, mrib_admin, rib_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp::params::*;
 use bgp_admin::BgpContext;
@@ -437,6 +437,70 @@ impl MgAdminApi for MgAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
         static_admin::static_list_v6_routes(ctx).await
+    }
+
+    async fn mrib_status_imported(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<MribStatusQuery>,
+    ) -> Result<HttpResponseOk<Vec<rdb::types::MulticastRoute>>, HttpError>
+    {
+        mrib_admin::mrib_status_imported(rqctx, query).await
+    }
+
+    async fn mrib_status_installed(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<MribStatusQuery>,
+    ) -> Result<HttpResponseOk<Vec<rdb::types::MulticastRoute>>, HttpError>
+    {
+        mrib_admin::mrib_status_installed(rqctx, query).await
+    }
+
+    async fn mrib_get_route(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<MribRouteQuery>,
+    ) -> Result<HttpResponseOk<rdb::types::MulticastRoute>, HttpError> {
+        mrib_admin::mrib_get_route(rqctx, query).await
+    }
+
+    async fn mrib_get_selected_route(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<MribRouteQuery>,
+    ) -> Result<HttpResponseOk<rdb::types::MulticastRoute>, HttpError> {
+        mrib_admin::mrib_get_selected_route(rqctx, query).await
+    }
+
+    async fn mrib_static_add(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribAddStaticRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        mrib_admin::mrib_static_add(rqctx, request).await
+    }
+
+    async fn mrib_static_delete(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribDeleteStaticRequest>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        mrib_admin::mrib_static_delete(rqctx, request).await
+    }
+
+    async fn mrib_static_list(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<rdb::types::MulticastRoute>>, HttpError>
+    {
+        mrib_admin::mrib_static_list(rqctx).await
+    }
+
+    async fn mrib_get_rpf_rebuild_interval(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<MribRpfRebuildIntervalResponse>, HttpError> {
+        mrib_admin::mrib_get_rpf_rebuild_interval(rqctx).await
+    }
+
+    async fn mrib_set_rpf_rebuild_interval(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribRpfRebuildIntervalRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        mrib_admin::mrib_set_rpf_rebuild_interval(rqctx, request).await
     }
 }
 
