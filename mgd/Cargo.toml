@@ -26,6 +26,7 @@ omicron-common.workspace = true
 hostname.workspace = true
 uuid.workspace = true
 smf.workspace = true
+gateway-client.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

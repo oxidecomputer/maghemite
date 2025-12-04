@@ -438,6 +438,12 @@ impl MgAdminApi for MgAdminApiImpl {
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
         static_admin::static_list_v6_routes(ctx).await
     }
+
+    async fn switch_identifiers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<SwitchIdentifiers>, HttpError> {
+        static_admin::switch_identifiers(ctx).await
+    }
 }
 
 pub fn api_description() -> ApiDescription<Arc<HandlerContext>> {

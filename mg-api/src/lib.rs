@@ -371,6 +371,20 @@ pub trait MgAdminApi {
     async fn static_list_v6_routes(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
+
+    #[endpoint {method = GET, path = "/switch/identifiers" }]
+    async fn switch_identifiers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<SwitchIdentifiers>, HttpError>;
+}
+
+/// Identifiers for a switch.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct SwitchIdentifiers {
+    /// The slot number of the switch being managed.
+    ///
+    /// MGS uses u16 for this internally.
+    pub slot: Option<u16>,
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]

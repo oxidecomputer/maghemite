@@ -114,6 +114,7 @@ proptest = "1.4"
 serial_test = "3.2"
 ddm-api = { path = "ddm-api" }
 ddm-types = { path = "ddm-types" }
+gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
