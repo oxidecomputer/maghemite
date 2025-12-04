@@ -1409,9 +1409,9 @@ dependencies = [
 
 [[package]]
 name = "drift"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43eb40edecda6106744f5e4f3d4dc78b3adf19d3cfb2d81cc4faa007da91e527"
+checksum = "beebeb5f38023a0c6586ffd39e43bb3280926e18faf576a3e10c95895c99651e"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -1474,9 +1474,9 @@ dependencies = [
 
 [[package]]
 name = "dropshot-api-manager"
-version = "0.2.2"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d0c9a9b3587eb5c7da419466203773307767124fa20e84068d9dd06ee34caa9"
+checksum = "aee20ca777e652264a3334e41c9b548bdd848562e3918541ab04d6ceb3b7dd56"
 dependencies = [
  "anyhow",
  "atomicwrites",
@@ -1504,9 +1504,9 @@ dependencies = [
 
 [[package]]
 name = "dropshot-api-manager-types"
-version = "0.2.2"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00be3e4459aae391b88805e9f735c7cf9cf4ed6aad02bc0e92b224b590af39ab"
+checksum = "b0103ef0b1a219c1a620e0b01659f6a27185df697876388144b1fb9637123e63"
 dependencies = [
  "anyhow",
  "camino",
