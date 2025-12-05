@@ -40,8 +40,47 @@ pub trait BgpWireFormat<T>: Sized {
     fn from_wire(input: &[u8]) -> Result<(&[u8], T), Self::Error>;
 }
 
+/// Errors from parsing NLRI prefixes.
+///
+/// These preserve the specific failure reason so callers can convert
+/// to `UpdateParseErrorReason` with the appropriate section context.
+#[derive(Debug, Clone)]
+pub enum PrefixParseError {
+    /// No data available for prefix length byte
+    MissingLength,
+    /// Prefix length exceeds maximum for address family
+    InvalidMask { length: u8, max: u8 },
+    /// Not enough bytes for declared prefix length
+    Truncated { needed: usize, available: usize },
+}
+
+impl PrefixParseError {
+    /// Convert to UpdateParseErrorReason with section context.
+    pub fn into_reason(self, section: &'static str) -> UpdateParseErrorReason {
+        match self {
+            Self::MissingLength => {
+                UpdateParseErrorReason::NlriMissingLength { section }
+            }
+            Self::InvalidMask { length, max } => {
+                UpdateParseErrorReason::InvalidNlriMask {
+                    section,
+                    length,
+                    max,
+                }
+            }
+            Self::Truncated { needed, available } => {
+                UpdateParseErrorReason::TruncatedNlri {
+                    section,
+                    needed,
+                    available,
+                }
+            }
+        }
+    }
+}
+
 impl BgpWireFormat<Prefix4> for Prefix4 {
-    type Error = Error;
+    type Error = PrefixParseError;
 
     fn to_wire(&self) -> Vec<u8> {
         let mut buf = vec![self.length];
@@ -52,26 +91,25 @@ impl BgpWireFormat<Prefix4> for Prefix4 {
 
     fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Self::Error> {
         if input.is_empty() {
-            return Err(Error::TooSmall("prefix length byte missing".into()));
+            return Err(PrefixParseError::MissingLength);
         }
 
         let len = input[0];
 
         // Validate length bound for IPv4 (structural validation)
-        if len > 32 {
-            return Err(Error::TooLarge(format!(
-                "invalid IPv4 prefix length {} > 32",
-                len
-            )));
+        if len > Prefix4::HOST_MASK {
+            return Err(PrefixParseError::InvalidMask {
+                length: len,
+                max: Prefix4::HOST_MASK,
+            });
         }
 
         let byte_count = (len as usize).div_ceil(8);
         if input.len() < 1 + byte_count {
-            return Err(Error::TooSmall(format!(
-                "prefix data too short: need {} bytes, have {}",
-                1 + byte_count,
-                input.len()
-            )));
+            return Err(PrefixParseError::Truncated {
+                needed: 1 + byte_count,
+                available: input.len(),
+            });
         }
 
         let mut bytes = [0u8; 4];
@@ -106,7 +144,7 @@ impl BgpWireFormat<Prefix4> for Prefix4 {
 }
 
 impl BgpWireFormat<Prefix6> for Prefix6 {
-    type Error = Error;
+    type Error = PrefixParseError;
 
     fn to_wire(&self) -> Vec<u8> {
         let mut buf = vec![self.length];
@@ -115,28 +153,27 @@ impl BgpWireFormat<Prefix6> for Prefix6 {
         buf
     }
 
-    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Error> {
+    fn from_wire(input: &[u8]) -> Result<(&[u8], Self), PrefixParseError> {
         if input.is_empty() {
-            return Err(Error::TooSmall("prefix length byte missing".into()));
+            return Err(PrefixParseError::MissingLength);
         }
 
         let len = input[0];
 
         // Validate length bound for IPv6 (structural validation)
-        if len > 128 {
-            return Err(Error::TooLarge(format!(
-                "invalid IPv6 prefix length {} > 128",
-                len
-            )));
+        if len > Prefix6::HOST_MASK {
+            return Err(PrefixParseError::InvalidMask {
+                length: len,
+                max: Prefix6::HOST_MASK,
+            });
         }
 
         let byte_count = (len as usize).div_ceil(8);
         if input.len() < 1 + byte_count {
-            return Err(Error::TooSmall(format!(
-                "prefix data too short: need {} bytes, have {}",
-                1 + byte_count,
-                input.len()
-            )));
+            return Err(PrefixParseError::Truncated {
+                needed: 1 + byte_count,
+                available: input.len(),
+            });
         }
 
         let mut bytes = [0u8; 16];
@@ -240,13 +277,13 @@ impl Message {
         }
     }
 
-    pub fn title(&self) -> &str {
+    pub fn title(&self) -> &'static str {
         match self {
-            Message::Open(_) => "open",
-            Message::Update(_) => "update",
-            Message::Notification(_) => "notification",
-            Message::KeepAlive => "keepalive",
-            Message::RouteRefresh(_) => "route refresh",
+            Message::Open(_) => "open message",
+            Message::Update(_) => "update message",
+            Message::Notification(_) => "notification message",
+            Message::KeepAlive => "keepalive message",
+            Message::RouteRefresh(_) => "route refresh message",
         }
     }
 
@@ -710,8 +747,21 @@ pub struct Tlv {
 )]
 pub struct UpdateMessage {
     pub withdrawn: Vec<Prefix4>,
-    pub path_attributes: Vec<PathAttribute>,
+    pub path_attributes: Vec<PathAttribute>, // XXX: use map for O(1) lookups?
     pub nlri: Vec<Prefix4>,
+
+    /// True if a TreatAsWithdraw error occurred during from_wire().
+    /// When true, session should process all NLRI (v4 + v6) as withdrawals.
+    /// Not serialized - only used for internal signaling.
+    #[serde(skip)]
+    pub treat_as_withdraw: bool,
+
+    /// All attribute parse errors encountered during from_wire().
+    /// Includes both TreatAsWithdraw and Discard errors.
+    /// SessionReset errors cause early return and are not collected here.
+    /// Not serialized - only used for internal signaling.
+    #[serde(skip)]
+    pub errors: Vec<(UpdateParseErrorReason, AttributeAction)>,
 }
 
 impl UpdateMessage {
@@ -827,64 +877,175 @@ impl UpdateMessage {
         Ok(buf)
     }
 
-    pub fn from_wire(input: &[u8]) -> Result<UpdateMessage, Error> {
-        let (input, len) = be_u16(input)?;
-        let (input, withdrawn_input) = take(len)(input)?;
-        let withdrawn = Self::prefixes4_from_wire(withdrawn_input)?;
+    /// Parse UPDATE message with RFC 7606 error tracking.
+    ///
+    /// Parses sequentially: withdrawn → attributes → nlri.
+    /// If an attribute error occurs, continues to parse NLRI so it can be
+    /// withdrawn per RFC 7606 "treat-as-withdraw" semantics.
+    ///
+    /// Returns `Ok(UpdateMessage)` on success (possibly with `treat_as_withdraw`
+    /// field set), or `Err(UpdateParseError)` for fatal errors requiring session
+    /// reset.
+    pub fn from_wire(input: &[u8]) -> Result<UpdateMessage, UpdateParseError> {
+        // 1. Parse withdrawn routes length and extract bytes
+        let (input, len) = be_u16::<_, nom::error::Error<&[u8]>>(input)
+            .map_err(|e| UpdateParseError {
+                error_code: ErrorCode::Update,
+                error_subcode: ErrorSubcode::Update(
+                    UpdateErrorSubcode::MalformedAttributeList,
+                ),
+                reason: UpdateParseErrorReason::Other {
+                    detail: format!("failed to parse withdrawn length: {e}"),
+                },
+            })?;
+        let (input, withdrawn_input) = take(len)(input).map_err(
+            |_e: nom::Err<nom::error::Error<&[u8]>>| UpdateParseError {
+                error_code: ErrorCode::Update,
+                error_subcode: ErrorSubcode::Update(
+                    UpdateErrorSubcode::MalformedAttributeList,
+                ),
+                reason: UpdateParseErrorReason::InvalidWithdrawnLength {
+                    declared: len,
+                    available: input.len(),
+                },
+            },
+        )?;
 
-        let (input, len) = be_u16(input)?;
-        let (input, attrs_input) = take(len)(input)?;
-        let path_attributes = Self::path_attrs_from_wire(attrs_input)?;
+        // 2. Parse withdrawn prefixes (SessionReset on failure)
+        let withdrawn = match Self::prefixes4_from_wire(withdrawn_input) {
+            Ok(w) => w,
+            Err(e) => {
+                return Err(UpdateParseError {
+                    error_code: ErrorCode::Update,
+                    error_subcode: ErrorSubcode::Update(
+                        UpdateErrorSubcode::InvalidNetworkField,
+                    ),
+                    reason: e.into_reason("withdrawn"),
+                });
+            }
+        };
 
-        let nlri = Self::prefixes4_from_wire(input)?;
+        // 3. Parse path attributes length and extract bytes
+        let (input, len) = be_u16::<_, nom::error::Error<&[u8]>>(input)
+            .map_err(|e| UpdateParseError {
+                error_code: ErrorCode::Update,
+                error_subcode: ErrorSubcode::Update(
+                    UpdateErrorSubcode::MalformedAttributeList,
+                ),
+                reason: UpdateParseErrorReason::Other {
+                    detail: format!(
+                        "failed to parse path attributes length: {e}"
+                    ),
+                },
+            })?;
+        let (input, attrs_input) = take(len)(input).map_err(
+            |_e: nom::Err<nom::error::Error<&[u8]>>| UpdateParseError {
+                error_code: ErrorCode::Update,
+                error_subcode: ErrorSubcode::Update(
+                    UpdateErrorSubcode::MalformedAttributeList,
+                ),
+                reason: UpdateParseErrorReason::InvalidAttributeLength {
+                    declared: len,
+                    available: input.len(),
+                },
+            },
+        )?;
+
+        // 4. Parse path attributes, collecting all errors
+        let ParsedPathAttrs {
+            attrs: path_attributes,
+            errors: attr_errors,
+            treat_as_withdraw,
+        } = Self::path_attrs_from_wire(attrs_input)?;
+
+        // 6. Parse NLRI (remaining bytes)
+        //    Even if attrs had errors, we need NLRI for TreatAsWithdraw
+        let nlri = match Self::prefixes4_from_wire(input) {
+            Ok(n) => n,
+            Err(e) => {
+                // NLRI parse failure = SessionReset (strongest action)
+                return Err(UpdateParseError {
+                    error_code: ErrorCode::Update,
+                    error_subcode: ErrorSubcode::Update(
+                        UpdateErrorSubcode::InvalidNetworkField,
+                    ),
+                    reason: e.into_reason("nlri"),
+                });
+            }
+        };
+
+        // 7. Validate mandatory attributes (RFC 4271 Section 5.1.2)
+        //    Only required when UPDATE carries reachability information (NLRI).
+        //    Missing mandatory attrs = TreatAsWithdraw per RFC 7606.
+        let mut errors = attr_errors;
+        let mut treat_as_withdraw = treat_as_withdraw;
+
+        // Check if we have any NLRI (traditional or MP-BGP)
+        let has_traditional_nlri = !nlri.is_empty();
+        let has_mp_reach = path_attributes
+            .iter()
+            .any(|a| matches!(a.value, PathAttributeValue::MpReachNlri(_)));
+
+        if has_traditional_nlri || has_mp_reach {
+            // ORIGIN is always required when there's NLRI
+            let has_origin = path_attributes
+                .iter()
+                .any(|a| matches!(a.value, PathAttributeValue::Origin(_)));
+            if !has_origin {
+                treat_as_withdraw = true;
+                errors.push((
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::Origin,
+                    },
+                    AttributeAction::TreatAsWithdraw,
+                ));
+            }
+
+            // AS_PATH is always required when there's NLRI
+            // Note: AS_PATH parses to As4Path variant internally (always uses 4-byte ASNs)
+            let has_as_path = path_attributes.iter().any(|a| {
+                matches!(
+                    a.value,
+                    PathAttributeValue::AsPath(_)
+                        | PathAttributeValue::As4Path(_)
+                )
+            });
+            if !has_as_path {
+                treat_as_withdraw = true;
+                errors.push((
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::AsPath,
+                    },
+                    AttributeAction::TreatAsWithdraw,
+                ));
+            }
+
+            // NEXT_HOP is required for traditional NLRI (IPv4 in NLRI field).
+            // When MP_REACH_NLRI is present without traditional NLRI, the nexthop
+            // is carried inside the MP attribute, so NEXT_HOP is not required.
+            if has_traditional_nlri {
+                let has_next_hop = path_attributes
+                    .iter()
+                    .any(|a| matches!(a.value, PathAttributeValue::NextHop(_)));
+                if !has_next_hop {
+                    treat_as_withdraw = true;
+                    errors.push((
+                        UpdateParseErrorReason::MissingAttribute {
+                            type_code: PathAttributeTypeCode::NextHop,
+                        },
+                        AttributeAction::TreatAsWithdraw,
+                    ));
+                }
+            }
+        }
 
         Ok(UpdateMessage {
             withdrawn,
             path_attributes,
             nlri,
+            treat_as_withdraw,
+            errors,
         })
-    }
-
-    /// Check for duplicate MP_REACH_NLRI or MP_UNREACH_NLRI attributes.
-    ///
-    /// RFC 7606 Section 3g:
-    /// ```text
-    /// g.  If the MP_REACH_NLRI attribute or the MP_UNREACH_NLRI [RFC4760]
-    ///     attribute appears more than once in the UPDATE message, then a
-    ///     NOTIFICATION message MUST be sent with the Error Subcode
-    ///     "Malformed Attribute List".  If any other attribute (whether
-    ///     recognized or unrecognized) appears more than once in an UPDATE
-    ///     message, then all the occurrences of the attribute other than the
-    ///     first one SHALL be discarded and the UPDATE message will continue
-    ///     to be processed.
-    /// ```
-    pub fn check_duplicate_mp_attributes(&self) -> Result<(), Error> {
-        let mut has_mp_reach = false;
-        let mut has_mp_unreach = false;
-
-        for attr in &self.path_attributes {
-            match &attr.value {
-                PathAttributeValue::MpReachNlri(_) => {
-                    if has_mp_reach {
-                        return Err(Error::MalformedAttributeList(
-                            "Multiple MP_REACH_NLRI attributes".into(),
-                        ));
-                    }
-                    has_mp_reach = true;
-                }
-                PathAttributeValue::MpUnreachNlri(_) => {
-                    if has_mp_unreach {
-                        return Err(Error::MalformedAttributeList(
-                            "Multiple MP_UNREACH_NLRI attributes".into(),
-                        ));
-                    }
-                    has_mp_unreach = true;
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
     }
 
     /// Parse prefixes from wire format.
@@ -892,7 +1053,7 @@ impl UpdateMessage {
     pub fn prefixes_from_wire(
         buf: &[u8],
         afi: AddressFamily,
-    ) -> Result<Vec<Prefix>, Error> {
+    ) -> Result<Vec<Prefix>, PrefixParseError> {
         match afi {
             AddressFamily::Ipv4 => Self::prefixes4_from_wire(buf)
                 .map(|v| v.into_iter().map(Prefix::V4).collect()),
@@ -902,11 +1063,12 @@ impl UpdateMessage {
     }
 
     /// Parse IPv4 prefixes from wire format.
-    pub fn prefixes4_from_wire(mut buf: &[u8]) -> Result<Vec<Prefix4>, Error> {
+    pub fn prefixes4_from_wire(
+        mut buf: &[u8],
+    ) -> Result<Vec<Prefix4>, PrefixParseError> {
         let mut result = Vec::new();
         while !buf.is_empty() {
-            let (out, prefix4) = Prefix4::from_wire(buf)
-                .map_err(|_| Error::InvalidNlriPrefix(buf.to_vec()))?;
+            let (out, prefix4) = Prefix4::from_wire(buf)?;
             result.push(prefix4);
             buf = out;
         }
@@ -914,18 +1076,23 @@ impl UpdateMessage {
     }
 
     /// Parse IPv6 prefixes from wire format.
-    pub fn prefixes6_from_wire(mut buf: &[u8]) -> Result<Vec<Prefix6>, Error> {
+    pub fn prefixes6_from_wire(
+        mut buf: &[u8],
+    ) -> Result<Vec<Prefix6>, PrefixParseError> {
         let mut result = Vec::new();
         while !buf.is_empty() {
-            let (out, prefix6) = Prefix6::from_wire(buf)
-                .map_err(|_| Error::InvalidNlriPrefix(buf.to_vec()))?;
+            let (out, prefix6) = Prefix6::from_wire(buf)?;
             result.push(prefix6);
             buf = out;
         }
         Ok(result)
     }
 
-    /// Parse Path Attributes carried in an Update from wire format.
+    /// Parse path attributes from wire format with RFC 7606 error handling.
+    ///
+    /// This function handles the framing (type header + length parsing) for each
+    /// attribute internally, which allows it to continue parsing after non-fatal
+    /// errors because it always knows where the next attribute starts.
     ///
     /// For any given path attribute, only the first instance is respected.
     /// Subsequent instances are discarded. The exceptions to this are MP-BGP
@@ -944,41 +1111,255 @@ impl UpdateMessage {
     ///     to be processed.
     /// ```
     ///
-    /// Note: Currently, this is implemented by retaining MpReachNlri and
-    /// MpUnreachNlri in the parsed Update so the session layer (FSM) can detect
-    /// the duplication and react accordingly (by sending a Malformed Attribute
-    /// List Notification).
+    /// # Returns
+    /// - `Ok(ParsedPathAttrs)`: Successfully parsed (may contain non-fatal errors)
+    /// - `Err(UpdateParseError)`: Fatal error (SessionReset) - parsing cannot continue
     fn path_attrs_from_wire(
         mut buf: &[u8],
-    ) -> Result<Vec<PathAttribute>, Error> {
+    ) -> Result<ParsedPathAttrs, UpdateParseError> {
         let mut result = Vec::new();
+        let mut errors = Vec::new();
+        let mut treat_as_withdraw = false;
         let mut seen_types: HashSet<u8> = HashSet::new();
+        let mut has_mp_reach = false;
+        let mut has_mp_unreach = false;
 
         loop {
             if buf.is_empty() {
                 break;
             }
-            let (out, pa) = PathAttribute::from_wire(buf)?;
 
-            let type_code = pa.typ.type_code as u8;
-            let is_mp_bgp = matches!(
-                pa.typ.type_code,
-                PathAttributeTypeCode::MpReachNlri
-                    | PathAttributeTypeCode::MpUnreachNlri
-            );
+            // ===== FRAMING: Parse attribute header (type + length) =====
 
-            if is_mp_bgp || !seen_types.contains(&type_code) {
-                // Keep MP-BGP attributes (duplicates trigger NOTIFICATION via
-                // check_duplicate_mp_attributes at session layer) and first
-                // occurrence of non-MP-BGP attributes.
-                seen_types.insert(type_code);
-                result.push(pa);
+            // 1. Parse 2-byte type header (flags + type_code)
+            let (remaining, type_bytes) =
+                match take::<_, _, nom::error::Error<&[u8]>>(2usize)(buf) {
+                    Ok((r, t)) => (r, t),
+                    Err(e) => {
+                        // Can't even read type header - fatal framing error
+                        return Err(UpdateParseError {
+                            error_code: ErrorCode::Update,
+                            error_subcode: ErrorSubcode::Update(
+                                UpdateErrorSubcode::MalformedAttributeList,
+                            ),
+                            reason:
+                                UpdateParseErrorReason::AttributeParseError {
+                                    type_code: None,
+                                    detail: format!(
+                                        "failed to read attribute type: {e}"
+                                    ),
+                                },
+                        });
+                    }
+                };
+
+            // 2. Parse PathAttributeType from the 2 bytes
+            let typ = match PathAttributeType::from_wire(type_bytes) {
+                Ok(t) => t,
+                Err(e) => {
+                    // Unknown/invalid type code - fatal framing error
+                    // (we don't know the length encoding without valid flags)
+                    return Err(UpdateParseError {
+                        error_code: ErrorCode::Update,
+                        error_subcode: ErrorSubcode::Update(
+                            UpdateErrorSubcode::MalformedAttributeList,
+                        ),
+                        reason: UpdateParseErrorReason::AttributeParseError {
+                            type_code: None,
+                            detail: format!("invalid attribute type: {e}"),
+                        },
+                    });
+                }
+            };
+
+            let type_code_u8 = typ.type_code as u8;
+
+            // 3. Validate attribute flags (RFC 7606 Section 3c)
+            //    Even if flag validation fails, we need to parse the length to skip
+            //    the attribute. Track the error but continue to length parsing.
+            let flag_error = validate_attribute_flags(&typ).err();
+
+            // 4. Parse length (1 or 2 bytes depending on EXTENDED_LENGTH flag)
+            let (remaining, len) =
+                if typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0 {
+                    match be_u16::<_, nom::error::Error<&[u8]>>(remaining) {
+                        Ok((r, l)) => (r, l as usize),
+                        Err(e) => {
+                            // Can't read extended length - fatal framing error
+                            return Err(UpdateParseError {
+                            error_code: ErrorCode::Update,
+                            error_subcode: ErrorSubcode::Update(
+                                UpdateErrorSubcode::MalformedAttributeList,
+                            ),
+                            reason:
+                                UpdateParseErrorReason::AttributeParseError {
+                                    type_code: Some(type_code_u8),
+                                    detail: format!(
+                                        "failed to read extended length: {e}"
+                                    ),
+                                },
+                        });
+                        }
+                    }
+                } else {
+                    match parse_u8::<_, nom::error::Error<&[u8]>>(remaining) {
+                        Ok((r, l)) => (r, l as usize),
+                        Err(e) => {
+                            // Can't read length - fatal framing error
+                            return Err(UpdateParseError {
+                            error_code: ErrorCode::Update,
+                            error_subcode: ErrorSubcode::Update(
+                                UpdateErrorSubcode::MalformedAttributeList,
+                            ),
+                            reason:
+                                UpdateParseErrorReason::AttributeParseError {
+                                    type_code: Some(type_code_u8),
+                                    detail: format!(
+                                        "failed to read length: {e}"
+                                    ),
+                                },
+                        });
+                        }
+                    }
+                };
+
+            // 5. Extract `len` bytes for the attribute value
+            let (remaining, value_bytes) = match take::<
+                _,
+                _,
+                nom::error::Error<&[u8]>,
+            >(len)(remaining)
+            {
+                Ok((r, v)) => (r, v),
+                Err(e) => {
+                    // Declared length exceeds available bytes - fatal framing error
+                    return Err(UpdateParseError {
+                        error_code: ErrorCode::Update,
+                        error_subcode: ErrorSubcode::Update(
+                            UpdateErrorSubcode::MalformedAttributeList,
+                        ),
+                        reason: UpdateParseErrorReason::AttributeParseError {
+                            type_code: Some(type_code_u8),
+                            detail: format!(
+                                "attribute truncated: declared {} bytes, {e}",
+                                len
+                            ),
+                        },
+                    });
+                }
+            };
+
+            // ===== We now know where the next attribute starts! =====
+            // Update buf to point past this attribute for the next iteration
+            buf = remaining;
+
+            // ===== Handle flag validation error =====
+            // Now that we've advanced buf, we can handle the flag error
+            if let Some((reason, action)) = flag_error {
+                match action {
+                    AttributeAction::SessionReset => {
+                        return Err(UpdateParseError {
+                            error_code: ErrorCode::Update,
+                            error_subcode: ErrorSubcode::Update(
+                                UpdateErrorSubcode::MalformedAttributeList,
+                            ),
+                            reason,
+                        });
+                    }
+                    AttributeAction::TreatAsWithdraw => {
+                        treat_as_withdraw = true;
+                        errors.push((reason, action));
+                        continue; // Skip value parsing, move to next attribute
+                    }
+                    AttributeAction::Discard => {
+                        errors.push((reason, action));
+                        continue; // Skip value parsing, move to next attribute
+                    }
+                }
             }
-            // else: discard duplicate non-MP-BGP attribute per RFC 7606 3(g)
 
-            buf = out;
+            // ===== VALUE PARSING: Parse the attribute value =====
+            match PathAttribute::from_bytes(typ.clone(), value_bytes) {
+                Ok(pa) => {
+                    // ===== DUPLICATE DETECTION =====
+                    let is_mp_reach =
+                        pa.typ.type_code == PathAttributeTypeCode::MpReachNlri;
+                    let is_mp_unreach = pa.typ.type_code
+                        == PathAttributeTypeCode::MpUnreachNlri;
+
+                    // Track MP-BGP duplicates for Session Reset (RFC 7606 §3g)
+                    if is_mp_reach {
+                        if has_mp_reach {
+                            // Duplicate MP_REACH_NLRI - Session Reset
+                            return Err(UpdateParseError {
+                                error_code: ErrorCode::Update,
+                                error_subcode: ErrorSubcode::Update(
+                                    UpdateErrorSubcode::MalformedAttributeList,
+                                ),
+                                reason:
+                                    UpdateParseErrorReason::DuplicateMpReachNlri,
+                            });
+                        }
+                        has_mp_reach = true;
+                    }
+                    if is_mp_unreach {
+                        if has_mp_unreach {
+                            // Duplicate MP_UNREACH_NLRI - Session Reset
+                            return Err(UpdateParseError {
+                                error_code: ErrorCode::Update,
+                                error_subcode: ErrorSubcode::Update(
+                                    UpdateErrorSubcode::MalformedAttributeList,
+                                ),
+                                reason: UpdateParseErrorReason::DuplicateMpUnreachNlri,
+                            });
+                        }
+                        has_mp_unreach = true;
+                    }
+
+                    let is_mp_bgp = is_mp_reach || is_mp_unreach;
+
+                    if is_mp_bgp || !seen_types.contains(&type_code_u8) {
+                        // Keep MP-BGP attributes and first occurrence of
+                        // non-MP-BGP attributes.
+                        seen_types.insert(type_code_u8);
+                        result.push(pa);
+                    }
+                    // else: discard duplicate non-MP-BGP attribute per RFC 7606 3(g)
+                }
+                Err(reason) => {
+                    // Value parsing failed - determine action based on attribute type
+                    let action = typ.error_action();
+
+                    match action {
+                        AttributeAction::SessionReset => {
+                            // Fatal error - return immediately
+                            return Err(UpdateParseError {
+                                error_code: ErrorCode::Update,
+                                error_subcode: ErrorSubcode::Update(
+                                    UpdateErrorSubcode::MalformedAttributeList,
+                                ),
+                                reason,
+                            });
+                        }
+                        AttributeAction::TreatAsWithdraw => {
+                            // Record error, skip this attribute, continue parsing
+                            treat_as_withdraw = true;
+                            errors.push((reason, action));
+                        }
+                        AttributeAction::Discard => {
+                            // Record error, skip this attribute, continue parsing
+                            errors.push((reason, action));
+                        }
+                    }
+                }
+            }
         }
-        Ok(result)
+
+        Ok(ParsedPathAttrs {
+            attrs: result,
+            errors,
+            treat_as_withdraw,
+        })
     }
 
     /// This method parses an UpdateMessage and returns a BgpNexthop which
@@ -988,31 +1369,19 @@ impl UpdateMessage {
     /// capabilities), this method centralizes the logic for parsing and
     /// selection of received nexthops.
     pub fn nexthop(&self) -> Result<BgpNexthop, Error> {
-        let mp =
-            match self.path_attributes.iter().find_map(|a| match &a.value {
-                PathAttributeValue::MpReachNlri(mp) => Some(mp),
-                _ => None,
-            }) {
-                // This Update is not MP-BGP, so we can just hand out NEXT_HOP
-                None => {
-                    return self
-                        .nexthop4()
-                        .map(|n4| n4.into())
-                        .ok_or(Error::MissingNexthop);
-                }
-                Some(mp) => mp,
-            };
-
-        // This Update is MP-BGP, so we need to use the AFI/SAFI (represented
-        // here via Afi) and the nh_len to derive the nexthop type.
-        // XXX: extended nexthop validation
-        BgpNexthop::from_bytes(
-            &mp.nh_bytes,
-            mp.nh_len,
-            Afi::try_from(mp.afi).map_err(|_| {
-                Error::UnsupportedAddressFamily(mp.afi, mp.safi)
-            })?,
-        )
+        // Find MP_REACH_NLRI if present
+        match self.path_attributes.iter().find_map(|a| match &a.value {
+            PathAttributeValue::MpReachNlri(mp) => Some(mp),
+            _ => None,
+        }) {
+            // This Update is MP-BGP, nexthop is already parsed
+            Some(mp) => Ok(*mp.nexthop()),
+            // This Update is not MP-BGP, use the NEXT_HOP attribute
+            None => self
+                .nexthop4()
+                .map(|n4| n4.into())
+                .ok_or(Error::MissingNexthop),
+        }
     }
 
     pub fn nexthop4(&self) -> Option<Ipv4Addr> {
@@ -1127,7 +1496,8 @@ impl Display for UpdateMessage {
 
         write!(
             f,
-            "Update[ path_attributes: {p_str}) withdrawn({}) nlri({}) ]",
+            "Update[ treat-as-withdraw: ({}) path_attributes: ({p_str}) withdrawn({}) nlri({}) ]",
+            self.treat_as_withdraw,
             if !w_str.is_empty() { &w_str } else { "empty" },
             if !n_str.is_empty() { &n_str } else { "empty" }
         )
@@ -1190,22 +1560,71 @@ impl PathAttribute {
         Ok(buf)
     }
 
-    fn from_wire(input: &[u8]) -> Result<(&[u8], PathAttribute), Error> {
-        let (input, type_input) = take(2usize)(input)?;
-        let typ = PathAttributeType::from_wire(type_input)?;
-
-        let (input, len) =
-            if typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0 {
-                let (input, len) = be_u16(input)?;
-                (input, len as usize)
-            } else {
-                let (input, len) = parse_u8(input)?;
-                (input, len as usize)
-            };
-        let (input, pa_input) = take(len)(input)?;
-        let value = PathAttributeValue::from_wire(pa_input, typ.type_code)?;
-        Ok((input, PathAttribute { typ, value }))
+    /// Parse a path attribute from bounded value bytes.
+    ///
+    /// The caller has already:
+    /// 1. Parsed the 2-byte type header (flags + type code)
+    /// 2. Validated the attribute flags via `validate_attribute_flags()`
+    /// 3. Parsed the length and extracted exactly `len` bytes
+    ///
+    /// This function parses only the attribute value from the bounded slice.
+    fn from_bytes(
+        typ: PathAttributeType,
+        value_bytes: &[u8],
+    ) -> Result<PathAttribute, UpdateParseErrorReason> {
+        let value = PathAttributeValue::from_wire(value_bytes, typ.type_code)?;
+        Ok(PathAttribute { typ, value })
     }
+}
+
+/// RFC 7606 Section 3(c): Validate attribute flags match expected values.
+///
+/// Each attribute type has specific requirements for the Optional and Transitive
+/// flags. If the received flags don't match, the attribute is malformed.
+///
+/// Returns `Ok(())` if flags are valid, or `Err` with the appropriate error and action.
+fn validate_attribute_flags(
+    typ: &PathAttributeType,
+) -> Result<(), (UpdateParseErrorReason, AttributeAction)> {
+    use path_attribute_flags::*;
+
+    let optional = typ.flags & OPTIONAL != 0;
+    let transitive = typ.flags & TRANSITIVE != 0;
+
+    // Define expected flags for each known attribute type
+    // Format: (expected_optional, expected_transitive)
+    let expected = match typ.type_code {
+        // Well-known mandatory/discretionary: Optional=0, Transitive=1
+        PathAttributeTypeCode::Origin
+        | PathAttributeTypeCode::AsPath
+        | PathAttributeTypeCode::NextHop
+        | PathAttributeTypeCode::LocalPref
+        | PathAttributeTypeCode::AtomicAggregate => (false, true),
+
+        // Optional non-transitive: Optional=1, Transitive=0
+        PathAttributeTypeCode::MultiExitDisc
+        | PathAttributeTypeCode::MpReachNlri
+        | PathAttributeTypeCode::MpUnreachNlri => (true, false),
+
+        // Optional transitive: Optional=1, Transitive=1
+        PathAttributeTypeCode::Aggregator
+        | PathAttributeTypeCode::Communities
+        | PathAttributeTypeCode::As4Path
+        | PathAttributeTypeCode::As4Aggregator => (true, true),
+    };
+
+    let (expected_optional, expected_transitive) = expected;
+
+    if optional != expected_optional || transitive != expected_transitive {
+        let reason = UpdateParseErrorReason::InvalidAttributeFlags {
+            type_code: typ.type_code as u8,
+            flags: typ.flags,
+        };
+        let action = typ.error_action();
+        return Err((reason, action));
+    }
+
+    Ok(())
 }
 
 /// Type encoding for a path attribute.
@@ -1228,6 +1647,59 @@ impl PathAttributeType {
         let (_, type_code) = parse_u8(input)?;
         let type_code = PathAttributeTypeCode::try_from(type_code)?;
         Ok(PathAttributeType { flags, type_code })
+    }
+
+    /// Determine RFC 7606 action for errors on this attribute type.
+    ///
+    /// RFC 7606 specifies different error handling actions for different attribute types:
+    /// - Session Reset: Critical errors that prevent reliable parsing
+    /// - Treat-as-withdraw: Errors in route-affecting attributes
+    /// - Attribute Discard: Errors in informational-only attributes
+    pub fn error_action(&self) -> AttributeAction {
+        match self.type_code {
+            // Well-known mandatory attributes (RFC 7606 Section 7.1-7.3)
+            PathAttributeTypeCode::Origin
+            | PathAttributeTypeCode::AsPath
+            | PathAttributeTypeCode::NextHop => {
+                AttributeAction::TreatAsWithdraw
+            }
+
+            // MP-BGP attributes: SessionReset on any error because we never
+            // negotiate AFI/SAFIs we don't support, so receiving one we can't
+            // parse is a protocol violation
+            PathAttributeTypeCode::MpReachNlri
+            | PathAttributeTypeCode::MpUnreachNlri => {
+                AttributeAction::SessionReset
+            }
+
+            // MULTI_EXIT_DISC (RFC 7606 Section 7.4): affects route selection
+            PathAttributeTypeCode::MultiExitDisc => {
+                AttributeAction::TreatAsWithdraw
+            }
+
+            // LOCAL_PREF (RFC 7606 Section 7.5): affects route selection
+            // Note: From eBGP peers this should be discarded, but that requires
+            // session context. For now, treat as withdraw for safety.
+            PathAttributeTypeCode::LocalPref => {
+                AttributeAction::TreatAsWithdraw
+            }
+
+            // Communities (RFC 7606 Section 7.8): affects policy/route selection
+            PathAttributeTypeCode::Communities => {
+                AttributeAction::TreatAsWithdraw
+            }
+
+            // AS4_PATH: Same as AS_PATH, affects loop detection and route selection
+            PathAttributeTypeCode::As4Path => AttributeAction::TreatAsWithdraw,
+
+            // ATOMIC_AGGREGATE (RFC 7606 Section 7.6): informational only
+            // AGGREGATOR (RFC 7606 Section 7.7): informational only
+            // AS4_AGGREGATOR: Same as AGGREGATOR
+            // These don't affect route selection, so discard is safe
+            PathAttributeTypeCode::AtomicAggregate
+            | PathAttributeTypeCode::Aggregator
+            | PathAttributeTypeCode::As4Aggregator => AttributeAction::Discard,
+        }
     }
 }
 
@@ -1343,9 +1815,9 @@ pub enum PathAttributeValue {
     /// This attribute is included in routes that are formed by aggregation.
     As4Aggregator([u8; 8]),
     /// Carries reachable MP-BGP NLRI and Next-hop (advertisement).
-    MpReachNlri(MpReach),
+    MpReachNlri(MpReachNlri),
     /// Carries unreachable MP-BGP NLRI (withdrawal).
-    MpUnreachNlri(MpUnreach),
+    MpUnreachNlri(MpUnreachNlri),
 }
 
 impl PathAttributeValue {
@@ -1389,11 +1861,24 @@ impl PathAttributeValue {
     pub fn from_wire(
         mut input: &[u8],
         type_code: PathAttributeTypeCode,
-    ) -> Result<PathAttributeValue, Error> {
+    ) -> Result<PathAttributeValue, UpdateParseErrorReason> {
+        // Helper for nom type annotation
+        type NomErr<'a> = nom::error::Error<&'a [u8]>;
+
         match type_code {
             PathAttributeTypeCode::Origin => {
-                let (_input, origin) = be_u8(input)?;
-                Ok(PathAttributeValue::Origin(PathOrigin::try_from(origin)?))
+                let (_input, origin) =
+                    be_u8::<_, NomErr<'_>>(input).map_err(|e| {
+                        UpdateParseErrorReason::AttributeParseError {
+                            type_code: Some(type_code as u8),
+                            detail: format!("{e}"),
+                        }
+                    })?;
+                PathOrigin::try_from(origin)
+                    .map(PathAttributeValue::Origin)
+                    .map_err(|_| UpdateParseErrorReason::InvalidOriginValue {
+                        value: origin,
+                    })
             }
             PathAttributeTypeCode::AsPath => {
                 let mut segments = Vec::new();
@@ -1401,7 +1886,12 @@ impl PathAttributeValue {
                     if input.is_empty() {
                         break;
                     }
-                    let (out, seg) = As4PathSegment::from_wire(input)?;
+                    let (out, seg) =
+                        As4PathSegment::from_wire(input).map_err(|e| {
+                            UpdateParseErrorReason::MalformedAsPath {
+                                detail: format!("{e}"),
+                            }
+                        })?;
                     segments.push(seg);
                     input = out;
                 }
@@ -1410,18 +1900,30 @@ impl PathAttributeValue {
             PathAttributeTypeCode::NextHop => {
                 // For IPv4 unicast, the length of this attribute MUST be 4 octets.
                 if input.len() != 4 {
-                    return Err(Error::BadLength {
+                    return Err(UpdateParseErrorReason::MalformedNextHop {
                         expected: 4,
-                        found: input.len() as u8,
+                        got: input.len(),
                     });
                 }
-                let (_input, b) = take(4usize)(input)?;
+                let (_input, b) = take::<_, _, NomErr<'_>>(4usize)(input)
+                    .map_err(|e| {
+                        UpdateParseErrorReason::AttributeParseError {
+                            type_code: Some(type_code as u8),
+                            detail: format!("{e}"),
+                        }
+                    })?;
                 Ok(PathAttributeValue::NextHop(Ipv4Addr::new(
                     b[0], b[1], b[2], b[3],
                 )))
             }
             PathAttributeTypeCode::MultiExitDisc => {
-                let (_input, v) = be_u32(input)?;
+                let (_input, v) =
+                    be_u32::<_, NomErr<'_>>(input).map_err(|e| {
+                        UpdateParseErrorReason::AttributeParseError {
+                            type_code: Some(type_code as u8),
+                            detail: format!("{e}"),
+                        }
+                    })?;
                 Ok(PathAttributeValue::MultiExitDisc(v))
             }
             PathAttributeTypeCode::As4Path => {
@@ -1430,7 +1932,12 @@ impl PathAttributeValue {
                     if input.is_empty() {
                         break;
                     }
-                    let (out, seg) = As4PathSegment::from_wire(input)?;
+                    let (out, seg) =
+                        As4PathSegment::from_wire(input).map_err(|e| {
+                            UpdateParseErrorReason::MalformedAsPath {
+                                detail: format!("{e}"),
+                            }
+                        })?;
                     segments.push(seg);
                     input = out;
                 }
@@ -1442,25 +1949,39 @@ impl PathAttributeValue {
                     if input.is_empty() {
                         break;
                     }
-                    let (out, v) = be_u32(input)?;
+                    let (out, v) =
+                        be_u32::<_, NomErr<'_>>(input).map_err(|e| {
+                            UpdateParseErrorReason::AttributeParseError {
+                                type_code: Some(type_code as u8),
+                                detail: format!("{e}"),
+                            }
+                        })?;
                     communities.push(Community::from(v));
                     input = out;
                 }
                 Ok(PathAttributeValue::Communities(communities))
             }
             PathAttributeTypeCode::LocalPref => {
-                let (_input, v) = be_u32(input)?;
+                let (_input, v) =
+                    be_u32::<_, NomErr<'_>>(input).map_err(|e| {
+                        UpdateParseErrorReason::AttributeParseError {
+                            type_code: Some(type_code as u8),
+                            detail: format!("{e}"),
+                        }
+                    })?;
                 Ok(PathAttributeValue::LocalPref(v))
             }
             PathAttributeTypeCode::MpReachNlri => {
-                let (_remaining, mp_reach) = MpReach::from_wire(input)?;
+                let (_remaining, mp_reach) = MpReachNlri::from_wire(input)?;
                 Ok(PathAttributeValue::MpReachNlri(mp_reach))
             }
             PathAttributeTypeCode::MpUnreachNlri => {
-                let (_remaining, mp_unreach) = MpUnreach::from_wire(input)?;
+                let (_remaining, mp_unreach) = MpUnreachNlri::from_wire(input)?;
                 Ok(PathAttributeValue::MpUnreachNlri(mp_unreach))
             }
-            x => Err(Error::UnsupportedPathAttributeTypeCode(x)),
+            x => Err(UpdateParseErrorReason::UnrecognizedMandatoryAttribute {
+                type_code: x as u8,
+            }),
         }
     }
 }
@@ -1509,25 +2030,10 @@ impl Display for PathAttributeValue {
                 write!(f, "communities: [{comms}]")
             }
             PathAttributeValue::MpReachNlri(reach) => {
-                write!(
-                    f,
-                    "mp-reach-nlri: [ afi: {}, safi: {}, next-hop-len: {}, next-hop-bytes: {} bytes, reserved: {}, nlri-bytes: {} bytes ]",
-                    reach.afi,
-                    reach.safi,
-                    reach.nh_len,
-                    reach.nh_bytes.len(),
-                    reach.reserved,
-                    reach.nlri_bytes.len()
-                )
+                write!(f, "mp-reach-nlri: {}", reach)
             }
             PathAttributeValue::MpUnreachNlri(unreach) => {
-                write!(
-                    f,
-                    "mp-unreach-nlri: [ afi: {}, safi: {}, withdrawn-bytes: {} bytes ]",
-                    unreach.afi_raw,
-                    unreach.safi_raw,
-                    unreach.withdrawn_bytes.len()
-                )
+                write!(f, "mp-unreach-nlri: {}", unreach)
             }
             PathAttributeValue::As4Path(path_segs) => {
                 let path = path_segs
@@ -1891,6 +2397,20 @@ impl BgpNexthop {
             BgpNexthop::Ipv6Double(_) => ((Ipv6Addr::BITS * 2) / 8) as u8,
         }
     }
+
+    /// Serialize next-hop to wire format bytes
+    pub fn to_bytes(&self) -> Vec<u8> {
+        match self {
+            BgpNexthop::Ipv4(addr) => addr.octets().to_vec(),
+            BgpNexthop::Ipv6Single(addr) => addr.octets().to_vec(),
+            BgpNexthop::Ipv6Double((addr1, addr2)) => {
+                let mut buf = Vec::new();
+                buf.extend_from_slice(&addr1.octets());
+                buf.extend_from_slice(&addr2.octets());
+                buf
+            }
+        }
+    }
 }
 
 impl Display for BgpNexthop {
@@ -1930,6 +2450,37 @@ impl From<IpAddr> for BgpNexthop {
     }
 }
 
+/// Parse IPv4 prefixes from wire format
+fn prefixes4_from_wire(
+    mut buf: &[u8],
+) -> Result<Vec<Prefix4>, PrefixParseError> {
+    let mut result = Vec::new();
+    while !buf.is_empty() {
+        let (out, prefix4) = Prefix4::from_wire(buf)?;
+        result.push(prefix4);
+        buf = out;
+    }
+    Ok(result)
+}
+
+/// Parse IPv6 prefixes from wire format
+fn prefixes6_from_wire(
+    mut buf: &[u8],
+) -> Result<Vec<Prefix6>, PrefixParseError> {
+    let mut result = Vec::new();
+    while !buf.is_empty() {
+        let (out, prefix6) = Prefix6::from_wire(buf)?;
+        result.push(prefix6);
+        buf = out;
+    }
+    Ok(result)
+}
+
+/// MP_REACH_NLRI path attribute
+///
+/// Each variant represents a specific AFI+SAFI combination, providing
+/// compile-time guarantees about the address family of routes being announced.
+///
 /// ```text
 /// 3.  Multiprotocol Reachable NLRI - MP_REACH_NLRI (Type Code 14):
 ///
@@ -1948,224 +2499,256 @@ impl From<IpAddr> for BgpNexthop {
 ///    +---------------------------------------------------------+
 ///    | Address Family Identifier (2 octets)                    |
 ///    +---------------------------------------------------------+
-///    | Subsequent Address Family Identifier (1 octet)          |
-///    +---------------------------------------------------------+
-///    | Length of Next Hop Network Address (1 octet)            |
-///    +---------------------------------------------------------+
-///    | Network Address of Next Hop (variable)                  |
-///    +---------------------------------------------------------+
-///    | Reserved (1 octet)                                      |
-///    +---------------------------------------------------------+
-///    | Network Layer Reachability Information (variable)       |
-///    +---------------------------------------------------------+
-/// ````
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MpReach {
-    /// Raw AFI value (not validated during parsing - validation deferred to session layer)
-    pub afi: u16,
-
-    /// Raw SAFI value (not validated during parsing - validation deferred to session layer)
-    pub safi: u8,
-
-    /// Length of Next Hop Network Address field
-    pub nh_len: u8,
-
-    /// Next-hop bytes (raw, not parsed - parsing deferred to session layer)
-    pub nh_bytes: Vec<u8>,
-
-    /// Reserved field (must be 0 per RFC 4760)
-    pub reserved: u8,
-
-    /// NLRI bytes (raw, not parsed - parsing deferred to session layer)
-    pub nlri_bytes: Vec<u8>,
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "afi_safi", rename_all = "snake_case")]
+pub enum MpReachNlri {
+    /// IPv4 Unicast routes (AFI=1, SAFI=1)
+    Ipv4Unicast(MpReachIpv4Unicast),
+    /// IPv6 Unicast routes (AFI=2, SAFI=1)
+    Ipv6Unicast(MpReachIpv6Unicast),
 }
 
-impl MpReach {
-    pub fn new(afi: Afi, nh: BgpNexthop, nlri: Vec<Prefix>) -> Self {
-        // Convert next-hop to bytes
-        let nh_bytes = match &nh {
-            BgpNexthop::Ipv4(addr) => addr.octets().to_vec(),
-            BgpNexthop::Ipv6Single(addr) => addr.octets().to_vec(),
-            BgpNexthop::Ipv6Double((addr1, addr2)) => {
-                let mut buf = Vec::new();
-                buf.extend_from_slice(&addr1.octets());
-                buf.extend_from_slice(&addr2.octets());
-                buf
-            }
-        };
+/// IPv4 Unicast MP_REACH_NLRI contents.
+///
+/// Contains the next-hop and NLRI for IPv4 unicast route announcements
+/// carried via MP-BGP (RFC 4760).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MpReachIpv4Unicast {
+    /// Next-hop for IPv4 routes.
+    ///
+    /// Currently must be `BgpNexthop::Ipv4`, but will support IPv6 nexthops
+    /// when extended next-hop capability (RFC 8950) is implemented.
+    pub nexthop: BgpNexthop,
+    /// IPv4 prefixes being announced
+    pub nlri: Vec<Prefix4>,
+}
 
-        // Convert NLRI to bytes
-        let mut nlri_bytes = Vec::new();
-        for prefix in &nlri {
-            match prefix {
-                Prefix::V4(p) => nlri_bytes.extend_from_slice(&p.to_wire()),
-                Prefix::V6(p) => nlri_bytes.extend_from_slice(&p.to_wire()),
-            }
-        }
+/// IPv6 Unicast MP_REACH_NLRI contents.
+///
+/// Contains the next-hop and NLRI for IPv6 unicast route announcements
+/// carried via MP-BGP (RFC 4760).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MpReachIpv6Unicast {
+    /// Next-hop for IPv6 routes.
+    ///
+    /// Can be `BgpNexthop::Ipv6Single` (16 bytes) or `BgpNexthop::Ipv6Double`
+    /// (32 bytes with link-local address).
+    pub nexthop: BgpNexthop,
+    /// IPv6 prefixes being announced
+    pub nlri: Vec<Prefix6>,
+}
 
-        Self {
-            afi: afi as u16,
-            safi: Safi::Unicast as u8,
-            nh_len: nh.byte_len(),
-            nh_bytes,
-            reserved: 0u8,
-            nlri_bytes,
-        }
-    }
-
-    /// Create an MpReach for IPv6 unicast routes.
-    /// This is the type-safe version that takes Vec<Prefix6> directly,
-    /// avoiding the need for runtime type validation.
-    pub fn new_v6(nh: BgpNexthop, nlri: Vec<Prefix6>) -> Self {
-        // Convert next-hop to bytes
-        let nh_bytes = match &nh {
-            BgpNexthop::Ipv4(addr) => addr.octets().to_vec(),
-            BgpNexthop::Ipv6Single(addr) => addr.octets().to_vec(),
-            BgpNexthop::Ipv6Double((addr1, addr2)) => {
-                let mut buf = Vec::new();
-                buf.extend_from_slice(&addr1.octets());
-                buf.extend_from_slice(&addr2.octets());
-                buf
-            }
-        };
-
-        // Convert NLRI to bytes - no match needed, we know it's V6
-        let mut nlri_bytes = Vec::new();
-        for prefix in &nlri {
-            nlri_bytes.extend_from_slice(&prefix.to_wire());
-        }
-
-        Self {
-            afi: Afi::Ipv6 as u16,
-            safi: Safi::Unicast as u8,
-            nh_len: nh.byte_len(),
-            nh_bytes,
-            reserved: 0u8,
-            nlri_bytes,
+impl MpReachNlri {
+    /// Returns the AFI for this MP_REACH_NLRI.
+    pub fn afi(&self) -> Afi {
+        match self {
+            Self::Ipv4Unicast(_) => Afi::Ipv4,
+            Self::Ipv6Unicast(_) => Afi::Ipv6,
         }
     }
 
-    /// Parse MP_REACH_NLRI from wire format.
-    ///
-    /// ## RFC 4760 Section 3: MP_REACH_NLRI Encoding
-    ///
-    /// This attribute is optional and non-transitive. It carries:
-    /// - AFI (2 octets): Address Family Identifier
-    /// - SAFI (1 octet): Subsequent Address Family Identifier
-    /// - Next Hop Length (1 octet): Length of next hop address
-    /// - Next Hop (variable): Network address of next hop
-    /// - Reserved (1 octet): Must be 0
-    /// - NLRI (variable): Network Layer Reachability Information
-    ///
-    /// ## Parsing Philosophy
-    ///
-    /// Unsupported AFI/SAFI is a **parsing error**, not a validation error, because:
-    /// 1. We cannot parse NLRI without knowing the address family format
-    /// 2. We cannot skip over NLRI bytes without knowing prefix encoding rules
-    /// 3. Per RFC 7606, malformed attributes that prevent NLRI location determination
-    ///    should trigger session reset or AFI/SAFI disable
-    ///
-    /// Therefore, this method validates that the AFI/SAFI tuple is supported during
-    /// parsing. The resulting `MpReach` is guaranteed to contain a valid, supported
-    /// address family.
-    ///
-    /// ## Parse Failures
-    ///
-    /// Parsing fails (returns `Err`) when:
-    /// - Buffer is too small for fixed-size fields
-    /// - Next-hop length is invalid for the given AFI
-    /// - AFI/SAFI combination is unsupported (structural requirement for parsing)
-    ///
-    /// ## Session-Level Validation
-    ///
-    /// After successful parsing, session-level code must still validate that this
-    /// address family was negotiated with the peer via capability exchange.
-    ///
-    /// # Arguments
-    /// * `input` - Wire format bytes to parse
-    ///
-    /// # Returns
-    /// `Ok((remaining_bytes, MpReach))` on successful parse
-    /// `Err(Error)` if wire format is malformed or address family is unsupported
-    pub fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Error> {
-        // Parse AFI (2 bytes) - DON'T VALIDATE (store raw value)
-        let (input, afi_raw) = be_u16(input)?;
-
-        // Parse SAFI (1 byte) - DON'T VALIDATE (store raw value)
-        let (input, safi_raw) = be_u8(input)?;
-
-        // Parse Next-hop Length (1 byte)
-        let (input, nh_len) = be_u8(input)?;
-
-        // Extract next-hop bytes (structural bounds check only - don't parse/validate)
-        if input.len() < nh_len as usize {
-            return Err(Error::TooSmall(format!(
-                "next-hop field too short: need {} bytes, have {}",
-                nh_len,
-                input.len()
-            )));
-        }
-        let nh_bytes = input[..nh_len as usize].to_vec();
-        let input = &input[nh_len as usize..];
-
-        // Parse Reserved byte (1 byte)
-        let (input, reserved) = be_u8(input)?;
-
-        // Store remaining bytes as raw NLRI (don't parse)
-        let nlri_bytes = input.to_vec();
-
-        Ok((
-            &[], // All remaining bytes consumed
-            MpReach {
-                afi: afi_raw,
-                safi: safi_raw,
-                nh_len,
-                nh_bytes,
-                reserved,
-                nlri_bytes,
-            },
-        ))
+    /// Returns the SAFI for this MP_REACH_NLRI (always Unicast).
+    pub fn safi(&self) -> Safi {
+        Safi::Unicast
     }
 
-    /// Serialize MP_REACH_NLRI to wire format.
+    /// Returns the next-hop for this MP_REACH_NLRI.
+    pub fn nexthop(&self) -> &BgpNexthop {
+        match self {
+            Self::Ipv4Unicast(inner) => &inner.nexthop,
+            Self::Ipv6Unicast(inner) => &inner.nexthop,
+        }
+    }
+
+    /// Returns true if there are no prefixes in this MP_REACH_NLRI.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Ipv4Unicast(inner) => inner.nlri.is_empty(),
+            Self::Ipv6Unicast(inner) => inner.nlri.is_empty(),
+        }
+    }
+
+    /// Returns the number of prefixes in this MP_REACH_NLRI.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Ipv4Unicast(inner) => inner.nlri.len(),
+            Self::Ipv6Unicast(inner) => inner.nlri.len(),
+        }
+    }
+
+    /// Create an IPv4 Unicast MP_REACH_NLRI.
+    pub fn ipv4_unicast(nexthop: BgpNexthop, nlri: Vec<Prefix4>) -> Self {
+        Self::Ipv4Unicast(MpReachIpv4Unicast { nexthop, nlri })
+    }
+
+    /// Create an IPv6 Unicast MP_REACH_NLRI.
+    pub fn ipv6_unicast(nexthop: BgpNexthop, nlri: Vec<Prefix6>) -> Self {
+        Self::Ipv6Unicast(MpReachIpv6Unicast { nexthop, nlri })
+    }
+
+    /// Serialize to wire format.
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
 
         // AFI (2 bytes)
-        buf.extend_from_slice(&self.afi.to_be_bytes());
+        buf.extend_from_slice(&(self.afi() as u16).to_be_bytes());
 
         // SAFI (1 byte)
-        buf.push(self.safi);
+        buf.push(self.safi() as u8);
 
-        // Next-hop Length (1 byte)
-        buf.push(self.nh_len);
+        // Next-hop
+        let nh_bytes = self.nexthop().to_bytes();
+        buf.push(nh_bytes.len() as u8); // Next-hop length
+        buf.extend_from_slice(&nh_bytes);
 
-        // Next-hop (raw bytes)
-        buf.extend_from_slice(&self.nh_bytes);
+        // Reserved (1 byte, must be 0)
+        buf.push(0);
 
-        // Reserved (1 byte)
-        buf.push(self.reserved);
-
-        // NLRI (raw bytes)
-        buf.extend_from_slice(&self.nlri_bytes);
+        // NLRI
+        match self {
+            Self::Ipv4Unicast(inner) => {
+                for prefix in &inner.nlri {
+                    buf.extend_from_slice(&prefix.to_wire());
+                }
+            }
+            Self::Ipv6Unicast(inner) => {
+                for prefix in &inner.nlri {
+                    buf.extend_from_slice(&prefix.to_wire());
+                }
+            }
+        }
 
         Ok(buf)
     }
-}
 
-impl Display for MpReach {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "MpReach[AFI={}, SAFI={}, nh_len={}, nlri_bytes={}]",
-            self.afi,
-            self.safi,
-            self.nh_len,
-            self.nlri_bytes.len()
-        )
+    /// Parse from wire format.
+    ///
+    /// This validates the AFI/SAFI and parses the next-hop and NLRI into
+    /// their proper typed representations.
+    ///
+    /// Returns an error if:
+    /// - The AFI/SAFI combination is unsupported
+    /// - The next-hop length is invalid for the AFI
+    /// - The NLRI is malformed
+    pub fn from_wire(
+        input: &[u8],
+    ) -> Result<(&[u8], Self), UpdateParseErrorReason> {
+        // Parse AFI (2 bytes)
+        let (input, afi_raw) = be_u16::<_, nom::error::Error<&[u8]>>(input)
+            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpReachNlri as u8),
+                detail: format!("failed to parse AFI: {e}"),
+            })?;
+        let afi = Afi::try_from(afi_raw).map_err(|_| {
+            UpdateParseErrorReason::UnsupportedAfiSafi {
+                afi: afi_raw,
+                safi: 0,
+            }
+        })?;
+
+        // Parse SAFI (1 byte)
+        let (input, safi_raw) = be_u8::<_, nom::error::Error<&[u8]>>(input)
+            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpReachNlri as u8),
+                detail: format!("failed to parse SAFI: {e}"),
+            })?;
+        let _safi = Safi::try_from(safi_raw).map_err(|_| {
+            UpdateParseErrorReason::UnsupportedAfiSafi {
+                afi: afi_raw,
+                safi: safi_raw,
+            }
+        })?;
+
+        // Parse Next-hop Length (1 byte)
+        let (input, nh_len) = be_u8::<_, nom::error::Error<&[u8]>>(input)
+            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpReachNlri as u8),
+                detail: format!("failed to parse next-hop length: {e}"),
+            })?;
+
+        // Extract next-hop bytes
+        if input.len() < nh_len as usize {
+            let expected = match afi {
+                Afi::Ipv4 => "4",
+                Afi::Ipv6 => "16 or 32",
+            };
+            return Err(UpdateParseErrorReason::InvalidMpNextHopLength {
+                afi: afi_raw,
+                expected,
+                got: input.len(),
+            });
+        }
+        let nh_bytes = &input[..nh_len as usize];
+        let input = &input[nh_len as usize..];
+
+        // Parse next-hop
+        let nexthop =
+            BgpNexthop::from_bytes(nh_bytes, nh_len, afi).map_err(|_| {
+                let expected = match afi {
+                    Afi::Ipv4 => "4",
+                    Afi::Ipv6 => "16 or 32",
+                };
+                UpdateParseErrorReason::InvalidMpNextHopLength {
+                    afi: afi_raw,
+                    expected,
+                    got: nh_len as usize,
+                }
+            })?;
+
+        // Parse Reserved byte (1 byte)
+        let (input, _reserved) = be_u8::<_, nom::error::Error<&[u8]>>(input)
+            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpReachNlri as u8),
+                detail: format!("failed to parse reserved byte: {e}"),
+            })?;
+
+        // Parse NLRI based on AFI
+        match afi {
+            Afi::Ipv4 => {
+                let nlri = prefixes4_from_wire(input)
+                    .map_err(|e| e.into_reason("mp_reach"))?;
+                Ok((
+                    &[],
+                    Self::Ipv4Unicast(MpReachIpv4Unicast { nexthop, nlri }),
+                ))
+            }
+            Afi::Ipv6 => {
+                let nlri = prefixes6_from_wire(input)
+                    .map_err(|e| e.into_reason("mp_reach"))?;
+                Ok((
+                    &[],
+                    Self::Ipv6Unicast(MpReachIpv6Unicast { nexthop, nlri }),
+                ))
+            }
+        }
     }
 }
 
+impl Display for MpReachNlri {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ipv4Unicast(inner) => write!(
+                f,
+                "MpReachNlri::Ipv4Unicast[nh={}, nlri={}]",
+                inner.nexthop,
+                inner.nlri.len()
+            ),
+            Self::Ipv6Unicast(inner) => write!(
+                f,
+                "MpReachNlri::Ipv6Unicast[nh={}, nlri={}]",
+                inner.nexthop,
+                inner.nlri.len()
+            ),
+        }
+    }
+}
+
+/// MP_UNREACH_NLRI path attribute
+///
+/// Each variant represents a specific AFI+SAFI combination, providing
+/// compile-time guarantees about the address family of routes being withdrawn.
+///
 /// ```text
 /// 4.  Multiprotocol Unreachable NLRI - MP_UNREACH_NLRI (Type Code 15):
 ///
@@ -2182,122 +2765,157 @@ impl Display for MpReach {
 ///         | Withdrawn Routes (variable)                             |
 ///         +---------------------------------------------------------+
 /// ```
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MpUnreach {
-    /// Raw AFI value (not validated during parsing - validation deferred to session layer)
-    pub afi_raw: u16,
-
-    /// Raw SAFI value (not validated during parsing - validation deferred to session layer)
-    pub safi_raw: u8,
-
-    /// Withdrawn routes bytes (raw, not parsed - parsing deferred to session layer)
-    pub withdrawn_bytes: Vec<u8>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "afi_safi", rename_all = "snake_case")]
+pub enum MpUnreachNlri {
+    /// IPv4 Unicast routes being withdrawn (AFI=1, SAFI=1)
+    Ipv4Unicast(MpUnreachIpv4Unicast),
+    /// IPv6 Unicast routes being withdrawn (AFI=2, SAFI=1)
+    Ipv6Unicast(MpUnreachIpv6Unicast),
 }
 
-impl MpUnreach {
-    pub fn new(afi: Afi, _nh: BgpNexthop, withdrawn: Vec<Prefix>) -> Self {
-        // Convert withdrawn routes to bytes
-        let mut withdrawn_bytes = Vec::new();
-        for prefix in &withdrawn {
-            match prefix {
-                Prefix::V4(p) => {
-                    withdrawn_bytes.extend_from_slice(&p.to_wire())
-                }
-                Prefix::V6(p) => {
-                    withdrawn_bytes.extend_from_slice(&p.to_wire())
-                }
-            }
-        }
+/// IPv4 Unicast MP_UNREACH_NLRI contents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MpUnreachIpv4Unicast {
+    pub withdrawn: Vec<Prefix4>,
+}
 
-        Self {
-            afi_raw: afi as u16,
-            safi_raw: Safi::Unicast as u8,
-            withdrawn_bytes,
+/// IPv6 Unicast MP_UNREACH_NLRI contents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MpUnreachIpv6Unicast {
+    pub withdrawn: Vec<Prefix6>,
+}
+
+impl MpUnreachNlri {
+    pub fn afi(&self) -> Afi {
+        match self {
+            Self::Ipv4Unicast(_) => Afi::Ipv4,
+            Self::Ipv6Unicast(_) => Afi::Ipv6,
         }
     }
 
-    /// Create an MpUnreach for IPv6 unicast withdrawn routes.
-    /// This is the type-safe version that takes Vec<Prefix6> directly,
-    /// avoiding the need for runtime type validation.
-    pub fn new_v6(withdrawn: Vec<Prefix6>) -> Self {
-        // Convert withdrawn routes to bytes - no match needed, we know it's V6
-        let mut withdrawn_bytes = Vec::new();
-        for prefix in &withdrawn {
-            withdrawn_bytes.extend_from_slice(&prefix.to_wire());
-        }
+    pub fn safi(&self) -> Safi {
+        Safi::Unicast
+    }
 
-        Self {
-            afi_raw: Afi::Ipv6 as u16,
-            safi_raw: Safi::Unicast as u8,
-            withdrawn_bytes,
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Ipv4Unicast(inner) => inner.withdrawn.is_empty(),
+            Self::Ipv6Unicast(inner) => inner.withdrawn.is_empty(),
         }
     }
 
-    /// Parse MP_UNREACH_NLRI from wire format.
-    ///
-    /// ## RFC 4760 Section 4: MP_UNREACH_NLRI Encoding
-    ///
-    /// This attribute is optional and non-transitive. It carries:
-    /// - AFI (2 octets): Address Family Identifier
-    /// - SAFI (1 octet): Subsequent Address Family Identifier
-    /// - Withdrawn Routes (variable): Routes to withdraw
-    ///
-    /// Per RFC 7606: Attribute length must be at least 3 octets (AFI + SAFI minimum).
-    ///
-    /// ## Parsing Philosophy
-    ///
-    /// Like MP_REACH_NLRI, unsupported AFI/SAFI is a parsing error because we cannot
-    /// parse withdrawn routes without knowing the address family format. The resulting
-    /// `MpUnreach` is guaranteed to contain a valid, supported address family.
-    ///
-    /// Session-level validation must still check that this address family was
-    /// negotiated with the peer.
-    pub fn from_wire(input: &[u8]) -> Result<(&[u8], Self), Error> {
-        // Parse AFI (2 bytes) - DON'T VALIDATE (store raw value)
-        let (input, afi_raw) = be_u16(input)?;
-
-        // Parse SAFI (1 byte) - DON'T VALIDATE (store raw value)
-        let (input, safi_raw) = be_u8(input)?;
-
-        // Store remaining bytes as raw withdrawn routes (don't parse)
-        let withdrawn_bytes = input.to_vec();
-
-        Ok((
-            &[], // All remaining bytes consumed
-            MpUnreach {
-                afi_raw,
-                safi_raw,
-                withdrawn_bytes,
-            },
-        ))
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Ipv4Unicast(inner) => inner.withdrawn.len(),
+            Self::Ipv6Unicast(inner) => inner.withdrawn.len(),
+        }
     }
 
-    /// Serialize MP_UNREACH_NLRI to wire format.
+    /// Create an IPv4 Unicast MP_UNREACH_NLRI.
+    pub fn ipv4_unicast(withdrawn: Vec<Prefix4>) -> Self {
+        Self::Ipv4Unicast(MpUnreachIpv4Unicast { withdrawn })
+    }
+
+    /// Create an IPv6 Unicast MP_UNREACH_NLRI.
+    pub fn ipv6_unicast(withdrawn: Vec<Prefix6>) -> Self {
+        Self::Ipv6Unicast(MpUnreachIpv6Unicast { withdrawn })
+    }
+
+    /// Serialize to wire format.
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
 
         // AFI (2 bytes)
-        buf.extend_from_slice(&self.afi_raw.to_be_bytes());
+        buf.extend_from_slice(&(self.afi() as u16).to_be_bytes());
 
         // SAFI (1 byte)
-        buf.push(self.safi_raw);
+        buf.push(self.safi() as u8);
 
-        // Withdrawn routes (raw bytes)
-        buf.extend_from_slice(&self.withdrawn_bytes);
+        // Withdrawn routes
+        match self {
+            Self::Ipv4Unicast(inner) => {
+                for prefix in &inner.withdrawn {
+                    buf.extend_from_slice(&prefix.to_wire());
+                }
+            }
+            Self::Ipv6Unicast(inner) => {
+                for prefix in &inner.withdrawn {
+                    buf.extend_from_slice(&prefix.to_wire());
+                }
+            }
+        }
 
         Ok(buf)
     }
+
+    /// Parse from wire format.
+    ///
+    /// This validates the AFI/SAFI and parses the withdrawn routes into
+    /// their proper typed representations.
+    ///
+    /// Returns an error if:
+    /// - The AFI/SAFI combination is unsupported
+    /// - The withdrawn routes are malformed
+    pub fn from_wire(
+        input: &[u8],
+    ) -> Result<(&[u8], Self), UpdateParseErrorReason> {
+        // Parse AFI (2 bytes)
+        let (input, afi_raw) = be_u16::<_, nom::error::Error<&[u8]>>(input)
+            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpUnreachNlri as u8),
+                detail: format!("failed to parse AFI: {e}"),
+            })?;
+        let afi = Afi::try_from(afi_raw).map_err(|_| {
+            UpdateParseErrorReason::UnsupportedAfiSafi {
+                afi: afi_raw,
+                safi: 0,
+            }
+        })?;
+
+        // Parse SAFI (1 byte)
+        let (input, safi_raw) = be_u8::<_, nom::error::Error<&[u8]>>(input)
+            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpUnreachNlri as u8),
+                detail: format!("failed to parse SAFI: {e}"),
+            })?;
+        let _safi = Safi::try_from(safi_raw).map_err(|_| {
+            UpdateParseErrorReason::UnsupportedAfiSafi {
+                afi: afi_raw,
+                safi: safi_raw,
+            }
+        })?;
+
+        // Parse withdrawn routes based on AFI
+        match afi {
+            Afi::Ipv4 => {
+                let withdrawn = prefixes4_from_wire(input)
+                    .map_err(|e| e.into_reason("mp_unreach"))?;
+                Ok((&[], Self::Ipv4Unicast(MpUnreachIpv4Unicast { withdrawn })))
+            }
+            Afi::Ipv6 => {
+                let withdrawn = prefixes6_from_wire(input)
+                    .map_err(|e| e.into_reason("mp_unreach"))?;
+                Ok((&[], Self::Ipv6Unicast(MpUnreachIpv6Unicast { withdrawn })))
+            }
+        }
+    }
 }
 
-impl Display for MpUnreach {
+impl Display for MpUnreachNlri {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "MpUnreach[AFI={}, SAFI={}, withdrawn_bytes={}]",
-            self.afi_raw,
-            self.safi_raw,
-            self.withdrawn_bytes.len()
-        )
+        match self {
+            Self::Ipv4Unicast(inner) => write!(
+                f,
+                "MpUnreachNlri::Ipv4Unicast[withdrawn={}]",
+                inner.withdrawn.len()
+            ),
+            Self::Ipv6Unicast(inner) => write!(
+                f,
+                "MpUnreachNlri::Ipv6Unicast[withdrawn={}]",
+                inner.withdrawn.len()
+            ),
+        }
     }
 }
 
@@ -3910,6 +4528,453 @@ impl slog::Value for Safi {
 }
 
 // ============================================================================
+// BGP Message Parse Error Types
+// ============================================================================
+// These types support revised UPDATE message error handling per RFC 7606,
+// which relaxes the "session reset" approach in RFC 4271 §6.3 for UPDATE
+// errors. Instead, most attribute errors trigger "treat-as-withdraw" behavior
+// allowing sessions to remain established while individual routes are
+// withdrawn.
+//
+// Design:
+// - UpdateParseErrorReason: Enum encoding all possible parse error reasons
+//   with Display impl for human-readable messages.
+// - UpdateParseError: Fatal UPDATE errors requiring session reset.
+// - MessageParseError: Wrapper for all message types' parse errors.
+// - UpdateMessage.treat_as_withdraw: Bool set when treat-as-withdraw occurs
+//   during parsing. false = normal, true = process all NLRI as withdrawals.
+// - UpdateMessage.errors: Vec collecting all non-fatal parse errors encountered.
+
+/// All possible reasons for UPDATE parse errors.
+///
+/// This enum codifies error reasons instead of using strings, providing
+/// type safety and consistent error messages via the Display impl.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateParseErrorReason {
+    // Frame structure errors (fatal)
+    /// Withdrawn routes length exceeds available bytes
+    InvalidWithdrawnLength { declared: u16, available: usize },
+    /// Path attributes length exceeds available bytes
+    InvalidAttributeLength { declared: u16, available: usize },
+
+    // Attribute parsing errors
+    /// Next-hop attribute has wrong length
+    MalformedNextHop { expected: usize, got: usize },
+    /// Origin attribute has invalid value
+    InvalidOriginValue { value: u8 },
+    /// AS_PATH attribute is malformed
+    MalformedAsPath { detail: String },
+    /// Attribute flags are invalid for this type
+    InvalidAttributeFlags { type_code: u8, flags: u8 },
+
+    // MP-BGP errors
+    /// Duplicate MP_REACH_NLRI attribute in UPDATE
+    DuplicateMpReachNlri,
+    /// Duplicate MP_UNREACH_NLRI attribute in UPDATE
+    DuplicateMpUnreachNlri,
+    /// AFI/SAFI combination not recognized (raw bytes)
+    UnsupportedAfiSafi { afi: u16, safi: u8 },
+    /// MP next-hop has invalid length for AFI
+    InvalidMpNextHopLength {
+        afi: u16,
+        expected: &'static str,
+        got: usize,
+    },
+
+    // Attribute-specific errors
+    /// Missing mandatory well-known attribute
+    MissingAttribute { type_code: PathAttributeTypeCode },
+    /// Attribute has invalid length for its type
+    AttributeLengthError {
+        type_code: PathAttributeTypeCode,
+        expected: usize,
+        got: usize,
+    },
+    /// Unrecognized mandatory attribute (not optional/transitive)
+    UnrecognizedMandatoryAttribute { type_code: u8 },
+    /// Attribute parsing failed (generic fallback for nom errors)
+    AttributeParseError {
+        type_code: Option<u8>,
+        detail: String,
+    },
+
+    // NLRI/prefix parsing errors
+    /// NLRI section is empty when prefix length byte expected
+    NlriMissingLength {
+        /// Which section: "nlri", "withdrawn", "mp_reach", "mp_unreach"
+        section: &'static str,
+    },
+    /// Prefix length exceeds maximum for address family (32 for IPv4, 128 for IPv6)
+    InvalidNlriMask {
+        section: &'static str,
+        length: u8,
+        max: u8,
+    },
+    /// Not enough bytes for declared prefix length
+    TruncatedNlri {
+        section: &'static str,
+        needed: usize,
+        available: usize,
+    },
+
+    // Generic fallback
+    /// Other parse error (avoid if possible; prefer specific variant)
+    Other { detail: String },
+}
+
+impl Display for UpdateParseErrorReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidWithdrawnLength {
+                declared,
+                available,
+            } => {
+                write!(
+                    f,
+                    "withdrawn length {} exceeds available {}",
+                    declared, available
+                )
+            }
+            Self::InvalidAttributeLength {
+                declared,
+                available,
+            } => {
+                write!(
+                    f,
+                    "attribute length {} exceeds available {}",
+                    declared, available
+                )
+            }
+            Self::MalformedNextHop { expected, got } => {
+                write!(
+                    f,
+                    "next-hop length mismatch: expected {}, got {}",
+                    expected, got
+                )
+            }
+            Self::InvalidOriginValue { value } => {
+                write!(f, "invalid ORIGIN value: {}", value)
+            }
+            Self::MalformedAsPath { detail } => {
+                write!(f, "malformed AS_PATH: {}", detail)
+            }
+            Self::InvalidAttributeFlags { type_code, flags } => {
+                write!(
+                    f,
+                    "invalid flags 0x{:02x} for attribute type {}",
+                    flags, type_code
+                )
+            }
+            Self::DuplicateMpReachNlri => {
+                write!(f, "duplicate MP_REACH_NLRI attribute")
+            }
+            Self::DuplicateMpUnreachNlri => {
+                write!(f, "duplicate MP_UNREACH_NLRI attribute")
+            }
+            Self::UnsupportedAfiSafi { afi, safi } => {
+                write!(f, "unsupported AFI/SAFI: {}/{}", afi, safi)
+            }
+            Self::InvalidMpNextHopLength { afi, expected, got } => {
+                write!(
+                    f,
+                    "invalid MP next-hop length for AFI {}: expected {}, got {}",
+                    afi, expected, got
+                )
+            }
+            Self::MissingAttribute { type_code } => {
+                write!(f, "missing mandatory attribute: {:?}", type_code)
+            }
+            Self::AttributeLengthError {
+                type_code,
+                expected,
+                got,
+            } => {
+                write!(
+                    f,
+                    "attribute {:?} length error: expected {}, got {}",
+                    type_code, expected, got
+                )
+            }
+            Self::UnrecognizedMandatoryAttribute { type_code } => {
+                write!(f, "unrecognized mandatory attribute: {}", type_code)
+            }
+            Self::AttributeParseError { type_code, detail } => {
+                match type_code {
+                    Some(tc) => {
+                        write!(f, "attribute {} parse error: {}", tc, detail)
+                    }
+                    None => write!(f, "attribute parse error: {}", detail),
+                }
+            }
+            Self::NlriMissingLength { section } => {
+                write!(f, "{} NLRI missing prefix length byte", section)
+            }
+            Self::InvalidNlriMask {
+                section,
+                length,
+                max,
+            } => {
+                write!(
+                    f,
+                    "{} NLRI prefix length {} exceeds maximum {}",
+                    section, length, max
+                )
+            }
+            Self::TruncatedNlri {
+                section,
+                needed,
+                available,
+            } => {
+                write!(
+                    f,
+                    "truncated {} NLRI: need {} bytes, have {}",
+                    section, needed, available
+                )
+            }
+            Self::Other { detail } => {
+                write!(f, "{}", detail)
+            }
+        }
+    }
+}
+
+/// Parsed path attributes from wire format.
+///
+/// Note: Existence of this struct means no fatal (SessionReset) errors occurred.
+/// The parse may still have collected non-fatal errors that require
+/// TreatAsWithdraw or Discard handling.
+pub struct ParsedPathAttrs {
+    /// Successfully parsed attributes
+    pub attrs: Vec<PathAttribute>,
+    /// All non-fatal errors collected during parsing
+    pub errors: Vec<(UpdateParseErrorReason, AttributeAction)>,
+    /// True if any TreatAsWithdraw error occurred
+    pub treat_as_withdraw: bool,
+}
+
+/// Fatal UPDATE parse error requiring session reset.
+///
+/// Returned by `UpdateMessage::from_wire()` when the error cannot be handled
+/// via treat-as-withdraw (e.g., NLRI parse failure, frame structure errors).
+#[derive(Debug, Clone)]
+pub struct UpdateParseError {
+    pub error_code: ErrorCode,
+    pub error_subcode: ErrorSubcode,
+    pub reason: UpdateParseErrorReason,
+}
+
+impl Display for UpdateParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?}/{:?}: {}",
+            self.error_code, self.error_subcode, self.reason
+        )
+    }
+}
+
+/// All possible reasons for OPEN parse errors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenParseErrorReason {
+    /// Version number not supported
+    InvalidVersion { version: u8 },
+    /// Hold time is invalid
+    InvalidHoldTime { hold_time: u16 },
+    /// Capability not supported
+    UnsupportedCapability { code: u8 },
+    /// Message too small for required field
+    TooSmall { field: &'static str },
+    /// Other parse error
+    Other { detail: String },
+}
+
+impl Display for OpenParseErrorReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidVersion { version } => {
+                write!(f, "unsupported version: {}", version)
+            }
+            Self::InvalidHoldTime { hold_time } => {
+                write!(f, "invalid hold time: {}", hold_time)
+            }
+            Self::UnsupportedCapability { code } => {
+                write!(f, "unsupported capability: {}", code)
+            }
+            Self::TooSmall { field } => {
+                write!(f, "message too small for {}", field)
+            }
+            Self::Other { detail } => write!(f, "{}", detail),
+        }
+    }
+}
+
+/// Fatal OPEN parse error requiring session reset.
+#[derive(Debug, Clone)]
+pub struct OpenParseError {
+    pub error_code: ErrorCode,
+    pub error_subcode: ErrorSubcode,
+    pub reason: OpenParseErrorReason,
+}
+
+impl Display for OpenParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?}/{:?}: {}",
+            self.error_code, self.error_subcode, self.reason
+        )
+    }
+}
+
+/// All possible reasons for NOTIFICATION parse errors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationParseErrorReason {
+    /// Message too small for required field
+    TooSmall { field: &'static str },
+    /// Invalid error code
+    InvalidErrorCode { code: u8 },
+    /// Other parse error
+    Other { detail: String },
+}
+
+impl Display for NotificationParseErrorReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooSmall { field } => {
+                write!(f, "message too small for {}", field)
+            }
+            Self::InvalidErrorCode { code } => {
+                write!(f, "invalid error code: {}", code)
+            }
+            Self::Other { detail } => write!(f, "{}", detail),
+        }
+    }
+}
+
+/// Fatal NOTIFICATION parse error.
+#[derive(Debug, Clone)]
+pub struct NotificationParseError {
+    pub error_code: ErrorCode,
+    pub error_subcode: ErrorSubcode,
+    pub reason: NotificationParseErrorReason,
+}
+
+impl Display for NotificationParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?}/{:?}: {}",
+            self.error_code, self.error_subcode, self.reason
+        )
+    }
+}
+
+/// All possible reasons for ROUTE_REFRESH parse errors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteRefreshParseErrorReason {
+    /// Message too small for required field
+    TooSmall { field: &'static str },
+    /// Invalid AFI value
+    InvalidAfi { afi: u16 },
+    /// Other parse error
+    Other { detail: String },
+}
+
+impl Display for RouteRefreshParseErrorReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooSmall { field } => {
+                write!(f, "message too small for {}", field)
+            }
+            Self::InvalidAfi { afi } => write!(f, "invalid AFI: {}", afi),
+            Self::Other { detail } => write!(f, "{}", detail),
+        }
+    }
+}
+
+/// Fatal ROUTE_REFRESH parse error.
+#[derive(Debug, Clone)]
+pub struct RouteRefreshParseError {
+    pub error_code: ErrorCode,
+    pub error_subcode: ErrorSubcode,
+    pub reason: RouteRefreshParseErrorReason,
+}
+
+impl Display for RouteRefreshParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?}/{:?}: {}",
+            self.error_code, self.error_subcode, self.reason
+        )
+    }
+}
+
+/// Wrapper enum identifying which message type caused a fatal parse error.
+///
+/// Used by the connection layer to send `ConnectionEvent::ParseError` to the
+/// session FSM. All variants represent fatal errors requiring session reset.
+#[derive(Debug, Clone)]
+pub enum MessageParseError {
+    Update(UpdateParseError),
+    Open(OpenParseError),
+    Notification(NotificationParseError),
+    RouteRefresh(RouteRefreshParseError),
+}
+
+impl MessageParseError {
+    /// Returns a human-readable description of the error for logging/history.
+    pub fn description(&self) -> String {
+        match self {
+            Self::Update(e) => format!("UPDATE: {}", e),
+            Self::Open(e) => format!("OPEN: {}", e),
+            Self::Notification(e) => format!("NOTIFICATION: {}", e),
+            Self::RouteRefresh(e) => format!("ROUTE_REFRESH: {}", e),
+        }
+    }
+
+    /// Returns the error codes for sending a NOTIFICATION message.
+    pub fn error_codes(&self) -> (ErrorCode, ErrorSubcode) {
+        match self {
+            Self::Update(e) => (e.error_code, e.error_subcode),
+            Self::Open(e) => (e.error_code, e.error_subcode),
+            Self::Notification(e) => (e.error_code, e.error_subcode),
+            Self::RouteRefresh(e) => (e.error_code, e.error_subcode),
+        }
+    }
+
+    /// Returns the message type that caused the error.
+    pub fn message_type(&self) -> &'static str {
+        match self {
+            Self::Update(_) => "UPDATE",
+            Self::Open(_) => "OPEN",
+            Self::Notification(_) => "NOTIFICATION",
+            Self::RouteRefresh(_) => "ROUTE_REFRESH",
+        }
+    }
+}
+
+impl Display for MessageParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.description())
+    }
+}
+
+/// RFC 7606 action classification for path attribute errors.
+///
+/// This enum carries no data - the error reason is stored separately
+/// in `UpdateParseErrorReason`. Ordered from strongest to weakest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttributeAction {
+    /// Terminate session with NOTIFICATION.
+    SessionReset,
+    /// Treat all NLRI in message as withdrawn.
+    TreatAsWithdraw,
+    /// Silently discard the attribute.
+    Discard,
+}
+
+// ============================================================================
 // API Compatibility Types (VERSION_INITIAL / v1.0.0)
 // ============================================================================
 // These types maintain backward compatibility with the INITIAL API version.
@@ -4093,21 +5158,40 @@ mod tests {
                 std::net::Ipv4Addr::new(0, 23, 1, 12),
                 32,
             )],
-            path_attributes: vec![PathAttribute {
-                typ: PathAttributeType {
-                    flags: path_attribute_flags::OPTIONAL
-                        | path_attribute_flags::PARTIAL,
-                    type_code: PathAttributeTypeCode::As4Path,
+            path_attributes: vec![
+                PathAttribute {
+                    typ: PathAttributeType {
+                        flags: path_attribute_flags::TRANSITIVE,
+                        type_code: PathAttributeTypeCode::Origin,
+                    },
+                    value: PathAttributeValue::Origin(PathOrigin::Igp),
                 },
-                value: PathAttributeValue::As4Path(vec![As4PathSegment {
-                    typ: AsPathType::AsSequence,
-                    value: vec![395849, 123456, 987654, 111111],
-                }]),
-            }],
+                PathAttribute {
+                    typ: PathAttributeType {
+                        flags: path_attribute_flags::TRANSITIVE,
+                        type_code: PathAttributeTypeCode::AsPath,
+                    },
+                    value: PathAttributeValue::As4Path(vec![As4PathSegment {
+                        typ: AsPathType::AsSequence,
+                        value: vec![395849, 123456, 987654, 111111],
+                    }]),
+                },
+                PathAttribute {
+                    typ: PathAttributeType {
+                        flags: path_attribute_flags::TRANSITIVE,
+                        type_code: PathAttributeTypeCode::NextHop,
+                    },
+                    value: PathAttributeValue::NextHop(
+                        std::net::Ipv4Addr::new(192, 0, 2, 1),
+                    ),
+                },
+            ],
             nlri: vec![
                 rdb::Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 13), 32),
                 rdb::Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 14), 32),
             ],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         let buf = um0.to_wire().expect("update message to wire");
@@ -4426,20 +5510,58 @@ mod tests {
         buf.push(24); // prefix length
         buf.extend_from_slice(&[198, 51, 100]); // prefix bytes
 
-        // Try to parse - should fail with BadLength error
+        // With RFC 7606 error handling, path attribute errors result in
+        // TreatAsWithdraw. The parsing succeeds but returns UpdateMessage
+        // with treat_as_withdraw = true and error in errors vec.
         let result = UpdateMessage::from_wire(&buf);
+        assert!(result.is_ok(), "Expected Ok with treat_as_withdraw set");
+
+        let msg = result.unwrap();
         assert!(
-            result.is_err(),
-            "Expected parsing to fail with bad NEXT_HOP length"
+            msg.treat_as_withdraw,
+            "Expected treat_as_withdraw to be true for bad NEXT_HOP length"
         );
 
-        match result.unwrap_err() {
-            Error::BadLength { expected, found } => {
-                assert_eq!(expected, 4, "Expected length should be 4");
-                assert_eq!(found, 16, "Found length should be 16");
+        // Verify errors: MalformedNextHop parse error + MissingAttribute
+        // (malformed NEXT_HOP doesn't count as present for mandatory attr check)
+        assert_eq!(msg.errors.len(), 2, "Expected two errors");
+
+        // First error: MalformedNextHop from parsing
+        let (reason, action) = &msg.errors[0];
+        assert!(
+            matches!(action, AttributeAction::TreatAsWithdraw),
+            "Expected TreatAsWithdraw action"
+        );
+        match reason {
+            UpdateParseErrorReason::MalformedNextHop { expected, got } => {
+                assert_eq!(*expected, 4, "Expected length should be 4");
+                assert_eq!(*got, 16, "Got length should be 16");
             }
-            other => panic!("Expected BadLength error, got: {:?}", other),
+            other => panic!(
+                "Expected MalformedNextHop {{ expected: 4, got: 16 }}, got {:?}",
+                other
+            ),
         }
+
+        // Second error: MissingAttribute for NEXT_HOP (malformed doesn't count)
+        let (reason2, action2) = &msg.errors[1];
+        assert!(
+            matches!(action2, AttributeAction::TreatAsWithdraw),
+            "Expected TreatAsWithdraw action for missing attr"
+        );
+        assert!(
+            matches!(
+                reason2,
+                UpdateParseErrorReason::MissingAttribute {
+                    type_code: PathAttributeTypeCode::NextHop
+                }
+            ),
+            "Second error should be MissingAttribute for NextHop, got {:?}",
+            reason2
+        );
+
+        // The NLRI should still be parsed (for processing as withdrawals)
+        assert!(!msg.nlri.is_empty(), "Expected NLRI to be present");
     }
 
     // =========================================================================
@@ -4514,27 +5636,34 @@ mod tests {
     }
 
     // =========================================================================
-    // MpReach tests
+    // MpReachNlri tests
     // =========================================================================
 
     #[test]
-    fn mp_reach_new_v4() {
+    fn mp_reach_nlri_ipv4_unicast() {
         let nh = BgpNexthop::Ipv4(Ipv4Addr::new(192, 0, 2, 1));
         let nlri = vec![
-            Prefix::V4(rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)),
-            Prefix::V4(rdb::Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12)),
+            rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
+            rdb::Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12),
         ];
 
-        let mp_reach = MpReach::new(Afi::Ipv4, nh, nlri);
+        let mp_reach = MpReachNlri::ipv4_unicast(nh, nlri.clone());
 
-        assert_eq!(mp_reach.afi, Afi::Ipv4 as u16);
-        assert_eq!(mp_reach.safi, Safi::Unicast as u8);
-        assert_eq!(mp_reach.nh_len, 4);
-        assert_eq!(mp_reach.reserved, 0);
+        assert_eq!(mp_reach.afi(), Afi::Ipv4);
+        assert_eq!(mp_reach.safi(), Safi::Unicast);
+        assert_eq!(mp_reach.nexthop(), &nh);
+        assert_eq!(mp_reach.len(), 2);
+
+        // Verify inner struct
+        if let MpReachNlri::Ipv4Unicast(inner) = &mp_reach {
+            assert_eq!(inner.nlri, nlri);
+        } else {
+            panic!("Expected Ipv4Unicast variant");
+        }
     }
 
     #[test]
-    fn mp_reach_new_v6() {
+    fn mp_reach_nlri_ipv6_unicast() {
         let nh =
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
         let nlri = vec![
@@ -4542,16 +5671,23 @@ mod tests {
             rdb::Prefix6::new(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
         ];
 
-        let mp_reach = MpReach::new_v6(nh, nlri);
+        let mp_reach = MpReachNlri::ipv6_unicast(nh, nlri.clone());
 
-        assert_eq!(mp_reach.afi, Afi::Ipv6 as u16);
-        assert_eq!(mp_reach.safi, Safi::Unicast as u8);
-        assert_eq!(mp_reach.nh_len, 16);
-        assert_eq!(mp_reach.reserved, 0);
+        assert_eq!(mp_reach.afi(), Afi::Ipv6);
+        assert_eq!(mp_reach.safi(), Safi::Unicast);
+        assert_eq!(mp_reach.nexthop(), &nh);
+        assert_eq!(mp_reach.len(), 2);
+
+        // Verify inner struct
+        if let MpReachNlri::Ipv6Unicast(inner) = &mp_reach {
+            assert_eq!(inner.nlri, nlri);
+        } else {
+            panic!("Expected Ipv6Unicast variant");
+        }
     }
 
     #[test]
-    fn mp_reach_round_trip() {
+    fn mp_reach_nlri_round_trip() {
         let nh =
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
         let nlri = vec![rdb::Prefix6::new(
@@ -4559,120 +5695,84 @@ mod tests {
             48,
         )];
 
-        let original = MpReach::new_v6(nh, nlri);
+        let original = MpReachNlri::ipv6_unicast(nh, nlri.clone());
         let wire = original.to_wire().expect("to_wire should succeed");
         let (remaining, parsed) =
-            MpReach::from_wire(&wire).expect("from_wire should succeed");
+            MpReachNlri::from_wire(&wire).expect("from_wire should succeed");
 
         assert!(remaining.is_empty(), "all bytes should be consumed");
-        assert_eq!(original.afi, parsed.afi);
-        assert_eq!(original.safi, parsed.safi);
-        assert_eq!(original.nh_len, parsed.nh_len);
-        assert_eq!(original.nh_bytes, parsed.nh_bytes);
-        assert_eq!(original.nlri_bytes, parsed.nlri_bytes);
+        assert_eq!(original.afi(), parsed.afi());
+        assert_eq!(original.safi(), parsed.safi());
+        assert_eq!(original.nexthop(), parsed.nexthop());
+
+        // Verify the NLRI matches
+        if let (
+            MpReachNlri::Ipv6Unicast(orig_inner),
+            MpReachNlri::Ipv6Unicast(parsed_inner),
+        ) = (&original, &parsed)
+        {
+            assert_eq!(orig_inner.nlri, parsed_inner.nlri);
+        } else {
+            panic!("Expected both to be Ipv6Unicast variants");
+        }
     }
 
     // =========================================================================
-    // MpUnreach tests
+    // MpUnreachNlri tests
     // =========================================================================
 
     #[test]
-    fn mp_unreach_new_v6() {
+    fn mp_unreach_nlri_ipv6_unicast() {
         let withdrawn = vec![
             rdb::Prefix6::new(Ipv6Addr::from_str("2001:db8:1::").unwrap(), 48),
             rdb::Prefix6::new(Ipv6Addr::from_str("2001:db8:2::").unwrap(), 48),
         ];
 
-        let mp_unreach = MpUnreach::new_v6(withdrawn);
+        let mp_unreach = MpUnreachNlri::ipv6_unicast(withdrawn.clone());
 
-        assert_eq!(mp_unreach.afi_raw, Afi::Ipv6 as u16);
-        assert_eq!(mp_unreach.safi_raw, Safi::Unicast as u8);
+        assert_eq!(mp_unreach.afi(), Afi::Ipv6);
+        assert_eq!(mp_unreach.safi(), Safi::Unicast);
+        assert_eq!(mp_unreach.len(), 2);
+
+        // Verify inner struct
+        if let MpUnreachNlri::Ipv6Unicast(inner) = &mp_unreach {
+            assert_eq!(inner.withdrawn, withdrawn);
+        } else {
+            panic!("Expected Ipv6Unicast variant");
+        }
     }
 
     #[test]
-    fn mp_unreach_round_trip() {
+    fn mp_unreach_nlri_round_trip() {
         let withdrawn = vec![rdb::Prefix6::new(
             Ipv6Addr::from_str("2001:db8:dead::").unwrap(),
             48,
         )];
 
-        let original = MpUnreach::new_v6(withdrawn);
+        let original = MpUnreachNlri::ipv6_unicast(withdrawn.clone());
         let wire = original.to_wire().expect("to_wire should succeed");
         let (remaining, parsed) =
-            MpUnreach::from_wire(&wire).expect("from_wire should succeed");
+            MpUnreachNlri::from_wire(&wire).expect("from_wire should succeed");
 
         assert!(remaining.is_empty(), "all bytes should be consumed");
-        assert_eq!(original.afi_raw, parsed.afi_raw);
-        assert_eq!(original.safi_raw, parsed.safi_raw);
-        assert_eq!(original.withdrawn_bytes, parsed.withdrawn_bytes);
+        assert_eq!(original.afi(), parsed.afi());
+        assert_eq!(original.safi(), parsed.safi());
+
+        // Verify the withdrawn prefixes match
+        if let (
+            MpUnreachNlri::Ipv6Unicast(orig_inner),
+            MpUnreachNlri::Ipv6Unicast(parsed_inner),
+        ) = (&original, &parsed)
+        {
+            assert_eq!(orig_inner.withdrawn, parsed_inner.withdrawn);
+        } else {
+            panic!("Expected both to be Ipv6Unicast variants");
+        }
     }
 
     // =========================================================================
     // RFC 7606 validation tests
     // =========================================================================
-
-    #[test]
-    fn check_duplicate_mp_attributes_none() {
-        let update = UpdateMessage::default();
-        assert!(update.check_duplicate_mp_attributes().is_ok());
-    }
-
-    #[test]
-    fn check_duplicate_mp_attributes_single_reach() {
-        let mp_reach = MpReach::new_v6(
-            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
-            vec![],
-        );
-
-        let update = UpdateMessage {
-            withdrawn: vec![],
-            path_attributes: vec![PathAttribute {
-                typ: PathAttributeType {
-                    flags: path_attribute_flags::OPTIONAL,
-                    type_code: PathAttributeTypeCode::MpReachNlri,
-                },
-                value: PathAttributeValue::MpReachNlri(mp_reach),
-            }],
-            nlri: vec![],
-        };
-
-        assert!(update.check_duplicate_mp_attributes().is_ok());
-    }
-
-    #[test]
-    fn check_duplicate_mp_attributes_duplicate_reach() {
-        let mp_reach1 = MpReach::new_v6(
-            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
-            vec![],
-        );
-        let mp_reach2 = MpReach::new_v6(
-            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::2").unwrap()),
-            vec![],
-        );
-
-        let update = UpdateMessage {
-            withdrawn: vec![],
-            path_attributes: vec![
-                PathAttribute {
-                    typ: PathAttributeType {
-                        flags: path_attribute_flags::OPTIONAL,
-                        type_code: PathAttributeTypeCode::MpReachNlri,
-                    },
-                    value: PathAttributeValue::MpReachNlri(mp_reach1),
-                },
-                PathAttribute {
-                    typ: PathAttributeType {
-                        flags: path_attribute_flags::OPTIONAL,
-                        type_code: PathAttributeTypeCode::MpReachNlri,
-                    },
-                    value: PathAttributeValue::MpReachNlri(mp_reach2),
-                },
-            ],
-            nlri: vec![],
-        };
-
-        assert!(update.check_duplicate_mp_attributes().is_err());
-    }
 
     /// Test that MP-BGP attributes are always encoded first in the wire format,
     /// regardless of their position in the path_attributes vector.
@@ -4682,7 +5782,7 @@ mod tests {
     ///  be encoded as the very first path attribute in an UPDATE message."
     #[test]
     fn mp_bgp_attributes_encoded_first() {
-        let mp_reach = MpReach::new_v6(
+        let mp_reach = MpReachNlri::ipv6_unicast(
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
             vec![],
         );
@@ -4707,6 +5807,8 @@ mod tests {
                 },
             ],
             nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         // Encode to wire format
@@ -4731,7 +5833,7 @@ mod tests {
     #[test]
     fn decoding_accepts_mixed_nlri_encoding() {
         // Create an UPDATE with both traditional NLRI and MP_REACH_NLRI
-        let mp_reach = MpReach::new_v6(
+        let mp_reach = MpReachNlri::ipv6_unicast(
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
             vec![rdb::Prefix6::new(
                 Ipv6Addr::from_str("2001:db8::").unwrap(),
@@ -4749,6 +5851,8 @@ mod tests {
                 value: PathAttributeValue::MpReachNlri(mp_reach),
             }],
             nlri: vec![rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         // Encode to wire and decode back - should succeed
@@ -4775,7 +5879,7 @@ mod tests {
     /// in the same UPDATE message (RFC 7606 Section 5.1 interoperability).
     #[test]
     fn decoding_accepts_reach_and_unreach_together() {
-        let mp_reach = MpReach::new_v6(
+        let mp_reach = MpReachNlri::ipv6_unicast(
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap()),
             vec![rdb::Prefix6::new(
                 Ipv6Addr::from_str("2001:db8:1::").unwrap(),
@@ -4783,7 +5887,7 @@ mod tests {
             )],
         );
 
-        let mp_unreach = MpUnreach::new_v6(vec![rdb::Prefix6::new(
+        let mp_unreach = MpUnreachNlri::ipv6_unicast(vec![rdb::Prefix6::new(
             Ipv6Addr::from_str("2001:db8:2::").unwrap(),
             48,
         )]);
@@ -4807,6 +5911,8 @@ mod tests {
                 },
             ],
             nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         // Encode to wire and decode back - should succeed
@@ -4887,5 +5993,1250 @@ mod tests {
             PathOrigin::Igp,
             "should keep the first ORIGIN (IGP), not the second (EGP)"
         );
+    }
+
+    /// Tests for RFC 7606 attribute error actions.
+    mod rfc7606_attribute_actions {
+        use crate::messages::{
+            AttributeAction, PathAttributeType, PathAttributeTypeCode,
+            path_attribute_flags,
+        };
+
+        /// Helper to construct PathAttributeType for testing
+        fn make_typ(
+            type_code: PathAttributeTypeCode,
+            flags: u8,
+        ) -> PathAttributeType {
+            PathAttributeType { flags, type_code }
+        }
+
+        #[test]
+        fn well_known_mandatory_returns_treat_as_withdraw() {
+            // ORIGIN, AS_PATH, NEXT_HOP are well-known mandatory
+            // RFC 7606 Section 7.1-7.3: errors should result in treat-as-withdraw
+            let well_known_flags = path_attribute_flags::TRANSITIVE;
+
+            assert_eq!(
+                make_typ(PathAttributeTypeCode::Origin, well_known_flags)
+                    .error_action(),
+                AttributeAction::TreatAsWithdraw,
+                "ORIGIN errors should treat-as-withdraw"
+            );
+            assert_eq!(
+                make_typ(PathAttributeTypeCode::AsPath, well_known_flags)
+                    .error_action(),
+                AttributeAction::TreatAsWithdraw,
+                "AS_PATH errors should treat-as-withdraw"
+            );
+            assert_eq!(
+                make_typ(PathAttributeTypeCode::NextHop, well_known_flags)
+                    .error_action(),
+                AttributeAction::TreatAsWithdraw,
+                "NEXT_HOP errors should treat-as-withdraw"
+            );
+        }
+
+        #[test]
+        fn multi_exit_disc_returns_treat_as_withdraw() {
+            // RFC 7606 Section 7.4: MED affects route selection
+            let optional_flags = path_attribute_flags::OPTIONAL;
+
+            assert_eq!(
+                make_typ(PathAttributeTypeCode::MultiExitDisc, optional_flags)
+                    .error_action(),
+                AttributeAction::TreatAsWithdraw,
+                "MULTI_EXIT_DISC errors should treat-as-withdraw"
+            );
+        }
+
+        #[test]
+        fn local_pref_returns_treat_as_withdraw() {
+            // RFC 7606 Section 7.5: LOCAL_PREF affects route selection
+            let well_known_flags = path_attribute_flags::TRANSITIVE;
+
+            assert_eq!(
+                make_typ(PathAttributeTypeCode::LocalPref, well_known_flags)
+                    .error_action(),
+                AttributeAction::TreatAsWithdraw,
+                "LOCAL_PREF errors should treat-as-withdraw"
+            );
+        }
+
+        #[test]
+        fn communities_returns_treat_as_withdraw() {
+            // RFC 7606 Section 7.8: Communities affect policy/route selection
+            let optional_transitive_flags = path_attribute_flags::OPTIONAL
+                | path_attribute_flags::TRANSITIVE;
+
+            assert_eq!(
+                make_typ(
+                    PathAttributeTypeCode::Communities,
+                    optional_transitive_flags
+                )
+                .error_action(),
+                AttributeAction::TreatAsWithdraw,
+                "Communities errors should treat-as-withdraw"
+            );
+        }
+
+        #[test]
+        fn as4_path_returns_treat_as_withdraw() {
+            // AS4_PATH is treated same as AS_PATH
+            let optional_transitive_flags = path_attribute_flags::OPTIONAL
+                | path_attribute_flags::TRANSITIVE;
+
+            assert_eq!(
+                make_typ(
+                    PathAttributeTypeCode::As4Path,
+                    optional_transitive_flags
+                )
+                .error_action(),
+                AttributeAction::TreatAsWithdraw,
+                "AS4_PATH errors should treat-as-withdraw"
+            );
+        }
+
+        #[test]
+        fn atomic_aggregate_returns_discard() {
+            // RFC 7606 Section 7.6: ATOMIC_AGGREGATE is informational only
+            let well_known_flags = path_attribute_flags::TRANSITIVE;
+
+            assert_eq!(
+                make_typ(
+                    PathAttributeTypeCode::AtomicAggregate,
+                    well_known_flags
+                )
+                .error_action(),
+                AttributeAction::Discard,
+                "ATOMIC_AGGREGATE errors should be discarded"
+            );
+        }
+
+        #[test]
+        fn aggregator_returns_discard() {
+            // RFC 7606 Section 7.7: AGGREGATOR is informational only
+            let optional_transitive_flags = path_attribute_flags::OPTIONAL
+                | path_attribute_flags::TRANSITIVE;
+
+            assert_eq!(
+                make_typ(
+                    PathAttributeTypeCode::Aggregator,
+                    optional_transitive_flags
+                )
+                .error_action(),
+                AttributeAction::Discard,
+                "AGGREGATOR errors should be discarded"
+            );
+            assert_eq!(
+                make_typ(
+                    PathAttributeTypeCode::As4Aggregator,
+                    optional_transitive_flags
+                )
+                .error_action(),
+                AttributeAction::Discard,
+                "AS4_AGGREGATOR errors should be discarded"
+            );
+        }
+
+        #[test]
+        fn mp_bgp_returns_session_reset() {
+            // MP-BGP errors should cause session reset since we never
+            // negotiate AFI/SAFIs we don't support
+            let optional_flags = path_attribute_flags::OPTIONAL;
+
+            assert_eq!(
+                make_typ(PathAttributeTypeCode::MpReachNlri, optional_flags)
+                    .error_action(),
+                AttributeAction::SessionReset,
+                "MP_REACH_NLRI errors should cause session reset"
+            );
+            assert_eq!(
+                make_typ(PathAttributeTypeCode::MpUnreachNlri, optional_flags)
+                    .error_action(),
+                AttributeAction::SessionReset,
+                "MP_UNREACH_NLRI errors should cause session reset"
+            );
+        }
+    }
+
+    /// Tests for RFC 7606 attribute flag validation.
+    mod rfc7606_flag_validation {
+        use crate::messages::{
+            AttributeAction, PathAttributeType, PathAttributeTypeCode,
+            UpdateParseErrorReason, path_attribute_flags,
+            validate_attribute_flags,
+        };
+
+        /// Helper to construct PathAttributeType for testing
+        fn make_typ(
+            type_code: PathAttributeTypeCode,
+            flags: u8,
+        ) -> PathAttributeType {
+            PathAttributeType { flags, type_code }
+        }
+
+        #[test]
+        fn well_known_attributes_require_transitive_not_optional() {
+            // Well-known mandatory/discretionary: Optional=0, Transitive=1
+            let correct_flags = path_attribute_flags::TRANSITIVE;
+
+            // Should accept correct flags
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::Origin,
+                    correct_flags
+                ))
+                .is_ok(),
+                "ORIGIN with correct flags should be valid"
+            );
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::AsPath,
+                    correct_flags
+                ))
+                .is_ok(),
+                "AS_PATH with correct flags should be valid"
+            );
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::NextHop,
+                    correct_flags
+                ))
+                .is_ok(),
+                "NEXT_HOP with correct flags should be valid"
+            );
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::LocalPref,
+                    correct_flags
+                ))
+                .is_ok(),
+                "LOCAL_PREF with correct flags should be valid"
+            );
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::AtomicAggregate,
+                    correct_flags
+                ))
+                .is_ok(),
+                "ATOMIC_AGGREGATE with correct flags should be valid"
+            );
+
+            // Should reject Optional flag being set
+            let optional_flags = path_attribute_flags::OPTIONAL
+                | path_attribute_flags::TRANSITIVE;
+            let result = validate_attribute_flags(&make_typ(
+                PathAttributeTypeCode::Origin,
+                optional_flags,
+            ));
+            assert!(result.is_err(), "ORIGIN with Optional flag should fail");
+            let (reason, _action) = result.unwrap_err();
+            assert!(
+                matches!(
+                    reason,
+                    UpdateParseErrorReason::InvalidAttributeFlags { .. }
+                ),
+                "should return InvalidAttributeFlags error"
+            );
+
+            // Should reject missing Transitive flag
+            let no_transitive_flags = 0u8;
+            let result = validate_attribute_flags(&make_typ(
+                PathAttributeTypeCode::AsPath,
+                no_transitive_flags,
+            ));
+            assert!(
+                result.is_err(),
+                "AS_PATH without Transitive flag should fail"
+            );
+        }
+
+        #[test]
+        fn optional_non_transitive_attributes_require_optional_not_transitive()
+        {
+            // Optional non-transitive: Optional=1, Transitive=0
+            let correct_flags = path_attribute_flags::OPTIONAL;
+
+            // Should accept correct flags
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::MultiExitDisc,
+                    correct_flags
+                ))
+                .is_ok(),
+                "MULTI_EXIT_DISC with correct flags should be valid"
+            );
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::MpReachNlri,
+                    correct_flags
+                ))
+                .is_ok(),
+                "MP_REACH_NLRI with correct flags should be valid"
+            );
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::MpUnreachNlri,
+                    correct_flags
+                ))
+                .is_ok(),
+                "MP_UNREACH_NLRI with correct flags should be valid"
+            );
+
+            // Should reject Transitive flag being set
+            let transitive_flags = path_attribute_flags::OPTIONAL
+                | path_attribute_flags::TRANSITIVE;
+            let result = validate_attribute_flags(&make_typ(
+                PathAttributeTypeCode::MultiExitDisc,
+                transitive_flags,
+            ));
+            assert!(
+                result.is_err(),
+                "MULTI_EXIT_DISC with Transitive flag should fail"
+            );
+
+            // Should reject missing Optional flag
+            let no_optional_flags = 0u8;
+            let result = validate_attribute_flags(&make_typ(
+                PathAttributeTypeCode::MpReachNlri,
+                no_optional_flags,
+            ));
+            assert!(
+                result.is_err(),
+                "MP_REACH_NLRI without Optional flag should fail"
+            );
+        }
+
+        #[test]
+        fn optional_transitive_attributes_require_both_flags() {
+            // Optional transitive: Optional=1, Transitive=1
+            let correct_flags = path_attribute_flags::OPTIONAL
+                | path_attribute_flags::TRANSITIVE;
+
+            // Should accept correct flags
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::Aggregator,
+                    correct_flags
+                ))
+                .is_ok(),
+                "AGGREGATOR with correct flags should be valid"
+            );
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::Communities,
+                    correct_flags
+                ))
+                .is_ok(),
+                "Communities with correct flags should be valid"
+            );
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::As4Path,
+                    correct_flags
+                ))
+                .is_ok(),
+                "AS4_PATH with correct flags should be valid"
+            );
+            assert!(
+                validate_attribute_flags(&make_typ(
+                    PathAttributeTypeCode::As4Aggregator,
+                    correct_flags
+                ))
+                .is_ok(),
+                "AS4_AGGREGATOR with correct flags should be valid"
+            );
+
+            // Should reject missing Optional flag
+            let no_optional_flags = path_attribute_flags::TRANSITIVE;
+            let result = validate_attribute_flags(&make_typ(
+                PathAttributeTypeCode::Communities,
+                no_optional_flags,
+            ));
+            assert!(
+                result.is_err(),
+                "Communities without Optional flag should fail"
+            );
+
+            // Should reject missing Transitive flag
+            let no_transitive_flags = path_attribute_flags::OPTIONAL;
+            let result = validate_attribute_flags(&make_typ(
+                PathAttributeTypeCode::Aggregator,
+                no_transitive_flags,
+            ));
+            assert!(
+                result.is_err(),
+                "AGGREGATOR without Transitive flag should fail"
+            );
+        }
+
+        #[test]
+        fn invalid_flags_returns_correct_error_details() {
+            let bad_flags = path_attribute_flags::OPTIONAL; // Wrong for ORIGIN
+            let result = validate_attribute_flags(&make_typ(
+                PathAttributeTypeCode::Origin,
+                bad_flags,
+            ));
+
+            let (reason, action) = result.expect_err("should return error");
+
+            match reason {
+                UpdateParseErrorReason::InvalidAttributeFlags {
+                    type_code,
+                    flags,
+                } => {
+                    assert_eq!(
+                        type_code,
+                        PathAttributeTypeCode::Origin as u8,
+                        "should include the attribute type code"
+                    );
+                    assert_eq!(
+                        flags, bad_flags,
+                        "should include the invalid flags"
+                    );
+                }
+                _ => panic!("expected InvalidAttributeFlags error"),
+            }
+
+            assert_eq!(
+                action,
+                AttributeAction::TreatAsWithdraw,
+                "ORIGIN flag errors should treat-as-withdraw"
+            );
+        }
+    }
+
+    /// Tests for RFC 7606 error collection behavior.
+    /// Verifies that multiple errors are collected and parsing continues
+    /// after non-fatal (TreatAsWithdraw/Discard) errors.
+    mod rfc7606_error_collection {
+        use crate::messages::{
+            AttributeAction, PathAttributeTypeCode, UpdateMessage,
+            UpdateParseErrorReason, path_attribute_flags,
+        };
+
+        /// Build an UPDATE message wire format with the given path attributes bytes.
+        /// Handles the withdrawn and path attrs length headers automatically.
+        fn build_update_wire(path_attrs: &[u8], nlri: &[u8]) -> Vec<u8> {
+            let mut buf = Vec::new();
+            // Withdrawn routes length (0)
+            buf.extend_from_slice(&0u16.to_be_bytes());
+            // Path attributes length
+            buf.extend_from_slice(&(path_attrs.len() as u16).to_be_bytes());
+            buf.extend_from_slice(path_attrs);
+            buf.extend_from_slice(nlri);
+            buf
+        }
+
+        /// Helper to build a valid ORIGIN attribute (IGP).
+        fn origin_attr() -> Vec<u8> {
+            vec![
+                path_attribute_flags::TRANSITIVE, // flags (0x40)
+                PathAttributeTypeCode::Origin as u8, // type 1
+                1,                                // length
+                0,                                // IGP
+            ]
+        }
+
+        /// Helper to build a valid AS_PATH attribute with single AS.
+        fn as_path_attr(asn: u32) -> Vec<u8> {
+            let mut attr = vec![
+                path_attribute_flags::TRANSITIVE, // flags (0x40)
+                PathAttributeTypeCode::AsPath as u8, // type 2
+                6, // length: 1 (segment type) + 1 (count) + 4 (ASN)
+                2, // AS_SEQUENCE
+                1, // 1 ASN in sequence
+            ];
+            attr.extend_from_slice(&asn.to_be_bytes());
+            attr
+        }
+
+        /// Helper to build a valid NEXT_HOP attribute.
+        fn next_hop_attr(ip: [u8; 4]) -> Vec<u8> {
+            let mut attr = vec![
+                path_attribute_flags::TRANSITIVE, // flags (0x40)
+                PathAttributeTypeCode::NextHop as u8, // type 3
+                4,                                // length
+            ];
+            attr.extend_from_slice(&ip);
+            attr
+        }
+
+        /// Helper to build a malformed NEXT_HOP attribute (wrong length).
+        /// NEXT_HOP requires exactly 4 bytes for IPv4.
+        fn bad_next_hop_attr() -> Vec<u8> {
+            vec![
+                path_attribute_flags::TRANSITIVE, // flags (0x40)
+                PathAttributeTypeCode::NextHop as u8, // type 3
+                16,                               // length - WRONG, should be 4
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                192,
+                0,
+                2,
+                1, // 16 bytes
+            ]
+        }
+
+        /// Helper to build a malformed MULTI_EXIT_DISC attribute (wrong length).
+        /// MED requires exactly 4 bytes.
+        fn bad_med_attr() -> Vec<u8> {
+            vec![
+                path_attribute_flags::OPTIONAL, // flags (0x80)
+                PathAttributeTypeCode::MultiExitDisc as u8, // type 4
+                2,                              // length - WRONG, should be 4
+                0,
+                100, // only 2 bytes
+            ]
+        }
+
+        /// Helper to build a malformed AGGREGATOR attribute (wrong length).
+        /// AGGREGATOR requires 6 bytes (2-byte AS + 4-byte IP) or 8 bytes (4-byte AS).
+        fn bad_aggregator_attr() -> Vec<u8> {
+            vec![
+                path_attribute_flags::OPTIONAL
+                    | path_attribute_flags::TRANSITIVE, // 0xC0
+                PathAttributeTypeCode::Aggregator as u8, // type 7
+                3,                                       // length - WRONG
+                0,
+                100,
+                1, // only 3 bytes
+            ]
+        }
+
+        /// Helper to build a malformed ORIGIN attribute (invalid value).
+        fn bad_origin_attr() -> Vec<u8> {
+            vec![
+                path_attribute_flags::TRANSITIVE, // flags (0x40)
+                PathAttributeTypeCode::Origin as u8, // type 1
+                1,                                // length
+                99, // INVALID - must be 0, 1, or 2
+            ]
+        }
+
+        /// Helper to build NLRI for a /24 prefix.
+        fn nlri_prefix(a: u8, b: u8, c: u8) -> Vec<u8> {
+            vec![24, a, b, c]
+        }
+
+        #[test]
+        fn multiple_treat_as_withdraw_errors_collected() {
+            // Construct UPDATE with multiple TreatAsWithdraw errors:
+            // - Bad ORIGIN (invalid value)
+            // - Bad NEXT_HOP (wrong length)
+            // - Bad MED (wrong length)
+            // Plus mandatory attribute validation adds MissingAttribute errors
+            // for ORIGIN and NEXT_HOP since the malformed ones don't count.
+            let mut attrs = Vec::new();
+            attrs.extend(bad_origin_attr()); // TreatAsWithdraw (parse error)
+            attrs.extend(as_path_attr(65000)); // Valid
+            attrs.extend(bad_next_hop_attr()); // TreatAsWithdraw (parse error)
+            attrs.extend(bad_med_attr()); // TreatAsWithdraw (parse error)
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "Parsing should succeed with errors collected"
+            );
+            let msg = result.unwrap();
+
+            assert!(msg.treat_as_withdraw, "treat_as_withdraw should be true");
+
+            // 3 parse errors + 2 missing attr errors (ORIGIN, NEXT_HOP)
+            assert_eq!(
+                msg.errors.len(),
+                5,
+                "Expected 5 errors (3 parse + 2 missing), got {}: {:?}",
+                msg.errors.len(),
+                msg.errors
+            );
+
+            // Verify parse errors are present
+            assert!(
+                msg.errors.iter().any(|(r, _)| matches!(
+                    r,
+                    UpdateParseErrorReason::InvalidOriginValue { value: 99 }
+                )),
+                "Should have InvalidOriginValue error"
+            );
+            assert!(
+                msg.errors.iter().any(|(r, _)| matches!(
+                    r,
+                    UpdateParseErrorReason::MalformedNextHop {
+                        expected: 4,
+                        got: 16
+                    }
+                )),
+                "Should have MalformedNextHop error"
+            );
+
+            // Verify MissingAttribute errors for ORIGIN and NEXT_HOP
+            assert!(
+                msg.errors.iter().any(|(r, _)| matches!(
+                    r,
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::Origin
+                    }
+                )),
+                "Should have MissingAttribute error for Origin"
+            );
+            assert!(
+                msg.errors.iter().any(|(r, _)| matches!(
+                    r,
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::NextHop
+                    }
+                )),
+                "Should have MissingAttribute error for NextHop"
+            );
+
+            // Valid AS_PATH should still be parsed
+            assert_eq!(
+                msg.path_attributes.len(),
+                1,
+                "Only valid AS_PATH should be in parsed attributes"
+            );
+        }
+
+        #[test]
+        fn discard_errors_collected_without_treat_as_withdraw() {
+            // AGGREGATOR errors result in Discard action (not TreatAsWithdraw)
+            // because AGGREGATOR is informational only.
+            let mut attrs = Vec::new();
+            attrs.extend(origin_attr()); // Valid
+            attrs.extend(as_path_attr(65000)); // Valid
+            attrs.extend(next_hop_attr([192, 0, 2, 1])); // Valid
+            attrs.extend(bad_aggregator_attr()); // Discard
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(result.is_ok(), "Parsing should succeed");
+            let msg = result.unwrap();
+
+            assert!(
+                !msg.treat_as_withdraw,
+                "treat_as_withdraw should be false (Discard doesn't set it)"
+            );
+
+            assert_eq!(msg.errors.len(), 1, "Expected 1 error (AGGREGATOR)");
+
+            let (reason, action) = &msg.errors[0];
+            assert!(
+                matches!(action, AttributeAction::Discard),
+                "AGGREGATOR error should be Discard, got {:?}",
+                action
+            );
+            // The actual error type may vary based on how parsing fails
+            // (UnrecognizedMandatoryAttribute, AttributeLengthError, or AttributeParseError)
+            assert!(
+                matches!(reason, UpdateParseErrorReason::AttributeLengthError { .. } |
+                         UpdateParseErrorReason::AttributeParseError { .. } |
+                         UpdateParseErrorReason::UnrecognizedMandatoryAttribute { .. }),
+                "Error should be one of the attribute error types, got {:?}",
+                reason
+            );
+
+            // All valid attributes should be parsed
+            assert_eq!(
+                msg.path_attributes.len(),
+                3,
+                "ORIGIN, AS_PATH, NEXT_HOP should all be parsed"
+            );
+        }
+
+        #[test]
+        fn mixed_treat_as_withdraw_and_discard_errors() {
+            // Test that both TreatAsWithdraw and Discard errors are collected,
+            // and treat_as_withdraw is true when any TaW error is present.
+            // bad_next_hop also triggers MissingAttribute for NEXT_HOP.
+            let mut attrs = Vec::new();
+            attrs.extend(origin_attr()); // Valid
+            attrs.extend(bad_aggregator_attr()); // Discard
+            attrs.extend(as_path_attr(65000)); // Valid
+            attrs.extend(bad_next_hop_attr()); // TreatAsWithdraw (parse error)
+            attrs.extend(bad_med_attr()); // TreatAsWithdraw
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(result.is_ok(), "Parsing should succeed");
+            let msg = result.unwrap();
+
+            assert!(
+                msg.treat_as_withdraw,
+                "treat_as_withdraw should be true (TaW errors present)"
+            );
+
+            // 3 parse errors + 1 MissingAttribute for NEXT_HOP
+            assert_eq!(
+                msg.errors.len(),
+                4,
+                "Expected 4 errors (3 parse + 1 missing), got {}: {:?}",
+                msg.errors.len(),
+                msg.errors
+            );
+
+            // Verify the different error types are present
+            assert!(
+                msg.errors
+                    .iter()
+                    .any(|(_, a)| matches!(a, AttributeAction::Discard)),
+                "Should have at least one Discard error"
+            );
+            assert!(
+                msg.errors.iter().any(|(r, _)| matches!(
+                    r,
+                    UpdateParseErrorReason::MalformedNextHop { .. }
+                )),
+                "Should have MalformedNextHop error"
+            );
+            assert!(
+                msg.errors.iter().any(|(r, _)| matches!(
+                    r,
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::NextHop
+                    }
+                )),
+                "Should have MissingAttribute error for NextHop"
+            );
+
+            // Valid ORIGIN and AS_PATH should be parsed
+            assert_eq!(
+                msg.path_attributes.len(),
+                2,
+                "ORIGIN and AS_PATH should be parsed"
+            );
+        }
+
+        #[test]
+        fn valid_attributes_after_errors_still_parsed() {
+            // Verify that valid attributes appearing AFTER errors are still parsed.
+            // Bad ORIGIN causes both a parse error and a MissingAttribute error.
+            let mut attrs = Vec::new();
+            attrs.extend(bad_origin_attr()); // TreatAsWithdraw - first
+            attrs.extend(as_path_attr(65000)); // Valid - after error
+            attrs.extend(next_hop_attr([192, 0, 2, 1])); // Valid - after error
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(result.is_ok(), "Parsing should succeed");
+            let msg = result.unwrap();
+
+            assert!(msg.treat_as_withdraw, "treat_as_withdraw should be true");
+            // 1 parse error (InvalidOriginValue) + 1 MissingAttribute (Origin)
+            assert_eq!(
+                msg.errors.len(),
+                2,
+                "ORIGIN parse error + MissingAttribute, got: {:?}",
+                msg.errors
+            );
+
+            // Both valid attributes after the error should be parsed
+            assert_eq!(
+                msg.path_attributes.len(),
+                2,
+                "AS_PATH and NEXT_HOP should both be parsed after ORIGIN error"
+            );
+        }
+
+        #[test]
+        fn no_errors_when_all_attributes_valid() {
+            // Baseline test: verify no errors when all attributes are valid.
+            let mut attrs = Vec::new();
+            attrs.extend(origin_attr());
+            attrs.extend(as_path_attr(65000));
+            attrs.extend(next_hop_attr([192, 0, 2, 1]));
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(result.is_ok(), "Parsing should succeed");
+            let msg = result.unwrap();
+
+            assert!(
+                !msg.treat_as_withdraw,
+                "treat_as_withdraw should be false"
+            );
+            assert!(msg.errors.is_empty(), "No errors expected");
+            assert_eq!(msg.path_attributes.len(), 3, "All 3 attributes parsed");
+        }
+
+        #[test]
+        fn flag_validation_error_collected() {
+            // Test that flag validation errors (from validate_attribute_flags)
+            // are also collected as non-fatal errors when the action is not SessionReset.
+            //
+            // ORIGIN with Optional flag set is invalid (well-known must not be Optional)
+            // and results in TreatAsWithdraw.
+            // The flag-invalid ORIGIN also triggers MissingAttribute since it's skipped.
+            // ORIGIN with wrong flags (Optional set, should not be)
+            let mut attrs = vec![
+                path_attribute_flags::OPTIONAL
+                    | path_attribute_flags::TRANSITIVE, // 0xC0 - wrong!
+                PathAttributeTypeCode::Origin as u8,
+                1, // length
+                0, // IGP value
+            ];
+
+            // Valid AS_PATH after
+            attrs.extend(as_path_attr(65000));
+            attrs.extend(next_hop_attr([192, 0, 2, 1]));
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "Parsing should succeed with flag error collected"
+            );
+            let msg = result.unwrap();
+
+            assert!(
+                msg.treat_as_withdraw,
+                "Flag errors on ORIGIN cause TreatAsWithdraw"
+            );
+            // 1 flag error + 1 MissingAttribute for Origin (skipped due to bad flags)
+            assert_eq!(
+                msg.errors.len(),
+                2,
+                "Flag error + MissingAttribute, got: {:?}",
+                msg.errors
+            );
+
+            assert!(
+                msg.errors.iter().any(|(r, _)| matches!(
+                    r,
+                    UpdateParseErrorReason::InvalidAttributeFlags { .. }
+                )),
+                "Should have InvalidAttributeFlags error"
+            );
+            assert!(
+                msg.errors.iter().any(|(r, _)| matches!(
+                    r,
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::Origin
+                    }
+                )),
+                "Should have MissingAttribute error for Origin"
+            );
+
+            // AS_PATH and NEXT_HOP should still be parsed
+            assert_eq!(
+                msg.path_attributes.len(),
+                2,
+                "AS_PATH and NEXT_HOP parsed"
+            );
+        }
+    }
+
+    /// Tests for mandatory attribute validation.
+    /// RFC 4271 requires ORIGIN, AS_PATH, and NEXT_HOP for traditional BGP UPDATEs.
+    /// RFC 4760 makes NEXT_HOP optional when MP_REACH_NLRI is present (nexthop is in MP attr).
+    mod mandatory_attribute_validation {
+        use std::net::Ipv6Addr;
+        use std::str::FromStr;
+
+        use crate::messages::{
+            BgpNexthop, MpReachNlri, MpUnreachNlri, PathAttributeTypeCode,
+            PathAttributeValue, UpdateMessage, UpdateParseErrorReason,
+            path_attribute_flags,
+        };
+
+        /// Build an UPDATE message wire format with the given path attributes bytes.
+        fn build_update_wire(path_attrs: &[u8], nlri: &[u8]) -> Vec<u8> {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&0u16.to_be_bytes()); // withdrawn length
+            buf.extend_from_slice(&(path_attrs.len() as u16).to_be_bytes());
+            buf.extend_from_slice(path_attrs);
+            buf.extend_from_slice(nlri);
+            buf
+        }
+
+        fn origin_attr() -> Vec<u8> {
+            vec![
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::Origin as u8,
+                1,
+                0, // IGP
+            ]
+        }
+
+        fn as_path_attr(asn: u32) -> Vec<u8> {
+            let mut attr = vec![
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::AsPath as u8,
+                6,
+                2, // AS_SEQUENCE
+                1, // 1 ASN
+            ];
+            attr.extend_from_slice(&asn.to_be_bytes());
+            attr
+        }
+
+        fn next_hop_attr(ip: [u8; 4]) -> Vec<u8> {
+            let mut attr = vec![
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::NextHop as u8,
+                4,
+            ];
+            attr.extend_from_slice(&ip);
+            attr
+        }
+
+        fn mp_reach_ipv6_attr() -> Vec<u8> {
+            // Build MP_REACH_NLRI for IPv6 unicast with nexthop and one prefix
+            let mp_reach = MpReachNlri::ipv6_unicast(
+                BgpNexthop::Ipv6Single(
+                    Ipv6Addr::from_str("2001:db8::1").unwrap(),
+                ),
+                vec![rdb::Prefix6::new(
+                    Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+                    48,
+                )],
+            );
+            let value_bytes =
+                mp_reach.to_wire().expect("MP_REACH_NLRI encoding");
+
+            let mut attr = vec![
+                path_attribute_flags::OPTIONAL,
+                PathAttributeTypeCode::MpReachNlri as u8,
+            ];
+            // Use extended length if needed
+            if value_bytes.len() > 255 {
+                attr[0] |= path_attribute_flags::EXTENDED_LENGTH;
+                attr.extend_from_slice(
+                    &(value_bytes.len() as u16).to_be_bytes(),
+                );
+            } else {
+                attr.push(value_bytes.len() as u8);
+            }
+            attr.extend_from_slice(&value_bytes);
+            attr
+        }
+
+        fn nlri_prefix(a: u8, b: u8, c: u8) -> Vec<u8> {
+            vec![24, a, b, c]
+        }
+
+        // =====================================================================
+        // MP-BGP: NEXT_HOP optional with MP_REACH_NLRI, no mandatory attrs
+        // for MP_UNREACH_NLRI-only UPDATEs
+        // =====================================================================
+
+        #[test]
+        fn mp_bgp_update_without_next_hop_succeeds() {
+            // When MP_REACH_NLRI is present, the nexthop is carried in the MP
+            // attribute, so the traditional NEXT_HOP attribute is not required.
+            let mut attrs = Vec::new();
+            attrs.extend(origin_attr());
+            attrs.extend(as_path_attr(65000));
+            attrs.extend(mp_reach_ipv6_attr()); // Has nexthop inside
+            // No NEXT_HOP attribute - this is OK for MP-BGP
+
+            // No traditional NLRI either (all NLRI is in MP_REACH_NLRI)
+            let wire = build_update_wire(&attrs, &[]);
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "MP-BGP UPDATE without NEXT_HOP should succeed: {:?}",
+                result.err()
+            );
+            let msg = result.unwrap();
+            assert!(!msg.treat_as_withdraw, "Should not be treat-as-withdraw");
+            assert!(
+                msg.errors.is_empty(),
+                "Should have no errors, got: {:?}",
+                msg.errors
+            );
+        }
+
+        #[test]
+        fn mp_bgp_update_with_traditional_nlri_requires_next_hop() {
+            // Even with MP_REACH_NLRI present, if there's traditional NLRI,
+            // NEXT_HOP is still required for those prefixes.
+            let mut attrs = Vec::new();
+            attrs.extend(origin_attr());
+            attrs.extend(as_path_attr(65000));
+            attrs.extend(mp_reach_ipv6_attr());
+            // No NEXT_HOP, but we have traditional NLRI
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "Parsing should succeed with error collected"
+            );
+            let msg = result.unwrap();
+            assert!(
+                msg.treat_as_withdraw,
+                "Missing NEXT_HOP with traditional NLRI should treat-as-withdraw"
+            );
+            assert!(
+                msg.errors.iter().any(|(reason, _)| matches!(
+                    reason,
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::NextHop
+                    }
+                )),
+                "Should have MissingAttribute error for NEXT_HOP, got: {:?}",
+                msg.errors
+            );
+        }
+
+        #[test]
+        fn mp_unreach_only_update_does_not_require_mandatory_attrs() {
+            // An UPDATE that only carries MP_UNREACH_NLRI (MP-BGP withdrawals)
+            // doesn't need mandatory attributes because there's no reachable NLRI.
+            let mp_unreach =
+                MpUnreachNlri::ipv6_unicast(vec![rdb::Prefix6::new(
+                    Ipv6Addr::from_str("2001:db8:1::").unwrap(),
+                    48,
+                )]);
+            let value_bytes =
+                mp_unreach.to_wire().expect("MP_UNREACH_NLRI encoding");
+
+            let mut attrs = vec![
+                path_attribute_flags::OPTIONAL,
+                PathAttributeTypeCode::MpUnreachNlri as u8,
+            ];
+            if value_bytes.len() > 255 {
+                attrs[0] |= path_attribute_flags::EXTENDED_LENGTH;
+                attrs.extend_from_slice(
+                    &(value_bytes.len() as u16).to_be_bytes(),
+                );
+            } else {
+                attrs.push(value_bytes.len() as u8);
+            }
+            attrs.extend_from_slice(&value_bytes);
+
+            // No traditional withdrawn, no traditional NLRI
+            let wire = build_update_wire(&attrs, &[]);
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "MP_UNREACH-only UPDATE should succeed: {:?}",
+                result.err()
+            );
+            let msg = result.unwrap();
+            assert!(!msg.treat_as_withdraw, "Should not be treat-as-withdraw");
+            assert!(
+                msg.errors.is_empty(),
+                "Should have no errors for MP_UNREACH-only UPDATE, got: {:?}",
+                msg.errors
+            );
+
+            // Verify MP_UNREACH_NLRI was parsed
+            assert!(
+                msg.path_attributes.iter().any(|a| matches!(
+                    a.value,
+                    PathAttributeValue::MpUnreachNlri(_)
+                )),
+                "MP_UNREACH_NLRI should be present in parsed attributes"
+            );
+        }
+
+        // =====================================================================
+        // Traditional BGP: All three mandatory attributes required
+        // =====================================================================
+
+        #[test]
+        fn traditional_update_without_next_hop_errors() {
+            // Traditional UPDATE with NLRI requires NEXT_HOP
+            let mut attrs = Vec::new();
+            attrs.extend(origin_attr());
+            attrs.extend(as_path_attr(65000));
+            // Missing NEXT_HOP
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "Parsing should succeed with error collected"
+            );
+            let msg = result.unwrap();
+            assert!(
+                msg.treat_as_withdraw,
+                "Missing NEXT_HOP should trigger treat-as-withdraw"
+            );
+            assert!(
+                msg.errors.iter().any(|(reason, _)| matches!(
+                    reason,
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::NextHop
+                    }
+                )),
+                "Should have MissingAttribute error for NEXT_HOP, got: {:?}",
+                msg.errors
+            );
+        }
+
+        #[test]
+        fn traditional_update_without_origin_errors() {
+            // Traditional UPDATE requires ORIGIN
+            let mut attrs = Vec::new();
+            // Missing ORIGIN
+            attrs.extend(as_path_attr(65000));
+            attrs.extend(next_hop_attr([192, 0, 2, 1]));
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "Parsing should succeed with error collected"
+            );
+            let msg = result.unwrap();
+            assert!(
+                msg.treat_as_withdraw,
+                "Missing ORIGIN should trigger treat-as-withdraw"
+            );
+            assert!(
+                msg.errors.iter().any(|(reason, _)| matches!(
+                    reason,
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::Origin
+                    }
+                )),
+                "Should have MissingAttribute error for ORIGIN, got: {:?}",
+                msg.errors
+            );
+        }
+
+        #[test]
+        fn traditional_update_without_as_path_errors() {
+            // Traditional UPDATE requires AS_PATH
+            let mut attrs = Vec::new();
+            attrs.extend(origin_attr());
+            // Missing AS_PATH
+            attrs.extend(next_hop_attr([192, 0, 2, 1]));
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "Parsing should succeed with error collected"
+            );
+            let msg = result.unwrap();
+            assert!(
+                msg.treat_as_withdraw,
+                "Missing AS_PATH should trigger treat-as-withdraw"
+            );
+            assert!(
+                msg.errors.iter().any(|(reason, _)| matches!(
+                    reason,
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::AsPath
+                    }
+                )),
+                "Should have MissingAttribute error for AS_PATH, got: {:?}",
+                msg.errors
+            );
+        }
+
+        #[test]
+        fn traditional_update_missing_multiple_mandatory_attrs() {
+            // Missing both ORIGIN and AS_PATH - should collect both errors
+            let mut attrs = Vec::new();
+            // Only NEXT_HOP, missing ORIGIN and AS_PATH
+            attrs.extend(next_hop_attr([192, 0, 2, 1]));
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "Parsing should succeed with errors collected"
+            );
+            let msg = result.unwrap();
+            assert!(
+                msg.treat_as_withdraw,
+                "Missing mandatory attrs should trigger treat-as-withdraw"
+            );
+            assert!(
+                msg.errors.iter().any(|(reason, _)| matches!(
+                    reason,
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::Origin
+                    }
+                )),
+                "Should have MissingAttribute error for ORIGIN"
+            );
+            assert!(
+                msg.errors.iter().any(|(reason, _)| matches!(
+                    reason,
+                    UpdateParseErrorReason::MissingAttribute {
+                        type_code: PathAttributeTypeCode::AsPath
+                    }
+                )),
+                "Should have MissingAttribute error for AS_PATH"
+            );
+        }
+
+        #[test]
+        fn withdraw_only_update_does_not_require_mandatory_attrs() {
+            // An UPDATE that only withdraws routes doesn't need mandatory attrs
+            // because there's no NLRI to apply them to.
+            let mut buf = Vec::new();
+            // Withdrawn routes: 198.51.100.0/24
+            let withdrawn = nlri_prefix(198, 51, 100);
+            buf.extend_from_slice(&(withdrawn.len() as u16).to_be_bytes());
+            buf.extend_from_slice(&withdrawn);
+            // No path attributes
+            buf.extend_from_slice(&0u16.to_be_bytes());
+            // No NLRI
+
+            let result = UpdateMessage::from_wire(&buf);
+
+            assert!(
+                result.is_ok(),
+                "Withdraw-only UPDATE should succeed: {:?}",
+                result.err()
+            );
+            let msg = result.unwrap();
+            assert!(!msg.treat_as_withdraw, "Should not be treat-as-withdraw");
+            assert!(
+                msg.errors.is_empty(),
+                "Should have no errors for withdraw-only UPDATE"
+            );
+        }
+
+        #[test]
+        fn empty_update_does_not_require_mandatory_attrs() {
+            // An UPDATE with no NLRI and no withdrawn routes (keepalive-like)
+            // doesn't need mandatory attributes.
+            let wire = build_update_wire(&[], &[]);
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "Empty UPDATE should succeed: {:?}",
+                result.err()
+            );
+            let msg = result.unwrap();
+            assert!(!msg.treat_as_withdraw, "Should not be treat-as-withdraw");
+            assert!(
+                msg.errors.is_empty(),
+                "Should have no errors for empty UPDATE"
+            );
+        }
     }
 }

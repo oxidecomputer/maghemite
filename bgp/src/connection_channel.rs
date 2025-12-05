@@ -414,6 +414,22 @@ impl BgpConnectionChannel {
                                 "connection_id" => conn_id.short(),
                                 "channel_id" => channel_id
                             );
+                            // Notify session runner that the connection failed,
+                            // unless this is a graceful shutdown
+                            if !dropped.load(Ordering::Relaxed)
+                                && let Err(e) = event_tx.send(FsmEvent::Connection(
+                                    ConnectionEvent::TcpConnectionFails(conn_id),
+                                ))
+                            {
+                                connection_log_lite!(log, warn,
+                                    "error sending TcpConnectionFails event to {peer}: {e}";
+                                    "direction" => direction.as_str(),
+                                    "peer" => format!("{peer}"),
+                                    "connection_id" => conn_id.short(),
+                                    "channel_id" => channel_id,
+                                    "error" => format!("{e}")
+                                );
+                            }
                             break;
                         }
                     }

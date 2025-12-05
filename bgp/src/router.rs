@@ -70,7 +70,9 @@ pub struct Router<Cnx: BgpConnection + 'static> {
     /// to all others. If/when we do that, there will need to be export
     /// policy that governs what updates fan out to what peers.
     /// Note: Since peers can have any combination of address families enabled,
-    ///       fanout must be maintained per address family.
+    ///       fanout must be maintained per address family. A peer session is
+    ///       inserted into an address-family's fanout when it moves into
+    ///       Established after negotiating that AFI/SAFI with the peer.
     pub fanout4: Arc<RwLock<Fanout4<Cnx>>>,
     pub fanout6: Arc<RwLock<Fanout6<Cnx>>>,
 }
@@ -171,16 +173,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         // Hold lock during entire iteration to prevent concurrent modifications
         let sessions = lock!(self.sessions);
-        for (addr, session) in sessions.iter() {
-            // Ensure fanout is set up for this session (needed for restart scenario)
-            if let Some(endpoint) = lock!(self.addr_to_session).get(addr) {
-                if lock!(endpoint.config).ipv4_enabled {
-                    self.add_fanout4(*addr, endpoint.event_tx.clone());
-                }
-                if lock!(endpoint.config).ipv6_enabled {
-                    self.add_fanout6(*addr, endpoint.event_tx.clone());
-                }
-            }
+        for session in sessions.values() {
             self.spawn_session_thread(session.clone());
         }
     }
@@ -289,9 +282,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         session_info.resolution = Duration::from_millis(peer.resolution);
         session_info.bind_addr = bind_addr;
 
-        let ipv4 = session_info.ipv4_enabled;
-        let ipv6 = session_info.ipv6_enabled;
-
         let session = Arc::new(Mutex::new(session_info));
 
         a2s.insert(
@@ -317,12 +307,6 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         ));
 
         self.spawn_session_thread(runner.clone());
-        if ipv4 {
-            self.add_fanout4(neighbor.host.ip(), event_tx.clone());
-        }
-        if ipv6 {
-            self.add_fanout6(neighbor.host.ip(), event_tx.clone());
-        }
         lock!(self.sessions).insert(neighbor.host.ip(), runner.clone());
 
         Ok(runner)

@@ -441,4 +441,3 @@ pub enum ProtocolFilter {
     /// Static routes only
     Static,
 }
-

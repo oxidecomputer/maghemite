@@ -13,9 +13,10 @@ use crate::{
     log::{collision_log, session_log, session_log_lite},
     messages::{
         AddPathElement, Afi, BgpNexthop, Capability, CeaseErrorSubcode,
-        Community, ErrorCode, ErrorSubcode, Message, MessageKind, MpReach,
-        MpUnreach, NotificationMessage, OpenMessage, PathAttributeValue,
-        RouteRefreshMessage, Safi, UpdateErrorSubcode, UpdateMessage,
+        Community, ErrorCode, ErrorSubcode, Message, MessageKind,
+        MessageParseError, MpReachNlri, MpUnreachNlri, NotificationMessage,
+        OpenMessage, PathAttributeValue, RouteRefreshMessage, Safi,
+        UpdateMessage,
     },
     policy::{CheckerResult, ShaperResult},
     recv_event_loop, recv_event_return,
@@ -43,6 +44,50 @@ use std::{
 
 const UNIT_SESSION_RUNNER: &str = "session_runner";
 
+/// The runtime state of an address-family for a given peer.
+/// This is instantiated after capability negotiation has completed.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+pub enum AfiSafiState {
+    /// Not configured for this session. We did not advertise this capability
+    /// in our OPEN message, so the peer's support is irrelevant.
+    #[default]
+    Unconfigured,
+
+    /// We advertised this capability but the peer did not. Routes for this
+    /// AFI/SAFI will be ignored.
+    Advertised,
+
+    /// Successfully negotiated with peer. Routes for this AFI/SAFI will be
+    /// processed.
+    Negotiated,
+}
+
+impl AfiSafiState {
+    pub fn negotiated(&self) -> bool {
+        matches!(self, Self::Negotiated)
+    }
+}
+
+impl Display for AfiSafiState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unconfigured => write!(f, "Unconfigured"),
+            Self::Advertised => write!(f, "Advertised"),
+            Self::Negotiated => write!(f, "Negotiated"),
+        }
+    }
+}
+
 /// This wraps a BgpConnection with runtime state learned from the peer's Open
 /// message. This encodes all the dynamic (but non-timer related) information
 /// for a given connection into the type system (rather than wrapping each
@@ -60,10 +105,10 @@ pub struct PeerConnection<Cnx: BgpConnection> {
     pub asn: u32,
     /// The actual capabilities received from the peer (runtime state)
     pub caps: BTreeSet<Capability>,
-    /// The IPv4 Unicast AFI/SAFI was negotiated (advertised by both sides)
-    pub ipv4: bool,
-    /// The IPv6 Unicast AFI/SAFI was negotiated (advertised by both sides)
-    pub ipv6: bool,
+    /// This peer's AFI/SAFI state for IPv4 Unicast
+    pub ipv4_unicast: AfiSafiState,
+    /// This peer's AFI/SAFI state for IPv6 Unicast
+    pub ipv6_unicast: AfiSafiState,
 }
 
 impl<Cnx: BgpConnection> Clone for PeerConnection<Cnx> {
@@ -73,8 +118,8 @@ impl<Cnx: BgpConnection> Clone for PeerConnection<Cnx> {
             id: self.id,
             asn: self.asn,
             caps: self.caps.clone(),
-            ipv4: self.ipv4,
-            ipv6: self.ipv6,
+            ipv4_unicast: self.ipv4_unicast,
+            ipv6_unicast: self.ipv6_unicast,
         }
     }
 }
@@ -193,7 +238,7 @@ pub enum FsmState<Cnx: BgpConnection> {
     /// Waiting for open message from peer.
     OpenSent(Arc<Cnx>),
 
-    /// Waiting for keepaliave or notification from peer.
+    /// Waiting for keepalive or notification from peer.
     OpenConfirm(PeerConnection<Cnx>),
 
     /// Waiting for Open from incoming connection to perform Collision Resolution.
@@ -202,7 +247,7 @@ pub enum FsmState<Cnx: BgpConnection> {
     /// Sync up with peers.
     SessionSetup(PeerConnection<Cnx>),
 
-    /// Able to exchange update, notification and keepliave messages with peers.
+    /// Able to exchange update, notification and keepalive messages with peers.
     Established(PeerConnection<Cnx>),
 }
 
@@ -237,7 +282,7 @@ pub enum FsmStateKind {
     /// Waiting for open message from peer.
     OpenSent,
 
-    /// Waiting for keepaliave or notification from peer.
+    /// Waiting for keepalive or notification from peer.
     OpenConfirm,
 
     /// Handler for Connection Collisions (RFC 4271 6.8)
@@ -426,6 +471,13 @@ pub enum StopReason {
     ConnectionRejected,
     CollisionResolution,
     IoError,
+    /// A parse error occurred that requires session reset with specific
+    /// error codes (per RFC 7606). This is used when the connection layer
+    /// reports a `ParseErrorAction::SessionReset`.
+    ParseError {
+        error_code: ErrorCode,
+        error_subcode: ErrorSubcode,
+    },
 }
 
 /// FsmEvents pertaining to a specific Connection
@@ -442,12 +494,29 @@ pub enum ConnectionEvent {
 
     /// Fires when the connection's delay open timer expires.
     DelayOpenTimerExpires(ConnectionId),
+
+    /// Fatal message parse error.
+    /// Connection layer has logged the error and sends this event for
+    /// fatal errors. All ParseError events are fatal - session should send
+    /// NOTIFICATION and reset.
+    /// Note: If we decide to implement RFC 4760 "AFI/SAFI disable" error
+    ///       handling, we likely would just update our response to this.
+    ParseError {
+        conn_id: ConnectionId,
+        error: MessageParseError,
+    },
+
+    /// Fires when the recv loop exits due to IO error (connection closed,
+    /// timeout, etc.) This signals that the underlying TCP connection
+    /// has failed and the SessionRunner should handle the connection loss
+    /// appropriately. The specific error is logged at the connection layer.
+    TcpConnectionFails(ConnectionId),
 }
 
 impl ConnectionEvent {
     fn title(&self) -> &'static str {
         match self {
-            ConnectionEvent::Message { .. } => "message",
+            ConnectionEvent::Message { msg, .. } => msg.title(),
             ConnectionEvent::HoldTimerExpires(_) => "hold timer expires",
             ConnectionEvent::KeepaliveTimerExpires(_) => {
                 "keepalive timer expires"
@@ -455,6 +524,8 @@ impl ConnectionEvent {
             ConnectionEvent::DelayOpenTimerExpires(_) => {
                 "delay open timer expires"
             }
+            ConnectionEvent::ParseError { .. } => "parse error",
+            ConnectionEvent::TcpConnectionFails(_) => "tcp connection fails",
         }
     }
 }
@@ -600,10 +671,6 @@ pub enum UnusedEvent {
     /// source/destination IP address/port.
     TcpConnectionInvalid,
 
-    /// Fires when the remote peer sends a TCP fin or the local connection times
-    /// out.
-    TcpConnectionFails,
-
     /// Fires when a connection has been detected while processing an open
     /// message. We implement Collision handling in FsmState::ConnectionCollision
     OpenCollisionDump,
@@ -623,7 +690,6 @@ impl UnusedEvent {
             Self::DelayOpenTimerExpires => "delay open timer expires",
             Self::TcpConnectionValid => "tcp connection valid",
             Self::TcpConnectionInvalid => "tcp connection invalid",
-            Self::TcpConnectionFails => "tcp connection fails",
             Self::BgpOpen => "bgp open",
             Self::DelayedBgpOpen => "delay bgp open",
             Self::BgpHeaderErr => "bgp header err",
@@ -1032,15 +1098,39 @@ macro_rules! connect_timeout {
     };
 }
 
+/// Determines AFI/SAFI state based on capability negotiation.
+///
+/// Returns (ipv4_unicast, ipv6_unicast) states:
+/// - Negotiated: Both sides advertised the capability
+/// - Advertised: We advertised but peer did not
+/// - Unconfigured: We did not advertise (not configured)
 macro_rules! active_afi {
     ($self:expr, $their_caps:ident) => {{
         let cap4 = Capability::ipv4_unicast();
         let cap6 = Capability::ipv6_unicast();
         let our_caps = lock!($self.caps_tx);
-        (
-            our_caps.contains(&cap4) && $their_caps.contains(&cap4),
-            our_caps.contains(&cap6) && $their_caps.contains(&cap6),
-        )
+
+        let ipv4_state = if our_caps.contains(&cap4) {
+            if $their_caps.contains(&cap4) {
+                AfiSafiState::Negotiated
+            } else {
+                AfiSafiState::Advertised
+            }
+        } else {
+            AfiSafiState::Unconfigured
+        };
+
+        let ipv6_state = if our_caps.contains(&cap6) {
+            if $their_caps.contains(&cap6) {
+                AfiSafiState::Negotiated
+            } else {
+                AfiSafiState::Advertised
+            }
+        } else {
+            AfiSafiState::Unconfigured
+        };
+
+        (ipv4_state, ipv6_state)
     }};
 }
 
@@ -1657,9 +1747,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             Some(details),
                         );
                     }
+                    ConnectionEvent::ParseError { conn_id, error } => {
+                        return (
+                            FsmEventCategory::Connection,
+                            Some(*conn_id),
+                            Some(error.description()),
+                        );
+                    }
                     ConnectionEvent::HoldTimerExpires(id)
                     | ConnectionEvent::KeepaliveTimerExpires(id)
                     | ConnectionEvent::DelayOpenTimerExpires(id) => Some(*id),
+                    ConnectionEvent::TcpConnectionFails(conn_id) => {
+                        Some(*conn_id)
+                    }
                 };
                 (FsmEventCategory::Connection, conn_id, None)
             }
@@ -2123,6 +2223,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             self.bump_msg_counter(msg.kind(), true);
                             continue;
                         }
+
+                        ConnectionEvent::TcpConnectionFails(ref conn_id)
+                        | ConnectionEvent::ParseError { ref conn_id, .. } => {
+                            // Idle doesn't own a connection, so this can't be
+                            // related to the current FSM. Log and ignore.
+                            session_log_lite!(
+                                self,
+                                debug,
+                                "{} (conn_id: {}) in Idle state, ignoring",
+                                connection_event.title(),
+                                conn_id.short()
+                            );
+                            continue;
+                        }
                     }
                 }
             }
@@ -2448,6 +2562,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                             continue;
                         }
+
+                        ConnectionEvent::TcpConnectionFails(ref conn_id)
+                        | ConnectionEvent::ParseError { ref conn_id, .. } => {
+                            // Connect doesn't own a connection, so this can't
+                            // be related to the current FSM. Log and ignore.
+                            // Note: If we add support for DelayOpen, we could
+                            //       own a BgpConnection while DelayOpenTimer is
+                            //       running. This would need to be updated to
+                            //       do conn_id validation.
+                            session_log_lite!(
+                                self,
+                                debug,
+                                "{} (conn_id: {}) in Connect state, ignoring",
+                                connection_event.title(),
+                                conn_id.short()
+                            );
+                            continue;
+                        }
                     }
                 }
             }
@@ -2679,6 +2811,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 conn_id.short()
                             );
 
+                            continue;
+                        }
+
+                        ConnectionEvent::TcpConnectionFails(ref conn_id)
+                        | ConnectionEvent::ParseError { ref conn_id, .. } => {
+                            // Active doesn't own a connection, so this can't
+                            // be related to the current FSM. Log and ignore.
+                            // Note: If we add support for DelayOpen, we could
+                            //       own a BgpConnection while DelayOpenTimer is
+                            //       running. This would need to be updated to
+                            //       do conn_id validation.
+                            session_log_lite!(
+                                self,
+                                debug,
+                                "{} (conn_id: {}) in Active state, ignoring",
+                                connection_event.title(),
+                                conn_id.short()
+                            );
                             continue;
                         }
                     }
@@ -3251,6 +3401,64 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             self.stop(Some(&conn), None, StopReason::FsmError);
                             return FsmState::Idle;
                         }
+
+                        ConnectionEvent::ParseError {
+                            ref conn_id,
+                            ref error,
+                        } => {
+                            if !self.validate_active_connection(
+                                conn_id,
+                                &conn,
+                                connection_event.title(),
+                            ) {
+                                continue;
+                            }
+
+                            // In OpenSent state, all parse errors are fatal.
+                            // We haven't completed the handshake yet.
+                            let (error_code, error_subcode) =
+                                error.error_codes();
+                            session_log!(
+                                self,
+                                warn,
+                                conn,
+                                "rx {} (conn_id: {}): {}, fsm transition to idle",
+                                connection_event.title(), conn_id.short(), error;
+                                "error_code" => format!("{error_code:?}"),
+                                "error_subcode" => format!("{error_subcode:?}")
+                            );
+                            let stop_reason = StopReason::ParseError {
+                                error_code,
+                                error_subcode,
+                            };
+
+                            session_timer!(self, connect_retry).stop();
+                            self.connect_retry_counter
+                                .fetch_add(1, Ordering::Relaxed);
+                            self.stop(Some(&conn), None, stop_reason);
+
+                            return FsmState::Idle;
+                        }
+
+                        ConnectionEvent::TcpConnectionFails(ref conn_id) => {
+                            if !self.validate_active_connection(
+                                conn_id,
+                                &conn,
+                                connection_event.title(),
+                            ) {
+                                continue;
+                            }
+
+                            session_log!(
+                                self,
+                                warn,
+                                conn,
+                                "rx {} (conn_id: {}), fsm transition to idle",
+                                connection_event.title(), conn_id.short();
+                            );
+                            self.stop(Some(&conn), None, StopReason::IoError);
+                            return FsmState::Idle;
+                        }
                     }
                 }
             }
@@ -3333,15 +3541,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         conn_timer!(conn, hold).enable();
 
         let caps = om.get_capabilities();
-        let (ipv4, ipv6) = active_afi!(self, caps);
+        let (ipv4_unicast, ipv6_unicast) = active_afi!(self, caps);
 
         let pc = PeerConnection {
             conn,
             id: om.id,
             asn: om.asn(),
             caps,
-            ipv4,
-            ipv6,
+            ipv4_unicast,
+            ipv6_unicast,
         };
 
         // Upgrade this connection from Partial to Full in the registry
@@ -3604,6 +3812,60 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         session_timer!(self, connect_retry).stop();
                         FsmState::Idle
                     }
+                }
+
+                ConnectionEvent::ParseError {
+                    ref conn_id,
+                    ref error,
+                } => {
+                    if !self.validate_active_connection(
+                        conn_id,
+                        &pc.conn,
+                        connection_event.title(),
+                    ) {
+                        return FsmState::OpenConfirm(pc);
+                    }
+
+                    // In OpenConfirm state, all parse errors are fatal.
+                    // We haven't completed the handshake yet.
+                    let (error_code, error_subcode) = error.error_codes();
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
+                        "rx {} (conn_id: {}): {}, fsm transition to idle",
+                        connection_event.title(), conn_id.short(), error;
+                        "error_code" => format!("{error_code:?}"),
+                        "error_subcode" => format!("{error_subcode:?}")
+                    );
+                    let stop_reason = StopReason::ParseError {
+                        error_code,
+                        error_subcode,
+                    };
+
+                    session_timer!(self, connect_retry).stop();
+                    self.stop(Some(&pc.conn), None, stop_reason);
+                    FsmState::Idle
+                }
+
+                ConnectionEvent::TcpConnectionFails(ref conn_id) => {
+                    if !self.validate_active_connection(
+                        conn_id,
+                        &pc.conn,
+                        connection_event.title(),
+                    ) {
+                        return FsmState::OpenConfirm(pc);
+                    }
+
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
+                        "rx {} (conn_id: {}), fsm transition to idle",
+                        connection_event.title(), conn_id.short();
+                    );
+                    self.stop(Some(&pc.conn), None, StopReason::IoError);
+                    FsmState::Idle
                 }
             },
 
@@ -4413,6 +4675,166 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 }
                             }
                         }
+
+                        ConnectionEvent::ParseError {
+                            ref conn_id,
+                            ref error,
+                        } => {
+                            // In ConnectionCollision state, a parse error on
+                            // either connection should result in that
+                            // connection being closed and the other connection
+                            // proceeding.
+                            // All ParseError events are fatal - get error codes for NOTIFICATION.
+                            let (error_code, error_subcode) =
+                                error.error_codes();
+                            let stop_reason = StopReason::ParseError {
+                                error_code,
+                                error_subcode,
+                            };
+
+                            match self.collision_conn_kind(
+                                conn_id,
+                                exist.conn.id(),
+                                new.id(),
+                            ) {
+                                CollisionConnectionKind::New => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
+                                        "rx {} on new connection (conn_id: {}): {}, keeping existing",
+                                        connection_event.title(), conn_id.short(), error;
+                                    );
+                                    self.stop(Some(&new), None, stop_reason);
+                                    return FsmState::OpenConfirm(exist);
+                                }
+                                CollisionConnectionKind::Exist => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
+                                        "rx {} on existing connection (conn_id: {}): {}, keeping new",
+                                        connection_event.title(), conn_id.short(), error;
+                                    );
+                                    self.stop(
+                                        Some(&exist.conn),
+                                        None,
+                                        stop_reason,
+                                    );
+                                    return FsmState::OpenSent(new);
+                                }
+                                CollisionConnectionKind::Unexpected(
+                                    unknown,
+                                ) => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
+                                        "rx {} for known connection (conn_id: {}) not in collision, closing",
+                                        connection_event.title(),
+                                        conn_id.short()
+                                    );
+                                    self.stop(
+                                        Some(&unknown),
+                                        None,
+                                        stop_reason,
+                                    );
+                                    continue;
+                                }
+                                CollisionConnectionKind::Missing => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
+                                        "rx {} for unknown connection (conn_id: {}), ignoring",
+                                        connection_event.title(),
+                                        conn_id.short()
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+
+                        // In ConnectionCollision state, a failed TCP connection
+                        // on either connection should result in that connection
+                        // being closed and the other connection proceeding.
+                        ConnectionEvent::TcpConnectionFails(ref conn_id) => {
+                            match self.collision_conn_kind(
+                                conn_id,
+                                exist.conn.id(),
+                                new.id(),
+                            ) {
+                                CollisionConnectionKind::New => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
+                                        "rx {} on new connection (conn_id: {}), keeping existing",
+                                        connection_event.title(),
+                                        conn_id.short()
+                                    );
+                                    self.stop(
+                                        Some(&new),
+                                        None,
+                                        StopReason::IoError,
+                                    );
+                                    return FsmState::OpenConfirm(exist);
+                                }
+                                CollisionConnectionKind::Exist => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
+                                        "rx {} on existing connection (conn_id: {}), keeping new",
+                                        connection_event.title(),
+                                        conn_id.short()
+                                    );
+                                    self.stop(
+                                        Some(&exist.conn),
+                                        None,
+                                        StopReason::IoError,
+                                    );
+                                    return FsmState::OpenSent(new);
+                                }
+                                CollisionConnectionKind::Unexpected(
+                                    unknown,
+                                ) => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
+                                        "rx {} for known connection (conn_id: {}) not in collision, closing",
+                                        connection_event.title(),
+                                        conn_id.short()
+                                    );
+                                    self.stop(
+                                        Some(&unknown),
+                                        None,
+                                        StopReason::IoError,
+                                    );
+                                    continue;
+                                }
+                                CollisionConnectionKind::Missing => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist.conn,
+                                        "rx {} for unknown connection (conn_id: {}), ignoring",
+                                        connection_event.title(),
+                                        conn_id.short()
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -4476,15 +4898,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .fetch_add(1, Ordering::Relaxed);
 
                 let caps = om.get_capabilities();
-                let (ipv4, ipv6) = active_afi!(self, caps);
+                let (ipv4_unicast, ipv6_unicast) = active_afi!(self, caps);
 
                 let new_pc = PeerConnection {
                     conn: new,
                     id: om.id,
                     asn: om.asn(),
                     caps,
-                    ipv4,
-                    ipv6,
+                    ipv4_unicast,
+                    ipv6_unicast,
                 };
 
                 conn_timer!(new_pc.conn, hold).restart();
@@ -4704,7 +5126,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 FsmEvent::Connection(connection_event) => {
                     match connection_event {
-                        // XXX: Make sure we always log the message type + conn_id
                         ConnectionEvent::Message { msg, ref conn_id } => {
                             let msg_kind = msg.kind();
                             match self.collision_conn_kind(conn_id, exist.id(), new.id()) {
@@ -4791,15 +5212,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 conn_timer!(exist, keepalive).restart();
 
                                                 let caps = om.get_capabilities();
-                                                let (ipv4, ipv6) = active_afi!(self, caps);
+                                                let (ipv4_unicast, ipv6_unicast) = active_afi!(self, caps);
 
                                                 let exist_pc = PeerConnection {
                                                     conn: exist.clone(),
                                                     id: om.id,
                                                     asn: om.asn(),
                                                     caps,
-                                                    ipv4,
-                                                    ipv6,
+                                                    ipv4_unicast,
+                                                    ipv6_unicast,
                                                 };
 
                                                 // Upgrade existing connection from Partial to Full in the registry
@@ -4927,15 +5348,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 self.stop(Some(&exist), None, StopReason::CollisionResolution);
 
                                                 let caps = om.get_capabilities();
-                                                let (ipv4, ipv6) = active_afi!(self, caps);
+                                                let (ipv4_unicast, ipv6_unicast) = active_afi!(self, caps);
 
                                                 let new_pc = PeerConnection {
                                                     conn: new.clone(),
                                                     id: om.id,
                                                     asn: om.asn(),
                                                     caps,
-                                                    ipv4,
-                                                    ipv6
+                                                    ipv4_unicast,
+                                                    ipv6_unicast,
                                                 };
 
                                                 conn_timer!(new, hold).restart();
@@ -5125,6 +5546,165 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 },
                             }
                         }
+
+                        ConnectionEvent::ParseError {
+                            ref conn_id,
+                            ref error,
+                        } => {
+                            // In ConnectionCollision (OpenSent) state, a parse
+                            // error on either connection should result in that
+                            // connection being closed and the other connection
+                            // proceeding.
+                            // All ParseError events are fatal - get error codes for NOTIFICATION.
+                            let (error_code, error_subcode) = error.error_codes();
+                            let stop_reason = StopReason::ParseError {
+                                error_code,
+                                error_subcode,
+                            };
+
+                            match self.collision_conn_kind(
+                                conn_id,
+                                exist.id(),
+                                new.id(),
+                            ) {
+                                CollisionConnectionKind::New => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
+                                        "rx {} on new connection (conn_id: {}): {}, keeping existing",
+                                        connection_event.title(), conn_id.short(), error;
+                                    );
+                                    self.stop(
+                                        Some(&new),
+                                        None,
+                                        stop_reason,
+                                    );
+                                    return FsmState::OpenSent(exist);
+                                }
+                                CollisionConnectionKind::Exist => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
+                                        "rx {} on existing connection (conn_id: {}): {}, keeping new",
+                                        connection_event.title(), conn_id.short(), error;
+                                    );
+                                    self.stop(
+                                        Some(&exist),
+                                        None,
+                                        stop_reason,
+                                    );
+                                    return FsmState::OpenSent(new);
+                                }
+                                CollisionConnectionKind::Unexpected(unknown) => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
+                                        "rx {} for known connection (conn_id: {}) not in collision, closing",
+                                        connection_event.title(), conn_id.short()
+                                    );
+                                    self.stop(
+                                        Some(&unknown),
+                                        None,
+                                        stop_reason,
+                                    );
+                                    continue;
+                                }
+                                CollisionConnectionKind::Missing => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
+                                        "rx {} for unknown connection (conn_id: {}), ignoring",
+                                        connection_event.title(), conn_id.short()
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+
+                        // In ConnectionCollision state, a failed TCP connection
+                        // on either connection should result in that connection
+                        // being closed and the other connection proceeding.
+                        ConnectionEvent::TcpConnectionFails(ref conn_id) => {
+                            match self.collision_conn_kind(
+                                conn_id,
+                                exist.id(),
+                                new.id(),
+                            ) {
+                                CollisionConnectionKind::New => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
+                                        "rx {} on new connection (conn_id: {}), keeping existing",
+                                        connection_event.title(),
+                                        conn_id.short()
+                                    );
+                                    self.stop(
+                                        Some(&new),
+                                        None,
+                                        StopReason::IoError,
+                                    );
+                                    return FsmState::OpenSent(exist);
+                                }
+                                CollisionConnectionKind::Exist => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
+                                        "rx {} on existing connection (conn_id: {}), keeping new",
+                                        connection_event.title(),
+                                        conn_id.short()
+                                    );
+                                    self.stop(
+                                        Some(&exist),
+                                        None,
+                                        StopReason::IoError,
+                                    );
+                                    return FsmState::OpenSent(new);
+                                }
+                                CollisionConnectionKind::Unexpected(
+                                    unknown,
+                                ) => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
+                                        "rx {} for known connection (conn_id: {}) not in collision, closing",
+                                        connection_event.title(),
+                                        conn_id.short()
+                                    );
+                                    self.stop(
+                                        Some(&unknown),
+                                        None,
+                                        StopReason::IoError,
+                                    );
+                                    continue;
+                                }
+                                CollisionConnectionKind::Missing => {
+                                    collision_log!(
+                                        self,
+                                        warn,
+                                        new,
+                                        exist,
+                                        "rx {} for unknown connection (conn_id: {}), ignoring",
+                                        connection_event.title(),
+                                        conn_id.short()
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -5169,7 +5749,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         // Collect the prefixes this router is originating.
-        let originated4 = if pc.ipv4 {
+        let originated4 = if pc.ipv4_unicast.negotiated() {
             match self.db.get_origin4() {
                 Ok(value) => value,
                 Err(e) => {
@@ -5188,7 +5768,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             Vec::new()
         };
 
-        let originated6 = if pc.ipv6 {
+        let originated6 = if pc.ipv6_unicast.negotiated() {
             match self.db.get_origin6() {
                 Ok(value) => value,
                 Err(e) => {
@@ -5208,7 +5788,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         // Ensure the router has a fanout entry for this peer.
-        if pc.ipv4 {
+        if pc.ipv4_unicast.negotiated() {
             write_lock!(self.fanout4).add_egress(
                 self.neighbor.host.ip(),
                 crate::fanout::Egress {
@@ -5217,7 +5797,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 },
             );
         }
-        if pc.ipv6 {
+        if pc.ipv6_unicast.negotiated() {
             write_lock!(self.fanout6).add_egress(
                 self.neighbor.host.ip(),
                 crate::fanout::Egress {
@@ -5847,7 +6427,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             );
 
                                             let caps = om.get_capabilities();
-                                            let (ipv4, ipv6) =
+                                            let (ipv4_unicast, ipv6_unicast) =
                                                 active_afi!(self, caps);
 
                                             let new_pc = PeerConnection {
@@ -5855,8 +6435,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 id: om.id,
                                                 asn: om.asn(),
                                                 caps,
-                                                ipv4,
-                                                ipv6,
+                                                ipv4_unicast,
+                                                ipv6_unicast,
                                             };
 
                                             // Clean up the old established connection
@@ -6084,6 +6664,54 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             }
                         }
                     }
+                }
+
+                ConnectionEvent::ParseError {
+                    ref conn_id,
+                    ref error,
+                } => {
+                    if !self.validate_active_connection(
+                        conn_id,
+                        &pc.conn,
+                        connection_event.title(),
+                    ) {
+                        return FsmState::Established(pc);
+                    }
+
+                    // All ParseError events are fatal - send NOTIFICATION and reset.
+                    // TreatAsWithdraw is now handled via UpdateMessage.treat_as_withdraw flag.
+                    let (error_code, error_subcode) = error.error_codes();
+                    session_log!(
+                        self,
+                        error,
+                        pc.conn,
+                        "rx {} (conn_id: {}): {}, session reset",
+                        connection_event.title(), conn_id.short(), error;
+                        "error_code" => format!("{error_code:?}"),
+                        "error_subcode" => format!("{error_subcode:?}")
+                    );
+                    self.send_notification(&pc.conn, error_code, error_subcode);
+                    self.exit_established(pc)
+                }
+
+                ConnectionEvent::TcpConnectionFails(ref conn_id) => {
+                    if !self.validate_active_connection(
+                        conn_id,
+                        &pc.conn,
+                        connection_event.title(),
+                    ) {
+                        return FsmState::Established(pc);
+                    }
+
+                    session_log!(
+                        self,
+                        warn,
+                        pc.conn,
+                        "rx {} (conn_id: {}), fsm transition to idle",
+                        connection_event.title(), conn_id.short();
+                    );
+                    self.stop(Some(&pc.conn), None, StopReason::IoError);
+                    self.exit_established(pc)
                 }
             },
         }
@@ -6678,6 +7306,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     withdrawn,
                     nlri,
                     path_attributes: path_attrs,
+                    treat_as_withdraw: false,
+                    errors: vec![],
                 };
 
                 (Afi::Ipv4, update)
@@ -6708,14 +7338,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 // Add MP_REACH_NLRI for announcements
                 if !nlri.is_empty() {
-                    let reach = MpReach::new_v6(nexthop, nlri);
+                    let reach = MpReachNlri::ipv6_unicast(nexthop, nlri);
                     path_attrs
                         .push(PathAttributeValue::MpReachNlri(reach).into());
                 }
 
                 // Add MP_UNREACH_NLRI for withdrawals
                 if !withdrawn.is_empty() {
-                    let unreach = MpUnreach::new_v6(withdrawn);
+                    let unreach = MpUnreachNlri::ipv6_unicast(withdrawn);
                     path_attrs.push(
                         PathAttributeValue::MpUnreachNlri(unreach).into(),
                     );
@@ -6725,6 +7355,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     withdrawn: vec![], // Traditional fields empty for IPv6
                     nlri: vec![],
                     path_attributes: path_attrs,
+                    treat_as_withdraw: false,
+                    errors: vec![],
                 };
 
                 (Afi::Ipv6, update)
@@ -6855,10 +7487,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         session_timer!(self, connect_retry).stop();
         self.connect_retry_counter.fetch_add(1, Ordering::Relaxed);
 
-        if pc.ipv4 {
+        if pc.ipv4_unicast.negotiated() {
             write_lock!(self.fanout4).remove_egress(self.neighbor.host.ip());
         }
-        if pc.ipv6 {
+        if pc.ipv6_unicast.negotiated() {
             write_lock!(self.fanout6).remove_egress(self.neighbor.host.ip());
         }
 
@@ -7031,6 +7663,25 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             }
             StopReason::IoError => {}
+
+            StopReason::ParseError {
+                error_code,
+                error_subcode,
+            } => {
+                if let Some(c1) = conn1 {
+                    self.send_notification(c1, error_code, error_subcode);
+                }
+                if let Some(c2) = conn2 {
+                    self.send_notification(c2, error_code, error_subcode);
+                }
+                self.counters
+                    .connect_retry_counter
+                    .fetch_add(1, Ordering::Relaxed);
+                self.counters
+                    .connection_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                session_timer!(self, connect_retry).stop();
+            }
         }
 
         if let Some(c1) = conn1 {
@@ -7061,19 +7712,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return;
         }
 
-        // Validate MP-BGP attributes before processing
-        // This now does parsing and validation of MP-BGP attributes from raw bytes
-        if let Err(e) = self.validate_mp_attributes(&mut update, pc) {
+        // Filter MP-BGP attributes based on negotiation state.
+        // Attributes for unnegotiated AFI/SAFIs are silently removed.
+        // Note: This function currently never fails, but we keep the error
+        // handling pattern for future extensibility.
+        if let Err(e) = self.check_afi_safi_negotiation(&mut update, pc) {
             session_log!(
                 self,
                 error,
                 pc.conn,
-                "MP-BGP attribute validation failed: {e}";
+                "AFI/SAFI negotiation check failed: {e}";
                 "error" => format!("{e}"),
                 "message" => "update"
             );
-            // Notification already sent by validate_mp_attributes()
-            // Don't process this UPDATE
             return;
         }
 
@@ -7131,123 +7782,48 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         //    self.fanout_update(&update);
     }
 
-    /// Validate MP-BGP attributes (MP_REACH_NLRI, MP_UNREACH_NLRI).
+    /// Filter MP-BGP attributes based on AFI/SAFI negotiation state.
     ///
-    /// This implements RFC 4760 Section 7 and RFC 7606 error handling for MP-BGP.
+    /// This checks whether the AFI/SAFI in MP_REACH_NLRI and MP_UNREACH_NLRI
+    /// attributes was negotiated with the peer during capability exchange.
+    /// Attributes for unnegotiated AFI/SAFIs are silently filtered out
+    /// (logged as warnings but not treated as errors).
     ///
-    /// ## RFC 4760 Section 7: Error Handling
+    /// This approach aligns with RFC 4760 Section 7's "AFI/SAFI disable"
+    /// concept: routes for unnegotiated address families are simply ignored.
     ///
-    /// When an UPDATE message with incorrect MP_REACH_NLRI or MP_UNREACH_NLRI
-    /// is received:
-    /// 1. Delete all BGP routes from that peer with the same AFI/SAFI
-    /// 2. Ignore all subsequent routes with that AFI/SAFI for the session duration
-    /// 3. Optionally terminate the session with NOTIFICATION:
-    ///    - Error Code: UPDATE Message Error
-    ///    - Subcode: Optional Attribute Error
+    /// ## Note on Error Handling
     ///
-    /// ## RFC 7606: Revised Error Handling
-    ///
-    /// The approach used depends on the error severity:
-    /// - **Session reset**: Most severe, terminates BGP session
-    /// - **AFI/SAFI disable**: Ignore subsequent routes for specific address family
-    /// - **Treat-as-withdraw**: Process as route withdrawal
-    /// - **Attribute discard**: Remove attribute, continue processing
-    ///
-    /// For MP_REACH_NLRI/MP_UNREACH_NLRI:
-    /// - Malformed attributes that prevent NLRI location → Session reset or AFI/SAFI disable
-    /// - Unsupported AFI/SAFI → AFI/SAFI disable (our implementation: discard + log)
-    /// - Unnegotiated AFI/SAFI → AFI/SAFI disable (our implementation: discard + log)
-    ///
-    /// ## Implementation Details
-    ///
-    /// This performs semantic validation:
-    /// 1. Check that AFI/SAFI is supported by this implementation
-    /// 2. Check that AFI/SAFI was negotiated with this peer
-    ///
-    /// Invalid attributes are logged and removed from the update message, effectively
-    /// implementing an "AFI/SAFI disable" approach by consistently filtering out
-    /// unsupported/unnegotiated address families.
-    ///
-    /// ## Error Handling at Parse Time
-    ///
-    /// Note that structural errors (duplicate attributes, malformed wire format)
-    /// are caught earlier during parsing in `UpdateMessage::from_wire()` and
-    /// `connection_tcp.rs`, which sends appropriate NOTIFICATION messages per
-    /// RFC 7606 Section 5.2.
-    fn validate_mp_attributes(
+    /// Structural errors (duplicate attributes, malformed wire format,
+    /// unsupported AFI/SAFI values) are caught during parsing in
+    /// `UpdateMessage::from_wire()` and `connection_tcp.rs`, which triggers
+    /// appropriate error handling per RFC 7606. This function only handles
+    /// the negotiation state check.
+    fn check_afi_safi_negotiation(
         &self,
         update: &mut UpdateMessage,
         pc: &PeerConnection<Cnx>,
     ) -> Result<(), Error> {
-        use crate::messages::{
-            Afi, BgpNexthop, PathAttributeValue, Safi, UpdateMessage as UM,
-        };
-        use rdb::types::AddressFamily;
-
-        // We'll rebuild the attributes list with validated/parsed MP-BGP attributes
+        // We'll rebuild the attributes list, filtering out unnegotiated AFI/SAFIs.
+        // Note: AFI/SAFI and NLRI validation happens during parsing (from_wire),
+        // so we only need to check negotiation state here.
         let mut validated_attributes = Vec::new();
-        let mut had_error = false;
 
         for attr in &update.path_attributes {
             match &attr.value {
                 PathAttributeValue::MpReachNlri(mp_reach) => {
-                    // Step 1: Validate AFI/SAFI support
-                    let afi = match Afi::try_from(mp_reach.afi) {
-                        Ok(afi) => afi,
-                        Err(_) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "Unsupported AFI {} in MP_REACH_NLRI",
-                                mp_reach.afi;
-                            );
+                    // AFI/SAFI and nexthop/NLRI are already validated during
+                    // parsing (from_wire). We only need to check negotiation.
+                    let afi = mp_reach.afi();
+                    let safi = mp_reach.safi();
 
-                            // Send notification for unsupported AFI/SAFI
-                            self.send_notification(
-                                &pc.conn,
-                                ErrorCode::Update,
-                                ErrorSubcode::Update(
-                                    UpdateErrorSubcode::OptionalAttribute,
-                                ),
-                            );
-
-                            had_error = true;
-                            continue; // Skip this attribute
-                        }
+                    // Check if AFI/SAFI was negotiated
+                    let afi_state = match (afi, safi) {
+                        (Afi::Ipv4, Safi::Unicast) => pc.ipv4_unicast,
+                        (Afi::Ipv6, Safi::Unicast) => pc.ipv6_unicast,
                     };
 
-                    let safi = match Safi::try_from(mp_reach.safi) {
-                        Ok(safi) => safi,
-                        Err(_) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "Unsupported SAFI {} in MP_REACH_NLRI",
-                                mp_reach.safi;
-                            );
-
-                            self.send_notification(
-                                &pc.conn,
-                                ErrorCode::Update,
-                                ErrorSubcode::Update(
-                                    UpdateErrorSubcode::OptionalAttribute,
-                                ),
-                            );
-
-                            had_error = true;
-                            continue;
-                        }
-                    };
-
-                    // Step 2: Check if AFI/SAFI was negotiated
-                    let negotiated = match (afi, safi) {
-                        (Afi::Ipv4, Safi::Unicast) => pc.ipv4,
-                        (Afi::Ipv6, Safi::Unicast) => pc.ipv6,
-                    };
-
-                    if !negotiated {
+                    if !afi_state.negotiated() {
                         session_log!(
                             self,
                             warn,
@@ -7256,128 +7832,27 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             afi, safi;
                         );
 
-                        // Don't send notification - just filter silently per existing pattern
+                        // Don't send notification - just filter silently
                         continue;
                     }
 
-                    // Step 3: Parse next-hop with validated AFI
-                    let _nexthop = match BgpNexthop::from_bytes(
-                        &mp_reach.nh_bytes,
-                        mp_reach.nh_len,
-                        afi,
-                    ) {
-                        Ok(nh) => nh,
-                        Err(e) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "Invalid next-hop in MP_REACH_NLRI: {e}";
-                            );
-
-                            self.send_notification(
-                                &pc.conn,
-                                ErrorCode::Update,
-                                ErrorSubcode::Update(
-                                    UpdateErrorSubcode::OptionalAttribute,
-                                ),
-                            );
-
-                            had_error = true;
-                            continue;
-                        }
-                    };
-
-                    // Step 4: Parse NLRI with validated AFI
-                    let address_family: AddressFamily = afi.into();
-                    let _nlri = match UM::prefixes_from_wire(
-                        &mp_reach.nlri_bytes,
-                        address_family,
-                    ) {
-                        Ok(prefixes) => prefixes,
-                        Err(e) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "Invalid NLRI in MP_REACH_NLRI: {e}";
-                            );
-
-                            self.send_notification(
-                                &pc.conn,
-                                ErrorCode::Update,
-                                ErrorSubcode::Update(
-                                    UpdateErrorSubcode::MalformedAttributeList,
-                                ),
-                            );
-
-                            had_error = true;
-                            continue;
-                        }
-                    };
-
-                    // Note: For now, we keep the attribute with raw bytes
-                    // Future enhancement: store parsed values in a new struct variant
+                    // The attribute is already validated, keep it
                     validated_attributes.push(attr.clone());
                 }
 
                 PathAttributeValue::MpUnreachNlri(mp_unreach) => {
-                    // Similar validation for MP_UNREACH_NLRI
-                    let afi = match Afi::try_from(mp_unreach.afi_raw) {
-                        Ok(afi) => afi,
-                        Err(_) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "Unsupported AFI {} in MP_UNREACH_NLRI",
-                                mp_unreach.afi_raw;
-                            );
-
-                            self.send_notification(
-                                &pc.conn,
-                                ErrorCode::Update,
-                                ErrorSubcode::Update(
-                                    UpdateErrorSubcode::OptionalAttribute,
-                                ),
-                            );
-
-                            had_error = true;
-                            continue;
-                        }
-                    };
-
-                    let safi = match Safi::try_from(mp_unreach.safi_raw) {
-                        Ok(safi) => safi,
-                        Err(_) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "Unsupported SAFI {} in MP_UNREACH_NLRI",
-                                mp_unreach.safi_raw;
-                            );
-
-                            self.send_notification(
-                                &pc.conn,
-                                ErrorCode::Update,
-                                ErrorSubcode::Update(
-                                    UpdateErrorSubcode::OptionalAttribute,
-                                ),
-                            );
-
-                            had_error = true;
-                            continue;
-                        }
-                    };
+                    // AFI/SAFI and withdrawn routes are already validated during
+                    // parsing (from_wire). We only need to check negotiation.
+                    let afi = mp_unreach.afi();
+                    let safi = mp_unreach.safi();
 
                     // Check if AFI/SAFI was negotiated
-                    let negotiated = match (afi, safi) {
-                        (Afi::Ipv4, Safi::Unicast) => pc.ipv4,
-                        (Afi::Ipv6, Safi::Unicast) => pc.ipv6,
+                    let afi_state = match (afi, safi) {
+                        (Afi::Ipv4, Safi::Unicast) => pc.ipv4_unicast,
+                        (Afi::Ipv6, Safi::Unicast) => pc.ipv6_unicast,
                     };
 
-                    if !negotiated {
+                    if !afi_state.negotiated() {
                         session_log!(
                             self,
                             warn,
@@ -7390,35 +7865,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         continue;
                     }
 
-                    // Parse withdrawn routes with validated AFI
-                    let address_family: AddressFamily = afi.into();
-                    let _withdrawn = match UM::prefixes_from_wire(
-                        &mp_unreach.withdrawn_bytes,
-                        address_family,
-                    ) {
-                        Ok(prefixes) => prefixes,
-                        Err(e) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "Invalid withdrawn routes in MP_UNREACH_NLRI: {e}";
-                            );
-
-                            self.send_notification(
-                                &pc.conn,
-                                ErrorCode::Update,
-                                ErrorSubcode::Update(
-                                    UpdateErrorSubcode::MalformedAttributeList,
-                                ),
-                            );
-
-                            had_error = true;
-                            continue;
-                        }
-                    };
-
-                    // Keep the attribute with raw bytes
+                    // The attribute is already validated, keep it
                     validated_attributes.push(attr.clone());
                 }
 
@@ -7427,12 +7874,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     validated_attributes.push(attr.clone());
                 }
             }
-        }
-
-        if had_error {
-            return Err(Error::MalformedAttributeList(
-                "MP-BGP attribute validation failed".into(),
-            ));
         }
 
         update.path_attributes = validated_attributes;
@@ -7636,9 +8077,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         update: &UpdateMessage,
         peer_as: u32,
     ) -> Result<(), Error> {
-        // RFC 7606 Section 3(g): Reject duplicate MP-BGP attributes
-        update.check_duplicate_mp_attributes()?;
-
         // Path vector routing and prefix validation
         self.check_for_self_in_path(update)?;
 
