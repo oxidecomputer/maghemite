@@ -332,7 +332,7 @@ pub enum FsmStateKindV1 {
     /// Waiting for open message from peer.
     OpenSent,
 
-    /// Waiting for keepaliave or notification from peer.
+    /// Waiting for keepalive or notification from peer.
     OpenConfirm,
 
     /// Sync up with peers.
