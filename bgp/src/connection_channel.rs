@@ -374,6 +374,15 @@ impl BgpConnectionChannel {
                         break;
                     }
 
+                    // Note: Unlike BgpConnectionTcp, this has no ParseErrors.
+                    //       BgpConnectionChannel is a wrapper around Message,
+                    //       which is the type representation of a fully parsed
+                    //       and valid message. This means it's not possible to
+                    //       exchange invalid messages as-is. To support this,
+                    //       the channel would need to wrap a different type
+                    //       (feasible, but of limited utility) or update the
+                    //       Message type to include possibly-invalid states
+                    //       (also feasible, but undesirable).
                     match rx.recv_timeout(timeout) {
                         Ok(msg) => {
                             connection_log_lite!(log,
@@ -414,6 +423,22 @@ impl BgpConnectionChannel {
                                 "connection_id" => conn_id.short(),
                                 "channel_id" => channel_id
                             );
+                            // Notify session runner that the connection failed,
+                            // unless this is a graceful shutdown
+                            if !dropped.load(Ordering::Relaxed)
+                                && let Err(e) = event_tx.send(FsmEvent::Connection(
+                                    ConnectionEvent::TcpConnectionFails(conn_id),
+                                ))
+                            {
+                                connection_log_lite!(log, warn,
+                                    "error sending TcpConnectionFails event to {peer}: {e}";
+                                    "direction" => direction.as_str(),
+                                    "peer" => format!("{peer}"),
+                                    "connection_id" => conn_id.short(),
+                                    "channel_id" => channel_id,
+                                    "error" => format!("{e}")
+                                );
+                            }
                             break;
                         }
                     }

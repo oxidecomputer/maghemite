@@ -13,12 +13,12 @@
 //! - RFC 7606 compliance (attribute deduplication, MP-BGP ordering)
 
 use crate::messages::{
-    Afi, As4PathSegment, AsPathType, BgpNexthop, BgpWireFormat, MpReach,
-    MpUnreach, PathAttribute, PathAttributeType, PathAttributeTypeCode,
+    As4PathSegment, AsPathType, BgpNexthop, BgpWireFormat, MpReachNlri,
+    MpUnreachNlri, PathAttribute, PathAttributeType, PathAttributeTypeCode,
     PathAttributeValue, PathOrigin, UpdateMessage, path_attribute_flags,
 };
 use proptest::prelude::*;
-use rdb::types::{Prefix, Prefix4, Prefix6};
+use rdb::types::{Prefix4, Prefix6};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 // =============================================================================
@@ -139,50 +139,29 @@ fn distinct_traditional_attrs_strategy()
 }
 
 // =============================================================================
-// MpReach/MpUnreach Strategies
+// MpReachNlri/MpUnreachNlri Strategies
 // =============================================================================
 
-/// Strategy for generating IPv4 MpReach
-fn mp_reach_v4_strategy() -> impl Strategy<Value = MpReach> {
-    (nexthop_ipv4_strategy(), ipv4_prefixes_strategy()).prop_map(
-        |(nexthop, nlri)| {
-            MpReach::new(
-                Afi::Ipv4,
-                nexthop,
-                nlri.into_iter().map(Prefix::V4).collect(),
-            )
-        },
-    )
+/// Strategy for generating IPv4 MpReachNlri
+fn mp_reach_v4_strategy() -> impl Strategy<Value = MpReachNlri> {
+    (nexthop_ipv4_strategy(), ipv4_prefixes_strategy())
+        .prop_map(|(nexthop, nlri)| MpReachNlri::ipv4_unicast(nexthop, nlri))
 }
 
-/// Strategy for generating IPv6 MpReach with single next-hop
-fn mp_reach_v6_single_strategy() -> impl Strategy<Value = MpReach> {
-    (nexthop_ipv6_single_strategy(), ipv6_prefixes_strategy()).prop_map(
-        |(nexthop, nlri)| {
-            MpReach::new(
-                Afi::Ipv6,
-                nexthop,
-                nlri.into_iter().map(Prefix::V6).collect(),
-            )
-        },
-    )
+/// Strategy for generating IPv6 MpReachNlri with single next-hop
+fn mp_reach_v6_single_strategy() -> impl Strategy<Value = MpReachNlri> {
+    (nexthop_ipv6_single_strategy(), ipv6_prefixes_strategy())
+        .prop_map(|(nexthop, nlri)| MpReachNlri::ipv6_unicast(nexthop, nlri))
 }
 
-/// Strategy for generating IPv6 MpReach with double next-hop
-fn mp_reach_v6_double_strategy() -> impl Strategy<Value = MpReach> {
-    (nexthop_ipv6_double_strategy(), ipv6_prefixes_strategy()).prop_map(
-        |(nexthop, nlri)| {
-            MpReach::new(
-                Afi::Ipv6,
-                nexthop,
-                nlri.into_iter().map(Prefix::V6).collect(),
-            )
-        },
-    )
+/// Strategy for generating IPv6 MpReachNlri with double next-hop
+fn mp_reach_v6_double_strategy() -> impl Strategy<Value = MpReachNlri> {
+    (nexthop_ipv6_double_strategy(), ipv6_prefixes_strategy())
+        .prop_map(|(nexthop, nlri)| MpReachNlri::ipv6_unicast(nexthop, nlri))
 }
 
-/// Strategy for generating any valid MpReach
-fn mp_reach_strategy() -> impl Strategy<Value = MpReach> {
+/// Strategy for generating any valid MpReachNlri
+fn mp_reach_strategy() -> impl Strategy<Value = MpReachNlri> {
     prop_oneof![
         mp_reach_v4_strategy(),
         mp_reach_v6_single_strategy(),
@@ -190,26 +169,18 @@ fn mp_reach_strategy() -> impl Strategy<Value = MpReach> {
     ]
 }
 
-/// Strategy for generating IPv4 MpUnreach
-fn mp_unreach_v4_strategy() -> impl Strategy<Value = MpUnreach> {
-    (nexthop_ipv4_strategy(), ipv4_prefixes_strategy()).prop_map(
-        |(nexthop, withdrawn)| {
-            MpUnreach::new(
-                Afi::Ipv4,
-                nexthop,
-                withdrawn.into_iter().map(Prefix::V4).collect(),
-            )
-        },
-    )
+/// Strategy for generating IPv4 MpUnreachNlri
+fn mp_unreach_v4_strategy() -> impl Strategy<Value = MpUnreachNlri> {
+    ipv4_prefixes_strategy().prop_map(MpUnreachNlri::ipv4_unicast)
 }
 
-/// Strategy for generating IPv6 MpUnreach
-fn mp_unreach_v6_strategy() -> impl Strategy<Value = MpUnreach> {
-    ipv6_prefixes_strategy().prop_map(MpUnreach::new_v6)
+/// Strategy for generating IPv6 MpUnreachNlri
+fn mp_unreach_v6_strategy() -> impl Strategy<Value = MpUnreachNlri> {
+    ipv6_prefixes_strategy().prop_map(MpUnreachNlri::ipv6_unicast)
 }
 
-/// Strategy for generating any valid MpUnreach
-fn mp_unreach_strategy() -> impl Strategy<Value = MpUnreach> {
+/// Strategy for generating any valid MpUnreachNlri
+fn mp_unreach_strategy() -> impl Strategy<Value = MpUnreachNlri> {
     prop_oneof![mp_unreach_v4_strategy(), mp_unreach_v6_strategy(),]
 }
 
@@ -228,6 +199,8 @@ fn update_traditional_strategy() -> impl Strategy<Value = UpdateMessage> {
             withdrawn,
             path_attributes,
             nlri,
+            treat_as_withdraw: false,
+            errors: vec![],
         })
 }
 
@@ -246,6 +219,8 @@ fn update_mp_reach_strategy() -> impl Strategy<Value = UpdateMessage> {
                 withdrawn: vec![],
                 path_attributes: attrs,
                 nlri: vec![],
+                treat_as_withdraw: false,
+                errors: vec![],
             }
         },
     )
@@ -263,6 +238,8 @@ fn update_mp_unreach_strategy() -> impl Strategy<Value = UpdateMessage> {
             value: PathAttributeValue::MpUnreachNlri(mp_unreach),
         }],
         nlri: vec![],
+        treat_as_withdraw: false,
+        errors: vec![],
     })
 }
 
@@ -318,6 +295,8 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![],
             nlri: prefixes.clone(),
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         let wire = update.to_wire().expect("should encode");
@@ -333,6 +312,8 @@ proptest! {
             withdrawn: prefixes.clone(),
             path_attributes: vec![],
             nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         let wire = update.to_wire().expect("should encode");
@@ -347,11 +328,7 @@ proptest! {
         prefixes in ipv6_prefixes_strategy(),
         nexthop in nexthop_ipv6_single_strategy()
     ) {
-        let mp_reach = MpReach::new(
-            Afi::Ipv6,
-            nexthop,
-            prefixes.iter().cloned().map(Prefix::V6).collect(),
-        );
+        let mp_reach = MpReachNlri::ipv6_unicast(nexthop, prefixes.clone());
 
         let update = UpdateMessage {
             withdrawn: vec![],
@@ -363,21 +340,22 @@ proptest! {
                 value: PathAttributeValue::MpReachNlri(mp_reach),
             }],
             nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         let wire = update.to_wire().expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Extract MP_REACH_NLRI and verify prefixes
-        let mp_reach_attr = decoded.path_attributes.iter()
+        let decoded_prefixes = decoded.path_attributes.iter()
             .find_map(|a| match &a.value {
-                PathAttributeValue::MpReachNlri(mp) => Some(mp),
+                PathAttributeValue::MpReachNlri(MpReachNlri::Ipv6Unicast(inner)) => {
+                    Some(inner.nlri.clone())
+                }
                 _ => None,
             })
-            .expect("should have MP_REACH_NLRI");
-
-        let decoded_prefixes = UpdateMessage::prefixes6_from_wire(&mp_reach_attr.nlri_bytes)
-            .expect("should parse NLRI");
+            .expect("should have MP_REACH_NLRI with IPv6 NLRI");
 
         prop_assert_eq!(decoded_prefixes, prefixes, "IPv6 NLRI prefixes should round-trip");
     }
@@ -385,7 +363,7 @@ proptest! {
     /// Property: Multiple IPv6 withdrawn prefixes round-trip through MP_UNREACH_NLRI
     #[test]
     fn prop_ipv6_withdrawn_via_mp_unreach(prefixes in ipv6_prefixes_strategy()) {
-        let mp_unreach = MpUnreach::new_v6(prefixes.clone());
+        let mp_unreach = MpUnreachNlri::ipv6_unicast(prefixes.clone());
 
         let update = UpdateMessage {
             withdrawn: vec![],
@@ -397,21 +375,22 @@ proptest! {
                 value: PathAttributeValue::MpUnreachNlri(mp_unreach),
             }],
             nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         let wire = update.to_wire().expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Extract MP_UNREACH_NLRI and verify prefixes
-        let mp_unreach_attr = decoded.path_attributes.iter()
+        let decoded_prefixes = decoded.path_attributes.iter()
             .find_map(|a| match &a.value {
-                PathAttributeValue::MpUnreachNlri(mp) => Some(mp),
+                PathAttributeValue::MpUnreachNlri(MpUnreachNlri::Ipv6Unicast(inner)) => {
+                    Some(inner.withdrawn.clone())
+                }
                 _ => None,
             })
-            .expect("should have MP_UNREACH_NLRI");
-
-        let decoded_prefixes = UpdateMessage::prefixes6_from_wire(&mp_unreach_attr.withdrawn_bytes)
-            .expect("should parse withdrawn");
+            .expect("should have MP_UNREACH_NLRI with IPv6 withdrawn");
 
         prop_assert_eq!(decoded_prefixes, prefixes, "IPv6 withdrawn prefixes should round-trip");
     }
@@ -422,11 +401,7 @@ proptest! {
         prefixes in ipv4_prefixes_strategy(),
         nexthop in nexthop_ipv4_strategy()
     ) {
-        let mp_reach = MpReach::new(
-            Afi::Ipv4,
-            nexthop,
-            prefixes.iter().cloned().map(Prefix::V4).collect(),
-        );
+        let mp_reach = MpReachNlri::ipv4_unicast(nexthop, prefixes.clone());
 
         let update = UpdateMessage {
             withdrawn: vec![],
@@ -438,36 +413,30 @@ proptest! {
                 value: PathAttributeValue::MpReachNlri(mp_reach),
             }],
             nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         let wire = update.to_wire().expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Extract MP_REACH_NLRI and verify prefixes
-        let mp_reach_attr = decoded.path_attributes.iter()
+        let decoded_prefixes = decoded.path_attributes.iter()
             .find_map(|a| match &a.value {
-                PathAttributeValue::MpReachNlri(mp) => Some(mp),
+                PathAttributeValue::MpReachNlri(MpReachNlri::Ipv4Unicast(inner)) => {
+                    Some(inner.nlri.clone())
+                }
                 _ => None,
             })
-            .expect("should have MP_REACH_NLRI");
-
-        let decoded_prefixes = UpdateMessage::prefixes4_from_wire(&mp_reach_attr.nlri_bytes)
-            .expect("should parse NLRI");
+            .expect("should have MP_REACH_NLRI with IPv4 NLRI");
 
         prop_assert_eq!(decoded_prefixes, prefixes, "IPv4 MP-BGP NLRI prefixes should round-trip");
     }
 
     /// Property: Multiple IPv4 withdrawn prefixes round-trip through MP_UNREACH_NLRI (MP-BGP encoding)
     #[test]
-    fn prop_ipv4_withdrawn_via_mp_unreach(
-        prefixes in ipv4_prefixes_strategy(),
-        nexthop in nexthop_ipv4_strategy()
-    ) {
-        let mp_unreach = MpUnreach::new(
-            Afi::Ipv4,
-            nexthop,
-            prefixes.iter().cloned().map(Prefix::V4).collect(),
-        );
+    fn prop_ipv4_withdrawn_via_mp_unreach(prefixes in ipv4_prefixes_strategy()) {
+        let mp_unreach = MpUnreachNlri::ipv4_unicast(prefixes.clone());
 
         let update = UpdateMessage {
             withdrawn: vec![],
@@ -479,33 +448,34 @@ proptest! {
                 value: PathAttributeValue::MpUnreachNlri(mp_unreach),
             }],
             nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         let wire = update.to_wire().expect("should encode");
         let decoded = UpdateMessage::from_wire(&wire).expect("should decode");
 
         // Extract MP_UNREACH_NLRI and verify prefixes
-        let mp_unreach_attr = decoded.path_attributes.iter()
+        let decoded_prefixes = decoded.path_attributes.iter()
             .find_map(|a| match &a.value {
-                PathAttributeValue::MpUnreachNlri(mp) => Some(mp),
+                PathAttributeValue::MpUnreachNlri(MpUnreachNlri::Ipv4Unicast(inner)) => {
+                    Some(inner.withdrawn.clone())
+                }
                 _ => None,
             })
-            .expect("should have MP_UNREACH_NLRI");
-
-        let decoded_prefixes = UpdateMessage::prefixes4_from_wire(&mp_unreach_attr.withdrawn_bytes)
-            .expect("should parse withdrawn");
+            .expect("should have MP_UNREACH_NLRI with IPv4 withdrawn");
 
         prop_assert_eq!(decoded_prefixes, prefixes, "IPv4 MP-BGP withdrawn prefixes should round-trip");
     }
 
     // -------------------------------------------------------------------------
-    // BgpNexthop Round-Trip Tests (via MpReach)
+    // BgpNexthop Round-Trip Tests (via MpReachNlri)
     // -------------------------------------------------------------------------
 
-    /// Property: BgpNexthop IPv4 round-trip through MpReach preserves next-hop
+    /// Property: BgpNexthop IPv4 round-trip through MpReachNlri preserves next-hop
     #[test]
     fn prop_nexthop_ipv4_via_mp_reach(nexthop in nexthop_ipv4_strategy()) {
-        let mp_reach = MpReach::new(Afi::Ipv4, nexthop, vec![]);
+        let mp_reach = MpReachNlri::ipv4_unicast(nexthop, vec![]);
         let attr = PathAttribute {
             typ: PathAttributeType {
                 flags: path_attribute_flags::OPTIONAL,
@@ -518,6 +488,8 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![attr],
             nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         let wire = update.to_wire().expect("should encode");
@@ -528,10 +500,10 @@ proptest! {
         prop_assert_eq!(decoded_nexthop, nexthop, "IPv4 nexthop should round-trip");
     }
 
-    /// Property: BgpNexthop IPv6 single round-trip through MpReach preserves next-hop
+    /// Property: BgpNexthop IPv6 single round-trip through MpReachNlri preserves next-hop
     #[test]
     fn prop_nexthop_ipv6_single_via_mp_reach(nexthop in nexthop_ipv6_single_strategy()) {
-        let mp_reach = MpReach::new(Afi::Ipv6, nexthop, vec![]);
+        let mp_reach = MpReachNlri::ipv6_unicast(nexthop, vec![]);
         let attr = PathAttribute {
             typ: PathAttributeType {
                 flags: path_attribute_flags::OPTIONAL,
@@ -544,6 +516,8 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![attr],
             nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         let wire = update.to_wire().expect("should encode");
@@ -553,10 +527,10 @@ proptest! {
         prop_assert_eq!(decoded_nexthop, nexthop, "IPv6 single nexthop should round-trip");
     }
 
-    /// Property: BgpNexthop IPv6 double round-trip through MpReach preserves next-hop
+    /// Property: BgpNexthop IPv6 double round-trip through MpReachNlri preserves next-hop
     #[test]
     fn prop_nexthop_ipv6_double_via_mp_reach(nexthop in nexthop_ipv6_double_strategy()) {
-        let mp_reach = MpReach::new(Afi::Ipv6, nexthop, vec![]);
+        let mp_reach = MpReachNlri::ipv6_unicast(nexthop, vec![]);
         let attr = PathAttribute {
             typ: PathAttributeType {
                 flags: path_attribute_flags::OPTIONAL,
@@ -569,6 +543,8 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![attr],
             nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
         };
 
         let wire = update.to_wire().expect("should encode");
