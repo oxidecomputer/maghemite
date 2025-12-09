@@ -77,7 +77,7 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" 
 progenitor = "0.11"
 progenitor-client = "0.11"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
-clap = { version = "4.5.47", features = ["derive", "unstable-styles", "env"] }
+clap = { version = "4.5.53", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "3.0"
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
