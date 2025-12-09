@@ -121,7 +121,7 @@ rev = "3d1263ced8177893d46da54a914e4c510dc2bfc8"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "3d1263ced8177893d46da54a914e4c510dc2bfc8"
+rev = "6d3a0ef08fd91c0418d63f44da6abf7a230bcb57"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
