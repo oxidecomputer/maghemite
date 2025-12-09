@@ -2,7 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,9 +11,9 @@ use dropshot::{
 };
 
 use mg_api::{
-    MribAddStaticRequest, MribDeleteStaticRequest,
+    MribAddStaticRequest, MribDeleteStaticRequest, MribQuery,
     MribRpfRebuildIntervalRequest, MribRpfRebuildIntervalResponse,
-    MribStatusQuery, RouteOriginFilter,
+    RouteOriginFilter,
 };
 use rdb::types::{
     MulticastAddr, MulticastRoute, MulticastRouteKey, MulticastRouteSource,
@@ -33,12 +32,30 @@ fn origin_to_static_only(origin: Option<RouteOriginFilter>) -> Option<bool> {
     }
 }
 
-pub async fn mrib_status_imported(
+pub async fn get_mrib_imported(
     rqctx: RequestContext<Arc<HandlerContext>>,
-    query: dropshot::Query<MribStatusQuery>,
+    query: dropshot::Query<MribQuery>,
 ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError> {
     let ctx = rqctx.context();
     let q = query.into_inner();
+
+    // If group is provided, look up a specific route
+    if let Some(group_addr) = q.group {
+        let group = MulticastAddr::try_from(group_addr).map_err(|e| {
+            HttpError::for_bad_request(
+                None,
+                format!("invalid group address: {e}"),
+            )
+        })?;
+        let key = MulticastRouteKey::new(q.source, group, q.vni)
+            .map_err(|e| HttpError::for_bad_request(None, format!("{e}")))?;
+        let route = ctx.db.get_mcast_route(&key).ok_or_else(|| {
+            HttpError::for_not_found(None, format!("route {key} not found"))
+        })?;
+        return Ok(HttpResponseOk(vec![route]));
+    }
+
+    // Otherwise, list all routes with filters
     let routes = ctx.db.mrib_list(
         q.address_family,
         origin_to_static_only(q.route_origin),
@@ -47,12 +64,33 @@ pub async fn mrib_status_imported(
     Ok(HttpResponseOk(routes))
 }
 
-pub async fn mrib_status_installed(
+pub async fn get_mrib_selected(
     rqctx: RequestContext<Arc<HandlerContext>>,
-    query: dropshot::Query<MribStatusQuery>,
+    query: dropshot::Query<MribQuery>,
 ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError> {
     let ctx = rqctx.context();
     let q = query.into_inner();
+
+    // If group is provided, look up a specific route
+    if let Some(group_addr) = q.group {
+        let group = MulticastAddr::try_from(group_addr).map_err(|e| {
+            HttpError::for_bad_request(
+                None,
+                format!("invalid group address: {e}"),
+            )
+        })?;
+        let key = MulticastRouteKey::new(q.source, group, q.vni)
+            .map_err(|e| HttpError::for_bad_request(None, format!("{e}")))?;
+        let route = ctx.db.get_selected_mcast_route(&key).ok_or_else(|| {
+            HttpError::for_not_found(
+                None,
+                format!("route {key} not found in mrib_loc"),
+            )
+        })?;
+        return Ok(HttpResponseOk(vec![route]));
+    }
+
+    // Otherwise, list all routes with filters
     let routes = ctx.db.mrib_list(
         q.address_family,
         origin_to_static_only(q.route_origin),
@@ -61,84 +99,7 @@ pub async fn mrib_status_installed(
     Ok(HttpResponseOk(routes))
 }
 
-pub async fn mrib_get_route(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    query: dropshot::Query<mg_api::MribRouteQuery>,
-) -> Result<HttpResponseOk<MulticastRoute>, HttpError> {
-    let ctx = rqctx.context();
-    let q = query.into_inner();
-
-    // Build the key from query params
-    let group = match q.group {
-        IpAddr::V4(v4) => MulticastAddr::try_from(v4).map_err(|e| {
-            HttpError::for_bad_request(
-                None,
-                format!("invalid group address: {e}"),
-            )
-        })?,
-        IpAddr::V6(v6) => MulticastAddr::try_from(v6).map_err(|e| {
-            HttpError::for_bad_request(
-                None,
-                format!("invalid group address: {e}"),
-            )
-        })?,
-    };
-
-    let key = MulticastRouteKey {
-        source: q.source,
-        group,
-        vni: q.vni,
-    };
-
-    // Look up in `mrib_in` (all imported routes)
-    let route = ctx.db.get_mcast_route(&key).ok_or_else(|| {
-        HttpError::for_not_found(None, format!("route {key} not found"))
-    })?;
-
-    Ok(HttpResponseOk(route))
-}
-
-pub async fn mrib_get_selected_route(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    query: dropshot::Query<mg_api::MribRouteQuery>,
-) -> Result<HttpResponseOk<MulticastRoute>, HttpError> {
-    let ctx = rqctx.context();
-    let q = query.into_inner();
-
-    // Build the key from query params
-    let group = match q.group {
-        IpAddr::V4(v4) => MulticastAddr::try_from(v4).map_err(|e| {
-            HttpError::for_bad_request(
-                None,
-                format!("invalid group address: {e}"),
-            )
-        })?,
-        IpAddr::V6(v6) => MulticastAddr::try_from(v6).map_err(|e| {
-            HttpError::for_bad_request(
-                None,
-                format!("invalid group address: {e}"),
-            )
-        })?,
-    };
-
-    let key = MulticastRouteKey {
-        source: q.source,
-        group,
-        vni: q.vni,
-    };
-
-    // Look up in `mrib_loc` (installed/selected routes)
-    let route = ctx.db.get_selected_mcast_route(&key).ok_or_else(|| {
-        HttpError::for_not_found(
-            None,
-            format!("route {key} not found in mrib_loc"),
-        )
-    })?;
-
-    Ok(HttpResponseOk(route))
-}
-
-pub async fn mrib_static_add(
+pub async fn static_add_mcast_route(
     rqctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MribAddStaticRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -174,7 +135,7 @@ pub async fn mrib_static_add(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-pub async fn mrib_static_delete(
+pub async fn static_remove_mcast_route(
     rqctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MribDeleteStaticRequest>,
 ) -> Result<HttpResponseDeleted, HttpError> {
@@ -186,7 +147,7 @@ pub async fn mrib_static_delete(
     Ok(HttpResponseDeleted())
 }
 
-pub async fn mrib_static_list(
+pub async fn static_list_mcast_routes(
     rqctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError> {
     let ctx = rqctx.context();
@@ -194,7 +155,7 @@ pub async fn mrib_static_list(
     Ok(HttpResponseOk(routes))
 }
 
-pub async fn mrib_get_rpf_rebuild_interval(
+pub async fn read_mrib_rpf_rebuild_interval(
     rqctx: RequestContext<Arc<HandlerContext>>,
 ) -> Result<HttpResponseOk<MribRpfRebuildIntervalResponse>, HttpError> {
     let ctx = rqctx.context();
@@ -207,7 +168,7 @@ pub async fn mrib_get_rpf_rebuild_interval(
     }))
 }
 
-pub async fn mrib_set_rpf_rebuild_interval(
+pub async fn update_mrib_rpf_rebuild_interval(
     rqctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MribRpfRebuildIntervalRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {

@@ -691,7 +691,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use mg_common::log::*;
+    use mg_common::test::DEFAULT_INTERVAL_MS;
+    use mg_common::wait_for;
 
+    use crate::test::TEST_WAIT_ITERATIONS;
     use crate::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_RIB_PRIORITY_STATIC};
 
     /// Helper to create empty Rib4 for tests
@@ -794,10 +797,11 @@ mod tests {
         rpf_table.trigger_rebuild_v4(Arc::clone(&rib4_loc), None);
 
         // Wait for rebuild to complete
-        crate::test::wait_for(
-            || rpf_table.cache_v4.read().unwrap().is_some(),
-            crate::test::TEST_TIMEOUT,
-            "poptrie v4 rebuild timed out",
+        wait_for!(
+            rpf_table.cache_v4.read().unwrap().is_some(),
+            DEFAULT_INTERVAL_MS,
+            TEST_WAIT_ITERATIONS,
+            "poptrie v4 rebuild timed out"
         );
 
         // Should now use poptrie cache
@@ -851,10 +855,11 @@ mod tests {
 
         // Rebuild poptrie and test again
         rpf_table.trigger_rebuild_v4(Arc::clone(&rib4_loc), None);
-        crate::test::wait_for(
-            || rpf_table.cache_v4.read().unwrap().is_some(),
-            crate::test::TEST_TIMEOUT,
-            "poptrie v4 rebuild timed out",
+        wait_for!(
+            rpf_table.cache_v4.read().unwrap().is_some(),
+            DEFAULT_INTERVAL_MS,
+            TEST_WAIT_ITERATIONS,
+            "poptrie v4 rebuild timed out"
         );
 
         // Poptrie should also return active path
@@ -892,10 +897,11 @@ mod tests {
 
         // Rebuild poptrie
         rpf_table.trigger_rebuild_v4(Arc::clone(&rib4_loc), None);
-        crate::test::wait_for(
-            || rpf_table.cache_v4.read().unwrap().is_some(),
-            crate::test::TEST_TIMEOUT,
-            "poptrie v4 rebuild timed out",
+        wait_for!(
+            rpf_table.cache_v4.read().unwrap().is_some(),
+            DEFAULT_INTERVAL_MS,
+            TEST_WAIT_ITERATIONS,
+            "poptrie v4 rebuild timed out"
         );
 
         // Poptrie finds the route but all paths shutdown, still `None`
@@ -947,10 +953,11 @@ mod tests {
         );
 
         rpf_table.trigger_rebuild_v4(Arc::clone(&rib4_loc), None);
-        crate::test::wait_for(
-            || rpf_table.cache_v4.read().unwrap().is_some(),
-            crate::test::TEST_TIMEOUT,
-            "poptrie v4 rebuild timed out",
+        wait_for!(
+            rpf_table.cache_v4.read().unwrap().is_some(),
+            DEFAULT_INTERVAL_MS,
+            TEST_WAIT_ITERATIONS,
+            "poptrie v4 rebuild timed out"
         );
 
         // Same with poptrie
@@ -1015,10 +1022,11 @@ mod tests {
         rpf_table.trigger_rebuild_v6(Arc::clone(&rib6_loc), None);
 
         // Wait for rebuild to complete
-        crate::test::wait_for(
-            || rpf_table.cache_v6.read().unwrap().is_some(),
-            crate::test::TEST_TIMEOUT,
-            "poptrie v6 rebuild timed out",
+        wait_for!(
+            rpf_table.cache_v6.read().unwrap().is_some(),
+            DEFAULT_INTERVAL_MS,
+            TEST_WAIT_ITERATIONS,
+            "poptrie v6 rebuild timed out"
         );
 
         // Should now use poptrie cache
@@ -1083,10 +1091,11 @@ mod tests {
 
         // Test with poptrie too
         rpf_table.trigger_rebuild_v4(Arc::clone(&rib4_loc), None);
-        crate::test::wait_for(
-            || rpf_table.cache_v4.read().unwrap().is_some(),
-            crate::test::TEST_TIMEOUT,
-            "poptrie v4 rebuild timed out",
+        wait_for!(
+            rpf_table.cache_v4.read().unwrap().is_some(),
+            DEFAULT_INTERVAL_MS,
+            TEST_WAIT_ITERATIONS,
+            "poptrie v4 rebuild timed out"
         );
 
         assert_eq!(

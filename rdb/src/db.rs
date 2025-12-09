@@ -1481,7 +1481,7 @@ impl Db {
     /// updates (e.g., adding replication targets).
     pub fn update_mrib_loc(&self, key: &MulticastRouteKey) {
         // (*,G) always installs - no RPF check needed
-        let Some(source) = key.source else {
+        let Some(source) = key.source() else {
             self.mrib.promote_any_source(key);
             return;
         };
@@ -1530,7 +1530,7 @@ impl Db {
             .get_source_specific_keys()
             .into_iter()
             .filter_map(|key| {
-                let source = key.source?;
+                let source = key.source()?;
                 // Targeted revalidation (skip routes not affected)
                 if let Some(ref evt) = event
                     && !evt.matches_source(source)
@@ -1790,16 +1790,18 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        AddressFamily, DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4,
-        Prefix6, StaticRouteKey,
+        AddressFamily, DEFAULT_MULTICAST_VNI, DEFAULT_RIB_PRIORITY_STATIC,
+        Path, Prefix, Prefix4, Prefix6, StaticRouteKey,
         db::Db,
-        test::{TestDb, mcast_v4, mcast_v6},
+        test::{TEST_WAIT_ITERATIONS, TestDb},
         types::{
-            MulticastAddr, MulticastRoute, MulticastRouteKey,
-            MulticastRouteSource, PrefixDbKey,
+            MulticastAddr, MulticastAddrV4, MulticastAddrV6, MulticastRoute,
+            MulticastRouteKey, MulticastRouteSource, PrefixDbKey,
         },
     };
     use mg_common::log::*;
+    use mg_common::test::DEFAULT_INTERVAL_MS;
+    use mg_common::wait_for;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
     use std::time::Duration;
@@ -2091,7 +2093,6 @@ mod test {
             nexthop: IpAddr,
             group: MulticastAddr,
         ) {
-            let timeout = crate::test::TEST_TIMEOUT;
             let srk = StaticRouteKey {
                 prefix: prefix.into(),
                 nexthop,
@@ -2100,7 +2101,12 @@ mod test {
             };
             db.add_static_routes(&[srk]).unwrap();
 
-            let key = MulticastRouteKey::source_specific(s_ip, group);
+            let key = MulticastRouteKey::new(
+                Some(s_ip),
+                group,
+                DEFAULT_MULTICAST_VNI,
+            )
+            .expect("AF match");
             let route = MulticastRoute::new(
                 key,
                 TEST_UNDERLAY,
@@ -2109,10 +2115,11 @@ mod test {
             db.add_static_mcast_routes(&[route]).unwrap();
 
             // Initially should be selected
-            crate::test::wait_for(
-                || db.get_selected_mcast_route(&key).is_some(),
-                timeout,
-                "(S,G) was not selected initially",
+            wait_for!(
+                db.get_selected_mcast_route(&key).is_some(),
+                DEFAULT_INTERVAL_MS,
+                TEST_WAIT_ITERATIONS,
+                "(S,G) was not selected initially"
             );
 
             // Verify `rpf_neighbor` was derived
@@ -2126,20 +2133,22 @@ mod test {
             // Remove unicast route; MRIB should be de-selected
             db.remove_static_routes(&[srk]).unwrap();
 
-            crate::test::wait_for(
-                || db.get_selected_mcast_route(&key).is_none(),
-                timeout,
-                "(S,G) remained selected after unicast route removed",
+            wait_for!(
+                db.get_selected_mcast_route(&key).is_none(),
+                DEFAULT_INTERVAL_MS,
+                TEST_WAIT_ITERATIONS,
+                "(S,G) remained selected after unicast route removed"
             );
 
             // Re-add unicast route
             db.add_static_routes(&[srk]).unwrap();
 
             // MRIB should be selected again
-            crate::test::wait_for(
-                || db.get_selected_mcast_route(&key).is_some(),
-                timeout,
-                "(S,G) not re-selected after unicast route restored",
+            wait_for!(
+                db.get_selected_mcast_route(&key).is_some(),
+                DEFAULT_INTERVAL_MS,
+                TEST_WAIT_ITERATIONS,
+                "(S,G) not re-selected after unicast route restored"
             );
 
             // Cleanup
@@ -2159,7 +2168,7 @@ mod test {
             IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)),
             "192.0.2.0/24".parse::<Prefix4>().unwrap(),
             IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
-            mcast_v4(225, 1, 1, 1),
+            MulticastAddr::new_v4(225, 1, 1, 1).expect("valid mcast"),
         );
 
         // IPv6
@@ -2168,7 +2177,8 @@ mod test {
             IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10)),
             "2001:db8::/32".parse::<Prefix6>().unwrap(),
             IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1)),
-            mcast_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1]),
+            MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
+                .expect("valid mcast"),
         );
     }
 
@@ -2185,7 +2195,8 @@ mod test {
 
         // Case: (*,G) with ASM address goes to `mrib_loc` immediately
         // (no unicast route needed)
-        let asm_group = mcast_v4(225, 5, 5, 5);
+        let asm_group =
+            MulticastAddr::new_v4(225, 5, 5, 5).expect("valid mcast");
         let star_g_key = MulticastRouteKey::any_source(asm_group);
         let star_g_route = MulticastRoute::new(
             star_g_key,
@@ -2196,10 +2207,11 @@ mod test {
         db.add_static_mcast_routes(&[star_g_route]).unwrap();
 
         // (*,G) should be in both `mrib_in` AND `mrib_loc` immediately
-        crate::test::wait_for(
-            || db.get_selected_mcast_route(&star_g_key).is_some(),
-            crate::test::TEST_TIMEOUT,
-            "(*,G) should be in mrib_loc immediately",
+        wait_for!(
+            db.get_selected_mcast_route(&star_g_key).is_some(),
+            DEFAULT_INTERVAL_MS,
+            TEST_WAIT_ITERATIONS,
+            "(*,G) should be in mrib_loc immediately"
         );
         assert!(
             db.get_mcast_route(&star_g_key).is_some(),
@@ -2207,9 +2219,10 @@ mod test {
         );
 
         // Case: (S,G) with SSM address (232.x) - requires unicast route
-        let ssm_group = mcast_v4(232, 1, 1, 1); // SSM range
-        let source = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 100));
-        let sg_key = MulticastRouteKey::source_specific(source, ssm_group);
+        let ssm_group = MulticastAddrV4::new(Ipv4Addr::new(232, 1, 1, 1))
+            .expect("valid mcast"); // SSM range
+        let source = Ipv4Addr::new(10, 0, 0, 100);
+        let sg_key = MulticastRouteKey::source_specific_v4(source, ssm_group);
         let sg_route = MulticastRoute::new(
             sg_key,
             TEST_UNDERLAY,
@@ -2237,14 +2250,17 @@ mod test {
         };
         db.add_static_routes(&[srk]).unwrap();
 
-        crate::test::wait_for(
-            || db.get_selected_mcast_route(&sg_key).is_some(),
-            crate::test::TEST_TIMEOUT,
-            "(S,G) should be selected after adding unicast route",
+        wait_for!(
+            db.get_selected_mcast_route(&sg_key).is_some(),
+            DEFAULT_INTERVAL_MS,
+            TEST_WAIT_ITERATIONS,
+            "(S,G) should be selected after adding unicast route"
         );
 
         // Case: IPv6 (*,G) with global scope - goes to `mrib_loc` immediately
-        let v6_group = mcast_v6([0xff0e, 0, 0, 0, 0, 0, 0, 0x5555]);
+        let v6_group =
+            MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 0x5555])
+                .expect("valid mcast");
         let v6_star_g_key = MulticastRouteKey::any_source(v6_group);
         let v6_star_g_route = MulticastRoute::new(
             v6_star_g_key,
@@ -2254,18 +2270,21 @@ mod test {
 
         db.add_static_mcast_routes(&[v6_star_g_route]).unwrap();
 
-        crate::test::wait_for(
-            || db.get_selected_mcast_route(&v6_star_g_key).is_some(),
-            crate::test::TEST_TIMEOUT,
-            "IPv6 (*,G) should be selected immediately",
+        wait_for!(
+            db.get_selected_mcast_route(&v6_star_g_key).is_some(),
+            DEFAULT_INTERVAL_MS,
+            TEST_WAIT_ITERATIONS,
+            "IPv6 (*,G) should be selected immediately"
         );
 
         // Case: IPv6 (S,G) with SSM address (ff3e::)
-        let v6_ssm_group = mcast_v6([0xff3e, 0, 0, 0, 0, 0, 0, 0x1234]);
-        let v6_source =
-            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x100));
+        let v6_ssm_group = MulticastAddrV6::new(Ipv6Addr::new(
+            0xff3e, 0, 0, 0, 0, 0, 0, 0x1234,
+        ))
+        .expect("valid mcast");
+        let v6_source = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x100);
         let v6_sg_key =
-            MulticastRouteKey::source_specific(v6_source, v6_ssm_group);
+            MulticastRouteKey::source_specific_v6(v6_source, v6_ssm_group);
         let v6_sg_route = MulticastRoute::new(
             v6_sg_key,
             TEST_UNDERLAY,
@@ -2294,10 +2313,11 @@ mod test {
         };
         db.add_static_routes(&[v6_srk]).unwrap();
 
-        crate::test::wait_for(
-            || db.get_selected_mcast_route(&v6_sg_key).is_some(),
-            crate::test::TEST_TIMEOUT,
-            "IPv6 (S,G) should be selected after adding unicast route",
+        wait_for!(
+            db.get_selected_mcast_route(&v6_sg_key).is_some(),
+            DEFAULT_INTERVAL_MS,
+            TEST_WAIT_ITERATIONS,
+            "IPv6 (S,G) should be selected after adding unicast route"
         );
 
         // Cleanup
@@ -2316,7 +2336,7 @@ mod test {
         let db_path = "/tmp/mrib_persist_test.db";
         let _ = std::fs::remove_dir_all(db_path);
 
-        let group = mcast_v4(225, 2, 2, 2);
+        let group = MulticastAddr::new_v4(225, 2, 2, 2).expect("valid mcast");
         let key = MulticastRouteKey::any_source(group);
         let route = MulticastRoute::new(
             key,

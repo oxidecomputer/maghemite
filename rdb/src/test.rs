@@ -4,16 +4,13 @@
 
 //! Test utilities for rdb tests.
 
-use crate::types::{MulticastAddr, MulticastAddrV4, MulticastAddrV6};
 use crate::{Db, error::Error};
 use slog::Logger;
-use std::net::{Ipv4Addr, Ipv6Addr};
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
-/// Default timeout for waiting on async operations in tests.
-pub const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// Default iteration count for wait_for! macro (5 seconds at 10ms polling).
+pub const TEST_WAIT_ITERATIONS: u64 = 500;
 
 /// A test database wrapper that automatically cleans up the database directory
 /// when dropped, but only if the test succeeded.
@@ -141,53 +138,4 @@ pub fn get_test_db(test_name: &str, log: Logger) -> Result<TestDb, Error> {
 
     let db = Db::new(&db_path, log)?;
     Ok(TestDb { db, path: db_path })
-}
-
-/// Wait for a condition to become true, polling until timeout.
-///
-/// This is useful for tests that need to wait for asynchronous operations
-/// like background rebuilds or notifications to complete.
-///
-/// This fn panics with the provided message if the condition doesn't become
-/// `true` within the timeout.
-pub fn wait_for<F>(mut condition: F, timeout: Duration, msg: &str)
-where
-    F: FnMut() -> bool,
-{
-    let start = std::time::Instant::now();
-    while !condition() {
-        if start.elapsed() > timeout {
-            panic!("{msg}");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-// Multicast address test helpers
-
-/// Create a validated IPv4 multicast address for tests.
-///
-/// Uses addresses in globally-routable ranges (not admin-scoped).
-/// Panics if the address is not valid multicast.
-pub fn mcast_v4(a: u8, b: u8, c: u8, d: u8) -> MulticastAddr {
-    MulticastAddr::V4(MulticastAddrV4::new(Ipv4Addr::new(a, b, c, d)).unwrap())
-}
-
-/// Create a validated IPv6 multicast address for tests.
-///
-/// Panics if the address is not valid multicast.
-pub fn mcast_v6(segments: [u16; 8]) -> MulticastAddr {
-    MulticastAddr::V6(
-        MulticastAddrV6::new(Ipv6Addr::new(
-            segments[0],
-            segments[1],
-            segments[2],
-            segments[3],
-            segments[4],
-            segments[5],
-            segments[6],
-            segments[7],
-        ))
-        .unwrap(),
-    )
 }

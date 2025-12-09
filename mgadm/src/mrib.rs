@@ -12,22 +12,23 @@
 use std::net::IpAddr;
 
 use anyhow::Result;
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 
 use mg_admin_client::Client;
 use mg_admin_client::types::{
-    MribRpfRebuildIntervalRequest, MulticastAddr, MulticastRoute,
+    MribRpfRebuildIntervalRequest, MulticastRoute, MulticastRouteKey,
     RouteOriginFilter,
 };
-use rdb::types::AddressFamily;
+use rdb::types::{AddressFamily, DEFAULT_MULTICAST_VNI};
 
-/// Filter for route origin.
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
-pub enum RouteOrigin {
-    /// Static routes only (manually configured).
-    Static,
-    /// Dynamic routes only (learned via IGMP, MLD, etc.).
-    Dynamic,
+fn parse_route_origin(s: &str) -> Result<RouteOriginFilter, String> {
+    match s.to_lowercase().as_str() {
+        "static" => Ok(RouteOriginFilter::Static),
+        "dynamic" => Ok(RouteOriginFilter::Dynamic),
+        _ => Err(format!(
+            "invalid origin: {s} (expected 'static' or 'dynamic')"
+        )),
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -35,17 +36,8 @@ pub enum Commands {
     /// View MRIB state.
     Status(StatusCommand),
 
-    /// Get a specific multicast route by key.
-    Get(GetCommand),
-
-    /// Get a specific installed multicast route (mrib_loc).
-    GetInstalled(GetCommand),
-
-    /// RPF rebuild configuration.
+    /// RPF (Reverse Path Forwarding) table configuration and lookup.
     Rpf(RpfCommand),
-
-    /// Static multicast route management.
-    Static(StaticCommand),
 }
 
 #[derive(Debug, Args)]
@@ -56,42 +48,59 @@ pub struct StatusCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum StatusCmd {
-    /// Get all imported multicast routes (`mrib_in`).
+    /// Get imported multicast routes (`mrib_in`).
+    ///
+    /// Lists all routes, or gets a specific route with `-g`.
+    ///
+    /// Usage: `mrib status imported [ipv4|ipv6] [-g group] [-s source] [-v vni]`
     Imported {
-        /// Filter by address family.
-        #[arg(short, long, value_enum)]
-        af: Option<AddressFamily>,
+        /// Address family to filter by.
+        #[arg(value_enum)]
+        address_family: Option<AddressFamily>,
+
+        /// Multicast group address (if omitted, lists all routes).
+        #[arg(short, long)]
+        group: Option<IpAddr>,
+
+        /// Source address (omit for any-source (*,G)).
+        #[arg(short, long)]
+        source: Option<IpAddr>,
+
+        /// VNI (defaults to DEFAULT_MULTICAST_VNI for fleet-scoped multicast).
+        #[arg(short, long, default_value_t = DEFAULT_MULTICAST_VNI)]
+        vni: u32,
 
         /// Filter by route origin ("static" or "dynamic").
-        #[arg(long, value_enum)]
-        origin: Option<RouteOrigin>,
+        #[arg(long, value_parser = parse_route_origin)]
+        origin: Option<RouteOriginFilter>,
     },
 
-    /// Get installed multicast routes (`mrib_loc`, RPF-validated).
-    Installed {
-        /// Filter by address family.
-        #[arg(short, long, value_enum)]
-        af: Option<AddressFamily>,
+    /// Get selected multicast routes (`mrib_loc`, RPF-validated).
+    ///
+    /// Lists all routes, or gets a specific route with `-g`.
+    ///
+    /// Usage: `mrib status selected [ipv4|ipv6] [-g group] [-s source] [-v vni]`
+    Selected {
+        /// Address family to filter by.
+        #[arg(value_enum)]
+        address_family: Option<AddressFamily>,
+
+        /// Multicast group address (if omitted, lists all routes).
+        #[arg(short, long)]
+        group: Option<IpAddr>,
+
+        /// Source address (omit for any-source (*,G)).
+        #[arg(short, long)]
+        source: Option<IpAddr>,
+
+        /// VNI (defaults to DEFAULT_MULTICAST_VNI for fleet-scoped multicast).
+        #[arg(short, long, default_value_t = DEFAULT_MULTICAST_VNI)]
+        vni: u32,
 
         /// Filter by route origin ("static" or "dynamic").
-        #[arg(long, value_enum)]
-        origin: Option<RouteOrigin>,
+        #[arg(long, value_parser = parse_route_origin)]
+        origin: Option<RouteOriginFilter>,
     },
-}
-
-#[derive(Debug, Args)]
-pub struct GetCommand {
-    /// Multicast group address.
-    #[arg(short, long)]
-    group: IpAddr,
-
-    /// Source address (omit for any-source (*,G)).
-    #[arg(short, long)]
-    source: Option<IpAddr>,
-
-    /// VNI (defaults to 77 for fleet-scoped multicast).
-    #[arg(short, long, default_value_t = 77)]
-    vni: u32,
 }
 
 #[derive(Debug, Args)]
@@ -112,43 +121,41 @@ pub enum RpfCmd {
     },
 }
 
-#[derive(Debug, Args)]
-pub struct StaticCommand {
-    #[command(subcommand)]
-    command: StaticRouteCmd,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum StaticRouteCmd {
-    /// List all static multicast routes.
-    List,
-}
-
 pub async fn commands(command: Commands, c: Client) -> Result<()> {
     match command {
         Commands::Status(status_cmd) => match status_cmd.command {
-            StatusCmd::Imported { af, origin } => {
-                get_imported(c, af, origin).await?
+            StatusCmd::Imported {
+                group,
+                source,
+                vni,
+                address_family,
+                origin,
+            } => {
+                if let Some(g) = group {
+                    get_route(c, g, source, vni).await?
+                } else {
+                    get_imported(c, address_family, origin).await?
+                }
             }
-            StatusCmd::Installed { af, origin } => {
-                get_installed(c, af, origin).await?
+            StatusCmd::Selected {
+                group,
+                source,
+                vni,
+                address_family,
+                origin,
+            } => {
+                if let Some(g) = group {
+                    get_route_selected(c, g, source, vni).await?
+                } else {
+                    get_selected(c, address_family, origin).await?
+                }
             }
         },
-        Commands::Get(get_cmd) => {
-            get_route(c, get_cmd.group, get_cmd.source, get_cmd.vni).await?
-        }
-        Commands::GetInstalled(get_cmd) => {
-            get_route_installed(c, get_cmd.group, get_cmd.source, get_cmd.vni)
-                .await?
-        }
         Commands::Rpf(rpf_cmd) => match rpf_cmd.command {
             RpfCmd::GetInterval => get_rpf_interval(c).await?,
             RpfCmd::SetInterval { interval_ms } => {
                 set_rpf_interval(c, interval_ms).await?
             }
-        },
-        Commands::Static(static_cmd) => match static_cmd.command {
-            StaticRouteCmd::List => static_list(c).await?,
         },
     }
     Ok(())
@@ -156,32 +163,24 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
 
 async fn get_imported(
     c: Client,
-    af: Option<AddressFamily>,
-    origin: Option<RouteOrigin>,
+    address_family: Option<AddressFamily>,
+    origin: Option<RouteOriginFilter>,
 ) -> Result<()> {
-    let origin_filter = origin.map(|o| match o {
-        RouteOrigin::Static => RouteOriginFilter::Static,
-        RouteOrigin::Dynamic => RouteOriginFilter::Dynamic,
-    });
     let routes = c
-        .mrib_status_imported(af.as_ref(), origin_filter)
+        .get_mrib_imported(address_family.as_ref(), None, origin, None, None)
         .await?
         .into_inner();
     print_routes(&routes);
     Ok(())
 }
 
-async fn get_installed(
+async fn get_selected(
     c: Client,
-    af: Option<AddressFamily>,
-    origin: Option<RouteOrigin>,
+    address_family: Option<AddressFamily>,
+    origin: Option<RouteOriginFilter>,
 ) -> Result<()> {
-    let origin_filter = origin.map(|o| match o {
-        RouteOrigin::Static => RouteOriginFilter::Static,
-        RouteOrigin::Dynamic => RouteOriginFilter::Dynamic,
-    });
     let routes = c
-        .mrib_status_installed(af.as_ref(), origin_filter)
+        .get_mrib_selected(address_family.as_ref(), None, origin, None, None)
         .await?
         .into_inner();
     print_routes(&routes);
@@ -194,50 +193,48 @@ async fn get_route(
     source: Option<IpAddr>,
     vni: u32,
 ) -> Result<()> {
-    let route = c
-        .mrib_get_route(&group, source.as_ref(), Some(vni))
+    let routes = c
+        .get_mrib_imported(None, Some(&group), None, source.as_ref(), Some(vni))
         .await?
         .into_inner();
-    println!("{route:#?}");
+    if let Some(route) = routes.first() {
+        println!("{route:#?}");
+    } else {
+        anyhow::bail!("route not found");
+    }
     Ok(())
 }
 
-async fn get_route_installed(
+async fn get_route_selected(
     c: Client,
     group: IpAddr,
     source: Option<IpAddr>,
     vni: u32,
 ) -> Result<()> {
-    let route = c
-        .mrib_get_selected_route(&group, source.as_ref(), Some(vni))
+    let routes = c
+        .get_mrib_selected(None, Some(&group), None, source.as_ref(), Some(vni))
         .await?
         .into_inner();
-    println!("{route:#?}");
+    if let Some(route) = routes.first() {
+        println!("{route:#?}");
+    } else {
+        anyhow::bail!("route not found in mrib_loc");
+    }
     Ok(())
 }
 
 async fn get_rpf_interval(c: Client) -> Result<()> {
-    let result = c.mrib_get_rpf_rebuild_interval().await?.into_inner();
+    let result = c.read_mrib_rpf_rebuild_interval().await?.into_inner();
     println!("RPF rebuild interval: {}ms", result.interval_ms);
     Ok(())
 }
 
 async fn set_rpf_interval(c: Client, interval_ms: u64) -> Result<()> {
-    c.mrib_set_rpf_rebuild_interval(&MribRpfRebuildIntervalRequest {
+    c.update_mrib_rpf_rebuild_interval(&MribRpfRebuildIntervalRequest {
         interval_ms,
     })
     .await?;
     println!("Updated RPF rebuild interval to: {interval_ms}ms");
-    Ok(())
-}
-
-async fn static_list(c: Client) -> Result<()> {
-    let routes = c.mrib_static_list().await?.into_inner();
-    if routes.is_empty() {
-        println!("No static multicast routes");
-    } else {
-        print_routes(&routes);
-    }
     Ok(())
 }
 
@@ -247,18 +244,20 @@ fn print_routes(routes: &[MulticastRoute]) {
         return;
     }
     for route in routes {
-        let key = &route.key;
-        let source_str = match &key.source {
-            Some(s) => s.to_string(),
-            None => "*".to_string(),
-        };
-        let group_str = match &key.group {
-            MulticastAddr::V4(v4) => v4.to_string(),
-            MulticastAddr::V6(v6) => v6.to_string(),
+        let (source_str, group_str, vni) = match &route.key {
+            MulticastRouteKey::V4(k) => {
+                let src = k.source.map_or("*".to_string(), |s| s.to_string());
+                let grp = k.group.to_string();
+                (src, grp, k.vni)
+            }
+            MulticastRouteKey::V6(k) => {
+                let src = k.source.map_or("*".to_string(), |s| s.to_string());
+                let grp = k.group.to_string();
+                (src, grp, k.vni)
+            }
         };
         println!(
-            "({source_str},{group_str}) vni={} underlay={} rpf={:?} nexthops={} source={:?}",
-            key.vni,
+            "({source_str},{group_str}) vni={vni} underlay={} rpf={:?} nexthops={} source={:?}",
             route.underlay_group,
             route.rpf_neighbor,
             route.underlay_nexthops.len(),
@@ -281,25 +280,40 @@ mod tests {
     }
 
     #[test]
-    fn test_get_command_group_only() {
-        let cli = TestCli::try_parse_from(["test", "get", "-g", "225.1.2.3"])
-            .unwrap();
+    fn test_status_imported_specific_route() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "status",
+            "imported",
+            "-g",
+            "225.1.2.3",
+        ])
+        .unwrap();
 
         match cli.command {
-            Commands::Get(cmd) => {
-                assert_eq!(cmd.group, IpAddr::V4(Ipv4Addr::new(225, 1, 2, 3)));
-                assert_eq!(cmd.source, None);
-                assert_eq!(cmd.vni, 77); // default
-            }
-            _ => panic!("expected Get command"),
+            Commands::Status(cmd) => match cmd.command {
+                StatusCmd::Imported {
+                    group, source, vni, ..
+                } => {
+                    assert_eq!(
+                        group,
+                        Some(IpAddr::V4(Ipv4Addr::new(225, 1, 2, 3)))
+                    );
+                    assert_eq!(source, None);
+                    assert_eq!(vni, DEFAULT_MULTICAST_VNI);
+                }
+                _ => panic!("expected Imported"),
+            },
+            _ => panic!("expected Status command"),
         }
     }
 
     #[test]
-    fn test_get_command_all_flags() {
+    fn test_status_imported_specific_route_all_flags() {
         let cli = TestCli::try_parse_from([
             "test",
-            "get",
+            "status",
+            "imported",
             "-g",
             "225.1.2.3",
             "-s",
@@ -310,23 +324,32 @@ mod tests {
         .unwrap();
 
         match cli.command {
-            Commands::Get(cmd) => {
-                assert_eq!(cmd.group, IpAddr::V4(Ipv4Addr::new(225, 1, 2, 3)));
-                assert_eq!(
-                    cmd.source,
-                    Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
-                );
-                assert_eq!(cmd.vni, 100);
-            }
-            _ => panic!("expected Get command"),
+            Commands::Status(cmd) => match cmd.command {
+                StatusCmd::Imported {
+                    group, source, vni, ..
+                } => {
+                    assert_eq!(
+                        group,
+                        Some(IpAddr::V4(Ipv4Addr::new(225, 1, 2, 3)))
+                    );
+                    assert_eq!(
+                        source,
+                        Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
+                    );
+                    assert_eq!(vni, 100);
+                }
+                _ => panic!("expected Imported"),
+            },
+            _ => panic!("expected Status command"),
         }
     }
 
     #[test]
-    fn test_get_command_ipv6() {
+    fn test_status_selected_specific_route_ipv6() {
         let cli = TestCli::try_parse_from([
             "test",
-            "get",
+            "status",
+            "selected",
             "--group",
             "ff0e::1",
             "--source",
@@ -337,35 +360,45 @@ mod tests {
         .unwrap();
 
         match cli.command {
-            Commands::Get(cmd) => {
-                assert_eq!(
-                    cmd.group,
-                    IpAddr::V6(Ipv6Addr::new(0xff0e, 0, 0, 0, 0, 0, 0, 1))
-                );
-                assert_eq!(
-                    cmd.source,
-                    Some(IpAddr::V6(Ipv6Addr::new(
-                        0x2001, 0xdb8, 0, 0, 0, 0, 0, 1
-                    )))
-                );
-                assert_eq!(cmd.vni, 42);
-            }
-            _ => panic!("expected Get command"),
+            Commands::Status(cmd) => match cmd.command {
+                StatusCmd::Selected {
+                    group, source, vni, ..
+                } => {
+                    assert_eq!(
+                        group,
+                        Some(IpAddr::V6(Ipv6Addr::new(
+                            0xff0e, 0, 0, 0, 0, 0, 0, 1
+                        )))
+                    );
+                    assert_eq!(
+                        source,
+                        Some(IpAddr::V6(Ipv6Addr::new(
+                            0x2001, 0xdb8, 0, 0, 0, 0, 0, 1
+                        )))
+                    );
+                    assert_eq!(vni, 42);
+                }
+                _ => panic!("expected Selected"),
+            },
+            _ => panic!("expected Status command"),
         }
     }
 
     #[test]
-    fn test_status_imported_with_af() {
-        let cli = TestCli::try_parse_from([
-            "test", "status", "imported", "-a", "ipv4",
-        ])
-        .unwrap();
+    fn test_status_imported_list_with_af() {
+        let cli =
+            TestCli::try_parse_from(["test", "status", "imported", "ipv4"])
+                .unwrap();
 
         match cli.command {
             Commands::Status(cmd) => match cmd.command {
-                StatusCmd::Imported { af, origin } => {
-                    assert_eq!(af, Some(AddressFamily::Ipv4));
-                    assert_eq!(origin, None);
+                StatusCmd::Imported {
+                    group,
+                    address_family,
+                    ..
+                } => {
+                    assert_eq!(group, None);
+                    assert_eq!(address_family, Some(AddressFamily::Ipv4));
                 }
                 _ => panic!("expected Imported"),
             },
@@ -374,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn test_status_imported_with_origin() {
+    fn test_status_imported_list_with_origin() {
         let cli = TestCli::try_parse_from([
             "test", "status", "imported", "--origin", "dynamic",
         ])
@@ -382,9 +415,9 @@ mod tests {
 
         match cli.command {
             Commands::Status(cmd) => match cmd.command {
-                StatusCmd::Imported { af, origin } => {
-                    assert_eq!(af, None);
-                    assert_eq!(origin, Some(RouteOrigin::Dynamic));
+                StatusCmd::Imported { group, origin, .. } => {
+                    assert_eq!(group, None);
+                    assert_eq!(origin, Some(RouteOriginFilter::Dynamic));
                 }
                 _ => panic!("expected Imported"),
             },
@@ -393,17 +426,23 @@ mod tests {
     }
 
     #[test]
-    fn test_status_installed_no_af() {
+    fn test_status_selected_list_all() {
         let cli =
-            TestCli::try_parse_from(["test", "status", "installed"]).unwrap();
+            TestCli::try_parse_from(["test", "status", "selected"]).unwrap();
 
         match cli.command {
             Commands::Status(cmd) => match cmd.command {
-                StatusCmd::Installed { af, origin } => {
-                    assert_eq!(af, None);
+                StatusCmd::Selected {
+                    group,
+                    address_family,
+                    origin,
+                    ..
+                } => {
+                    assert_eq!(group, None);
+                    assert_eq!(address_family, None);
                     assert_eq!(origin, None);
                 }
-                _ => panic!("expected Installed"),
+                _ => panic!("expected Selected"),
             },
             _ => panic!("expected Status command"),
         }
@@ -423,18 +462,6 @@ mod tests {
                 _ => panic!("expected SetInterval"),
             },
             _ => panic!("expected Rpf command"),
-        }
-    }
-
-    #[test]
-    fn test_static_list() {
-        let cli = TestCli::try_parse_from(["test", "static", "list"]).unwrap();
-
-        match cli.command {
-            Commands::Static(cmd) => {
-                assert!(matches!(cmd.command, StaticRouteCmd::List));
-            }
-            _ => panic!("expected Static command"),
         }
     }
 }

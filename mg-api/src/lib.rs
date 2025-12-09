@@ -380,73 +380,61 @@ pub trait MgAdminApi {
     // Direct operator configuration should go through the Oxide API to
     // maintain consistency with the control plane's view of group membership.
 
-    /// Get all imported multicast routes (`mrib_in`).
-    #[endpoint { method = GET, path = "/mrib/status/imported", versions = VERSION_MULTICAST_SUPPORT.. }]
-    async fn mrib_status_imported(
-        rqctx: RequestContext<Self::Context>,
-        query: Query<MribStatusQuery>,
-    ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError>;
-
-    /// Get installed multicast routes (`mrib_loc`, RPF-validated).
-    #[endpoint { method = GET, path = "/mrib/status/installed", versions = VERSION_MULTICAST_SUPPORT.. }]
-    async fn mrib_status_installed(
-        rqctx: RequestContext<Self::Context>,
-        query: Query<MribStatusQuery>,
-    ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError>;
-
-    /// Get a specific multicast route by key.
-    #[endpoint { method = GET, path = "/mrib/route", versions = VERSION_MULTICAST_SUPPORT.. }]
-    async fn mrib_get_route(
-        rqctx: RequestContext<Self::Context>,
-        query: Query<MribRouteQuery>,
-    ) -> Result<HttpResponseOk<MulticastRoute>, HttpError>;
-
-    /// Get a specific installed multicast route by key (`mrib_loc`).
+    /// Get imported multicast routes (`mrib_in`).
     ///
-    /// Same query parameters as `mrib_get_route`, but returns the RPF-selected
-    /// route from the installed table. Useful for verifying RPF neighbor and
-    /// dataplane eligibility.
-    #[endpoint { method = GET, path = "/mrib/route/installed", versions = VERSION_MULTICAST_SUPPORT.. }]
-    async fn mrib_get_selected_route(
+    /// When `group` is provided, returns a specific route.
+    /// When `group` is omitted, returns all routes (with optional filters).
+    #[endpoint { method = GET, path = "/mrib/status/imported", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn get_mrib_imported(
         rqctx: RequestContext<Self::Context>,
-        query: Query<MribRouteQuery>,
-    ) -> Result<HttpResponseOk<MulticastRoute>, HttpError>;
+        query: Query<MribQuery>,
+    ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError>;
+
+    /// Get selected multicast routes (`mrib_loc`, RPF-validated).
+    ///
+    /// When `group` is provided, returns a specific route.
+    /// When `group` is omitted, returns all routes (with optional filters).
+    #[endpoint { method = GET, path = "/mrib/status/selected", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn get_mrib_selected(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<MribQuery>,
+    ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError>;
 
     /// Add static multicast routes.
     ///
     /// This endpoint is intended for Nexus RPW use. Operators should
     /// configure multicast group membership through the Oxide API.
-    #[endpoint { method = PUT, path = "/mrib/static/route", versions = VERSION_MULTICAST_SUPPORT.. }]
-    async fn mrib_static_add(
+    #[endpoint { method = PUT, path = "/static/mroute", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn static_add_mcast_route(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MribAddStaticRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    /// Delete static multicast routes.
+    /// Remove static multicast routes.
     ///
     /// This endpoint is intended for Nexus RPW use. Operators should
     /// configure multicast group membership through the Oxide API.
-    #[endpoint { method = DELETE, path = "/mrib/static/route", versions = VERSION_MULTICAST_SUPPORT.. }]
-    async fn mrib_static_delete(
+    #[endpoint { method = DELETE, path = "/static/mroute", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn static_remove_mcast_route(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MribDeleteStaticRequest>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
     /// List all static multicast routes.
-    #[endpoint { method = GET, path = "/mrib/static/route", versions = VERSION_MULTICAST_SUPPORT.. }]
-    async fn mrib_static_list(
+    #[endpoint { method = GET, path = "/static/mroute", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn static_list_mcast_routes(
         rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError>;
 
     /// Get the current RPF rebuild interval.
     #[endpoint { method = GET, path = "/mrib/config/rpf/rebuild-interval", versions = VERSION_MULTICAST_SUPPORT.. }]
-    async fn mrib_get_rpf_rebuild_interval(
+    async fn read_mrib_rpf_rebuild_interval(
         rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<MribRpfRebuildIntervalResponse>, HttpError>;
 
     /// Set the RPF rebuild interval.
     #[endpoint { method = POST, path = "/mrib/config/rpf/rebuild-interval", versions = VERSION_MULTICAST_SUPPORT.. }]
-    async fn mrib_set_rpf_rebuild_interval(
+    async fn update_mrib_rpf_rebuild_interval(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MribRpfRebuildIntervalRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
@@ -702,28 +690,30 @@ pub enum RouteOriginFilter {
     Dynamic,
 }
 
-/// Query parameters for listing MRIB routes.
+/// Query parameters for MRIB routes.
+///
+/// When `group` is provided, looks up a specific route.
+/// When `group` is omitted, lists all routes (with optional filters).
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct MribStatusQuery {
-    /// Filter by address family (`None` returns all).
+pub struct MribQuery {
+    /// Multicast group address. If provided, returns a specific route.
+    /// If omitted, returns all routes matching the filters.
     #[serde(default)]
-    pub address_family: Option<AddressFamily>,
-    /// Filter by route origin, i.e. "Static" or "Dynamic"
-    /// (`None` returns all).
+    pub group: Option<IpAddr>,
+    /// Source address (`None` for (*,G) routes). Only used when `group` is set.
     #[serde(default)]
-    pub route_origin: Option<RouteOriginFilter>,
-}
-
-/// Query parameters for looking up a specific MRIB route.
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct MribRouteQuery {
-    /// Source address (`None` for ASM (*,G)).
     pub source: Option<IpAddr>,
-    /// Multicast group address.
-    pub group: IpAddr,
     /// VNI (defaults to 77 for fleet-scoped multicast).
+    /// Only used when `group` is set.
     #[serde(default = "default_multicast_vni")]
     pub vni: u32,
+    /// Filter by address family. Only used when listing all routes.
+    #[serde(default)]
+    pub address_family: Option<AddressFamily>,
+    /// Filter by route origin ("static" or "dynamic").
+    /// Only used when listing all routes.
+    #[serde(default)]
+    pub route_origin: Option<RouteOriginFilter>,
 }
 
 fn default_multicast_vni() -> u32 {

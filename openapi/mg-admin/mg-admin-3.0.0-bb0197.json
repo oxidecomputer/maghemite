@@ -1044,7 +1044,7 @@
     "/mrib/config/rpf/rebuild-interval": {
       "get": {
         "summary": "Get the current RPF rebuild interval.",
-        "operationId": "mrib_get_rpf_rebuild_interval",
+        "operationId": "read_mrib_rpf_rebuild_interval",
         "responses": {
           "200": {
             "description": "successful operation",
@@ -1066,7 +1066,7 @@
       },
       "post": {
         "summary": "Set the RPF rebuild interval.",
-        "operationId": "mrib_set_rpf_rebuild_interval",
+        "operationId": "update_mrib_rpf_rebuild_interval",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1090,218 +1090,56 @@
         }
       }
     },
-    "/mrib/route": {
-      "get": {
-        "summary": "Get a specific multicast route by key.",
-        "operationId": "mrib_get_route",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "group",
-            "description": "Multicast group address.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "ip"
-            }
-          },
-          {
-            "in": "query",
-            "name": "source",
-            "description": "Source address (`None` for ASM (*,G)).",
-            "schema": {
-              "nullable": true,
-              "type": "string",
-              "format": "ip"
-            }
-          },
-          {
-            "in": "query",
-            "name": "vni",
-            "description": "VNI (defaults to 77 for fleet-scoped multicast).",
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MulticastRoute"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/mrib/route/installed": {
-      "get": {
-        "summary": "Get a specific installed multicast route by key (`mrib_loc`).",
-        "description": "Same query parameters as `mrib_get_route`, but returns the RPF-selected route from the installed table. Useful for verifying RPF neighbor and dataplane eligibility.",
-        "operationId": "mrib_get_selected_route",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "group",
-            "description": "Multicast group address.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "ip"
-            }
-          },
-          {
-            "in": "query",
-            "name": "source",
-            "description": "Source address (`None` for ASM (*,G)).",
-            "schema": {
-              "nullable": true,
-              "type": "string",
-              "format": "ip"
-            }
-          },
-          {
-            "in": "query",
-            "name": "vni",
-            "description": "VNI (defaults to 77 for fleet-scoped multicast).",
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MulticastRoute"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/mrib/static/route": {
-      "get": {
-        "summary": "List all static multicast routes.",
-        "operationId": "mrib_static_list",
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Array_of_MulticastRoute",
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/MulticastRoute"
-                  }
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "put": {
-        "summary": "Add static multicast routes.",
-        "description": "This endpoint is intended for Nexus RPW use. Operators should configure multicast group membership through the Oxide API.",
-        "operationId": "mrib_static_add",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MribAddStaticRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "delete": {
-        "summary": "Delete static multicast routes.",
-        "description": "This endpoint is intended for Nexus RPW use. Operators should configure multicast group membership through the Oxide API.",
-        "operationId": "mrib_static_delete",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MribDeleteStaticRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "successful deletion"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/mrib/status/imported": {
       "get": {
-        "summary": "Get all imported multicast routes (`mrib_in`).",
-        "operationId": "mrib_status_imported",
+        "summary": "Get imported multicast routes (`mrib_in`).",
+        "description": "When `group` is provided, returns a specific route. When `group` is omitted, returns all routes (with optional filters).",
+        "operationId": "get_mrib_imported",
         "parameters": [
           {
             "in": "query",
             "name": "address_family",
-            "description": "Filter by address family (`None` returns all).",
+            "description": "Filter by address family. Only used when listing all routes.",
             "schema": {
               "$ref": "#/components/schemas/AddressFamily"
             }
           },
           {
             "in": "query",
+            "name": "group",
+            "description": "Multicast group address. If provided, returns a specific route. If omitted, returns all routes matching the filters.",
+            "schema": {
+              "nullable": true,
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
             "name": "route_origin",
-            "description": "Filter by route origin, i.e. \"Static\" or \"Dynamic\" (`None` returns all).",
+            "description": "Filter by route origin (\"static\" or \"dynamic\"). Only used when listing all routes.",
             "schema": {
               "$ref": "#/components/schemas/RouteOriginFilter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "description": "Source address (`None` for (*,G) routes). Only used when `group` is set.",
+            "schema": {
+              "nullable": true,
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vni",
+            "description": "VNI (defaults to 77 for fleet-scoped multicast). Only used when `group` is set.",
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
             }
           }
         ],
@@ -1329,25 +1167,56 @@
         }
       }
     },
-    "/mrib/status/installed": {
+    "/mrib/status/selected": {
       "get": {
-        "summary": "Get installed multicast routes (`mrib_loc`, RPF-validated).",
-        "operationId": "mrib_status_installed",
+        "summary": "Get selected multicast routes (`mrib_loc`, RPF-validated).",
+        "description": "When `group` is provided, returns a specific route. When `group` is omitted, returns all routes (with optional filters).",
+        "operationId": "get_mrib_selected",
         "parameters": [
           {
             "in": "query",
             "name": "address_family",
-            "description": "Filter by address family (`None` returns all).",
+            "description": "Filter by address family. Only used when listing all routes.",
             "schema": {
               "$ref": "#/components/schemas/AddressFamily"
             }
           },
           {
             "in": "query",
+            "name": "group",
+            "description": "Multicast group address. If provided, returns a specific route. If omitted, returns all routes matching the filters.",
+            "schema": {
+              "nullable": true,
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
             "name": "route_origin",
-            "description": "Filter by route origin, i.e. \"Static\" or \"Dynamic\" (`None` returns all).",
+            "description": "Filter by route origin (\"static\" or \"dynamic\"). Only used when listing all routes.",
             "schema": {
               "$ref": "#/components/schemas/RouteOriginFilter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "description": "Source address (`None` for (*,G) routes). Only used when `group` is set.",
+            "schema": {
+              "nullable": true,
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vni",
+            "description": "VNI (defaults to 77 for fleet-scoped multicast). Only used when `group` is set.",
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
             }
           }
         ],
@@ -1494,6 +1363,86 @@
                 }
               }
             }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/static/mroute": {
+      "get": {
+        "summary": "List all static multicast routes.",
+        "operationId": "static_list_mcast_routes",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_MulticastRoute",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MulticastRoute"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "summary": "Add static multicast routes.",
+        "description": "This endpoint is intended for Nexus RPW use. Operators should configure multicast group membership through the Oxide API.",
+        "operationId": "static_add_mcast_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MribAddStaticRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove static multicast routes.",
+        "description": "This endpoint is intended for Nexus RPW use. Operators should configure multicast group membership through the Oxide API.",
+        "operationId": "static_remove_mcast_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MribDeleteStaticRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "successful deletion"
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -3271,37 +3220,6 @@
           "interval_ms"
         ]
       },
-      "MulticastAddr": {
-        "description": "A validated multicast group address (IPv4 or IPv6).\n\nThis type guarantees that the contained address is a routable multicast address. Construction is only possible through validated paths.",
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "V4": {
-                "type": "string",
-                "format": "ipv4"
-              }
-            },
-            "required": [
-              "V4"
-            ],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "V6": {
-                "type": "string",
-                "format": "ipv6"
-              }
-            },
-            "required": [
-              "V6"
-            ],
-            "additionalProperties": false
-          }
-        ]
-      },
       "MulticastRoute": {
         "description": "Multicast route entry containing replication groups and metadata.",
         "type": "object",
@@ -3334,7 +3252,7 @@
             ]
           },
           "underlay_group": {
-            "description": "Underlay multicast group address (ff04::X).\n\nAdmin-scoped IPv6 multicast address corresponding to the overlay multicast group. 1:1 mapped and always derived from the overlay multicast group in Omicron.",
+            "description": "Underlay multicast group address (ff04::X).\n\nAdmin-local scoped IPv6 multicast address corresponding to the overlay multicast group. 1:1 mapped and always derived from the overlay multicast group in Omicron.",
             "type": "string",
             "format": "ipv6"
           },
@@ -3348,7 +3266,7 @@
             "uniqueItems": true
           },
           "updated": {
-            "description": "Last updated timestamp.",
+            "description": "Last updated timestamp.\n\nOnly updated when route fields change semantically (rpf_neighbor, underlay_group, underlay_nexthops, source). An idempotent upsert with an identical value does not update this timestamp.",
             "type": "string",
             "format": "date-time"
           }
@@ -3363,25 +3281,78 @@
         ]
       },
       "MulticastRouteKey": {
-        "description": "Multicast route key: (Source, Group) pair for source-specific multicast, or (*, Group) for any-source multicast.",
+        "description": "Multicast route key: (Source, Group) pair for source-specific multicast, or (*, Group) for any-source multicast.\n\nUses type-enforced address family matching: IPv4 sources can only be paired with IPv4 groups, and IPv6 sources with IPv6 groups.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "V4": {
+                "$ref": "#/components/schemas/MulticastRouteKeyV4"
+              }
+            },
+            "required": [
+              "V4"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "V6": {
+                "$ref": "#/components/schemas/MulticastRouteKeyV6"
+              }
+            },
+            "required": [
+              "V6"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "MulticastRouteKeyV4": {
+        "description": "IPv4 multicast route key with type-enforced address family matching.",
         "type": "object",
         "properties": {
           "group": {
             "description": "Multicast group address.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MulticastAddr"
-              }
-            ]
+            "type": "string",
+            "format": "ipv4"
           },
           "source": {
             "nullable": true,
-            "description": "Source address (None for any-source multicast (*,G)).",
+            "description": "Source address (`None` for (*,G) routes).",
             "type": "string",
-            "format": "ip"
+            "format": "ipv4"
           },
           "vni": {
-            "description": "VNI (Virtual Network Identifier) - defaults to 77 for fleet-wide multicast, but allows future per-VPC multicast routing.",
+            "description": "VNI (Virtual Network Identifier).",
+            "default": 77,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "group"
+        ]
+      },
+      "MulticastRouteKeyV6": {
+        "description": "IPv6 multicast route key with type-enforced address family matching.",
+        "type": "object",
+        "properties": {
+          "group": {
+            "description": "Multicast group address.",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "source": {
+            "nullable": true,
+            "description": "Source address (`None` for (*,G) routes).",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "vni": {
+            "description": "VNI (Virtual Network Identifier).",
             "default": 77,
             "type": "integer",
             "format": "uint32",
@@ -4292,7 +4263,7 @@
             ]
           },
           "underlay_group": {
-            "description": "Underlay multicast group address (ff04::X).\n\nAdmin-scoped IPv6 multicast address corresponding to the overlay multicast group. 1:1 mapped and always derived from the overlay multicast group in Omicron.",
+            "description": "Underlay multicast group address (ff04::X).\n\nAdmin-local scoped IPv6 multicast address corresponding to the overlay multicast group. 1:1 mapped and always derived from the overlay multicast group in Omicron.",
             "type": "string",
             "format": "ipv6"
           },

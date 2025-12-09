@@ -6,13 +6,12 @@ use crate::error::Error;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use omicron_common::address::{
-    IPV4_ADMIN_SCOPED_MULTICAST_SUBNET, IPV4_GLOP_MULTICAST_SUBNET,
-    IPV4_LINK_LOCAL_MULTICAST_SUBNET, IPV4_MULTICAST_RANGE,
-    IPV4_SPECIFIC_RESERVED_MULTICAST_ADDRS, IPV4_SSM_SUBNET,
+    IPV4_LINK_LOCAL_MULTICAST_SUBNET, IPV4_MULTICAST_RANGE, IPV4_SSM_SUBNET,
     IPV6_ADMIN_SCOPED_MULTICAST_PREFIX, IPV6_INTERFACE_LOCAL_MULTICAST_SUBNET,
     IPV6_LINK_LOCAL_MULTICAST_SUBNET, IPV6_MULTICAST_RANGE,
     IPV6_RESERVED_SCOPE_MULTICAST_SUBNET, IPV6_SSM_SUBNET,
 };
+use omicron_common::api::external::Vni;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -483,14 +482,12 @@ impl Display for PrefixChangeNotification {
 // ============================================================================
 
 /// Default VNI for fleet-wide multicast routing.
-///
-/// Should match `omicron_common::api::external::Vni::DEFAULT_MULTICAST_VNI`.
-pub const DEFAULT_MULTICAST_VNI: u32 = 77;
+pub const DEFAULT_MULTICAST_VNI: u32 = Vni::DEFAULT_MULTICAST_VNI.as_u32();
 
 /// A validated IPv4 multicast address.
 ///
 /// This type guarantees that the inner address is a routable multicast address
-/// (not link-local, GLOP, admin-scoped, or otherwise reserved).
+/// (not link-local).
 #[derive(
     Debug,
     Copy,
@@ -518,36 +515,11 @@ impl MulticastAddrV4 {
             )));
         }
 
-        // Reject link-local multicast (224.0.0.0/24) - not routed
+        // Reject link-local multicast (224.0.0.0/24)
         if IPV4_LINK_LOCAL_MULTICAST_SUBNET.contains(value) {
             return Err(Error::Validation(format!(
                 "IPv4 address {value} is link-local multicast \
                  ({IPV4_LINK_LOCAL_MULTICAST_SUBNET}) which is not routable"
-            )));
-        }
-
-        // Reject GLOP addresses (233.0.0.0/8) - AS-based allocation
-        if IPV4_GLOP_MULTICAST_SUBNET.contains(value) {
-            return Err(Error::Validation(format!(
-                "IPv4 address {value} is in GLOP range \
-                 ({IPV4_GLOP_MULTICAST_SUBNET}) \
-                 which is reserved for AS-based allocation"
-            )));
-        }
-
-        // Reject admin-scoped addresses (239.0.0.0/8) - locally administered
-        if IPV4_ADMIN_SCOPED_MULTICAST_SUBNET.contains(value) {
-            return Err(Error::Validation(format!(
-                "IPv4 address {value} is admin-scoped \
-                 ({IPV4_ADMIN_SCOPED_MULTICAST_SUBNET}) \
-                 which is not globally routable"
-            )));
-        }
-
-        // Reject specific reserved addresses
-        if IPV4_SPECIFIC_RESERVED_MULTICAST_ADDRS.contains(&value) {
-            return Err(Error::Validation(format!(
-                "IPv4 address {value} is reserved and not routable"
             )));
         }
 
@@ -612,7 +584,15 @@ impl MulticastAddrV6 {
             )));
         }
 
-        // Reject interface-local multicast (ff01::/16) - not routed
+        // Reject reserved scope (ff00::/16) (reserved, not usable)
+        if IPV6_RESERVED_SCOPE_MULTICAST_SUBNET.contains(value) {
+            return Err(Error::Validation(format!(
+                "IPv6 address {value} is in reserved scope \
+                 ({IPV6_RESERVED_SCOPE_MULTICAST_SUBNET}) which is not routable"
+            )));
+        }
+
+        // Reject interface-local multicast (ff01::/16)
         if IPV6_INTERFACE_LOCAL_MULTICAST_SUBNET.contains(value) {
             return Err(Error::Validation(format!(
                 "IPv6 address {value} is interface-local multicast \
@@ -620,19 +600,11 @@ impl MulticastAddrV6 {
             )));
         }
 
-        // Reject link-local multicast (ff02::/16) - not routed
+        // Reject link-local multicast (ff02::/16)
         if IPV6_LINK_LOCAL_MULTICAST_SUBNET.contains(value) {
             return Err(Error::Validation(format!(
                 "IPv6 address {value} is link-local multicast \
                  ({IPV6_LINK_LOCAL_MULTICAST_SUBNET}) which is not routable"
-            )));
-        }
-
-        // Reject reserved scope (ff00::/16) - reserved, not usable
-        if IPV6_RESERVED_SCOPE_MULTICAST_SUBNET.contains(value) {
-            return Err(Error::Validation(format!(
-                "IPv6 address {value} is in reserved scope \
-                 ({IPV6_RESERVED_SCOPE_MULTICAST_SUBNET}) which is not routable"
             )));
         }
 
@@ -688,6 +660,25 @@ pub enum MulticastAddr {
 }
 
 impl MulticastAddr {
+    /// Create an IPv4 multicast address from octets.
+    pub fn new_v4(a: u8, b: u8, c: u8, d: u8) -> Result<Self, Error> {
+        Ok(Self::V4(MulticastAddrV4::new(Ipv4Addr::new(a, b, c, d))?))
+    }
+
+    /// Create an IPv6 multicast address from segments.
+    pub fn new_v6(segments: [u16; 8]) -> Result<Self, Error> {
+        Ok(Self::V6(MulticastAddrV6::new(Ipv6Addr::new(
+            segments[0],
+            segments[1],
+            segments[2],
+            segments[3],
+            segments[4],
+            segments[5],
+            segments[6],
+            segments[7],
+        ))?))
+    }
+
     /// Returns the underlying IP address.
     pub fn ip(&self) -> IpAddr {
         match self {
@@ -745,8 +736,7 @@ impl TryFrom<IpAddr> for MulticastAddr {
     }
 }
 
-/// Multicast route key: (Source, Group) pair for source-specific multicast,
-/// or (*, Group) for any-source multicast.
+/// IPv4 multicast route key with type-enforced address family matching.
 #[derive(
     Debug,
     Copy,
@@ -759,15 +749,59 @@ impl TryFrom<IpAddr> for MulticastAddr {
     Deserialize,
     JsonSchema,
 )]
-pub struct MulticastRouteKey {
-    /// Source address (None for any-source multicast (*,G)).
-    pub source: Option<IpAddr>,
+pub struct MulticastRouteKeyV4 {
+    /// Source address (`None` for (*,G) routes).
+    source: Option<Ipv4Addr>,
     /// Multicast group address.
-    pub group: MulticastAddr,
-    /// VNI (Virtual Network Identifier) - defaults to 77 for fleet-wide
-    /// multicast, but allows future per-VPC multicast routing.
+    group: MulticastAddrV4,
+    /// VNI (Virtual Network Identifier).
     #[serde(default = "default_multicast_vni")]
-    pub vni: u32,
+    vni: u32,
+}
+
+/// IPv6 multicast route key with type-enforced address family matching.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+pub struct MulticastRouteKeyV6 {
+    /// Source address (`None` for (*,G) routes).
+    source: Option<Ipv6Addr>,
+    /// Multicast group address.
+    group: MulticastAddrV6,
+    /// VNI (Virtual Network Identifier).
+    #[serde(default = "default_multicast_vni")]
+    vni: u32,
+}
+
+/// Multicast route key: (Source, Group) pair for source-specific multicast,
+/// or (*, Group) for any-source multicast.
+///
+/// Uses type-enforced address family matching: IPv4 sources can only be
+/// paired with IPv4 groups, and IPv6 sources with IPv6 groups.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+pub enum MulticastRouteKey {
+    V4(MulticastRouteKeyV4),
+    V6(MulticastRouteKeyV6),
 }
 
 const fn default_multicast_vni() -> u32 {
@@ -776,51 +810,171 @@ const fn default_multicast_vni() -> u32 {
 
 impl fmt::Display for MulticastRouteKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self.source {
-            Some(src) => write!(f, "({},{})", src, self.group),
-            None => write!(f, "(*,{})", self.group),
+        match self {
+            Self::V4(key) => match key.source {
+                Some(src) => write!(f, "({src},{})", key.group),
+                None => write!(f, "(*,{})", key.group),
+            },
+            Self::V6(key) => match key.source {
+                Some(src) => write!(f, "({src},{})", key.group),
+                None => write!(f, "(*,{})", key.group),
+            },
         }
     }
 }
 
 impl MulticastRouteKey {
-    /// Create an any-source multicast route (*,G) with default VNI.
-    pub fn any_source(group: MulticastAddr) -> Self {
-        Self {
-            source: None,
-            group,
-            vni: DEFAULT_MULTICAST_VNI,
+    /// Create a multicast route key, validating address family matching.
+    ///
+    /// Use this when the address family is not known at compile time (e.g.,
+    /// from API requests). Returns an error if source and group address
+    /// families don't match. For compile-time type safety, prefer
+    /// [`Self::source_specific_v4`]/[`Self::source_specific_v6`] or
+    /// [`Self::any_source`].
+    pub fn new(
+        source: Option<IpAddr>,
+        group: MulticastAddr,
+        vni: u32,
+    ) -> Result<Self, Error> {
+        match group {
+            MulticastAddr::V4(g) => {
+                let src = match source {
+                    None => None,
+                    Some(IpAddr::V4(s)) => Some(s),
+                    Some(IpAddr::V6(s)) => {
+                        return Err(Error::Validation(format!(
+                            "source {s} is IPv6 but group {g} is IPv4"
+                        )));
+                    }
+                };
+                Ok(Self::V4(MulticastRouteKeyV4 {
+                    source: src,
+                    group: g,
+                    vni,
+                }))
+            }
+            MulticastAddr::V6(g) => {
+                let src = match source {
+                    None => None,
+                    Some(IpAddr::V6(s)) => Some(s),
+                    Some(IpAddr::V4(s)) => {
+                        return Err(Error::Validation(format!(
+                            "source {s} is IPv4 but group {g} is IPv6"
+                        )));
+                    }
+                };
+                Ok(Self::V6(MulticastRouteKeyV6 {
+                    source: src,
+                    group: g,
+                    vni,
+                }))
+            }
         }
     }
 
-    /// Create a source-specific multicast route (S,G) with default VNI.
-    pub fn source_specific(source: IpAddr, group: MulticastAddr) -> Self {
-        Self {
+    /// Create an any-source multicast route (*,G) with default VNI.
+    pub fn any_source(group: MulticastAddr) -> Self {
+        match group {
+            MulticastAddr::V4(g) => Self::V4(MulticastRouteKeyV4 {
+                source: None,
+                group: g,
+                vni: DEFAULT_MULTICAST_VNI,
+            }),
+            MulticastAddr::V6(g) => Self::V6(MulticastRouteKeyV6 {
+                source: None,
+                group: g,
+                vni: DEFAULT_MULTICAST_VNI,
+            }),
+        }
+    }
+
+    /// Create a source-specific IPv4 multicast route (S,G) with default VNI.
+    pub fn source_specific_v4(
+        source: Ipv4Addr,
+        group: MulticastAddrV4,
+    ) -> Self {
+        Self::V4(MulticastRouteKeyV4 {
             source: Some(source),
             group,
             vni: DEFAULT_MULTICAST_VNI,
-        }
+        })
+    }
+
+    /// Create a source-specific IPv6 multicast route (S,G) with default VNI.
+    pub fn source_specific_v6(
+        source: Ipv6Addr,
+        group: MulticastAddrV6,
+    ) -> Self {
+        Self::V6(MulticastRouteKeyV6 {
+            source: Some(source),
+            group,
+            vni: DEFAULT_MULTICAST_VNI,
+        })
     }
 
     /// Create an any-source multicast route (*,G) with specified VNI.
     pub fn any_source_with_vni(group: MulticastAddr, vni: u32) -> Self {
-        Self {
-            source: None,
-            group,
-            vni,
+        match group {
+            MulticastAddr::V4(g) => Self::V4(MulticastRouteKeyV4 {
+                source: None,
+                group: g,
+                vni,
+            }),
+            MulticastAddr::V6(g) => Self::V6(MulticastRouteKeyV6 {
+                source: None,
+                group: g,
+                vni,
+            }),
         }
     }
 
-    /// Create a source-specific multicast route (S,G) with specified VNI.
-    pub fn source_specific_with_vni(
-        source: IpAddr,
-        group: MulticastAddr,
+    /// Create a source-specific IPv4 multicast route (S,G) with VNI.
+    pub fn source_specific_v4_with_vni(
+        source: Ipv4Addr,
+        group: MulticastAddrV4,
         vni: u32,
     ) -> Self {
-        Self {
+        Self::V4(MulticastRouteKeyV4 {
             source: Some(source),
             group,
             vni,
+        })
+    }
+
+    /// Create a source-specific IPv6 multicast route (S,G) with VNI.
+    pub fn source_specific_v6_with_vni(
+        source: Ipv6Addr,
+        group: MulticastAddrV6,
+        vni: u32,
+    ) -> Self {
+        Self::V6(MulticastRouteKeyV6 {
+            source: Some(source),
+            group,
+            vni,
+        })
+    }
+
+    /// Get the source address as IpAddr.
+    pub fn source(&self) -> Option<IpAddr> {
+        match self {
+            Self::V4(k) => k.source.map(IpAddr::V4),
+            Self::V6(k) => k.source.map(IpAddr::V6),
+        }
+    }
+
+    /// Get the group address.
+    pub fn group(&self) -> MulticastAddr {
+        match self {
+            Self::V4(k) => MulticastAddr::V4(k.group),
+            Self::V6(k) => MulticastAddr::V6(k.group),
+        }
+    }
+
+    /// Get the VNI.
+    pub fn vni(&self) -> u32 {
+        match self {
+            Self::V4(k) => k.vni,
+            Self::V6(k) => k.vni,
         }
     }
 
@@ -845,37 +999,39 @@ impl MulticastRouteKey {
     /// Validate the multicast route key.
     ///
     /// Checks:
-    /// - SSM groups (232.0.0.0/8, ff3x::/12) require a source address
+    /// - SSM groups require a source address (RFC 4607)
+    ///   - IPv4: 232.0.0.0/8
+    ///   - IPv6: ff30::/12 (superset covering all ff3x:: scopes for validation)
     /// - Source address (if present) must be unicast
-    /// - Source address family must match group address family
     /// - VNI must be in valid range (0 to 16777215)
     pub fn validate(&self) -> Result<(), Error> {
         // VNI must fit in 24 bits
         const MAX_VNI: u32 = (1 << 24) - 1;
-        if self.vni > MAX_VNI {
+        if self.vni() > MAX_VNI {
             return Err(Error::Validation(format!(
                 "VNI {} exceeds maximum value {MAX_VNI}",
-                self.vni
+                self.vni()
             )));
         }
 
-        // SSM (Source-Specific Multicast) groups require a source address
-        let is_ssm = match self.group {
-            MulticastAddr::V4(addr) => IPV4_SSM_SUBNET.contains(addr.ip()),
-            MulticastAddr::V6(addr) => IPV6_SSM_SUBNET.contains(addr.ip()),
+        // SSM addresses require a source (RFC 4607). Note: ASM addresses
+        // can also have sources, allowing (S,G) joins on ASM ranges gives
+        // customers source filtering outside the SSM range.
+        let is_ssm = match self {
+            Self::V4(k) => IPV4_SSM_SUBNET.contains(k.group.ip()),
+            Self::V6(k) => IPV6_SSM_SUBNET.contains(k.group.ip()),
         };
-        if is_ssm && self.source.is_none() {
+        if is_ssm && self.source().is_none() {
             return Err(Error::Validation(format!(
                 "SSM group {} requires a source address",
-                self.group
+                self.group()
             )));
         }
 
         // Validate source address if present
-        if let Some(source) = &self.source {
-            // Source must be unicast (not multicast or broadcast)
-            match source {
-                IpAddr::V4(addr) => {
+        match self {
+            Self::V4(k) => {
+                if let Some(addr) = k.source {
                     if addr.is_multicast() {
                         return Err(Error::Validation(format!(
                             "source address {addr} must be unicast, not multicast"
@@ -886,25 +1042,23 @@ impl MulticastRouteKey {
                             "source address {addr} must be unicast, not broadcast"
                         )));
                     }
-                    // Address family must match group
-                    if !matches!(self.group, MulticastAddr::V4(_)) {
+                    if addr.is_loopback() {
                         return Err(Error::Validation(format!(
-                            "source address {addr} is IPv4 but group {} is IPv6",
-                            self.group
+                            "source address {addr} must not be loopback"
                         )));
                     }
                 }
-                IpAddr::V6(addr) => {
+            }
+            Self::V6(k) => {
+                if let Some(addr) = k.source {
                     if addr.is_multicast() {
                         return Err(Error::Validation(format!(
                             "source address {addr} must be unicast, not multicast"
                         )));
                     }
-                    // Address family must match group
-                    if !matches!(self.group, MulticastAddr::V6(_)) {
+                    if addr.is_loopback() {
                         return Err(Error::Validation(format!(
-                            "source address {addr} is IPv6 but group {} is IPv4",
-                            self.group
+                            "source address {addr} must not be loopback"
                         )));
                     }
                 }
@@ -941,8 +1095,8 @@ pub struct MulticastRoute {
     /// Last updated timestamp.
     ///
     /// Only updated when route fields change semantically (rpf_neighbor,
-    /// underlay_group, underlay_nexthops, source). Idempotent upserts with
-    /// identical values do not update this timestamp.
+    /// underlay_group, underlay_nexthops, source). An idempotent upsert with
+    /// an identical value does not update this timestamp.
     pub updated: DateTime<Utc>,
 }
 
@@ -1015,10 +1169,10 @@ impl MulticastRoute {
                         )));
                     }
                     // Address family must match group
-                    if !matches!(self.key.group, MulticastAddr::V4(_)) {
+                    if !matches!(self.key.group(), MulticastAddr::V4(_)) {
                         return Err(Error::Validation(format!(
                             "RPF neighbor {addr} is IPv4 but group {} is IPv6",
-                            self.key.group
+                            self.key.group()
                         )));
                     }
                 }
@@ -1029,10 +1183,10 @@ impl MulticastRoute {
                         )));
                     }
                     // AF must match group
-                    if !matches!(self.key.group, MulticastAddr::V6(_)) {
+                    if !matches!(self.key.group(), MulticastAddr::V6(_)) {
                         return Err(Error::Validation(format!(
                             "RPF neighbor {addr} is IPv6 but group {} is IPv4",
-                            self.key.group
+                            self.key.group()
                         )));
                     }
                 }
@@ -1097,7 +1251,6 @@ impl From<MulticastRouteKey> for MribChangeNotification {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::{mcast_v4, mcast_v6};
 
     // MulticastAddr validation tests
 
@@ -1126,20 +1279,6 @@ mod tests {
     fn multicast_addr_rejects_ipv4_link_local() {
         // 224.0.0.x is link-local, not routable
         let result = MulticastAddr::try_from(Ipv4Addr::new(224, 0, 0, 1));
-        assert!(matches!(result, Err(Error::Validation(_))));
-    }
-
-    #[test]
-    fn multicast_addr_rejects_ipv4_glop() {
-        // 233.x.x.x is GLOP (AS-based allocation), not globally routable
-        let result = MulticastAddr::try_from(Ipv4Addr::new(233, 1, 2, 3));
-        assert!(matches!(result, Err(Error::Validation(_))));
-    }
-
-    #[test]
-    fn multicast_addr_rejects_ipv4_admin_scoped() {
-        // 239.x.x.x is admin-scoped, not globally routable
-        let result = MulticastAddr::try_from(Ipv4Addr::new(239, 1, 2, 3));
         assert!(matches!(result, Err(Error::Validation(_))));
     }
 
@@ -1189,20 +1328,24 @@ mod tests {
     #[test]
     fn test_multicast_route_key_v4() {
         // (*,G) valid (using 225.x which is globally routable)
-        let key = MulticastRouteKey::any_source(mcast_v4(225, 1, 2, 3));
+        let key = MulticastRouteKey::any_source(
+            MulticastAddr::new_v4(225, 1, 2, 3).expect("valid mcast"),
+        );
         assert!(key.validate().is_ok(), "(*,G) should be valid");
 
         // (S,G) valid
-        let key = MulticastRouteKey::source_specific(
-            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            mcast_v4(225, 1, 2, 3),
+        let key = MulticastRouteKey::source_specific_v4(
+            Ipv4Addr::new(10, 0, 0, 1),
+            MulticastAddrV4::new(Ipv4Addr::new(225, 1, 2, 3))
+                .expect("valid mcast"),
         );
         assert!(key.validate().is_ok(), "(S,G) should be valid");
 
         // Multicast source rejected
-        let key = MulticastRouteKey::source_specific(
-            IpAddr::V4(Ipv4Addr::new(225, 1, 1, 1)), // multicast as source
-            mcast_v4(225, 1, 2, 3),
+        let key = MulticastRouteKey::source_specific_v4(
+            Ipv4Addr::new(225, 1, 1, 1), // multicast as source
+            MulticastAddrV4::new(Ipv4Addr::new(225, 1, 2, 3))
+                .expect("valid mcast"),
         );
         assert!(
             matches!(key.validate(), Err(Error::Validation(_))),
@@ -1210,16 +1353,19 @@ mod tests {
         );
 
         // SSM (232.x.x.x) requires source
-        let key = MulticastRouteKey::any_source(mcast_v4(232, 1, 2, 3));
+        let key = MulticastRouteKey::any_source(
+            MulticastAddr::new_v4(232, 1, 2, 3).expect("valid mcast"),
+        );
         assert!(
             matches!(key.validate(), Err(Error::Validation(_))),
             "SSM without source should be rejected"
         );
 
         // SSM with source is valid
-        let key = MulticastRouteKey::source_specific(
-            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            mcast_v4(232, 1, 2, 3),
+        let key = MulticastRouteKey::source_specific_v4(
+            Ipv4Addr::new(10, 0, 0, 1),
+            MulticastAddrV4::new(Ipv4Addr::new(232, 1, 2, 3))
+                .expect("valid mcast"),
         );
         assert!(key.validate().is_ok(), "SSM with source should be valid");
     }
@@ -1227,22 +1373,25 @@ mod tests {
     #[test]
     fn test_multicast_route_key_v6() {
         // (*,G) valid (ff0e = global scope)
-        let key = MulticastRouteKey::any_source(mcast_v6([
-            0xff0e, 0, 0, 0, 0, 0, 0, 1,
-        ]));
+        let key = MulticastRouteKey::any_source(
+            MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
+                .expect("valid mcast"),
+        );
         assert!(key.validate().is_ok(), "(*,G) should be valid");
 
         // (S,G) valid
-        let key = MulticastRouteKey::source_specific(
-            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
-            mcast_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1]),
+        let key = MulticastRouteKey::source_specific_v6(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
+            MulticastAddrV6::new(Ipv6Addr::new(0xff0e, 0, 0, 0, 0, 0, 0, 1))
+                .expect("valid mcast"),
         );
         assert!(key.validate().is_ok(), "(S,G) should be valid");
 
         // Multicast source rejected
-        let key = MulticastRouteKey::source_specific(
-            IpAddr::V6(Ipv6Addr::new(0xff0e, 0, 0, 0, 0, 0, 0, 1)), // mcast
-            mcast_v6([0xff0e, 0, 0, 0, 0, 0, 0, 2]),
+        let key = MulticastRouteKey::source_specific_v6(
+            Ipv6Addr::new(0xff0e, 0, 0, 0, 0, 0, 0, 1), // mcast
+            MulticastAddrV6::new(Ipv6Addr::new(0xff0e, 0, 0, 0, 0, 0, 0, 2))
+                .expect("valid mcast"),
         );
         assert!(
             matches!(key.validate(), Err(Error::Validation(_))),
@@ -1250,41 +1399,46 @@ mod tests {
         );
 
         // SSM (ff3x::) requires source
-        let key = MulticastRouteKey::any_source(mcast_v6([
-            0xff3e, 0, 0, 0, 0, 0, 0, 1,
-        ]));
+        let key = MulticastRouteKey::any_source(
+            MulticastAddr::new_v6([0xff3e, 0, 0, 0, 0, 0, 0, 1])
+                .expect("valid mcast"),
+        );
         assert!(
             matches!(key.validate(), Err(Error::Validation(_))),
             "SSM without source should be rejected"
         );
 
         // SSM with source is valid
-        let key = MulticastRouteKey::source_specific(
-            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
-            mcast_v6([0xff3e, 0, 0, 0, 0, 0, 0, 1]),
+        let key = MulticastRouteKey::source_specific_v6(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
+            MulticastAddrV6::new(Ipv6Addr::new(0xff3e, 0, 0, 0, 0, 0, 0, 1))
+                .expect("valid mcast"),
         );
         assert!(key.validate().is_ok(), "SSM with source should be valid");
     }
 
     #[test]
     fn test_multicast_route_key_af_mismatch() {
-        // IPv4 source with IPv6 group
-        let key = MulticastRouteKey::source_specific(
-            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            mcast_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1]),
+        // IPv4 source with IPv6 group should be rejected at construction time
+        let result = MulticastRouteKey::new(
+            Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))),
+            MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
+                .expect("valid mcast"),
+            DEFAULT_MULTICAST_VNI,
         );
         assert!(
-            matches!(key.validate(), Err(Error::Validation(_))),
+            matches!(result, Err(Error::Validation(_))),
             "v4 source with v6 group should be rejected"
         );
 
-        // IPv6 source with IPv4 group
-        let key = MulticastRouteKey::source_specific(
-            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
-            mcast_v4(225, 1, 2, 3),
+        // IPv6 source with IPv4 group should be rejected at construction time
+        let result = MulticastRouteKey::new(
+            Some(IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1))),
+            MulticastAddr::new_v4(225, 1, 2, 3).expect("valid mcast"),
+            DEFAULT_MULTICAST_VNI,
         );
         assert!(
-            matches!(key.validate(), Err(Error::Validation(_))),
+            matches!(result, Err(Error::Validation(_))),
             "v6 source with v4 group should be rejected"
         );
     }
@@ -1292,22 +1446,20 @@ mod tests {
     #[test]
     fn test_multicast_route_key_vni() {
         // VNI too large
-        let key = MulticastRouteKey {
-            source: None,
-            group: mcast_v4(225, 1, 2, 3),
-            vni: 1 << 24, // MAX_VNI + 1
-        };
+        let key = MulticastRouteKey::any_source_with_vni(
+            MulticastAddr::new_v4(225, 1, 2, 3).expect("valid mcast"),
+            1 << 24, // MAX_VNI + 1
+        );
         assert!(
             matches!(key.validate(), Err(Error::Validation(_))),
             "VNI > 24 bits should be rejected"
         );
 
         // Max VNI is valid
-        let key = MulticastRouteKey {
-            source: None,
-            group: mcast_v4(225, 1, 2, 3),
-            vni: (1 << 24) - 1, // MAX_VNI
-        };
+        let key = MulticastRouteKey::any_source_with_vni(
+            MulticastAddr::new_v4(225, 1, 2, 3).expect("valid mcast"),
+            (1 << 24) - 1, // MAX_VNI
+        );
         assert!(key.validate().is_ok(), "max VNI should be valid");
     }
 
@@ -1319,7 +1471,9 @@ mod tests {
     #[test]
     fn test_multicast_route_v4() {
         // Without RPF neighbor
-        let key = MulticastRouteKey::any_source(mcast_v4(225, 1, 2, 3));
+        let key = MulticastRouteKey::any_source(
+            MulticastAddr::new_v4(225, 1, 2, 3).expect("valid mcast"),
+        );
         let route = MulticastRoute::new(
             key,
             TEST_UNDERLAY,
@@ -1358,9 +1512,10 @@ mod tests {
     #[test]
     fn test_multicast_route_v6() {
         // With valid unicast RPF neighbor
-        let key = MulticastRouteKey::any_source(mcast_v6([
-            0xff0e, 0, 0, 0, 0, 0, 0, 1,
-        ]));
+        let key = MulticastRouteKey::any_source(
+            MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
+                .expect("valid mcast"),
+        );
         let mut route = MulticastRoute::new(
             key,
             TEST_UNDERLAY,
@@ -1390,9 +1545,10 @@ mod tests {
     #[test]
     fn test_multicast_route_rpf_af_mismatch() {
         // IPv4 RPF with IPv6 group
-        let key = MulticastRouteKey::any_source(mcast_v6([
-            0xff0e, 0, 0, 0, 0, 0, 0, 1,
-        ]));
+        let key = MulticastRouteKey::any_source(
+            MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
+                .expect("valid mcast"),
+        );
         let mut route = MulticastRoute::new(
             key,
             TEST_UNDERLAY,
@@ -1405,7 +1561,9 @@ mod tests {
         );
 
         // IPv6 RPF with IPv4 group
-        let key = MulticastRouteKey::any_source(mcast_v4(225, 1, 2, 3));
+        let key = MulticastRouteKey::any_source(
+            MulticastAddr::new_v4(225, 1, 2, 3).expect("valid mcast"),
+        );
         let mut route = MulticastRoute::new(
             key,
             TEST_UNDERLAY,

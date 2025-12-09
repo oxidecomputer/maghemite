@@ -151,10 +151,10 @@ impl Mrib {
             let af_match = match af {
                 None => true,
                 Some(AddressFamily::Ipv4) => {
-                    matches!(route.key.group, MulticastAddr::V4(_))
+                    matches!(route.key.group(), MulticastAddr::V4(_))
                 }
                 Some(AddressFamily::Ipv6) => {
-                    matches!(route.key.group, MulticastAddr::V6(_))
+                    matches!(route.key.group(), MulticastAddr::V6(_))
                 }
             };
             // Origin filter
@@ -423,7 +423,7 @@ impl Mrib {
     ) -> Vec<MulticastRoute> {
         lock!(self.mrib_in)
             .values()
-            .filter(|route| &route.key.group == group)
+            .filter(|route| &route.key.group() == group)
             .cloned()
             .collect()
     }
@@ -435,7 +435,7 @@ impl Mrib {
     ) -> Vec<MulticastRoute> {
         lock!(self.mrib_in)
             .values()
-            .filter(|route| route.key.source.as_ref() == Some(source))
+            .filter(|route| route.key.source().as_ref() == Some(source))
             .cloned()
             .collect()
     }
@@ -444,7 +444,7 @@ impl Mrib {
     pub fn get_any_source_routes(&self) -> Vec<MulticastRoute> {
         lock!(self.mrib_in)
             .values()
-            .filter(|route| route.key.source.is_none())
+            .filter(|route| route.key.source().is_none())
             .cloned()
             .collect()
     }
@@ -453,7 +453,7 @@ impl Mrib {
     pub fn get_source_specific_keys(&self) -> Vec<MulticastRouteKey> {
         lock!(self.mrib_in)
             .keys()
-            .filter(|key| key.source.is_some())
+            .filter(|key| key.source().is_some())
             .copied()
             .collect()
     }
@@ -523,7 +523,7 @@ mod test {
 
     use mg_common::log::*;
 
-    use crate::test::{mcast_v4, mcast_v6};
+    use crate::types::{MulticastAddrV4, MulticastAddrV6};
 
     // Valid admin-scoped underlay address for tests
     const TEST_UNDERLAY: Ipv6Addr = Ipv6Addr::new(0xff04, 0, 0, 0, 0, 0, 0, 1);
@@ -534,7 +534,7 @@ mod test {
         let mrib = Mrib::new(log);
 
         // Test ASM route (*,G)
-        let group = mcast_v4(225, 1, 1, 1);
+        let group = MulticastAddr::new_v4(225, 1, 1, 1).expect("valid mcast");
         let key = MulticastRouteKey::any_source(group);
         let route = MulticastRoute::new(
             key,
@@ -546,8 +546,10 @@ mod test {
         assert!(mrib.get_route(&key).is_some());
 
         // Test source-specific multicast route (S,G)
-        let source = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
-        let key_sg = MulticastRouteKey::source_specific(source, group);
+        let source = Ipv4Addr::new(10, 0, 0, 1);
+        let group_v4 = MulticastAddrV4::new(Ipv4Addr::new(225, 1, 1, 1))
+            .expect("valid mcast");
+        let key_sg = MulticastRouteKey::source_specific_v4(source, group_v4);
         let mut route_sg = MulticastRoute::new(
             key_sg,
             TEST_UNDERLAY,
@@ -592,7 +594,7 @@ mod test {
         mrib.watch("test-watcher".to_string(), tx);
 
         // Add a route and verify notification
-        let group = mcast_v4(225, 3, 3, 3);
+        let group = MulticastAddr::new_v4(225, 3, 3, 3).expect("valid mcast");
         let key = MulticastRouteKey::any_source(group);
         let route = MulticastRoute::new(
             key,
@@ -621,7 +623,7 @@ mod test {
         let mrib = Mrib::new(log);
 
         // Add a (*,G) route to mrib_in only
-        let group = mcast_v4(225, 4, 4, 4);
+        let group = MulticastAddr::new_v4(225, 4, 4, 4).expect("valid mcast");
         let key = MulticastRouteKey::any_source(group);
         let route = MulticastRoute::new(
             key,
@@ -660,7 +662,8 @@ mod test {
         let mrib = Mrib::new(log);
 
         // IPv6 ASM route (*,G)
-        let group = mcast_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1]);
+        let group = MulticastAddr::new_v6([0xff0e, 0, 0, 0, 0, 0, 0, 1])
+            .expect("valid mcast");
         let key = MulticastRouteKey::any_source(group);
         let route = MulticastRoute::new(
             key,
@@ -672,8 +675,11 @@ mod test {
         assert!(mrib.get_route(&key).is_some());
 
         // IPv6 source-specific multicast route (S,G)
-        let source = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
-        let key_sg = MulticastRouteKey::source_specific(source, group);
+        let source = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let group_v6 =
+            MulticastAddrV6::new(Ipv6Addr::new(0xff0e, 0, 0, 0, 0, 0, 0, 1))
+                .expect("valid mcast");
+        let key_sg = MulticastRouteKey::source_specific_v6(source, group_v6);
         let route_sg = MulticastRoute::new(
             key_sg,
             TEST_UNDERLAY,
