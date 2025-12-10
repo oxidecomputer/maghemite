@@ -1247,4 +1247,3 @@ impl From<MulticastRouteKey> for MribChangeNotification {
         }
     }
 }
-
