@@ -705,4 +705,120 @@ proptest! {
             );
         }
     }
+
+    // -------------------------------------------------------------------------
+    // IPv4 Encoding Equivalence Tests
+    // -------------------------------------------------------------------------
+
+    /// Property: Two UPDATE messages carrying the same IPv4 Unicast routes should
+    /// be functionally equivalent regardless of whether they use traditional encoding
+    /// (NLRI/withdrawn fields) or MP-BGP encoding (MP_REACH_NLRI/MP_UNREACH_NLRI).
+    ///
+    /// This test generates random IPv4 prefixes, encodes them using both methods,
+    /// and verifies that the decoded routes are equivalent.
+    #[test]
+    fn prop_ipv4_traditional_vs_mp_bgp_equivalence(
+        nlri_prefixes in ipv4_prefixes_strategy(),
+        withdrawn_prefixes in ipv4_prefixes_strategy(),
+        nexthop in nexthop_ipv4_strategy()
+    ) {
+        // Create UPDATE using traditional encoding
+        let traditional_update = UpdateMessage {
+            withdrawn: withdrawn_prefixes.clone(),
+            path_attributes: vec![
+                PathAttribute::from(PathAttributeValue::Origin(PathOrigin::Igp)),
+                PathAttribute::from(PathAttributeValue::AsPath(vec![])),
+                PathAttribute::from(PathAttributeValue::NextHop(
+                    match nexthop {
+                        BgpNexthop::Ipv4(addr) => addr,
+                        _ => unreachable!("nexthop_ipv4_strategy only generates IPv4"),
+                    }
+                )),
+            ],
+            nlri: nlri_prefixes.clone(),
+            treat_as_withdraw: false,
+            errors: vec![],
+        };
+
+        // Create UPDATE using MP-BGP encoding
+        let mp_reach = MpReachNlri::ipv4_unicast(nexthop, nlri_prefixes.clone());
+        let mp_unreach = MpUnreachNlri::ipv4_unicast(withdrawn_prefixes.clone());
+
+        let mut mp_attrs = vec![
+            PathAttribute::from(PathAttributeValue::Origin(PathOrigin::Igp)),
+            PathAttribute::from(PathAttributeValue::AsPath(vec![])),
+        ];
+        if !nlri_prefixes.is_empty() {
+            mp_attrs.push(PathAttribute {
+                typ: PathAttributeType {
+                    flags: path_attribute_flags::OPTIONAL,
+                    type_code: PathAttributeTypeCode::MpReachNlri,
+                },
+                value: PathAttributeValue::MpReachNlri(mp_reach),
+            });
+        }
+        if !withdrawn_prefixes.is_empty() {
+            mp_attrs.push(PathAttribute {
+                typ: PathAttributeType {
+                    flags: path_attribute_flags::OPTIONAL,
+                    type_code: PathAttributeTypeCode::MpUnreachNlri,
+                },
+                value: PathAttributeValue::MpUnreachNlri(mp_unreach),
+            });
+        }
+
+        let mp_bgp_update = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: mp_attrs,
+            nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
+        };
+
+        // Encode and decode both
+        let traditional_wire = traditional_update.to_wire().expect("traditional encode");
+        let mp_bgp_wire = mp_bgp_update.to_wire().expect("mp-bgp encode");
+
+        let traditional_decoded = UpdateMessage::from_wire(&traditional_wire)
+            .expect("traditional decode");
+        let mp_bgp_decoded = UpdateMessage::from_wire(&mp_bgp_wire)
+            .expect("mp-bgp decode");
+
+        // Extract the effective NLRI from both (traditional uses nlri field,
+        // MP-BGP uses MP_REACH_NLRI attribute)
+        let traditional_effective_nlri = traditional_decoded.nlri.clone();
+        let mp_bgp_effective_nlri: Vec<Prefix4> = mp_bgp_decoded
+            .path_attributes
+            .iter()
+            .find_map(|a| match &a.value {
+                PathAttributeValue::MpReachNlri(MpReachNlri::Ipv4Unicast(inner)) => {
+                    Some(inner.nlri.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        // Extract the effective withdrawn from both
+        let traditional_effective_withdrawn = traditional_decoded.withdrawn.clone();
+        let mp_bgp_effective_withdrawn: Vec<Prefix4> = mp_bgp_decoded
+            .path_attributes
+            .iter()
+            .find_map(|a| match &a.value {
+                PathAttributeValue::MpUnreachNlri(MpUnreachNlri::Ipv4Unicast(inner)) => {
+                    Some(inner.withdrawn.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        // The routes should be functionally equivalent
+        prop_assert_eq!(
+            traditional_effective_nlri, mp_bgp_effective_nlri,
+            "NLRI prefixes should be equivalent regardless of encoding"
+        );
+        prop_assert_eq!(
+            traditional_effective_withdrawn, mp_bgp_effective_withdrawn,
+            "Withdrawn prefixes should be equivalent regardless of encoding"
+        );
+    }
 }

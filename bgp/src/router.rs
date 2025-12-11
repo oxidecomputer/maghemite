@@ -429,7 +429,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         read_lock!(self.fanout4).announce_all(prefixes, vec![]);
     }
 
-    pub fn withdraw_origin4(&self, prefixes: Vec<Prefix4>) {
+    fn withdraw_origin4(&self, prefixes: Vec<Prefix4>) {
         if prefixes.is_empty() {
             return;
         }
@@ -533,7 +533,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         read_lock!(self.fanout6).announce_all(prefixes, vec![]);
     }
 
-    pub fn withdraw_origin6(&self, prefixes: Vec<Prefix6>) {
+    fn withdraw_origin6(&self, prefixes: Vec<Prefix6>) {
         if prefixes.is_empty() {
             return;
         }

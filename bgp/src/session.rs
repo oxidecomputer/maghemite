@@ -333,71 +333,111 @@ impl<Cnx: BgpConnection> From<&FsmState<Cnx>> for FsmStateKind {
     }
 }
 
-/// Type-safe route update that enforces IP version consistency at compile time.
-/// This eliminates the need for runtime Afi validation and prevents
-/// mixing IPv4 routes with IPv6 encoding or vice versa.
+/// IPv4 route update - either an announcement or withdrawal, never both.
+///
+/// RFC 7606 requires that UPDATE messages not mix reachable and unreachable
+/// NLRI. This type enforces that constraint at compile time.
+#[derive(Clone, Debug)]
+pub enum RouteUpdate4 {
+    Announce(Vec<Prefix4>),
+    Withdraw(Vec<Prefix4>),
+}
+
+/// IPv6 route update - either an announcement or withdrawal, never both.
+///
+/// RFC 7606 requires that UPDATE messages not mix reachable and unreachable
+/// NLRI. This type enforces that constraint at compile time.
+#[derive(Clone, Debug)]
+pub enum RouteUpdate6 {
+    Announce(Vec<Prefix6>),
+    Withdraw(Vec<Prefix6>),
+}
+
+/// Route update for a specific address family.
+///
+/// RFC 7606 requires that UPDATE messages not mix reachable and unreachable
+/// NLRI. The inner `RouteUpdate4`/`RouteUpdate6` types enforce this by only
+/// allowing either an announcement OR a withdrawal, never both.
 #[derive(Clone, Debug)]
 pub enum RouteUpdate {
-    V4 {
-        withdrawn: Vec<Prefix4>,
-        nlri: Vec<Prefix4>,
-    },
-    V6 {
-        withdrawn: Vec<Prefix6>,
-        nlri: Vec<Prefix6>,
-    },
+    V4(RouteUpdate4),
+    V6(RouteUpdate6),
 }
 
 impl RouteUpdate {
     pub fn is_empty(&self) -> bool {
         match self {
-            RouteUpdate::V4 { withdrawn, nlri } => {
-                withdrawn.is_empty() && nlri.is_empty()
+            RouteUpdate::V4(RouteUpdate4::Announce(nlri)) => nlri.is_empty(),
+            RouteUpdate::V4(RouteUpdate4::Withdraw(withdrawn)) => {
+                withdrawn.is_empty()
             }
-            RouteUpdate::V6 { withdrawn, nlri } => {
-                withdrawn.is_empty() && nlri.is_empty()
+            RouteUpdate::V6(RouteUpdate6::Announce(nlri)) => nlri.is_empty(),
+            RouteUpdate::V6(RouteUpdate6::Withdraw(withdrawn)) => {
+                withdrawn.is_empty()
             }
         }
     }
 
     pub fn afi(&self) -> Afi {
         match self {
-            RouteUpdate::V4 { .. } => Afi::Ipv4,
-            RouteUpdate::V6 { .. } => Afi::Ipv6,
+            RouteUpdate::V4(_) => Afi::Ipv4,
+            RouteUpdate::V6(_) => Afi::Ipv6,
         }
     }
 
     pub fn nlri_count(&self) -> usize {
         match self {
-            RouteUpdate::V4 { withdrawn: _, nlri } => nlri.len(),
-            RouteUpdate::V6 { withdrawn: _, nlri } => nlri.len(),
+            RouteUpdate::V4(RouteUpdate4::Announce(nlri)) => nlri.len(),
+            RouteUpdate::V4(RouteUpdate4::Withdraw(_)) => 0,
+            RouteUpdate::V6(RouteUpdate6::Announce(nlri)) => nlri.len(),
+            RouteUpdate::V6(RouteUpdate6::Withdraw(_)) => 0,
         }
     }
 
     pub fn withdrawn_count(&self) -> usize {
         match self {
-            RouteUpdate::V4 { withdrawn, .. } => withdrawn.len(),
-            RouteUpdate::V6 { withdrawn, .. } => withdrawn.len(),
+            RouteUpdate::V4(RouteUpdate4::Announce(_)) => 0,
+            RouteUpdate::V4(RouteUpdate4::Withdraw(withdrawn)) => {
+                withdrawn.len()
+            }
+            RouteUpdate::V6(RouteUpdate6::Announce(_)) => 0,
+            RouteUpdate::V6(RouteUpdate6::Withdraw(withdrawn)) => {
+                withdrawn.len()
+            }
         }
+    }
+
+    pub fn is_announcement(&self) -> bool {
+        matches!(
+            self,
+            RouteUpdate::V4(RouteUpdate4::Announce(_))
+                | RouteUpdate::V6(RouteUpdate6::Announce(_))
+        )
+    }
+
+    pub fn is_withdrawal(&self) -> bool {
+        matches!(
+            self,
+            RouteUpdate::V4(RouteUpdate4::Withdraw(_))
+                | RouteUpdate::V6(RouteUpdate6::Withdraw(_))
+        )
     }
 }
 
 impl Display for RouteUpdate {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            RouteUpdate::V4 { withdrawn, nlri } => {
-                write!(
-                    f,
-                    "RouteUpdate::V4 {{ nlri: {:?}, withdrawn: {:?} }}",
-                    nlri, withdrawn
-                )
+            RouteUpdate::V4(RouteUpdate4::Announce(nlri)) => {
+                write!(f, "ipv4 announce {} prefixes", nlri.len())
             }
-            RouteUpdate::V6 { withdrawn, nlri } => {
-                write!(
-                    f,
-                    "RouteUpdate::V6 {{ nlri: {:?}, withdrawn: {:?} }}",
-                    nlri, withdrawn
-                )
+            RouteUpdate::V4(RouteUpdate4::Withdraw(withdrawn)) => {
+                write!(f, "ipv4 withdraw {} prefixes", withdrawn.len())
+            }
+            RouteUpdate::V6(RouteUpdate6::Announce(nlri)) => {
+                write!(f, "ipv6 announce {} prefixes", nlri.len())
+            }
+            RouteUpdate::V6(RouteUpdate6::Withdraw(withdrawn)) => {
+                write!(f, "ipv6 withdraw {} prefixes", withdrawn.len())
             }
         }
     }
@@ -5814,10 +5854,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // is originating.
         if !originated4.is_empty()
             && let Err(e) = self.send_update(
-                RouteUpdate::V4 {
-                    nlri: originated4,
-                    withdrawn: vec![],
-                },
+                RouteUpdate::V4(RouteUpdate4::Announce(originated4)),
                 &pc,
                 ShaperApplication::Current,
             )
@@ -5835,10 +5872,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // Send IPv6 Unicast prefixes using MP-BGP encoding
         if !originated6.is_empty()
             && let Err(e) = self.send_update(
-                RouteUpdate::V6 {
-                    nlri: originated6,
-                    withdrawn: vec![],
-                },
+                RouteUpdate::V6(RouteUpdate6::Announce(originated6)),
                 &pc,
                 ShaperApplication::Current,
             )
@@ -5872,10 +5906,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if !originated4.is_empty() {
             self.send_update(
-                RouteUpdate::V4 {
-                    nlri: originated4,
-                    withdrawn: vec![],
-                },
+                RouteUpdate::V4(RouteUpdate4::Announce(originated4)),
                 pc,
                 ShaperApplication::Current,
             )?;
@@ -5891,10 +5922,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if !originated6.is_empty() {
             self.send_update(
-                RouteUpdate::V6 {
-                    nlri: originated6,
-                    withdrawn: vec![],
-                },
+                RouteUpdate::V6(RouteUpdate6::Announce(originated6)),
                 pc,
                 ShaperApplication::Current,
             )?;
@@ -5941,24 +5969,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     //      adj-rib-in pre-policy, so a route-refresh is the
                     //      only mechanism we really have to trigger a re-learn
                     //      of the route without changing the current design.
-                    let (afi, nlri_count, withdrawn_count) = match &route_update
-                    {
-                        RouteUpdate::V4 { nlri, withdrawn } => {
-                            (Afi::Ipv4, nlri.len(), withdrawn.len())
-                        }
-                        RouteUpdate::V6 { nlri, withdrawn } => {
-                            (Afi::Ipv6, nlri.len(), withdrawn.len())
-                        }
-                    };
-
                     session_log!(
                         self,
                         debug,
                         pc.conn,
-                        "received announce-routes event: afi={}, nlri={}, withdrawn={}",
-                        afi,
-                        nlri_count,
-                        withdrawn_count;
+                        "received route-update event: {route_update}"
                     );
 
                     if let Err(e) = self.send_update(
@@ -6049,12 +6064,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .cloned()
                         .collect();
 
-                    if (!to_withdraw.is_empty() || !to_announce.is_empty())
+                    // Per RFC 7606, send announcements and withdrawals as
+                    // separate UPDATE messages.
+                    if !to_announce.is_empty()
                         && let Err(e) = self.send_update(
-                            RouteUpdate::V4 {
-                                nlri: to_announce,
-                                withdrawn: to_withdraw,
-                            },
+                            RouteUpdate::V4(RouteUpdate4::Announce(
+                                to_announce,
+                            )),
                             &pc,
                             ShaperApplication::Current,
                         )
@@ -6063,7 +6079,26 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             self,
                             error,
                             pc.conn,
-                            "failed to send export policy update: {e}";
+                            "failed to send export policy announce: {e}";
+                            "error" => format!("{e}")
+                        );
+                        return self.exit_established(pc);
+                    }
+
+                    if !to_withdraw.is_empty()
+                        && let Err(e) = self.send_update(
+                            RouteUpdate::V4(RouteUpdate4::Withdraw(
+                                to_withdraw,
+                            )),
+                            &pc,
+                            ShaperApplication::Current,
+                        )
+                    {
+                        session_log!(
+                            self,
+                            error,
+                            pc.conn,
+                            "failed to send export policy withdraw: {e}";
                             "error" => format!("{e}")
                         );
                         return self.exit_established(pc);
@@ -7163,14 +7198,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // Standard behavior: use local IP as next-hop
         match (afi, local_ip) {
-            (Afi::Ipv4, std::net::IpAddr::V4(ipv4)) => Ok(BgpNexthop::Ipv4(ipv4)),
-            (Afi::Ipv6, std::net::IpAddr::V6(ipv6)) => Ok(BgpNexthop::Ipv6Single(ipv6)),
-            (Afi::Ipv4, std::net::IpAddr::V6(_)) => {
+            (Afi::Ipv4, IpAddr::V4(ipv4)) => Ok(BgpNexthop::Ipv4(ipv4)),
+            (Afi::Ipv6, IpAddr::V6(ipv6)) => Ok(BgpNexthop::Ipv6Single(ipv6)),
+            (Afi::Ipv4, IpAddr::V6(_)) => {
                 Err(Error::InvalidAddress(
                     "IPv4 routes require IPv4 next-hop (Extended Next-Hop not negotiated)".into()
                 ))
             }
-            (Afi::Ipv6, std::net::IpAddr::V4(_)) => {
+            (Afi::Ipv6, IpAddr::V4(_)) => {
                 Err(Error::InvalidAddress(
                     "IPv6 routes require IPv6 next-hop".into()
                 ))
@@ -7233,11 +7268,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // Filter traditional NLRI field
             update.nlri.retain(|p| allowed.contains(&Prefix::V4(*p)));
 
-            // TODO: Filter MP-BGP NLRI (if present)
-            // Since MP-BGP attributes now store raw bytes, filtering requires
-            // parsing NLRI first. This should be handled during UPDATE construction
-            // in send_update_v2() instead of post-hoc filtering.
-            // See docs/update-construction-layered-design-plan.md for details.
+            // Filter MP_REACH_NLRI
+            if let Some(reach) = update.mp_reach() {
+                match reach {
+                    MpReachNlri::Ipv4Unicast(reach4) => {
+                        reach4
+                            .nlri
+                            .retain(|p| allowed.contains(&Prefix::V4(*p)));
+                    }
+                    MpReachNlri::Ipv6Unicast(reach6) => {
+                        reach6
+                            .nlri
+                            .retain(|p| allowed.contains(&Prefix::V6(*p)));
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -7262,26 +7307,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         pc: &PeerConnection<Cnx>,
         shaper_application: ShaperApplication,
     ) -> Result<(), Error> {
+        // XXX: Handle more originated routes than can fit in a single Update
+
         // Early exit if nothing to send
         if route_update.is_empty() {
             return Ok(());
         }
 
-        // Extract AFI and build the UpdateMessage based on variant
-        let (afi, mut update) = match route_update {
-            RouteUpdate::V4 { nlri, withdrawn } => {
-                session_log!(
-                    self,
-                    debug,
-                    pc.conn,
-                    "building IPv4 update: nlri={}, withdrawn={}",
-                    nlri.len(),
-                    withdrawn.len();
-                );
-
-                // Derive IPv4 next-hop
-                let nexthop = self.derive_nexthop(Afi::Ipv4, pc)?;
-                let nh4 = match nexthop {
+        // Build the UpdateMessage based on variant. RFC 7606 compliance:
+        // Each RouteUpdate is either an announcement OR withdrawal, never both.
+        let mut update = match route_update {
+            RouteUpdate::V4(RouteUpdate4::Announce(nlri)) => {
+                let nh4 = match self.derive_nexthop(Afi::Ipv4, pc)? {
                     BgpNexthop::Ipv4(addr) => addr,
                     _ => {
                         return Err(Error::InvalidAddress(
@@ -7290,91 +7327,58 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 };
 
-                session_log!(
-                    self,
-                    debug,
-                    pc.conn,
-                    "derived next-hop: {}",
-                    nh4;
-                );
+                let mut path_attributes = self.router.base_attributes();
+                path_attributes.push(PathAttributeValue::NextHop(nh4).into());
 
-                // Build UpdateMessage directly with type-safe Vec<Prefix4>
-                let mut path_attrs = self.router.base_attributes();
-                path_attrs.push(PathAttributeValue::NextHop(nh4).into());
-
-                let update = UpdateMessage {
-                    withdrawn,
+                UpdateMessage {
+                    withdrawn: vec![],
+                    path_attributes,
                     nlri,
-                    path_attributes: path_attrs,
-                    treat_as_withdraw: false,
-                    errors: vec![],
-                };
-
-                (Afi::Ipv4, update)
+                    ..Default::default()
+                }
             }
-            RouteUpdate::V6 { nlri, withdrawn } => {
-                session_log!(
-                    self,
-                    debug,
-                    pc.conn,
-                    "building IPv6 update: nlri={}, withdrawn={}",
-                    nlri.len(),
-                    withdrawn.len();
-                );
-
-                // Derive IPv6 next-hop
-                let nexthop = self.derive_nexthop(Afi::Ipv6, pc)?;
-
-                session_log!(
-                    self,
-                    debug,
-                    pc.conn,
-                    "derived next-hop: {:?}",
-                    nexthop;
-                );
-
-                // Build UpdateMessage with MP-BGP attributes
-                let mut path_attrs = self.router.base_attributes();
-
-                // Add MP_REACH_NLRI for announcements
-                if !nlri.is_empty() {
-                    let reach = MpReachNlri::ipv6_unicast(nexthop, nlri);
-                    path_attrs
-                        .push(PathAttributeValue::MpReachNlri(reach).into());
-                }
-
-                // Add MP_UNREACH_NLRI for withdrawals
-                if !withdrawn.is_empty() {
-                    let unreach = MpUnreachNlri::ipv6_unicast(withdrawn);
-                    path_attrs.push(
-                        PathAttributeValue::MpUnreachNlri(unreach).into(),
-                    );
-                }
-
-                let update = UpdateMessage {
-                    withdrawn: vec![], // Traditional fields empty for IPv6
+            RouteUpdate::V4(RouteUpdate4::Withdraw(withdrawn)) => {
+                // Traditional withdrawals don't need path attributes
+                UpdateMessage {
+                    withdrawn,
+                    path_attributes: vec![],
                     nlri: vec![],
-                    path_attributes: path_attrs,
-                    treat_as_withdraw: false,
-                    errors: vec![],
-                };
+                    ..Default::default()
+                }
+            }
+            RouteUpdate::V6(RouteUpdate6::Announce(nlri)) => {
+                let nh6 = self.derive_nexthop(Afi::Ipv6, pc)?;
+                if matches!(nh6, BgpNexthop::Ipv4(_)) {
+                    return Err(Error::InvalidAddress(
+                        "IPv6 routes require IPv6 next-hop".into(),
+                    ));
+                }
 
-                (Afi::Ipv6, update)
+                let mut path_attrs = self.router.base_attributes();
+                let reach = MpReachNlri::ipv6_unicast(nh6, nlri);
+                path_attrs.push(PathAttributeValue::MpReachNlri(reach).into());
+
+                UpdateMessage {
+                    withdrawn: vec![],
+                    path_attributes: path_attrs,
+                    nlri: vec![],
+                    ..Default::default()
+                }
+            }
+            RouteUpdate::V6(RouteUpdate6::Withdraw(withdrawn)) => {
+                // MP_UNREACH_NLRI for IPv6 withdrawals
+                let unreach = MpUnreachNlri::ipv6_unicast(withdrawn);
+                let path_attrs =
+                    vec![PathAttributeValue::MpUnreachNlri(unreach).into()];
+
+                UpdateMessage {
+                    withdrawn: vec![],
+                    path_attributes: path_attrs,
+                    nlri: vec![],
+                    ..Default::default()
+                }
             }
         };
-
-        session_log!(
-            self,
-            debug,
-            pc.conn,
-            "built update skeleton: afi={}, traditional_nlri={}, mp_bgp={}",
-            afi,
-            !update.nlri.is_empty(),
-            update.path_attributes.iter().any(|a| matches!(
-                a.value,
-                PathAttributeValue::MpReachNlri(_) | PathAttributeValue::MpUnreachNlri(_)
-            ));
-        );
 
         // 3. Add peer-specific enrichments
         self.enrich_update(&mut update, pc)?;
@@ -7901,10 +7905,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if !originated.is_empty() {
             self.send_update(
-                RouteUpdate::V4 {
-                    nlri: originated,
-                    withdrawn: vec![],
-                },
+                RouteUpdate::V4(RouteUpdate4::Announce(originated)),
                 pc,
                 ShaperApplication::Current,
             )?;
@@ -7933,10 +7934,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if !originated.is_empty() {
             self.send_update(
-                RouteUpdate::V6 {
-                    nlri: originated,
-                    withdrawn: vec![],
-                },
+                RouteUpdate::V6(RouteUpdate6::Announce(originated)),
                 pc,
                 ShaperApplication::Current,
             )?;
@@ -8581,71 +8579,41 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn route_update_is_empty() {
-        // Empty V4
-        let empty_v4 = RouteUpdate::V4 {
-            nlri: vec![],
-            withdrawn: vec![],
-        };
-        assert!(empty_v4.is_empty());
+    fn route_update_is_announcement_and_withdrawal() {
+        let v4_announce =
+            RouteUpdate::V4(RouteUpdate4::Announce(vec![Prefix4::new(
+                std::net::Ipv4Addr::new(10, 0, 0, 0),
+                8,
+            )]));
+        assert!(v4_announce.is_announcement());
+        assert!(!v4_announce.is_withdrawal());
 
-        // Empty V6
-        let empty_v6 = RouteUpdate::V6 {
-            nlri: vec![],
-            withdrawn: vec![],
-        };
-        assert!(empty_v6.is_empty());
+        let v4_withdraw =
+            RouteUpdate::V4(RouteUpdate4::Withdraw(vec![Prefix4::new(
+                std::net::Ipv4Addr::new(10, 0, 0, 0),
+                8,
+            )]));
+        assert!(!v4_withdraw.is_announcement());
+        assert!(v4_withdraw.is_withdrawal());
 
-        // Non-empty V4 with NLRI
-        let non_empty_v4 = RouteUpdate::V4 {
-            nlri: vec![Prefix4::new(std::net::Ipv4Addr::new(10, 0, 0, 0), 8)],
-            withdrawn: vec![],
-        };
-        assert!(!non_empty_v4.is_empty());
-
-        // Non-empty V6 with withdrawn
-        let non_empty_v6 = RouteUpdate::V6 {
-            nlri: vec![],
-            withdrawn: vec![Prefix6::new(
+        let v6_announce =
+            RouteUpdate::V6(RouteUpdate6::Announce(vec![Prefix6::new(
                 std::net::Ipv6Addr::from([
                     0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 ]),
                 32,
-            )],
-        };
-        assert!(!non_empty_v6.is_empty());
-    }
+            )]));
+        assert!(v6_announce.is_announcement());
+        assert!(!v6_announce.is_withdrawal());
 
-    #[test]
-    fn route_update_display_v4() {
-        let update = RouteUpdate::V4 {
-            nlri: vec![Prefix4::new(std::net::Ipv4Addr::new(10, 0, 0, 0), 8)],
-            withdrawn: vec![Prefix4::new(
-                std::net::Ipv4Addr::new(192, 168, 0, 0),
-                16,
-            )],
-        };
-        let display = format!("{}", update);
-        // Uses Debug format {:?} for prefix contents, which shows struct fields
-        assert!(display.contains("RouteUpdate::V4"));
-        assert!(display.contains("10.0.0.0"));
-        assert!(display.contains("192.168.0.0"));
-    }
-
-    #[test]
-    fn route_update_display_v6() {
-        let update = RouteUpdate::V6 {
-            nlri: vec![Prefix6::new(
+        let v6_withdraw =
+            RouteUpdate::V6(RouteUpdate6::Withdraw(vec![Prefix6::new(
                 std::net::Ipv6Addr::from([
                     0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 ]),
                 32,
-            )],
-            withdrawn: vec![],
-        };
-        let display = format!("{}", update);
-        // Uses Debug format {:?} for prefix contents
-        assert!(display.contains("RouteUpdate::V6"));
-        assert!(display.contains("2001:db8"));
+            )]));
+        assert!(!v6_withdraw.is_announcement());
+        assert!(v6_withdraw.is_withdrawal());
     }
 }
