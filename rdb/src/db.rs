@@ -1228,9 +1228,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn mark_bgp_peer_stale(&self, peer: IpAddr) {
-        // TODO(ipv6): call this just for enabled address-families.
-        // no need to walk the full rib for an AF that isn't affected
+    pub fn mark_bgp_peer_stale4(&self, peer: IpAddr) {
         let mut rib = lock!(self.rib4_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
@@ -1250,7 +1248,9 @@ impl Db {
                 path.replace(t);
             }
         });
+    }
 
+    pub fn mark_bgp_peer_stale6(&self, peer: IpAddr) {
         let mut rib = lock!(self.rib6_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
@@ -1285,6 +1285,13 @@ impl Db {
     pub fn set_slot(&mut self, slot: Option<u16>) {
         let mut value = self.slot.write().unwrap();
         *value = slot;
+    }
+
+    pub fn mark_bgp_peer_stale(&self, peer: IpAddr, af: AddressFamily) {
+        match af {
+            AddressFamily::Ipv4 => self.mark_bgp_peer_stale4(peer),
+            AddressFamily::Ipv6 => self.mark_bgp_peer_stale6(peer),
+        }
     }
 }
 

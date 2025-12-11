@@ -1470,11 +1470,34 @@ impl UpdateMessage {
             .push(PathAttributeValue::Communities(vec![community]).into());
     }
 
-    pub fn mp_reach(&mut self) -> Option<&mut MpReachNlri> {
+    pub fn mp_reach(&self) -> Option<&MpReachNlri> {
+        self.path_attributes.iter().find_map(|a| match &a.value {
+            PathAttributeValue::MpReachNlri(mp) => Some(mp),
+            _ => None,
+        })
+    }
+
+    pub fn mp_reach_mut(&mut self) -> Option<&mut MpReachNlri> {
         self.path_attributes
             .iter_mut()
             .find_map(|a| match &mut a.value {
                 PathAttributeValue::MpReachNlri(mp) => Some(mp),
+                _ => None,
+            })
+    }
+
+    pub fn mp_unreach(&self) -> Option<&MpUnreachNlri> {
+        self.path_attributes.iter().find_map(|a| match &a.value {
+            PathAttributeValue::MpUnreachNlri(mp) => Some(mp),
+            _ => None,
+        })
+    }
+
+    pub fn mp_unreach_mut(&mut self) -> Option<&mut MpUnreachNlri> {
+        self.path_attributes
+            .iter_mut()
+            .find_map(|a| match &mut a.value {
+                PathAttributeValue::MpUnreachNlri(mp) => Some(mp),
                 _ => None,
             })
     }

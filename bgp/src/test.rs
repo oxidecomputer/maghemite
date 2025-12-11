@@ -18,7 +18,7 @@ use lazy_static::lazy_static;
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
-use rdb::{Asn, Prefix};
+use rdb::{Asn, Prefix, Prefix4};
 use std::{
     collections::BTreeMap,
     net::{IpAddr, SocketAddr},
@@ -936,7 +936,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
 /// 5. Path attributes are correctly preserved through filtering
 #[test]
 fn test_import_export_policy_filtering() {
-    use rdb::ImportExportPolicy;
+    use rdb::ImportExportPolicy4;
     use std::collections::BTreeSet;
 
     let r1_addr: SocketAddr = sockaddr!(&format!("127.0.0.12:{TEST_BGP_PORT}"));
@@ -951,20 +951,16 @@ fn test_import_export_policy_filtering() {
     let prefix_c = ip!("10.3.0.0/24"); // Will pass export but filtered by import
 
     // Build export policy for r1: allow prefix_a and prefix_c, deny prefix_b
-    let export_allow: BTreeSet<Prefix> = [
-        Prefix::V4(cidr!("10.1.0.0/24")),
-        Prefix::V4(cidr!("10.3.0.0/24")),
-    ]
-    .into_iter()
-    .collect();
+    let export_allow: BTreeSet<Prefix4> =
+        [cidr!("10.1.0.0/24"), cidr!("10.3.0.0/24")]
+            .into_iter()
+            .collect();
 
     // Build import policy for r2: allow prefix_a and prefix_b, deny prefix_c
-    let import_allow: BTreeSet<Prefix> = [
-        Prefix::V4(cidr!("10.1.0.0/24")),
-        Prefix::V4(cidr!("10.2.0.0/24")),
-    ]
-    .into_iter()
-    .collect();
+    let import_allow: BTreeSet<Prefix4> =
+        [cidr!("10.1.0.0/24"), cidr!("10.2.0.0/24")]
+            .into_iter()
+            .collect();
 
     // Configure r1 with export policy
     let r1_peer_config = PeerConfig {
@@ -979,7 +975,7 @@ fn test_import_export_policy_filtering() {
     };
     let r1_session_info = {
         let mut info = SessionInfo::from_peer_config(&r1_peer_config);
-        info.allow_export = ImportExportPolicy::Allow(export_allow.clone());
+        info.allow_export4 = ImportExportPolicy4::Allow(export_allow.clone());
         info
     };
 
@@ -996,7 +992,7 @@ fn test_import_export_policy_filtering() {
     };
     let r2_session_info = {
         let mut info = SessionInfo::from_peer_config(&r2_peer_config);
-        info.allow_import = ImportExportPolicy::Allow(import_allow.clone());
+        info.allow_import4 = ImportExportPolicy4::Allow(import_allow.clone());
         info
     };
 
@@ -1093,7 +1089,7 @@ fn test_import_export_policy_filtering() {
     );
 
     // Remove r1's export policy - prefix_b should now be sent to r2
-    // The ExportPolicyChanged handler will automatically send the newly-allowed
+    // The ExportPolicy4Changed handler will automatically send the newly-allowed
     // prefix without requiring manual re-origination.
     assert_eq!(
         r1_session.state(),
@@ -1102,7 +1098,7 @@ fn test_import_export_policy_filtering() {
     );
     let r1_session_info_no_export = {
         let mut info = SessionInfo::from_peer_config(&r1_peer_config);
-        info.allow_export = ImportExportPolicy::NoFiltering;
+        info.allow_export4 = ImportExportPolicy4::NoFiltering;
         info
     };
     r1.router
@@ -1145,7 +1141,7 @@ fn test_import_export_policy_filtering() {
     // Now remove r2's import policy - prefix_c should appear via route-refresh
     let r2_session_info_no_import = {
         let mut info = SessionInfo::from_peer_config(&r2_peer_config);
-        info.allow_import = ImportExportPolicy::NoFiltering;
+        info.allow_import4 = ImportExportPolicy4::NoFiltering;
         info
     };
     r2.router
