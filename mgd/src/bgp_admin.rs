@@ -5,17 +5,16 @@
 #![allow(clippy::type_complexity)]
 use crate::validation::{validate_prefixes_v4, validate_prefixes_v6};
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
-use bgp::params::*;
-use bgp::router::LoadPolicyError;
-use bgp::session::FsmStateKind;
 use bgp::{
     BGP_PORT,
     config::RouterConfig,
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
-    router::Router,
+    messages::Afi,
+    params::*,
+    router::{LoadPolicyError, Router},
     session::{
-        AdminEvent, FsmEvent, MessageHistory, MessageHistoryV1,
+        AdminEvent, FsmEvent, FsmStateKind, MessageHistory, MessageHistoryV1,
         SessionEndpoint, SessionInfo,
     },
 };
@@ -30,7 +29,7 @@ use mg_api::{
     MessageHistoryResponseV1, NeighborResetRequest, NeighborSelector, Rib,
 };
 use mg_common::lock;
-use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
+use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicyV1, Prefix};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -417,9 +416,14 @@ pub async fn get_exported(
             .map(|p| rdb::Prefix::from(*p))
             .collect();
 
-        let mut exported_routes: Vec<Prefix> = match n.allow_export {
-            ImportExportPolicy::NoFiltering => orig_routes,
-            ImportExportPolicy::Allow(epol) => {
+        // Combine per-AF export policies into legacy format for filtering
+        let allow_export = ImportExportPolicyV1::from_per_af_policies(
+            &n.allow_export4,
+            &n.allow_export6,
+        );
+        let mut exported_routes: Vec<Prefix> = match allow_export {
+            ImportExportPolicyV1::NoFiltering => orig_routes,
+            ImportExportPolicyV1::Allow(epol) => {
                 orig_routes.retain(|p| epol.contains(p));
                 orig_routes
             }
@@ -1039,6 +1043,11 @@ pub(crate) mod helpers {
 
         let (event_tx, event_rx) = channel();
 
+        let allow_import4 = rq.allow_import.as_ipv4_policy();
+        let allow_export4 = rq.allow_export.as_ipv4_policy();
+        let allow_import6 = rq.allow_import.as_ipv6_policy();
+        let allow_export6 = rq.allow_export.as_ipv6_policy();
+
         // XXX: Do we really want both rq and info?
         //      SessionInfo and Neighbor types could probably be merged.
         let info = SessionInfo {
@@ -1050,8 +1059,11 @@ pub(crate) mod helpers {
             communities: rq.communities.clone().into_iter().collect(),
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
-            allow_import: rq.allow_import.clone(),
-            allow_export: rq.allow_export.clone(),
+            // Derive per-AF policies from legacy fields
+            allow_import4: allow_import4.clone(),
+            allow_export4: allow_export4.clone(),
+            allow_import6: allow_import6.clone(),
+            allow_export6: allow_export6.clone(),
             vlan_id: rq.vlan_id,
             remote_id: None,
             bind_addr: None,
@@ -1109,8 +1121,10 @@ pub(crate) mod helpers {
             communities: rq.communities,
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
-            allow_import: rq.allow_import.clone(),
-            allow_export: rq.allow_export.clone(),
+            allow_import4,
+            allow_export4,
+            allow_import6,
+            allow_export6,
             vlan_id: rq.vlan_id,
         })?;
 
@@ -1135,6 +1149,7 @@ pub(crate) mod helpers {
             .get_session(addr)
             .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
 
+        // XXX: Add IPv6 support -- needs API update
         match op {
             NeighborResetOp::Hard => session
                 .event_tx
@@ -1148,7 +1163,9 @@ pub(crate) mod helpers {
                 // XXX: check if neighbor has negotiated route refresh cap
                 session
                     .event_tx
-                    .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh))
+                    .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh(
+                        Afi::Ipv4,
+                    )))
                     .map_err(|e| {
                         Error::InternalCommunication(format!(
                             "failed to generate route refresh {e}"
@@ -1157,7 +1174,7 @@ pub(crate) mod helpers {
             }
             NeighborResetOp::SoftOutbound => session
                 .event_tx
-                .send(FsmEvent::Admin(AdminEvent::ReAdvertiseRoutes))
+                .send(FsmEvent::Admin(AdminEvent::ReAdvertiseRoutes(Afi::Ipv4)))
                 .map_err(|e| {
                     Error::InternalCommunication(format!(
                         "failed to trigger outbound update {e}"
@@ -1328,7 +1345,7 @@ mod tests {
     };
     use bgp::params::{ApplyRequest, BgpPeerConfig};
     use mg_common::stats::MgLowerStats;
-    use rdb::{Db, ImportExportPolicy};
+    use rdb::{Db, ImportExportPolicy4, ImportExportPolicy6};
     use std::{
         collections::{BTreeMap, HashMap},
         env::temp_dir,
@@ -1384,8 +1401,10 @@ mod tests {
                 communities: Vec::default(),
                 local_pref: None,
                 enforce_first_as: false,
-                allow_import: ImportExportPolicy::NoFiltering,
-                allow_export: ImportExportPolicy::NoFiltering,
+                allow_import4: ImportExportPolicy4::NoFiltering,
+                allow_export4: ImportExportPolicy4::NoFiltering,
+                allow_import6: ImportExportPolicy6::NoFiltering,
+                allow_export6: ImportExportPolicy6::NoFiltering,
                 vlan_id: None,
             }],
         );
@@ -1408,8 +1427,10 @@ mod tests {
                 communities: Vec::default(),
                 local_pref: None,
                 enforce_first_as: false,
-                allow_import: ImportExportPolicy::NoFiltering,
-                allow_export: ImportExportPolicy::NoFiltering,
+                allow_import4: ImportExportPolicy4::NoFiltering,
+                allow_export4: ImportExportPolicy4::NoFiltering,
+                allow_import6: ImportExportPolicy6::NoFiltering,
+                allow_export6: ImportExportPolicy6::NoFiltering,
                 vlan_id: None,
             }],
         );
