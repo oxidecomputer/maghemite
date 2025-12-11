@@ -7964,8 +7964,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     // RFC 4760 §3: Check reserved byte (must be 0, but must be ignored)
                     let reserved = match mp_reach {
-                        crate::messages::MpReachNlri::Ipv4Unicast(inner) => inner.reserved,
-                        crate::messages::MpReachNlri::Ipv6Unicast(inner) => inner.reserved,
+                        crate::messages::MpReachNlri::Ipv4Unicast(inner) => {
+                            inner.reserved
+                        }
+                        crate::messages::MpReachNlri::Ipv6Unicast(inner) => {
+                            inner.reserved
+                        }
                     };
                     if reserved != 0 {
                         session_log!(

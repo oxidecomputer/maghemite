@@ -653,6 +653,12 @@ impl OpenMessage {
 
     /// Deserialize an open message from wire format.
     pub fn from_wire(input: &[u8]) -> Result<OpenMessage, Error> {
+        // RFC 4271 §4.2: OPEN minimum 10 bytes body
+        // (1 version + 2 ASN + 2 hold_time + 4 ID + 1 opt_param_len)
+        if input.len() < 10 {
+            return Err(Error::TooSmall("open message body".into()));
+        }
+
         let (input, version) = parse_u8(input)?;
         let (input, asn) = be_u16(input)?;
         let (input, hold_time) = be_u16(input)?;
@@ -887,6 +893,21 @@ impl UpdateMessage {
     /// field set), or `Err(UpdateParseError)` for fatal errors requiring session
     /// reset.
     pub fn from_wire(input: &[u8]) -> Result<UpdateMessage, UpdateParseError> {
+        // RFC 4271 §4.3: UPDATE minimum 4 bytes body
+        // (2 bytes withdrawn length + 2 bytes path attributes length)
+        if input.len() < 4 {
+            return Err(UpdateParseError {
+                error_code: ErrorCode::Header,
+                error_subcode: ErrorSubcode::Header(
+                    HeaderErrorSubcode::BadMessageLength,
+                ),
+                reason: UpdateParseErrorReason::MessageTooShort {
+                    expected_min: 4,
+                    got: input.len(),
+                },
+            });
+        }
+
         // 1. Parse withdrawn routes length and extract bytes
         let (input, len) = be_u16::<_, nom::error::Error<&[u8]>>(input)
             .map_err(|e| UpdateParseError {
@@ -1799,6 +1820,9 @@ impl From<PathAttributeValue> for PathAttributeTypeCode {
             PathAttributeValue::Communities(_) => {
                 PathAttributeTypeCode::Communities
             }
+            PathAttributeValue::AtomicAggregate => {
+                PathAttributeTypeCode::AtomicAggregate
+            }
             PathAttributeValue::MpReachNlri(_) => {
                 PathAttributeTypeCode::MpReachNlri
             }
@@ -1815,6 +1839,92 @@ impl From<PathAttributeValue> for PathAttributeTypeCode {
                 PathAttributeTypeCode::As4Aggregator
             }
         }
+    }
+}
+
+/// AGGREGATOR path attribute (RFC 4271 §5.1.8)
+///
+/// The AGGREGATOR attribute is an optional transitive attribute that contains
+/// the AS number and IP address of the last BGP speaker that formed the aggregate route.
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
+)]
+pub struct Aggregator {
+    /// Autonomous System Number that formed the aggregate (2-octet)
+    pub asn: u16,
+    /// IP address of the BGP speaker that formed the aggregate
+    pub address: Ipv4Addr,
+}
+
+impl Display for Aggregator {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "AS{} ({})", self.asn, self.address)
+    }
+}
+
+impl Aggregator {
+    /// Parse AGGREGATOR from wire format (6 bytes: 2-byte ASN + 4-byte IP)
+    pub fn from_wire(input: &[u8]) -> Result<Self, String> {
+        if input.len() != 6 {
+            return Err(format!(
+                "AGGREGATOR attribute length must be 6, got {}",
+                input.len()
+            ));
+        }
+        let asn = u16::from_be_bytes([input[0], input[1]]);
+        let address = Ipv4Addr::new(input[2], input[3], input[4], input[5]);
+        Ok(Aggregator { asn, address })
+    }
+
+    /// Serialize AGGREGATOR to wire format
+    pub fn to_wire(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(6);
+        buf.extend_from_slice(&self.asn.to_be_bytes());
+        buf.extend_from_slice(&self.address.octets());
+        buf
+    }
+}
+
+/// AS4_AGGREGATOR path attribute (RFC 6793)
+///
+/// The AS4_AGGREGATOR attribute is an optional transitive attribute with the same
+/// semantics as AGGREGATOR, but carries a 4-octet AS number instead of 2-octet.
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
+)]
+pub struct As4Aggregator {
+    /// Autonomous System Number that formed the aggregate (4-octet)
+    pub asn: u32,
+    /// IP address of the BGP speaker that formed the aggregate
+    pub address: Ipv4Addr,
+}
+
+impl Display for As4Aggregator {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "AS{} ({})", self.asn, self.address)
+    }
+}
+
+impl As4Aggregator {
+    /// Parse AS4_AGGREGATOR from wire format (8 bytes: 4-byte ASN + 4-byte IP)
+    pub fn from_wire(input: &[u8]) -> Result<Self, String> {
+        if input.len() != 8 {
+            return Err(format!(
+                "AS4_AGGREGATOR attribute length must be 8, got {}",
+                input.len()
+            ));
+        }
+        let asn = u32::from_be_bytes([input[0], input[1], input[2], input[3]]);
+        let address = Ipv4Addr::new(input[4], input[5], input[6], input[7]);
+        Ok(As4Aggregator { asn, address })
+    }
+
+    /// Serialize AS4_AGGREGATOR to wire format
+    pub fn to_wire(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(8);
+        buf.extend_from_slice(&self.asn.to_be_bytes());
+        buf.extend_from_slice(&self.address.octets());
+        buf
     }
 }
 
@@ -1838,14 +1948,16 @@ pub enum PathAttributeValue {
     /// Local pref is included in update messages sent to internal peers and
     /// indicates a degree of preference.
     LocalPref(u32),
-    /// This attribute is included in routes that are formed by aggregation.
-    Aggregator([u8; 6]),
+    /// AGGREGATOR: AS number and IP address of the last aggregating BGP speaker (2-octet ASN)
+    Aggregator(Aggregator),
     /// Indicates communities associated with a path.
     Communities(Vec<Community>),
+    /// Indicates this route was formed via aggregation (RFC 4271 §5.1.7)
+    AtomicAggregate,
     /// The 4-byte encoded AS set associated with a path
     As4Path(Vec<As4PathSegment>),
-    /// This attribute is included in routes that are formed by aggregation.
-    As4Aggregator([u8; 8]),
+    /// AS4_AGGREGATOR: AS number and IP address of the last aggregating BGP speaker (4-octet ASN)
+    As4Aggregator(As4Aggregator),
     /// Carries reachable MP-BGP NLRI and Next-hop (advertisement).
     MpReachNlri(MpReachNlri),
     /// Carries unreachable MP-BGP NLRI (withdrawal).
@@ -1884,9 +1996,11 @@ impl PathAttributeValue {
             }
             Self::LocalPref(value) => Ok(value.to_be_bytes().into()),
             Self::MultiExitDisc(value) => Ok(value.to_be_bytes().into()),
+            Self::Aggregator(agg) => Ok(agg.to_wire()),
+            Self::As4Aggregator(agg) => Ok(agg.to_wire()),
+            Self::AtomicAggregate => Ok(Vec::new()), // Zero-length attribute
             Self::MpReachNlri(mp) => mp.to_wire(),
             Self::MpUnreachNlri(mp) => mp.to_wire(),
-            x => Err(Error::UnsupportedPathAttributeValue(x.clone())),
         }
     }
 
@@ -1897,8 +2011,33 @@ impl PathAttributeValue {
         // Helper for nom type annotation
         type NomErr<'a> = nom::error::Error<&'a [u8]>;
 
+        // RFC 7606 §3: Zero-length attributes only valid for AS_PATH and ATOMIC_AGGREGATE
+        if input.is_empty() {
+            match type_code {
+                PathAttributeTypeCode::AsPath
+                | PathAttributeTypeCode::AtomicAggregate => {
+                    // These attributes are allowed to be zero-length
+                }
+                _ => {
+                    return Err(UpdateParseErrorReason::AttributeLengthError {
+                        type_code,
+                        expected: 1, // Most attributes require at least 1 byte
+                        got: 0,
+                    });
+                }
+            }
+        }
+
         match type_code {
             PathAttributeTypeCode::Origin => {
+                // RFC 4271 §5.1.2: ORIGIN must be exactly 1 octet
+                if input.len() != 1 {
+                    return Err(UpdateParseErrorReason::AttributeLengthError {
+                        type_code: PathAttributeTypeCode::Origin,
+                        expected: 1,
+                        got: input.len(),
+                    });
+                }
                 let (_input, origin) =
                     be_u8::<_, NomErr<'_>>(input).map_err(|e| {
                         UpdateParseErrorReason::AttributeParseError {
@@ -1949,6 +2088,14 @@ impl PathAttributeValue {
                 )))
             }
             PathAttributeTypeCode::MultiExitDisc => {
+                // RFC 4271 §5.1.5: MULTI_EXIT_DISC must be exactly 4 octets
+                if input.len() != 4 {
+                    return Err(UpdateParseErrorReason::AttributeLengthError {
+                        type_code: PathAttributeTypeCode::MultiExitDisc,
+                        expected: 4,
+                        got: input.len(),
+                    });
+                }
                 let (_input, v) =
                     be_u32::<_, NomErr<'_>>(input).map_err(|e| {
                         UpdateParseErrorReason::AttributeParseError {
@@ -1976,6 +2123,15 @@ impl PathAttributeValue {
                 Ok(PathAttributeValue::As4Path(segments))
             }
             PathAttributeTypeCode::Communities => {
+                // RFC 4271 §5.1.9 (via RFC 1997): COMMUNITIES length must be multiple of 4
+                if !input.len().is_multiple_of(4) {
+                    return Err(UpdateParseErrorReason::Other {
+                        detail: format!(
+                            "COMMUNITIES attribute length must be multiple of 4, got {}",
+                            input.len()
+                        ),
+                    });
+                }
                 let mut communities = Vec::new();
                 loop {
                     if input.is_empty() {
@@ -1994,6 +2150,14 @@ impl PathAttributeValue {
                 Ok(PathAttributeValue::Communities(communities))
             }
             PathAttributeTypeCode::LocalPref => {
+                // RFC 4271 §5.1.6: LOCAL_PREF must be exactly 4 octets
+                if input.len() != 4 {
+                    return Err(UpdateParseErrorReason::AttributeLengthError {
+                        type_code: PathAttributeTypeCode::LocalPref,
+                        expected: 4,
+                        got: input.len(),
+                    });
+                }
                 let (_input, v) =
                     be_u32::<_, NomErr<'_>>(input).map_err(|e| {
                         UpdateParseErrorReason::AttributeParseError {
@@ -2011,9 +2175,54 @@ impl PathAttributeValue {
                 let (_remaining, mp_unreach) = MpUnreachNlri::from_wire(input)?;
                 Ok(PathAttributeValue::MpUnreachNlri(mp_unreach))
             }
-            x => Err(UpdateParseErrorReason::UnrecognizedMandatoryAttribute {
-                type_code: x as u8,
-            }),
+            PathAttributeTypeCode::AtomicAggregate => {
+                // RFC 4271 §5.1.7: ATOMIC_AGGREGATE must be zero-length
+                // (This is also checked earlier at function entry for zero-length validation)
+                if !input.is_empty() {
+                    return Err(UpdateParseErrorReason::AttributeLengthError {
+                        type_code: PathAttributeTypeCode::AtomicAggregate,
+                        expected: 0,
+                        got: input.len(),
+                    });
+                }
+                Ok(PathAttributeValue::AtomicAggregate)
+            }
+            PathAttributeTypeCode::Aggregator => {
+                // RFC 4271 §5.1.8: AGGREGATOR must be exactly 6 octets
+                // (2 octets AS number + 4 octets IP address)
+                if input.len() != 6 {
+                    return Err(UpdateParseErrorReason::AttributeLengthError {
+                        type_code: PathAttributeTypeCode::Aggregator,
+                        expected: 6,
+                        got: input.len(),
+                    });
+                }
+                let agg = Aggregator::from_wire(input).map_err(|e| {
+                    UpdateParseErrorReason::AttributeParseError {
+                        type_code: Some(type_code as u8),
+                        detail: e,
+                    }
+                })?;
+                Ok(PathAttributeValue::Aggregator(agg))
+            }
+            PathAttributeTypeCode::As4Aggregator => {
+                // RFC 6793: AS4_AGGREGATOR must be exactly 8 octets
+                // (4 octets AS number + 4 octets IP address)
+                if input.len() != 8 {
+                    return Err(UpdateParseErrorReason::AttributeLengthError {
+                        type_code: PathAttributeTypeCode::As4Aggregator,
+                        expected: 8,
+                        got: input.len(),
+                    });
+                }
+                let agg = As4Aggregator::from_wire(input).map_err(|e| {
+                    UpdateParseErrorReason::AttributeParseError {
+                        type_code: Some(type_code as u8),
+                        detail: e,
+                    }
+                })?;
+                Ok(PathAttributeValue::As4Aggregator(agg))
+            }
         }
     }
 }
@@ -2048,10 +2257,7 @@ impl Display for PathAttributeValue {
              *       the one used for the BGP Identifier of the speaker.
              */
             PathAttributeValue::Aggregator(agg) => {
-                let [a0, a1, a2, a3, a4, a5] = *agg;
-                let asn = u16::from_be_bytes([a0, a1]);
-                let ip = Ipv4Addr::from([a2, a3, a4, a5]);
-                write!(f, "aggregator: [ asn: {asn}, ip: {ip} ]",)
+                write!(f, "aggregator: {}", agg)
             }
             PathAttributeValue::Communities(comms) => {
                 let comms = comms
@@ -2060,6 +2266,9 @@ impl Display for PathAttributeValue {
                     .collect::<Vec<_>>()
                     .join(" ");
                 write!(f, "communities: [{comms}]")
+            }
+            PathAttributeValue::AtomicAggregate => {
+                write!(f, "atomic-aggregate")
             }
             PathAttributeValue::MpReachNlri(reach) => {
                 write!(f, "mp-reach-nlri: {}", reach)
@@ -2084,10 +2293,7 @@ impl Display for PathAttributeValue {
              *   AGGREGATOR attribute, except that it carries a four-octet AS number.
              */
             PathAttributeValue::As4Aggregator(agg) => {
-                let [a0, a1, a2, a3, a4, a5, a6, a7] = *agg;
-                let asn = u32::from_be_bytes([a0, a1, a2, a3]);
-                let ip = Ipv4Addr::from([a4, a5, a6, a7]);
-                write!(f, "as4-aggregator: [ asn: {asn}, ip: {ip} ]")
+                write!(f, "as4-aggregator: {}", agg)
             }
         }
     }
@@ -2204,17 +2410,26 @@ impl As4PathSegment {
         let (input, typ) = parse_u8(input)?;
         let typ = AsPathType::try_from(typ)?;
 
-        let (input, len) = parse_u8(input)?;
-        let len = (len as usize) * 4;
+        let (input, len_u8) = parse_u8(input)?;
+
+        // RFC 4271 §5.1.3: Check for overflow when calculating byte length from segment count
+        // Each AS number is 4 bytes, so byte_len = len_u8 * 4
+        // Note: This is technically safe (max 255 * 4 = 1020), but we validate for defense-in-depth
+        let byte_len = (len_u8 as usize).checked_mul(4).ok_or_else(|| {
+            Error::TooLarge(
+                "AS path segment length calculation overflow".into(),
+            )
+        })?;
+
         let mut segment = As4PathSegment {
             typ,
             value: Vec::new(),
         };
-        if len == 0 {
+        if byte_len == 0 {
             return Ok((input, segment));
         }
 
-        let (input, mut value_input) = take(len)(input)?;
+        let (input, mut value_input) = take(byte_len)(input)?;
         loop {
             if value_input.is_empty() {
                 break;
@@ -2552,6 +2767,11 @@ pub struct MpReachIpv4Unicast {
     /// Currently must be `BgpNexthop::Ipv4`, but will support IPv6 nexthops
     /// when extended next-hop capability (RFC 8950) is implemented.
     pub nexthop: BgpNexthop,
+    /// Reserved byte from RFC 4760 §3 (historically "Number of SNPAs" in RFC 2858).
+    /// MUST be 0 per RFC 4760, but MUST be ignored by receiver.
+    /// Stored for validation logging in session layer.
+    /// This field is positioned before NLRI to match the wire format encoding.
+    pub reserved: u8,
     /// IPv4 prefixes being announced
     pub nlri: Vec<Prefix4>,
 }
@@ -2567,6 +2787,11 @@ pub struct MpReachIpv6Unicast {
     /// Can be `BgpNexthop::Ipv6Single` (16 bytes) or `BgpNexthop::Ipv6Double`
     /// (32 bytes with link-local address).
     pub nexthop: BgpNexthop,
+    /// Reserved byte from RFC 4760 §3 (historically "Number of SNPAs" in RFC 2858).
+    /// MUST be 0 per RFC 4760, but MUST be ignored by receiver.
+    /// Stored for validation logging in session layer.
+    /// This field is positioned before NLRI to match the wire format encoding.
+    pub reserved: u8,
     /// IPv6 prefixes being announced
     pub nlri: Vec<Prefix6>,
 }
@@ -2611,12 +2836,20 @@ impl MpReachNlri {
 
     /// Create an IPv4 Unicast MP_REACH_NLRI.
     pub fn ipv4_unicast(nexthop: BgpNexthop, nlri: Vec<Prefix4>) -> Self {
-        Self::Ipv4Unicast(MpReachIpv4Unicast { nexthop, nlri })
+        Self::Ipv4Unicast(MpReachIpv4Unicast {
+            nexthop,
+            reserved: 0, // Always send 0 per RFC 4760
+            nlri,
+        })
     }
 
     /// Create an IPv6 Unicast MP_REACH_NLRI.
     pub fn ipv6_unicast(nexthop: BgpNexthop, nlri: Vec<Prefix6>) -> Self {
-        Self::Ipv6Unicast(MpReachIpv6Unicast { nexthop, nlri })
+        Self::Ipv6Unicast(MpReachIpv6Unicast {
+            nexthop,
+            reserved: 0, // Always send 0 per RFC 4760
+            nlri,
+        })
     }
 
     /// Serialize to wire format.
@@ -2634,8 +2867,12 @@ impl MpReachNlri {
         buf.push(nh_bytes.len() as u8); // Next-hop length
         buf.extend_from_slice(&nh_bytes);
 
-        // Reserved (1 byte, must be 0)
-        buf.push(0);
+        // Reserved (1 byte from RFC 4760 §3, historically "Number of SNPAs")
+        let reserved = match self {
+            Self::Ipv4Unicast(inner) => inner.reserved,
+            Self::Ipv6Unicast(inner) => inner.reserved,
+        };
+        buf.push(reserved);
 
         // NLRI
         match self {
@@ -2728,8 +2965,12 @@ impl MpReachNlri {
                 }
             })?;
 
-        // Parse Reserved byte (1 byte)
-        let (input, _reserved) = be_u8::<_, nom::error::Error<&[u8]>>(input)
+        // Parse Reserved byte (1 byte from RFC 4760 §3)
+        // RFC 4760 §3: "This field is reserved for future use. It MUST be set to 0 by
+        // the sender and MUST be ignored by the receiver."
+        // Historical note: In RFC 2858 (obsoleted by RFC 4760), this was "Number of SNPAs".
+        // Store the value for session layer validation/logging, but don't error here.
+        let (input, reserved) = be_u8::<_, nom::error::Error<&[u8]>>(input)
             .map_err(|e| UpdateParseErrorReason::AttributeParseError {
                 type_code: Some(PathAttributeTypeCode::MpReachNlri as u8),
                 detail: format!("failed to parse reserved byte: {e}"),
@@ -2742,7 +2983,11 @@ impl MpReachNlri {
                     .map_err(|e| e.into_reason("mp_reach"))?;
                 Ok((
                     &[],
-                    Self::Ipv4Unicast(MpReachIpv4Unicast { nexthop, nlri }),
+                    Self::Ipv4Unicast(MpReachIpv4Unicast {
+                        nexthop,
+                        reserved,
+                        nlri,
+                    }),
                 ))
             }
             Afi::Ipv6 => {
@@ -2750,7 +2995,11 @@ impl MpReachNlri {
                     .map_err(|e| e.into_reason("mp_reach"))?;
                 Ok((
                     &[],
-                    Self::Ipv6Unicast(MpReachIpv6Unicast { nexthop, nlri }),
+                    Self::Ipv6Unicast(MpReachIpv6Unicast {
+                        nexthop,
+                        reserved,
+                        nlri,
+                    }),
                 ))
             }
         }
@@ -3054,6 +3303,14 @@ impl NotificationMessage {
     }
 
     pub fn from_wire(input: &[u8]) -> Result<NotificationMessage, Error> {
+        // RFC 4271 §4.5: NOTIFICATION minimum 2 bytes body
+        // (1 error code + 1 error subcode, plus 0 or more bytes of data)
+        if input.len() < 2 {
+            return Err(Error::TooSmall(
+                "notification message body".to_string(),
+            ));
+        }
+
         let (input, error_code) = parse_u8(input)?;
         let error_code = ErrorCode::try_from(error_code)?;
 
@@ -4584,6 +4841,8 @@ impl slog::Value for Safi {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateParseErrorReason {
     // Frame structure errors (fatal)
+    /// UPDATE message body is too short for frame structure parsing
+    MessageTooShort { expected_min: usize, got: usize },
     /// Withdrawn routes length exceeds available bytes
     InvalidWithdrawnLength { declared: u16, available: usize },
     /// Path attributes length exceeds available bytes
@@ -4657,6 +4916,13 @@ pub enum UpdateParseErrorReason {
 impl Display for UpdateParseErrorReason {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::MessageTooShort { expected_min, got } => {
+                write!(
+                    f,
+                    "UPDATE message too short: expected minimum {}, got {}",
+                    expected_min, got
+                )
+            }
             Self::InvalidWithdrawnLength {
                 declared,
                 available,
@@ -7212,13 +7478,14 @@ mod tests {
     /// RFC 4271 requires ORIGIN, AS_PATH, and NEXT_HOP for traditional BGP UPDATEs.
     /// RFC 4760 makes NEXT_HOP optional when MP_REACH_NLRI is present (nexthop is in MP attr).
     mod mandatory_attribute_validation {
-        use std::net::Ipv6Addr;
+        use std::net::{Ipv4Addr, Ipv6Addr};
         use std::str::FromStr;
 
         use crate::messages::{
-            BgpNexthop, MpReachNlri, MpUnreachNlri, PathAttributeTypeCode,
-            PathAttributeValue, UpdateMessage, UpdateParseErrorReason,
-            path_attribute_flags,
+            Aggregator, As4Aggregator, BgpNexthop, Error, MpReachNlri,
+            MpUnreachNlri, NotificationMessage, OpenMessage,
+            PathAttributeTypeCode, PathAttributeValue, UpdateMessage,
+            UpdateParseErrorReason, path_attribute_flags,
         };
 
         /// Build an UPDATE message wire format with the given path attributes bytes.
@@ -7601,6 +7868,434 @@ mod tests {
             assert!(
                 msg.errors.is_empty(),
                 "Should have no errors for empty UPDATE"
+            );
+        }
+
+        // =====================================================================
+        // Phase 2 - Message Length Validation Tests
+        // =====================================================================
+
+        #[test]
+        fn open_message_too_short() {
+            // OPEN message with insufficient body (< 10 bytes)
+            let input = vec![1, 0, 0]; // Only 3 bytes (need 10 minimum)
+            let result = OpenMessage::from_wire(&input);
+            assert!(result.is_err(), "OPEN with too short body should fail");
+            match result {
+                Err(Error::TooSmall(msg)) => {
+                    assert!(msg.contains("open message body"));
+                }
+                other => panic!("Expected TooSmall error, got: {:?}", other),
+            }
+        }
+
+        #[test]
+        fn update_message_minimum_length() {
+            // UPDATE message with exactly 4 bytes (minimum valid)
+            // 2 bytes withdrawn length (0) + 2 bytes path attributes length (0)
+            let input = vec![0u8, 0, 0, 0];
+            let result = UpdateMessage::from_wire(&input);
+            assert!(
+                result.is_ok(),
+                "UPDATE with minimum 4 bytes should succeed: {:?}",
+                result.err()
+            );
+        }
+
+        #[test]
+        fn update_message_too_short() {
+            // UPDATE message with only 3 bytes (< 4 minimum)
+            let input = vec![0u8, 0, 0];
+            let result = UpdateMessage::from_wire(&input);
+            assert!(result.is_err(), "UPDATE with < 4 bytes should fail");
+            match result {
+                Err(err) => {
+                    assert!(matches!(
+                        err.reason,
+                        UpdateParseErrorReason::MessageTooShort { .. }
+                    ));
+                }
+                Ok(_) => panic!("Expected error for too-short UPDATE"),
+            }
+        }
+
+        #[test]
+        fn notification_message_minimum_length() {
+            // NOTIFICATION message with exactly 2 bytes (error code + subcode)
+            let input = vec![1, 1]; // Error code 1, subcode 1
+            let result = NotificationMessage::from_wire(&input);
+            assert!(
+                result.is_ok(),
+                "NOTIFICATION with minimum 2 bytes should succeed"
+            );
+        }
+
+        #[test]
+        fn notification_message_too_short() {
+            // NOTIFICATION message with only 1 byte (< 2 minimum)
+            let input = vec![1u8];
+            let result = NotificationMessage::from_wire(&input);
+            assert!(result.is_err(), "NOTIFICATION with < 2 bytes should fail");
+        }
+
+        // =====================================================================
+        // Phase 3 - Aggregator and AtomicAggregate Tests
+        // =====================================================================
+
+        #[test]
+        fn aggregator_structure_parsing() {
+            let asn = 65000u16;
+            let address = Ipv4Addr::new(192, 0, 2, 1);
+            let agg = Aggregator { asn, address };
+
+            // Test to_wire and from_wire round-trip
+            let wire = agg.to_wire();
+            assert_eq!(wire.len(), 6, "AGGREGATOR should serialize to 6 bytes");
+
+            let parsed = Aggregator::from_wire(&wire)
+                .expect("Should parse valid AGGREGATOR wire format");
+            assert_eq!(parsed.asn, asn, "ASN should match");
+            assert_eq!(parsed.address, address, "Address should match");
+        }
+
+        #[test]
+        fn aggregator_wire_format() {
+            let wire = vec![0xFDu8, 0xE8, 192, 0, 2, 1]; // ASN 65000 in big-endian
+            let agg = Aggregator::from_wire(&wire)
+                .expect("Should parse valid wire format");
+            assert_eq!(agg.asn, 65000);
+            assert_eq!(agg.address, Ipv4Addr::new(192, 0, 2, 1));
+        }
+
+        #[test]
+        fn aggregator_invalid_length() {
+            // Too short
+            let wire = vec![0xFDu8, 0xE8, 192, 0, 2];
+            let result = Aggregator::from_wire(&wire);
+            assert!(result.is_err(), "AGGREGATOR with 5 bytes should fail");
+
+            // Too long
+            let wire = vec![0xFDu8, 0xE8, 192, 0, 2, 1, 2];
+            let result = Aggregator::from_wire(&wire);
+            assert!(result.is_err(), "AGGREGATOR with 7 bytes should fail");
+        }
+
+        #[test]
+        fn aggregator_display() {
+            let agg = Aggregator {
+                asn: 65000,
+                address: Ipv4Addr::new(192, 0, 2, 1),
+            };
+            let display = format!("{}", agg);
+            assert_eq!(display, "AS65000 (192.0.2.1)");
+        }
+
+        #[test]
+        fn as4_aggregator_structure_parsing() {
+            let asn = 4200000000u32;
+            let address = Ipv4Addr::new(203, 0, 113, 1);
+            let agg = As4Aggregator { asn, address };
+
+            // Test to_wire and from_wire round-trip
+            let wire = agg.to_wire();
+            assert_eq!(
+                wire.len(),
+                8,
+                "AS4_AGGREGATOR should serialize to 8 bytes"
+            );
+
+            let parsed = As4Aggregator::from_wire(&wire)
+                .expect("Should parse valid AS4_AGGREGATOR wire format");
+            assert_eq!(parsed.asn, asn, "ASN should match");
+            assert_eq!(parsed.address, address, "Address should match");
+        }
+
+        #[test]
+        fn as4_aggregator_wire_format() {
+            let asn = 4200000000u32;
+            let mut wire = asn.to_be_bytes().to_vec();
+            wire.extend_from_slice(&[203, 0, 113, 1]);
+
+            let agg = As4Aggregator::from_wire(&wire)
+                .expect("Should parse valid wire format");
+            assert_eq!(agg.asn, asn);
+            assert_eq!(agg.address, Ipv4Addr::new(203, 0, 113, 1));
+        }
+
+        #[test]
+        fn as4_aggregator_invalid_length() {
+            // Too short
+            let wire = vec![0xFAu8, 0x0Du8, 0x18, 0x00, 203, 0, 113];
+            let result = As4Aggregator::from_wire(&wire);
+            assert!(result.is_err(), "AS4_AGGREGATOR with 7 bytes should fail");
+
+            // Too long
+            let wire = vec![0xFAu8, 0x0Du8, 0x18, 0x00, 203, 0, 113, 1, 2];
+            let result = As4Aggregator::from_wire(&wire);
+            assert!(result.is_err(), "AS4_AGGREGATOR with 9 bytes should fail");
+        }
+
+        #[test]
+        fn as4_aggregator_display() {
+            let agg = As4Aggregator {
+                asn: 4200000000,
+                address: Ipv4Addr::new(203, 0, 113, 1),
+            };
+            let display = format!("{}", agg);
+            assert_eq!(display, "AS4200000000 (203.0.113.1)");
+        }
+
+        #[test]
+        fn atomic_aggregate_zero_length() {
+            // ATOMIC_AGGREGATE must be exactly zero bytes
+            let input: &[u8] = &[];
+            let result = PathAttributeValue::from_wire(
+                input,
+                PathAttributeTypeCode::AtomicAggregate,
+            );
+            assert!(
+                result.is_ok(),
+                "Zero-length ATOMIC_AGGREGATE should parse: {:?}",
+                result.err()
+            );
+            match result.unwrap() {
+                PathAttributeValue::AtomicAggregate => {}
+                other => panic!("Expected AtomicAggregate, got: {:?}", other),
+            }
+        }
+
+        #[test]
+        fn atomic_aggregate_non_zero_length_error() {
+            // ATOMIC_AGGREGATE with any data should fail
+            let input = vec![1u8];
+            let result = PathAttributeValue::from_wire(
+                &input,
+                PathAttributeTypeCode::AtomicAggregate,
+            );
+            assert!(
+                result.is_err(),
+                "Non-zero length ATOMIC_AGGREGATE should fail"
+            );
+            match result {
+                Err(UpdateParseErrorReason::AttributeLengthError {
+                    expected,
+                    got,
+                    ..
+                }) => {
+                    assert_eq!(expected, 0);
+                    assert_eq!(got, 1);
+                }
+                other => {
+                    panic!("Expected AttributeLengthError, got: {:?}", other)
+                }
+            }
+        }
+
+        #[test]
+        fn atomic_aggregate_to_wire() {
+            let attr = PathAttributeValue::AtomicAggregate;
+            let wire = attr.to_wire().expect("Should serialize");
+            assert_eq!(
+                wire.len(),
+                0,
+                "ATOMIC_AGGREGATE should serialize to empty"
+            );
+        }
+
+        #[test]
+        fn aggregator_in_update_message() {
+            // Test AGGREGATOR attribute in a complete UPDATE message
+            let mut attrs = Vec::new();
+
+            // ORIGIN
+            attrs.extend([
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::Origin as u8,
+                1,
+                0, // IGP
+            ]);
+
+            // AS_PATH (empty)
+            attrs.extend([
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::AsPath as u8,
+                0, // empty
+            ]);
+
+            // NEXT_HOP
+            attrs.extend([
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::NextHop as u8,
+                4,
+                192,
+                0,
+                2,
+                1,
+            ]);
+
+            // AGGREGATOR
+            attrs.extend([
+                path_attribute_flags::OPTIONAL
+                    | path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::Aggregator as u8,
+                6,
+                0xFDu8,
+                0xE8, // ASN 65000
+                192,
+                0,
+                2,
+                1, // Address
+            ]);
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(result.is_ok(), "Should parse UPDATE with AGGREGATOR");
+            let msg = result.unwrap();
+
+            // Find AGGREGATOR attribute
+            let agg_attr = msg
+                .path_attributes
+                .iter()
+                .find(|attr| {
+                    matches!(attr.value, PathAttributeValue::Aggregator(_))
+                })
+                .expect("Should have AGGREGATOR attribute");
+
+            match &agg_attr.value {
+                PathAttributeValue::Aggregator(agg) => {
+                    assert_eq!(agg.asn, 65000);
+                    assert_eq!(agg.address, Ipv4Addr::new(192, 0, 2, 1));
+                }
+                _ => panic!("Wrong attribute type"),
+            }
+        }
+
+        #[test]
+        fn atomic_aggregate_in_update_message() {
+            // Test ATOMIC_AGGREGATE attribute in a complete UPDATE message
+            let mut attrs = Vec::new();
+
+            // ORIGIN
+            attrs.extend([
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::Origin as u8,
+                1,
+                0, // IGP
+            ]);
+
+            // AS_PATH
+            attrs.extend([
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::AsPath as u8,
+                0,
+            ]);
+
+            // NEXT_HOP
+            attrs.extend([
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::NextHop as u8,
+                4,
+                192,
+                0,
+                2,
+                1,
+            ]);
+
+            // ATOMIC_AGGREGATE (zero-length)
+            attrs.extend([
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::AtomicAggregate as u8,
+                0, // zero-length
+            ]);
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "Should parse UPDATE with ATOMIC_AGGREGATE"
+            );
+            let msg = result.unwrap();
+
+            // Find ATOMIC_AGGREGATE attribute
+            let atomic_attr = msg
+                .path_attributes
+                .iter()
+                .find(|attr| {
+                    matches!(attr.value, PathAttributeValue::AtomicAggregate)
+                })
+                .expect("Should have ATOMIC_AGGREGATE attribute");
+
+            assert!(matches!(
+                atomic_attr.value,
+                PathAttributeValue::AtomicAggregate
+            ));
+        }
+
+        #[test]
+        fn aggregator_length_validation_in_parsing() {
+            // Test that length validation happens during parsing
+            let mut attrs = Vec::new();
+
+            // ORIGIN
+            attrs.extend([
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::Origin as u8,
+                1,
+                0,
+            ]);
+
+            // AS_PATH
+            attrs.extend([
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::AsPath as u8,
+                0,
+            ]);
+
+            // NEXT_HOP
+            attrs.extend([
+                path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::NextHop as u8,
+                4,
+                192,
+                0,
+                2,
+                1,
+            ]);
+
+            // AGGREGATOR with WRONG length (5 bytes instead of 6)
+            attrs.extend([
+                path_attribute_flags::OPTIONAL
+                    | path_attribute_flags::TRANSITIVE,
+                PathAttributeTypeCode::Aggregator as u8,
+                5, // WRONG!
+                0xFDu8,
+                0xE8,
+                192,
+                0,
+                2, // Missing last octet
+            ]);
+
+            let wire = build_update_wire(&attrs, &nlri_prefix(198, 51, 100));
+            let result = UpdateMessage::from_wire(&wire);
+
+            assert!(
+                result.is_ok(),
+                "Parsing should succeed with error collected"
+            );
+            let msg = result.unwrap();
+
+            // Should have AttributeLengthError for AGGREGATOR
+            assert!(
+                msg.errors.iter().any(|(reason, _)| matches!(
+                    reason,
+                    UpdateParseErrorReason::AttributeLengthError {
+                        type_code: PathAttributeTypeCode::Aggregator,
+                        ..
+                    }
+                )),
+                "Should have AttributeLengthError for AGGREGATOR"
             );
         }
     }
