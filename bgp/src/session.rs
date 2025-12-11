@@ -24,7 +24,8 @@ use crate::{
 };
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{
-    Asn, BgpPathProperties, Db, ImportExportPolicy, Prefix, Prefix4, Prefix6,
+    AddressFamily, Asn, BgpPathProperties, Db, ImportExportPolicy,
+    ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4, Prefix6,
 };
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
@@ -453,7 +454,8 @@ pub enum AdminEvent {
     // Current shaper is available in the router policy object.
     ShaperChanged(Option<rhai::AST>),
 
-    /// Fires when export policy has changed.
+    /// Fires when an export policy has changed.
+    /// Contains the previous policy for determining routes to re-advertise.
     ExportPolicyChanged(ImportExportPolicy),
 
     // The checker for the router has changed. Event contains previous checker.
@@ -472,10 +474,10 @@ pub enum AdminEvent {
     ManualStop,
 
     /// Fires when we need to ask the peer for a route refresh.
-    SendRouteRefresh,
+    SendRouteRefresh(Afi),
 
     /// Fires when we need to re-send our routes to the peer.
-    ReAdvertiseRoutes,
+    ReAdvertiseRoutes(Afi),
 
     /// Fires when path attributes have changed.
     PathAttributesChanged,
@@ -487,12 +489,21 @@ impl AdminEvent {
             AdminEvent::Announce(_) => "announce routes",
             AdminEvent::ShaperChanged(_) => "shaper changed",
             AdminEvent::CheckerChanged(_) => "checker changed",
-            AdminEvent::ExportPolicyChanged(_) => "export policy changed",
+            AdminEvent::ExportPolicyChanged(p) => match p {
+                ImportExportPolicy::V4(_) => "ipv4 export policy changed",
+                ImportExportPolicy::V6(_) => "ipv6 export policy changed",
+            },
             AdminEvent::Reset => "reset",
             AdminEvent::ManualStart => "manual start",
             AdminEvent::ManualStop => "manual stop",
-            AdminEvent::SendRouteRefresh => "route refresh needed",
-            AdminEvent::ReAdvertiseRoutes => "re-advertise routes",
+            AdminEvent::SendRouteRefresh(af) => match af {
+                Afi::Ipv4 => "route refresh needed (ipv4 unicast)",
+                Afi::Ipv6 => "route refresh needed (ipv6 unicast)",
+            },
+            AdminEvent::ReAdvertiseRoutes(af) => match af {
+                Afi::Ipv4 => "re-advertise routes (ipv4 unicast)",
+                Afi::Ipv6 => "re-advertise routes (ipv6 unicast)",
+            },
             AdminEvent::PathAttributesChanged => "path attributes changed",
         }
     }
@@ -775,10 +786,14 @@ pub struct SessionInfo {
     /// Ensure that routes received from eBGP peers have the peer's ASN as the
     /// first element in the AS path.
     pub enforce_first_as: bool,
-    /// Policy governing imported routes.
-    pub allow_import: ImportExportPolicy,
-    /// Policy governing exported routes.
-    pub allow_export: ImportExportPolicy,
+    /// Per-address-family import policy for IPv4 routes.
+    pub allow_import4: ImportExportPolicy4,
+    /// Per-address-family export policy for IPv4 routes.
+    pub allow_export4: ImportExportPolicy4,
+    /// Per-address-family import policy for IPv6 routes.
+    pub allow_import6: ImportExportPolicy6,
+    /// Per-address-family export policy for IPv6 routes.
+    pub allow_export6: ImportExportPolicy6,
     /// Vlan tag to assign to data plane routes created by this session.
     pub vlan_id: Option<u16>,
     /// Timer intervals for session and connection management
@@ -827,8 +842,10 @@ impl SessionInfo {
             communities: BTreeSet::new(),
             local_pref: None,
             enforce_first_as: false,
-            allow_import: ImportExportPolicy::default(),
-            allow_export: ImportExportPolicy::default(),
+            allow_import4: ImportExportPolicy4::default(),
+            allow_export4: ImportExportPolicy4::default(),
+            allow_import6: ImportExportPolicy6::default(),
+            allow_export6: ImportExportPolicy6::default(),
             vlan_id: None,
             connect_retry_time: Duration::from_secs(peer_config.connect_retry),
             keepalive_time: Duration::from_secs(peer_config.keepalive),
@@ -2095,8 +2112,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ShaperChanged(_)
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
-                    | AdminEvent::SendRouteRefresh
-                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::SendRouteRefresh(_)
+                    | AdminEvent::ReAdvertiseRoutes(_)
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
                         session_log_lite!(
@@ -2341,8 +2358,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ShaperChanged(_)
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
-                    | AdminEvent::SendRouteRefresh
-                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::SendRouteRefresh(_)
+                    | AdminEvent::ReAdvertiseRoutes(_)
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
                         session_log_lite!(
@@ -2704,8 +2721,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ShaperChanged(_)
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
-                    | AdminEvent::SendRouteRefresh
-                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::SendRouteRefresh(_)
+                    | AdminEvent::ReAdvertiseRoutes(_)
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
                         session_log_lite!(
@@ -3079,8 +3096,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ShaperChanged(_)
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
-                    | AdminEvent::SendRouteRefresh
-                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::SendRouteRefresh(_)
+                    | AdminEvent::ReAdvertiseRoutes(_)
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
                         session_log!(
@@ -3660,8 +3677,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 | AdminEvent::ExportPolicyChanged(_)
                 | AdminEvent::CheckerChanged(_)
                 | AdminEvent::ManualStart
-                | AdminEvent::SendRouteRefresh
-                | AdminEvent::ReAdvertiseRoutes
+                | AdminEvent::SendRouteRefresh(_)
+                | AdminEvent::ReAdvertiseRoutes(_)
                 | AdminEvent::PathAttributesChanged => {
                     let title = admin_event.title();
                     session_log!(
@@ -4186,8 +4203,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::ManualStart
-                    | AdminEvent::SendRouteRefresh
-                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::SendRouteRefresh(_)
+                    | AdminEvent::ReAdvertiseRoutes(_)
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
                         collision_log!(
@@ -5042,8 +5059,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::ManualStart
-                    | AdminEvent::SendRouteRefresh
-                    | AdminEvent::ReAdvertiseRoutes
+                    | AdminEvent::SendRouteRefresh(_)
+                    | AdminEvent::ReAdvertiseRoutes(_)
                     | AdminEvent::PathAttributesChanged => {
                         let title = admin_event.title();
                         collision_log!(
@@ -6014,99 +6031,204 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 AdminEvent::ExportPolicyChanged(previous) => {
-                    let originated = match self.db.get_origin4() {
-                        Ok(value) => value,
-                        Err(e) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "failed to get originated IPv4 routes from db";
-                                "error" => format!("{e}")
-                            );
-                            return FsmState::SessionSetup(pc);
-                        }
-                    };
+                    match previous {
+                        ImportExportPolicy::V4(previous4) => {
+                            let originated = match self.db.get_origin4() {
+                                Ok(value) => value,
+                                Err(e) => {
+                                    session_log!(
+                                        self,
+                                        error,
+                                        pc.conn,
+                                        "failed to get originated IPv4 routes from db";
+                                        "error" => format!("{e}")
+                                    );
+                                    return FsmState::SessionSetup(pc);
+                                }
+                            };
 
-                    // Determine which routes to announce/withdraw based on policy change
-                    let session = lock!(self.session);
-                    let originated_before: BTreeSet<Prefix4> = match previous {
-                        ImportExportPolicy::NoFiltering => {
-                            originated.iter().cloned().collect()
-                        }
-                        ImportExportPolicy::Allow(ref list) => originated
-                            .clone()
-                            .into_iter()
-                            .filter(|x| list.contains(&Prefix::from(*x)))
-                            .collect(),
-                    };
+                            // Determine which routes to announce/withdraw based on policy change
+                            let session = lock!(self.session);
+                            let originated_before: BTreeSet<Prefix4> =
+                                match previous4 {
+                                    ImportExportPolicy4::NoFiltering => {
+                                        originated.iter().cloned().collect()
+                                    }
+                                    ImportExportPolicy4::Allow(ref list) => {
+                                        originated
+                                            .iter()
+                                            .cloned()
+                                            .filter(|x| list.contains(x))
+                                            .collect()
+                                    }
+                                };
 
-                    let originated_after: BTreeSet<Prefix4> =
-                        match &session.allow_export {
-                            ImportExportPolicy::NoFiltering => {
-                                originated.iter().cloned().collect()
+                            let originated_after: BTreeSet<Prefix4> =
+                                match &session.allow_export4 {
+                                    ImportExportPolicy4::NoFiltering => {
+                                        originated.iter().cloned().collect()
+                                    }
+                                    ImportExportPolicy4::Allow(list) => {
+                                        originated
+                                            .clone()
+                                            .into_iter()
+                                            .filter(|x| list.contains(x))
+                                            .collect()
+                                    }
+                                };
+                            drop(session);
+
+                            let to_withdraw: Vec<Prefix4> = originated_before
+                                .difference(&originated_after)
+                                .cloned()
+                                .collect();
+
+                            let to_announce: Vec<Prefix4> = originated_after
+                                .difference(&originated_before)
+                                .cloned()
+                                .collect();
+
+                            // Per RFC 7606, send announcements and withdrawals as
+                            // separate UPDATE messages.
+                            if !to_announce.is_empty()
+                                && let Err(e) = self.send_update(
+                                    RouteUpdate::V4(RouteUpdate4::Announce(
+                                        to_announce,
+                                    )),
+                                    &pc,
+                                    ShaperApplication::Current,
+                                )
+                            {
+                                session_log!(
+                                    self,
+                                    error,
+                                    pc.conn,
+                                    "failed to send IPv4 export policy announce: {e}";
+                                    "error" => format!("{e}")
+                                );
+                                return self.exit_established(pc);
                             }
-                            ImportExportPolicy::Allow(list) => originated
-                                .clone()
-                                .into_iter()
-                                .filter(|x| list.contains(&Prefix::from(*x)))
-                                .collect(),
-                        };
-                    drop(session);
 
-                    let to_withdraw: Vec<Prefix4> = originated_before
-                        .difference(&originated_after)
-                        .cloned()
-                        .collect();
+                            if !to_withdraw.is_empty()
+                                && let Err(e) = self.send_update(
+                                    RouteUpdate::V4(RouteUpdate4::Withdraw(
+                                        to_withdraw,
+                                    )),
+                                    &pc,
+                                    ShaperApplication::Current,
+                                )
+                            {
+                                session_log!(
+                                    self,
+                                    error,
+                                    pc.conn,
+                                    "failed to send IPv4 export policy withdraw: {e}";
+                                    "error" => format!("{e}")
+                                );
+                                return self.exit_established(pc);
+                            }
 
-                    let to_announce: Vec<Prefix4> = originated_after
-                        .difference(&originated_before)
-                        .cloned()
-                        .collect();
+                            FsmState::Established(pc)
+                        }
+                        ImportExportPolicy::V6(previous6) => {
+                            let originated = match self.db.get_origin6() {
+                                Ok(value) => value,
+                                Err(e) => {
+                                    session_log!(
+                                        self,
+                                        error,
+                                        pc.conn,
+                                        "failed to get originated IPv6 routes from db";
+                                        "error" => format!("{e}")
+                                    );
+                                    return FsmState::SessionSetup(pc);
+                                }
+                            };
 
-                    // Per RFC 7606, send announcements and withdrawals as
-                    // separate UPDATE messages.
-                    if !to_announce.is_empty()
-                        && let Err(e) = self.send_update(
-                            RouteUpdate::V4(RouteUpdate4::Announce(
-                                to_announce,
-                            )),
-                            &pc,
-                            ShaperApplication::Current,
-                        )
-                    {
-                        session_log!(
-                            self,
-                            error,
-                            pc.conn,
-                            "failed to send export policy announce: {e}";
-                            "error" => format!("{e}")
-                        );
-                        return self.exit_established(pc);
+                            // Determine which routes to announce/withdraw based on policy change
+                            let session = lock!(self.session);
+                            let originated_before: BTreeSet<Prefix6> =
+                                match previous6 {
+                                    ImportExportPolicy6::NoFiltering => {
+                                        originated.iter().cloned().collect()
+                                    }
+                                    ImportExportPolicy6::Allow(ref list) => {
+                                        originated
+                                            .iter()
+                                            .cloned()
+                                            .filter(|x| list.contains(x))
+                                            .collect()
+                                    }
+                                };
+
+                            let originated_after: BTreeSet<Prefix6> =
+                                match &session.allow_export6 {
+                                    ImportExportPolicy6::NoFiltering => {
+                                        originated.iter().cloned().collect()
+                                    }
+                                    ImportExportPolicy6::Allow(list) => {
+                                        originated
+                                            .clone()
+                                            .into_iter()
+                                            .filter(|x| list.contains(x))
+                                            .collect()
+                                    }
+                                };
+                            drop(session);
+
+                            let to_withdraw: Vec<Prefix6> = originated_before
+                                .difference(&originated_after)
+                                .cloned()
+                                .collect();
+
+                            let to_announce: Vec<Prefix6> = originated_after
+                                .difference(&originated_before)
+                                .cloned()
+                                .collect();
+
+                            // Per RFC 7606, send announcements and withdrawals as
+                            // separate UPDATE messages.
+                            if !to_announce.is_empty()
+                                && let Err(e) = self.send_update(
+                                    RouteUpdate::V6(RouteUpdate6::Announce(
+                                        to_announce,
+                                    )),
+                                    &pc,
+                                    ShaperApplication::Current,
+                                )
+                            {
+                                session_log!(
+                                    self,
+                                    error,
+                                    pc.conn,
+                                    "failed to send IPv6 export policy announce: {e}";
+                                    "error" => format!("{e}")
+                                );
+                                return self.exit_established(pc);
+                            }
+
+                            if !to_withdraw.is_empty()
+                                && let Err(e) = self.send_update(
+                                    RouteUpdate::V6(RouteUpdate6::Withdraw(
+                                        to_withdraw,
+                                    )),
+                                    &pc,
+                                    ShaperApplication::Current,
+                                )
+                            {
+                                session_log!(
+                                    self,
+                                    error,
+                                    pc.conn,
+                                    "failed to send IPv6 export policy withdraw: {e}";
+                                    "error" => format!("{e}")
+                                );
+                                return self.exit_established(pc);
+                            }
+
+                            FsmState::Established(pc)
+                        }
                     }
-
-                    if !to_withdraw.is_empty()
-                        && let Err(e) = self.send_update(
-                            RouteUpdate::V4(RouteUpdate4::Withdraw(
-                                to_withdraw,
-                            )),
-                            &pc,
-                            ShaperApplication::Current,
-                        )
-                    {
-                        session_log!(
-                            self,
-                            error,
-                            pc.conn,
-                            "failed to send export policy withdraw: {e}";
-                            "error" => format!("{e}")
-                        );
-                        return self.exit_established(pc);
-                    }
-
-                    // TODO: Also handle IPv6 originated routes when needed
-
-                    FsmState::Established(pc)
                 }
 
                 AdminEvent::CheckerChanged(_previous) => {
@@ -6114,15 +6236,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     FsmState::Established(pc)
                 }
 
-                AdminEvent::SendRouteRefresh => {
-                    self.db.mark_bgp_peer_stale(pc.conn.peer().ip());
-                    // XXX: Update for IPv6
-                    self.send_route_refresh(&pc.conn);
+                AdminEvent::SendRouteRefresh(af) => {
+                    self.db.mark_bgp_peer_stale(
+                        pc.conn.peer().ip(),
+                        AddressFamily::from(af),
+                    );
+                    self.send_route_refresh(&pc.conn, af);
                     FsmState::Established(pc)
                 }
 
-                AdminEvent::ReAdvertiseRoutes => {
-                    if let Err(e) = self.refresh_react4(&pc) {
+                AdminEvent::ReAdvertiseRoutes(af) => {
+                    if let Err(e) = self.refresh_react(af, &pc) {
                         session_log!(
                             self,
                             error,
@@ -6913,7 +7037,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
-    fn send_route_refresh(&self, conn: &Cnx) {
+    fn send_route_refresh(&self, conn: &Cnx, af: Afi) {
         session_log!(
             self,
             info,
@@ -6921,10 +7045,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             "sending route refresh";
             "message" => "route refresh"
         );
-        if let Err(e) = conn.send(Message::RouteRefresh(RouteRefreshMessage {
-            afi: Afi::Ipv4 as u16,
+        let rr = Message::RouteRefresh(RouteRefreshMessage {
+            afi: af as u16,
             safi: Safi::Unicast as u8,
-        })) {
+        });
+        if let Err(e) = conn.send(rr) {
             session_log!(
                 self,
                 error,
@@ -6933,11 +7058,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 "error" => format!("{e}")
             );
             self.counters
-                .keepalive_send_failure
+                .route_refresh_send_failure
                 .fetch_add(1, Ordering::Relaxed);
         } else {
             self.counters
-                .keepalives_sent
+                .route_refresh_sent
                 .fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -7260,26 +7385,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         &self,
         update: &mut UpdateMessage,
     ) -> Result<(), Error> {
-        if let ImportExportPolicy::Allow(ref policy) =
-            lock!(self.session).allow_export
-        {
-            let allowed: BTreeSet<Prefix> = policy.iter().copied().collect();
+        let session = lock!(self.session);
 
-            // Filter traditional NLRI field
-            update.nlri.retain(|p| allowed.contains(&Prefix::V4(*p)));
+        // Filter traditional NLRI field (IPv4) using IPv4 export policy
+        if let ImportExportPolicy4::Allow(ref policy4) = session.allow_export4 {
+            update.nlri.retain(|p| policy4.contains(p));
+        }
 
-            // Filter MP_REACH_NLRI
-            if let Some(reach) = update.mp_reach() {
-                match reach {
-                    MpReachNlri::Ipv4Unicast(reach4) => {
-                        reach4
-                            .nlri
-                            .retain(|p| allowed.contains(&Prefix::V4(*p)));
+        // Filter MP_REACH_NLRI using the appropriate per-AF policy
+        if let Some(reach) = update.mp_reach_mut() {
+            match reach {
+                MpReachNlri::Ipv4Unicast(reach4) => {
+                    if let ImportExportPolicy4::Allow(ref policy4) =
+                        session.allow_export4
+                    {
+                        reach4.nlri.retain(|p| policy4.contains(p));
                     }
-                    MpReachNlri::Ipv6Unicast(reach6) => {
-                        reach6
-                            .nlri
-                            .retain(|p| allowed.contains(&Prefix::V6(*p)));
+                }
+                MpReachNlri::Ipv6Unicast(reach6) => {
+                    if let ImportExportPolicy6::Allow(ref policy6) =
+                        session.allow_export6
+                    {
+                        reach6.nlri.retain(|p| policy6.contains(p));
                     }
                 }
             }
@@ -7760,22 +7887,36 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         }
 
-        if let ImportExportPolicy::Allow(ref policy) =
-            lock!(self.session).allow_import
         {
-            let message_policy = policy
-                .iter()
-                .filter_map(|x| match x {
-                    rdb::Prefix::V4(x) => Some(x),
-                    _ => None,
-                })
-                .map(|x| crate::messages::Prefix::from(*x))
-                .collect::<BTreeSet<crate::messages::Prefix>>();
+            let session = lock!(self.session);
 
-            update
-                .nlri
-                .retain(|x| message_policy.contains(&Prefix::V4(*x)));
-        };
+            // Filter traditional NLRI field (IPv4) using IPv4 import policy
+            if let ImportExportPolicy4::Allow(ref policy4) =
+                session.allow_import4
+            {
+                update.nlri.retain(|p| policy4.contains(p));
+            }
+
+            // Filter MP_REACH_NLRI using the appropriate per-AF policy
+            if let Some(reach) = update.mp_reach_mut() {
+                match reach {
+                    MpReachNlri::Ipv4Unicast(reach4) => {
+                        if let ImportExportPolicy4::Allow(ref policy4) =
+                            session.allow_import4
+                        {
+                            reach4.nlri.retain(|p| policy4.contains(p));
+                        }
+                    }
+                    MpReachNlri::Ipv6Unicast(reach6) => {
+                        if let ImportExportPolicy6::Allow(ref policy6) =
+                            session.allow_import6
+                        {
+                            reach6.nlri.retain(|p| policy6.contains(p));
+                        }
+                    }
+                }
+            }
+        }
 
         self.update_rib(&update, pc);
 
@@ -7820,6 +7961,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     // parsing (from_wire). We only need to check negotiation.
                     let afi = mp_reach.afi();
                     let safi = mp_reach.safi();
+
+                    // RFC 4760 §3: Check reserved byte (must be 0, but must be ignored)
+                    let reserved = match mp_reach {
+                        crate::messages::MpReachNlri::Ipv4Unicast(inner) => inner.reserved,
+                        crate::messages::MpReachNlri::Ipv6Unicast(inner) => inner.reserved,
+                    };
+                    if reserved != 0 {
+                        session_log!(
+                            self,
+                            warn,
+                            pc.conn,
+                            "MP_REACH_NLRI reserved byte is non-zero: {} (RFC 2858 'Number of SNPAs', obsoleted by RFC 4760)",
+                            reserved;
+                        );
+                    }
 
                     // Check if AFI/SAFI was negotiated
                     let afi_state = match (afi, safi) {
@@ -7942,6 +8098,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         Ok(())
     }
 
+    fn refresh_react(
+        &self,
+        af: Afi,
+        pc: &PeerConnection<Cnx>,
+    ) -> Result<(), Error> {
+        match af {
+            Afi::Ipv4 => self.refresh_react4(pc),
+            Afi::Ipv6 => self.refresh_react6(pc),
+        }
+    }
+
     fn handle_refresh(
         &self,
         msg: RouteRefreshMessage,
@@ -7958,10 +8125,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        match af {
-            Afi::Ipv4 => self.refresh_react4(pc),
-            Afi::Ipv6 => self.refresh_react6(pc),
-        }
+        self.refresh_react(af, pc)
     }
 
     /// Update this router's RIB based on an update message from a peer.
@@ -7973,21 +8137,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self,
                     error,
                     pc.conn,
-                    "failed to get originated ipv4 routes from db";
-                    "error" => format!("{e}")
-                );
-                Vec::new()
-            }
-        };
-
-        let _originated6 = match self.db.get_origin6() {
-            Ok(value) => value,
-            Err(e) => {
-                session_log!(
-                    self,
-                    error,
-                    pc.conn,
-                    "failed to get originated ipv6 routes from db";
+                    "failed to get originated ipv4 routes from db: {e}";
                     "error" => format!("{e}")
                 );
                 Vec::new()
@@ -8066,7 +8216,180 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self.db.add_bgp_prefixes(&nlri, path.clone());
         }
 
-        //TODO(IPv6) iterate through MpReachNlri attributes for IPv6
+        // Process MP_REACH_NLRI for IPv4 and IPv6 routes
+        if let Some(reach) = update.mp_reach() {
+            match reach {
+                MpReachNlri::Ipv4Unicast(reach4) => {
+                    let mp_nexthop = match &reach4.nexthop {
+                        BgpNexthop::Ipv4(ip4) => IpAddr::V4(*ip4),
+                        BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
+                        BgpNexthop::Ipv6Double((gua, _ll)) => IpAddr::V6(*gua),
+                    };
+
+                    let mp_nlri4: Vec<Prefix> = reach4
+                        .nlri
+                        .iter()
+                        .filter(|p| {
+                            !originated4.contains(p)
+                                && p.valid_for_rib()
+                                && !self.prefix_via_self(
+                                    Prefix::V4(**p),
+                                    mp_nexthop,
+                                )
+                        })
+                        .copied()
+                        .map(Prefix::V4)
+                        .collect();
+
+                    if !mp_nlri4.is_empty() {
+                        let mut as_path = Vec::new();
+                        if let Some(segments_list) = update.as_path() {
+                            for segments in &segments_list {
+                                as_path.extend(segments.value.iter());
+                            }
+                        }
+                        let path4 = rdb::Path {
+                            nexthop: mp_nexthop,
+                            shutdown: update.graceful_shutdown(),
+                            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+                            bgp: Some(BgpPathProperties {
+                                origin_as: pc.asn,
+                                peer: pc.conn.peer().ip(),
+                                id: pc.id,
+                                med: update.multi_exit_discriminator(),
+                                local_pref: update.local_pref(),
+                                as_path,
+                                stale: None,
+                            }),
+                            vlan_id: lock!(self.session).vlan_id,
+                        };
+
+                        self.db.add_bgp_prefixes(&mp_nlri4, path4);
+                    }
+                }
+                MpReachNlri::Ipv6Unicast(reach6) => {
+                    let originated6 = match self.db.get_origin6() {
+                        Ok(value) => value,
+                        Err(e) => {
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
+                                "failed to get originated ipv6 routes from db: {e}";
+                                "error" => format!("{e}")
+                            );
+                            Vec::new()
+                        }
+                    };
+
+                    let nexthop6 = match &reach6.nexthop {
+                        BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
+                        BgpNexthop::Ipv6Double((gua, _ll)) => IpAddr::V6(*gua),
+                        BgpNexthop::Ipv4(ip4) => {
+                            // IPv4 nexthop for IPv6 routes is unusual but possible
+                            // in some configurations (e.g., IPv4-mapped IPv6)
+                            session_log!(
+                                self,
+                                warn,
+                                pc.conn,
+                                "IPv4 nexthop in IPv6 MP_REACH_NLRI";
+                                "nexthop" => format!("{ip4}")
+                            );
+                            IpAddr::V4(*ip4)
+                        }
+                    };
+
+                    let nlri6: Vec<Prefix> = reach6
+                        .nlri
+                        .iter()
+                        .filter(|p| {
+                            !originated6.contains(p)
+                                && p.valid_for_rib()
+                                && !self
+                                    .prefix_via_self(Prefix::V6(**p), nexthop6)
+                        })
+                        .copied()
+                        .map(Prefix::V6)
+                        .collect();
+
+                    if !nlri6.is_empty() {
+                        let mut as_path = Vec::new();
+                        if let Some(segments_list) = update.as_path() {
+                            for segments in &segments_list {
+                                as_path.extend(segments.value.iter());
+                            }
+                        }
+                        let path6 = rdb::Path {
+                            nexthop: nexthop6,
+                            shutdown: update.graceful_shutdown(),
+                            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+                            bgp: Some(BgpPathProperties {
+                                origin_as: pc.asn,
+                                peer: pc.conn.peer().ip(),
+                                id: pc.id,
+                                med: update.multi_exit_discriminator(),
+                                local_pref: update.local_pref(),
+                                as_path,
+                                stale: None,
+                            }),
+                            vlan_id: lock!(self.session).vlan_id,
+                        };
+
+                        self.db.add_bgp_prefixes(&nlri6, path6);
+                    }
+                }
+            }
+        }
+
+        // Process MP_UNREACH_NLRI for IPv4 and IPv6 withdrawals
+        if let Some(unreach) = update.mp_unreach() {
+            match unreach {
+                MpUnreachNlri::Ipv4Unicast(unreach4) => {
+                    let mp_withdrawn4: Vec<Prefix> = unreach4
+                        .withdrawn
+                        .iter()
+                        .filter(|p| {
+                            !originated4.contains(p) && p.valid_for_rib()
+                        })
+                        .copied()
+                        .map(Prefix::V4)
+                        .collect();
+
+                    self.db.remove_bgp_prefixes(
+                        &mp_withdrawn4,
+                        &pc.conn.peer().ip(),
+                    );
+                }
+                MpUnreachNlri::Ipv6Unicast(unreach6) => {
+                    let originated6 = match self.db.get_origin6() {
+                        Ok(value) => value,
+                        Err(e) => {
+                            session_log!(
+                                self,
+                                error,
+                                pc.conn,
+                                "failed to get originated ipv6 routes for withdrawal: {e}";
+                                "error" => format!("{e}")
+                            );
+                            Vec::new()
+                        }
+                    };
+
+                    let withdrawn6: Vec<Prefix> = unreach6
+                        .withdrawn
+                        .iter()
+                        .filter(|p| {
+                            !originated6.contains(p) && p.valid_for_rib()
+                        })
+                        .copied()
+                        .map(Prefix::V6)
+                        .collect();
+
+                    self.db
+                        .remove_bgp_prefixes(&withdrawn6, &pc.conn.peer().ip());
+                }
+            }
+        }
     }
 
     /// Perform a set of checks on an update to see if we can accept it.
@@ -8238,7 +8561,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ) -> Result<bool, Error> {
         let mut reset_needed = false;
         let mut path_attributes_changed = false;
-        let mut refresh_needed = false;
+        let mut refresh_needed4 = false;
+        let mut refresh_needed6 = false;
         let mut current = lock!(self.session);
 
         current.passive_tcp_establishment = info.passive_tcp_establishment;
@@ -8275,17 +8599,27 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if current.local_pref != info.local_pref {
             current.local_pref = info.local_pref;
-            refresh_needed = true;
+            refresh_needed4 = true;
+            refresh_needed6 = true;
         }
 
         if current.enforce_first_as != info.enforce_first_as {
             current.enforce_first_as = info.enforce_first_as;
+            // XXX: handle more gracefully.
+            //      disabling = send route refresh
+            //      enabling = run rib walker + delete paths failing check
             reset_needed = true;
         }
 
-        if current.allow_import != info.allow_import {
-            current.allow_import = info.allow_import;
-            refresh_needed = true;
+        // Handle per-AF import policy changes (trigger route refresh)
+        if current.allow_import4 != info.allow_import4 {
+            current.allow_import4 = info.allow_import4;
+            refresh_needed4 = true;
+        }
+
+        if current.allow_import6 != info.allow_import6 {
+            current.allow_import6 = info.allow_import6;
+            refresh_needed6 = true;
         }
 
         if current.vlan_id != info.vlan_id {
@@ -8306,18 +8640,27 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .set_jitter_range(info.idle_hold_jitter);
         }
 
-        if current.allow_export != info.allow_export {
-            let previous = current.allow_export.clone();
-            current.allow_export = info.allow_export;
-            drop(current);
+        if current.allow_export4 != info.allow_export4 {
+            let previous4 = current.allow_export4.clone();
+            current.allow_export4 = info.allow_export4;
             self.event_tx
                 .send(FsmEvent::Admin(AdminEvent::ExportPolicyChanged(
-                    previous,
+                    ImportExportPolicy::V4(previous4),
                 )))
                 .map_err(|e| Error::EventSend(e.to_string()))?;
-        } else {
-            drop(current);
         }
+
+        if current.allow_export6 != info.allow_export6 {
+            let previous6 = current.allow_export6.clone();
+            current.allow_export6 = info.allow_export6;
+            self.event_tx
+                .send(FsmEvent::Admin(AdminEvent::ExportPolicyChanged(
+                    ImportExportPolicy::V6(previous6),
+                )))
+                .map_err(|e| Error::EventSend(e.to_string()))?;
+        }
+
+        drop(current);
 
         if path_attributes_changed {
             self.event_tx
@@ -8325,9 +8668,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .map_err(|e| Error::EventSend(e.to_string()))?;
         }
 
-        if refresh_needed {
+        if refresh_needed4 {
             self.event_tx
-                .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh))
+                .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh(Afi::Ipv4)))
+                .map_err(|e| Error::EventSend(e.to_string()))?;
+        }
+
+        if refresh_needed6 {
+            self.event_tx
+                .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh(Afi::Ipv6)))
                 .map_err(|e| Error::EventSend(e.to_string()))?;
         }
 

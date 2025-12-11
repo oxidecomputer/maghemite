@@ -4,7 +4,10 @@
 
 use crate::config::PeerConfig;
 use crate::session::FsmStateKind;
-use rdb::{ImportExportPolicy, PolicyAction, Prefix4, Prefix6};
+use rdb::{
+    ImportExportPolicy4, ImportExportPolicy6, ImportExportPolicyV1,
+    PolicyAction, Prefix4, Prefix6,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -56,8 +59,8 @@ pub struct Neighbor {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
-    pub allow_import: ImportExportPolicy,
-    pub allow_export: ImportExportPolicy,
+    pub allow_import: ImportExportPolicyV1,
+    pub allow_export: ImportExportPolicyV1,
     pub vlan_id: Option<u16>,
 }
 
@@ -101,8 +104,15 @@ impl Neighbor {
             communities: rq.communities,
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
-            allow_import: rq.allow_import,
-            allow_export: rq.allow_export,
+            // Combine per-AF policies into legacy format for API compatibility
+            allow_import: ImportExportPolicyV1::from_per_af_policies(
+                &rq.allow_import4,
+                &rq.allow_import6,
+            ),
+            allow_export: ImportExportPolicyV1::from_per_af_policies(
+                &rq.allow_export4,
+                &rq.allow_export6,
+            ),
             vlan_id: rq.vlan_id,
         }
     }
@@ -127,8 +137,15 @@ impl Neighbor {
             communities: rq.communities.clone(),
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
-            allow_import: rq.allow_import.clone(),
-            allow_export: rq.allow_export.clone(),
+            // Combine per-AF policies into legacy format for API compatibility
+            allow_import: ImportExportPolicyV1::from_per_af_policies(
+                &rq.allow_import4,
+                &rq.allow_import6,
+            ),
+            allow_export: ImportExportPolicyV1::from_per_af_policies(
+                &rq.allow_export4,
+                &rq.allow_export6,
+            ),
             vlan_id: rq.vlan_id,
         }
     }
@@ -286,8 +303,18 @@ pub struct BgpPeerConfig {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
-    pub allow_import: ImportExportPolicy,
-    pub allow_export: ImportExportPolicy,
+    /// Per-address-family import policy for IPv4 routes.
+    #[serde(default)]
+    pub allow_import4: ImportExportPolicy4,
+    /// Per-address-family export policy for IPv4 routes.
+    #[serde(default)]
+    pub allow_export4: ImportExportPolicy4,
+    /// Per-address-family import policy for IPv6 routes.
+    #[serde(default)]
+    pub allow_import6: ImportExportPolicy6,
+    /// Per-address-family export policy for IPv6 routes.
+    #[serde(default)]
+    pub allow_export6: ImportExportPolicy6,
     pub vlan_id: Option<u16>,
 }
 
