@@ -1469,6 +1469,15 @@ impl UpdateMessage {
         self.path_attributes
             .push(PathAttributeValue::Communities(vec![community]).into());
     }
+
+    pub fn mp_reach(&mut self) -> Option<&mut MpReachNlri> {
+        self.path_attributes
+            .iter_mut()
+            .find_map(|a| match &mut a.value {
+                PathAttributeValue::MpReachNlri(mp) => Some(mp),
+                _ => None,
+            })
+    }
 }
 
 impl Display for UpdateMessage {
@@ -5203,6 +5212,52 @@ mod tests {
     }
 
     #[test]
+    fn notification_round_trip() {
+        // Note: NotificationMessage::to_wire() does not yet serialize the data field
+        // (see TODO in the impl), so we test with empty data.
+        let nm0 = NotificationMessage {
+            error_code: ErrorCode::Update,
+            error_subcode: ErrorSubcode::Update(
+                UpdateErrorSubcode::InvalidOriginAttribute,
+            ),
+            data: vec![],
+        };
+
+        let buf = nm0.to_wire().expect("notification message to wire");
+        let nm1 = NotificationMessage::from_wire(&buf)
+            .expect("notification message from wire");
+
+        assert_eq!(nm0.error_code, nm1.error_code);
+        assert_eq!(nm0.error_subcode, nm1.error_subcode);
+        assert_eq!(nm0.data, nm1.data);
+    }
+
+    #[test]
+    fn route_refresh_round_trip() {
+        // IPv4 Unicast route refresh
+        let rr0 = RouteRefreshMessage {
+            afi: Afi::Ipv4 as u16,
+            safi: Safi::Unicast as u8,
+        };
+
+        let buf = rr0.to_wire().expect("route refresh to wire");
+        let rr1 = RouteRefreshMessage::from_wire(&buf)
+            .expect("route refresh from wire");
+        assert_eq!(rr0, rr1);
+
+        // IPv6 Unicast route refresh
+        let rr2 = RouteRefreshMessage {
+            afi: Afi::Ipv6 as u16,
+            safi: Safi::Unicast as u8,
+        };
+
+        let buf = rr2.to_wire().expect("route refresh to wire");
+        let rr3 = RouteRefreshMessage::from_wire(&buf)
+            .expect("route refresh from wire");
+        assert_eq!(rr2, rr3);
+    }
+
+    #[test]
     fn prefix_within() {
         // Test IPv4 prefix containment
         let ipv4_prefixes: &[Prefix] = &[
@@ -5613,10 +5668,40 @@ mod tests {
 
     #[test]
     fn bgp_nexthop_length_mismatch() {
-        // nh_bytes.len() != nh_len
+        // Test that nh_bytes.len() != nh_len is always rejected.
+        // The function checks bytes.len() == nh_len first before parsing.
+
+        // IPv4: 4 bytes provided, but nh_len claims 8
         let bytes = [192, 0, 2, 1];
         let result = BgpNexthop::from_bytes(&bytes, 8, Afi::Ipv4);
-        assert!(result.is_err());
+        assert!(
+            result.is_err(),
+            "IPv4: should reject when nh_len > bytes.len()"
+        );
+
+        // IPv6 single: 16 bytes provided, but nh_len claims 32
+        let bytes = [0u8; 16];
+        let result = BgpNexthop::from_bytes(&bytes, 32, Afi::Ipv6);
+        assert!(
+            result.is_err(),
+            "IPv6 single: should reject when nh_len > bytes.len()"
+        );
+
+        // IPv6: 32 bytes provided, but nh_len claims 16 (mismatch)
+        let bytes = [0u8; 32];
+        let result = BgpNexthop::from_bytes(&bytes, 16, Afi::Ipv6);
+        assert!(
+            result.is_err(),
+            "IPv6: should reject when nh_len != bytes.len()"
+        );
+
+        // IPv6 double: 32 bytes provided, but nh_len claims 48
+        let bytes = [0u8; 32];
+        let result = BgpNexthop::from_bytes(&bytes, 48, Afi::Ipv6);
+        assert!(
+            result.is_err(),
+            "IPv6 double: should reject when nh_len > bytes.len()"
+        );
     }
 
     #[test]
@@ -5633,6 +5718,45 @@ mod tests {
             Ipv6Addr::from_str("fe80::1").unwrap(),
         ));
         assert_eq!(ipv6_double.byte_len(), 32);
+    }
+
+    #[test]
+    fn bgp_nexthop_round_trip() {
+        // Test all BgpNexthop variants survive encoding/decoding
+
+        // IPv4
+        let ipv4 = BgpNexthop::Ipv4(Ipv4Addr::new(192, 0, 2, 1));
+        let wire = ipv4.to_bytes();
+        let decoded =
+            BgpNexthop::from_bytes(&wire, wire.len() as u8, Afi::Ipv4)
+                .expect("IPv4 should decode");
+        assert_eq!(ipv4, decoded, "IPv4 nexthop should round-trip");
+
+        // IPv6 single
+        let ipv6_single =
+            BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
+        let wire = ipv6_single.to_bytes();
+        let decoded =
+            BgpNexthop::from_bytes(&wire, wire.len() as u8, Afi::Ipv6)
+                .expect("IPv6 single should decode");
+        assert_eq!(
+            ipv6_single, decoded,
+            "IPv6 single nexthop should round-trip"
+        );
+
+        // IPv6 double
+        let ipv6_double = BgpNexthop::Ipv6Double((
+            Ipv6Addr::from_str("2001:db8::1").unwrap(),
+            Ipv6Addr::from_str("fe80::1").unwrap(),
+        ));
+        let wire = ipv6_double.to_bytes();
+        let decoded =
+            BgpNexthop::from_bytes(&wire, wire.len() as u8, Afi::Ipv6)
+                .expect("IPv6 double should decode");
+        assert_eq!(
+            ipv6_double, decoded,
+            "IPv6 double nexthop should round-trip"
+        );
     }
 
     // =========================================================================
@@ -5720,6 +5844,27 @@ mod tests {
     // =========================================================================
     // MpUnreachNlri tests
     // =========================================================================
+
+    #[test]
+    fn mp_unreach_nlri_ipv4_unicast() {
+        let withdrawn = vec![
+            rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
+            rdb::Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12),
+        ];
+
+        let mp_unreach = MpUnreachNlri::ipv4_unicast(withdrawn.clone());
+
+        assert_eq!(mp_unreach.afi(), Afi::Ipv4);
+        assert_eq!(mp_unreach.safi(), Safi::Unicast);
+        assert_eq!(mp_unreach.len(), 2);
+
+        // Verify inner struct
+        if let MpUnreachNlri::Ipv4Unicast(inner) = &mp_unreach {
+            assert_eq!(inner.withdrawn, withdrawn);
+        } else {
+            panic!("Expected Ipv4Unicast variant");
+        }
+    }
 
     #[test]
     fn mp_unreach_nlri_ipv6_unicast() {
@@ -5935,6 +6080,203 @@ mod tests {
             .any(|a| matches!(a.value, PathAttributeValue::MpUnreachNlri(_)));
         assert!(has_reach, "MP_REACH_NLRI should be present");
         assert!(has_unreach, "MP_UNREACH_NLRI should be present");
+    }
+
+    /// Test that we can handle IPv4 Unicast routes encoded using both methods:
+    /// traditional NLRI/withdrawn fields AND MP-BGP path attributes in the same UPDATE.
+    #[test]
+    fn ipv4_unicast_dual_encoding() {
+        // Traditional IPv4 prefixes
+        let traditional_nlri =
+            vec![rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)];
+        let traditional_withdrawn =
+            vec![rdb::Prefix4::new(Ipv4Addr::new(192, 168, 0, 0), 16)];
+
+        // MP-BGP IPv4 prefixes (different from traditional)
+        let mp_nlri = vec![rdb::Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12)];
+        let mp_withdrawn =
+            vec![rdb::Prefix4::new(Ipv4Addr::new(10, 10, 0, 0), 16)];
+
+        let mp_reach = MpReachNlri::ipv4_unicast(
+            BgpNexthop::Ipv4(Ipv4Addr::new(192, 0, 2, 1)),
+            mp_nlri.clone(),
+        );
+        let mp_unreach = MpUnreachNlri::ipv4_unicast(mp_withdrawn.clone());
+
+        let update = UpdateMessage {
+            withdrawn: traditional_withdrawn.clone(),
+            path_attributes: vec![
+                PathAttribute {
+                    typ: PathAttributeType {
+                        flags: path_attribute_flags::OPTIONAL,
+                        type_code: PathAttributeTypeCode::MpReachNlri,
+                    },
+                    value: PathAttributeValue::MpReachNlri(mp_reach),
+                },
+                PathAttribute {
+                    typ: PathAttributeType {
+                        flags: path_attribute_flags::OPTIONAL,
+                        type_code: PathAttributeTypeCode::MpUnreachNlri,
+                    },
+                    value: PathAttributeValue::MpUnreachNlri(mp_unreach),
+                },
+            ],
+            nlri: traditional_nlri.clone(),
+            treat_as_withdraw: false,
+            errors: vec![],
+        };
+
+        // Round-trip through wire format
+        let wire = update.to_wire().expect("encoding should succeed");
+        let decoded =
+            UpdateMessage::from_wire(&wire).expect("decoding should succeed");
+
+        // Verify traditional encoding is preserved
+        assert_eq!(
+            decoded.nlri, traditional_nlri,
+            "traditional NLRI should be preserved"
+        );
+        assert_eq!(
+            decoded.withdrawn, traditional_withdrawn,
+            "traditional withdrawn should be preserved"
+        );
+
+        // Verify MP-BGP encoding is preserved
+        let decoded_mp_reach = decoded
+            .path_attributes
+            .iter()
+            .find_map(|a| match &a.value {
+                PathAttributeValue::MpReachNlri(MpReachNlri::Ipv4Unicast(
+                    inner,
+                )) => Some(inner.nlri.clone()),
+                _ => None,
+            })
+            .expect("MP_REACH_NLRI should be present");
+        assert_eq!(
+            decoded_mp_reach, mp_nlri,
+            "MP-BGP NLRI should be preserved"
+        );
+
+        let decoded_mp_unreach = decoded
+            .path_attributes
+            .iter()
+            .find_map(|a| match &a.value {
+                PathAttributeValue::MpUnreachNlri(
+                    MpUnreachNlri::Ipv4Unicast(inner),
+                ) => Some(inner.withdrawn.clone()),
+                _ => None,
+            })
+            .expect("MP_UNREACH_NLRI should be present");
+        assert_eq!(
+            decoded_mp_unreach, mp_withdrawn,
+            "MP-BGP withdrawn should be preserved"
+        );
+    }
+
+    /// Test that an empty UPDATE message (End-of-RIB marker) can be encoded and decoded.
+    ///
+    /// Per RFC 4724 Section 2, an End-of-RIB marker is an UPDATE message with:
+    /// - No withdrawn routes
+    /// - No path attributes (for traditional IPv4)
+    /// - No NLRI
+    ///
+    /// For MP-BGP, End-of-RIB uses an UPDATE with only MP_UNREACH_NLRI containing
+    /// zero withdrawn routes.
+    #[test]
+    fn empty_update_end_of_rib() {
+        // Traditional IPv4 End-of-RIB: completely empty UPDATE
+        let empty_update = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: vec![],
+            nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
+        };
+
+        let wire = empty_update.to_wire().expect("encoding should succeed");
+        let decoded =
+            UpdateMessage::from_wire(&wire).expect("decoding should succeed");
+
+        assert!(decoded.withdrawn.is_empty(), "withdrawn should be empty");
+        assert!(
+            decoded.path_attributes.is_empty(),
+            "path_attributes should be empty"
+        );
+        assert!(decoded.nlri.is_empty(), "nlri should be empty");
+
+        // MP-BGP IPv6 End-of-RIB: UPDATE with MP_UNREACH_NLRI containing zero prefixes
+        let mp_eor = MpUnreachNlri::ipv6_unicast(vec![]);
+        let mp_eor_update = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: vec![PathAttribute {
+                typ: PathAttributeType {
+                    flags: path_attribute_flags::OPTIONAL,
+                    type_code: PathAttributeTypeCode::MpUnreachNlri,
+                },
+                value: PathAttributeValue::MpUnreachNlri(mp_eor),
+            }],
+            nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
+        };
+
+        let wire = mp_eor_update.to_wire().expect("encoding should succeed");
+        let decoded =
+            UpdateMessage::from_wire(&wire).expect("decoding should succeed");
+
+        // Verify MP_UNREACH_NLRI is present with zero prefixes
+        let mp_unreach = decoded
+            .path_attributes
+            .iter()
+            .find_map(|a| match &a.value {
+                PathAttributeValue::MpUnreachNlri(u) => Some(u),
+                _ => None,
+            })
+            .expect("MP_UNREACH_NLRI should be present");
+        assert_eq!(
+            mp_unreach.len(),
+            0,
+            "MP_UNREACH_NLRI should have 0 prefixes"
+        );
+        assert_eq!(mp_unreach.afi(), Afi::Ipv6);
+        assert_eq!(mp_unreach.safi(), Safi::Unicast);
+
+        // MP-BGP IPv4 Unicast End-of-RIB: UPDATE with MP_UNREACH_NLRI for IPv4
+        let mp_eor_v4 = MpUnreachNlri::ipv4_unicast(vec![]);
+        let mp_eor_v4_update = UpdateMessage {
+            withdrawn: vec![],
+            path_attributes: vec![PathAttribute {
+                typ: PathAttributeType {
+                    flags: path_attribute_flags::OPTIONAL,
+                    type_code: PathAttributeTypeCode::MpUnreachNlri,
+                },
+                value: PathAttributeValue::MpUnreachNlri(mp_eor_v4),
+            }],
+            nlri: vec![],
+            treat_as_withdraw: false,
+            errors: vec![],
+        };
+
+        let wire = mp_eor_v4_update.to_wire().expect("encoding should succeed");
+        let decoded =
+            UpdateMessage::from_wire(&wire).expect("decoding should succeed");
+
+        // Verify MP_UNREACH_NLRI is present with zero prefixes and correct AFI/SAFI
+        let mp_unreach_v4 = decoded
+            .path_attributes
+            .iter()
+            .find_map(|a| match &a.value {
+                PathAttributeValue::MpUnreachNlri(u) => Some(u),
+                _ => None,
+            })
+            .expect("MP_UNREACH_NLRI should be present for IPv4 EOR");
+        assert_eq!(
+            mp_unreach_v4.len(),
+            0,
+            "MP_UNREACH_NLRI should have 0 prefixes"
+        );
+        assert_eq!(mp_unreach_v4.afi(), Afi::Ipv4);
+        assert_eq!(mp_unreach_v4.safi(), Safi::Unicast);
     }
 
     /// Test that duplicate non-MP-BGP path attributes are deduplicated during

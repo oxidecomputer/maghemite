@@ -925,3 +925,271 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
         "BGP thread count should return to baseline after delete"
     );
 }
+
+/// Test import/export policy filtering.
+///
+/// This test verifies that:
+/// 1. Export policy on the sender filters prefixes before transmission
+/// 2. Import policy on the receiver filters prefixes after reception
+/// 3. Removing export policy allows filtered prefixes through
+/// 4. Removing import policy allows filtered prefixes through
+/// 5. Path attributes are correctly preserved through filtering
+#[test]
+fn test_import_export_policy_filtering() {
+    use rdb::ImportExportPolicy;
+    use std::collections::BTreeSet;
+
+    let r1_addr: SocketAddr = sockaddr!(&format!("127.0.0.12:{TEST_BGP_PORT}"));
+    let r2_addr: SocketAddr = sockaddr!(&format!("127.0.0.13:{TEST_BGP_PORT}"));
+
+    // Ensure loopback IPs are available for this test
+    let _ip_guard = ensure_loop_ips(&[r1_addr.ip(), r2_addr.ip()]);
+
+    // Define our test prefixes
+    let prefix_a = ip!("10.1.0.0/24"); // Will pass both export and import
+    let prefix_b = ip!("10.2.0.0/24"); // Will be filtered by export, passes import
+    let prefix_c = ip!("10.3.0.0/24"); // Will pass export but filtered by import
+
+    // Build export policy for r1: allow prefix_a and prefix_c, deny prefix_b
+    let export_allow: BTreeSet<Prefix> = [
+        Prefix::V4(cidr!("10.1.0.0/24")),
+        Prefix::V4(cidr!("10.3.0.0/24")),
+    ]
+    .into_iter()
+    .collect();
+
+    // Build import policy for r2: allow prefix_a and prefix_b, deny prefix_c
+    let import_allow: BTreeSet<Prefix> = [
+        Prefix::V4(cidr!("10.1.0.0/24")),
+        Prefix::V4(cidr!("10.2.0.0/24")),
+    ]
+    .into_iter()
+    .collect();
+
+    // Configure r1 with export policy
+    let r1_peer_config = PeerConfig {
+        name: "r2".into(),
+        host: r2_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+    let r1_session_info = {
+        let mut info = SessionInfo::from_peer_config(&r1_peer_config);
+        info.allow_export = ImportExportPolicy::Allow(export_allow.clone());
+        info
+    };
+
+    // Configure r2 with import policy
+    let r2_peer_config = PeerConfig {
+        name: "r1".into(),
+        host: r1_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+    let r2_session_info = {
+        let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+        info.allow_import = ImportExportPolicy::Allow(import_allow.clone());
+        info
+    };
+
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
+            neighbors: vec![Neighbor {
+                peer_config: r1_peer_config.clone(),
+                session_info: Some(r1_session_info),
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
+            neighbors: vec![Neighbor {
+                peer_config: r2_peer_config.clone(),
+                session_info: Some(r2_session_info),
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard2) = test_setup::<
+        BgpConnectionTcp,
+        BgpListenerTcp,
+    >("import_export_policy", &routers);
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
+
+    // Wait for session establishment
+    let r1_session = r1
+        .router
+        .get_session(r2_addr.ip())
+        .expect("get r1->r2 session");
+    let r2_session = r2
+        .router
+        .get_session(r1_addr.ip())
+        .expect("get r2->r1 session");
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    // Originate all 3 prefixes from r1
+    r1.router
+        .create_origin4(vec![prefix_a, prefix_b, prefix_c])
+        .expect("originate prefixes");
+
+    // Wait for routes to propagate - r2 should only see prefix_a
+    // (prefix_b filtered by export, prefix_c filtered by import)
+    let prefix_a_rdb = Prefix::V4(cidr!("10.1.0.0/24"));
+    let prefix_b_rdb = Prefix::V4(cidr!("10.2.0.0/24"));
+    let prefix_c_rdb = Prefix::V4(cidr!("10.3.0.0/24"));
+
+    wait_for!(
+        !r2.router.db.get_prefix_paths(&prefix_a_rdb).is_empty(),
+        "r2 should receive prefix_a"
+    );
+
+    // Verify r2's RIB state with policies active
+    // prefix_a: should be present (passes both export and import)
+    let paths_a = r2.router.db.get_prefix_paths(&prefix_a_rdb);
+    assert_eq!(paths_a.len(), 1, "prefix_a should have exactly one path");
+    let path_a = &paths_a[0];
+    assert_eq!(path_a.nexthop, r1_addr.ip(), "nexthop should be r1");
+    let bgp_props_a = path_a.bgp.as_ref().expect("should have BGP properties");
+    assert_eq!(
+        bgp_props_a.origin_as, 4200000001,
+        "origin AS should be r1's ASN"
+    );
+    assert_eq!(
+        bgp_props_a.as_path,
+        vec![4200000001],
+        "AS path should contain r1's ASN"
+    );
+
+    // prefix_b: should NOT be present (filtered by r1's export policy)
+    let paths_b = r2.router.db.get_prefix_paths(&prefix_b_rdb);
+    assert!(
+        paths_b.is_empty(),
+        "prefix_b should be filtered by export policy"
+    );
+
+    // prefix_c: should NOT be present (filtered by r2's import policy)
+    let paths_c = r2.router.db.get_prefix_paths(&prefix_c_rdb);
+    assert!(
+        paths_c.is_empty(),
+        "prefix_c should be filtered by import policy"
+    );
+
+    // Remove r1's export policy - prefix_b should now be sent to r2
+    // The ExportPolicyChanged handler will automatically send the newly-allowed
+    // prefix without requiring manual re-origination.
+    assert_eq!(
+        r1_session.state(),
+        FsmStateKind::Established,
+        "r1 session should be in Established state before policy update"
+    );
+    let r1_session_info_no_export = {
+        let mut info = SessionInfo::from_peer_config(&r1_peer_config);
+        info.allow_export = ImportExportPolicy::NoFiltering;
+        info
+    };
+    r1.router
+        .update_session(r1_peer_config.clone(), r1_session_info_no_export)
+        .expect("update r1 session to remove export policy");
+
+    // prefix_b should now appear (was filtered by export, now allowed)
+    // but prefix_c is still filtered by r2's import policy
+    wait_for!(
+        !r2.router.db.get_prefix_paths(&prefix_b_rdb).is_empty(),
+        "r2 should receive prefix_b after removing export policy"
+    );
+
+    // Verify prefix_b arrived with correct attributes
+    let paths_b = r2.router.db.get_prefix_paths(&prefix_b_rdb);
+    assert_eq!(
+        paths_b.len(),
+        1,
+        "prefix_b should have exactly one path after export policy removal"
+    );
+    let path_b = &paths_b[0];
+    assert_eq!(
+        path_b.nexthop,
+        r1_addr.ip(),
+        "prefix_b nexthop should be r1"
+    );
+    let bgp_props_b = path_b.bgp.as_ref().expect("should have BGP properties");
+    assert_eq!(
+        bgp_props_b.origin_as, 4200000001,
+        "prefix_b origin AS should be r1's ASN"
+    );
+
+    // prefix_c should still be filtered by r2's import policy
+    let paths_c = r2.router.db.get_prefix_paths(&prefix_c_rdb);
+    assert!(
+        paths_c.is_empty(),
+        "prefix_c should still be filtered by import policy"
+    );
+
+    // Now remove r2's import policy - prefix_c should appear via route-refresh
+    let r2_session_info_no_import = {
+        let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+        info.allow_import = ImportExportPolicy::NoFiltering;
+        info
+    };
+    r2.router
+        .update_session(r2_peer_config.clone(), r2_session_info_no_import)
+        .expect("update r2 session to remove import policy");
+
+    // Wait for prefix_c to appear after import policy removal
+    // The import policy change triggers a route-refresh request to r1
+    wait_for!(
+        !r2.router.db.get_prefix_paths(&prefix_c_rdb).is_empty(),
+        "r2 should receive prefix_c after removing import policy"
+    );
+
+    // Final verification: all 3 prefixes present with correct attributes
+    for (prefix_name, prefix_rdb) in [
+        ("prefix_a", &prefix_a_rdb),
+        ("prefix_b", &prefix_b_rdb),
+        ("prefix_c", &prefix_c_rdb),
+    ] {
+        let paths = r2.router.db.get_prefix_paths(prefix_rdb);
+        assert_eq!(
+            paths.len(),
+            1,
+            "{prefix_name} should have exactly one path after policy removal"
+        );
+        let path = &paths[0];
+        assert_eq!(
+            path.nexthop,
+            r1_addr.ip(),
+            "{prefix_name} nexthop should be r1"
+        );
+        let bgp_props = path.bgp.as_ref().expect("should have BGP properties");
+        assert_eq!(
+            bgp_props.origin_as, 4200000001,
+            "{prefix_name} origin AS should be r1's ASN"
+        );
+        assert_eq!(
+            bgp_props.as_path,
+            vec![4200000001],
+            "{prefix_name} AS path should contain r1's ASN"
+        );
+    }
+
+    // Clean up
+    r1.shutdown();
+    r2.shutdown();
+}

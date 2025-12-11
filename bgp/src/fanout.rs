@@ -3,7 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::connection::BgpConnection;
-use crate::session::{AdminEvent, FsmEvent, RouteUpdate};
+use crate::session::{
+    AdminEvent, FsmEvent, RouteUpdate, RouteUpdate4, RouteUpdate6,
+};
 use crate::{COMPONENT_BGP, MOD_NEIGHBOR};
 use rdb::types::{Ipv4Marker, Ipv6Marker, Prefix4, Prefix6};
 use slog::Logger;
@@ -47,58 +49,98 @@ pub struct Egress<Cnx: BgpConnection> {
 
 // IPv4-specific implementation
 impl<Cnx: BgpConnection> Fanout<Cnx, Ipv4Marker> {
-    /// Announce IPv4 routes to all peers.
+    /// Announce and/or withdraw IPv4 routes to all peers.
+    ///
+    /// Per RFC 7606, announcements and withdrawals are sent as separate
+    /// UPDATE messages to avoid mixing reachable and unreachable NLRI.
     pub fn announce_all(&self, nlri: Vec<Prefix4>, withdrawn: Vec<Prefix4>) {
-        let route_update = RouteUpdate::V4 { nlri, withdrawn };
-
         for egress in self.egress.values() {
-            egress.announce_routes(route_update.clone());
+            if !nlri.is_empty() {
+                let announce =
+                    RouteUpdate::V4(RouteUpdate4::Announce(nlri.clone()));
+                egress.send_route_update(announce);
+            }
+            if !withdrawn.is_empty() {
+                let withdraw =
+                    RouteUpdate::V4(RouteUpdate4::Withdraw(withdrawn.clone()));
+                egress.send_route_update(withdraw);
+            }
         }
     }
 
-    /// Announce IPv4 routes to all peers except the origin.
+    /// Announce and/or withdraw IPv4 routes to all peers except the origin.
+    ///
+    /// Per RFC 7606, announcements and withdrawals are sent as separate
+    /// UPDATE messages to avoid mixing reachable and unreachable NLRI.
     pub fn announce_except(
         &self,
         origin: IpAddr,
         nlri: Vec<Prefix4>,
         withdrawn: Vec<Prefix4>,
     ) {
-        let route_update = RouteUpdate::V4 { nlri, withdrawn };
-
         for (peer_addr, egress) in &self.egress {
             if *peer_addr == origin {
                 continue;
             }
-            egress.announce_routes(route_update.clone());
+            if !nlri.is_empty() {
+                let announce =
+                    RouteUpdate::V4(RouteUpdate4::Announce(nlri.clone()));
+                egress.send_route_update(announce);
+            }
+            if !withdrawn.is_empty() {
+                let withdraw =
+                    RouteUpdate::V4(RouteUpdate4::Withdraw(withdrawn.clone()));
+                egress.send_route_update(withdraw);
+            }
         }
     }
 }
 
 // IPv6-specific implementation
 impl<Cnx: BgpConnection> Fanout<Cnx, Ipv6Marker> {
-    /// Announce IPv6 routes to all peers.
+    /// Announce and/or withdraw IPv6 routes to all peers.
+    ///
+    /// Per RFC 7606, announcements and withdrawals are sent as separate
+    /// UPDATE messages to avoid mixing reachable and unreachable NLRI.
     pub fn announce_all(&self, nlri: Vec<Prefix6>, withdrawn: Vec<Prefix6>) {
-        let route_update = RouteUpdate::V6 { nlri, withdrawn };
-
         for egress in self.egress.values() {
-            egress.announce_routes(route_update.clone());
+            if !nlri.is_empty() {
+                let announce =
+                    RouteUpdate::V6(RouteUpdate6::Announce(nlri.clone()));
+                egress.send_route_update(announce);
+            }
+            if !withdrawn.is_empty() {
+                let withdraw =
+                    RouteUpdate::V6(RouteUpdate6::Withdraw(withdrawn.clone()));
+                egress.send_route_update(withdraw);
+            }
         }
     }
 
-    /// Announce IPv6 routes to all peers except the origin.
+    /// Announce and/or withdraw IPv6 routes to all peers except the origin.
+    ///
+    /// Per RFC 7606, announcements and withdrawals are sent as separate
+    /// UPDATE messages to avoid mixing reachable and unreachable NLRI.
     pub fn announce_except(
         &self,
         origin: IpAddr,
         nlri: Vec<Prefix6>,
         withdrawn: Vec<Prefix6>,
     ) {
-        let route_update = RouteUpdate::V6 { nlri, withdrawn };
-
         for (peer_addr, egress) in &self.egress {
             if *peer_addr == origin {
                 continue;
             }
-            egress.announce_routes(route_update.clone());
+            if !nlri.is_empty() {
+                let announce =
+                    RouteUpdate::V6(RouteUpdate6::Announce(nlri.clone()));
+                egress.send_route_update(announce);
+            }
+            if !withdrawn.is_empty() {
+                let withdraw =
+                    RouteUpdate::V6(RouteUpdate6::Withdraw(withdrawn.clone()));
+                egress.send_route_update(withdraw);
+            }
         }
     }
 }
@@ -119,31 +161,24 @@ impl<Cnx: BgpConnection, Af> Fanout<Cnx, Af> {
 }
 
 impl<Cnx: BgpConnection> Egress<Cnx> {
-    fn announce_routes(&self, route_update: RouteUpdate) {
+    fn send_route_update(&self, route_update: RouteUpdate) {
         let Some(tx) = self.event_tx.as_ref() else {
             return;
         };
 
-        // Extract summary info before send() consumes route_update.
-        // This avoids expensive formatting when send succeeds (common case).
-        let (af, nlri_count, withdrawn_count) = (
-            route_update.afi(),
-            route_update.nlri_count(),
-            route_update.withdrawn_count(),
-        );
+        // Capture Display output before send() consumes route_update.
+        let update_desc = format!("{route_update}");
 
         if let Err(e) =
             tx.send(FsmEvent::Admin(AdminEvent::Announce(route_update)))
         {
             slog::error!(
                 self.log,
-                "failed to send routes to egress: {e}";
+                "failed to send route update to egress: {e}";
                 "component" => COMPONENT_BGP,
                 "module" => MOD_NEIGHBOR,
                 "unit" => UNIT_FANOUT,
-                "address_family" => af,
-                "nlri_count" => nlri_count,
-                "withdrawn_count" => withdrawn_count,
+                "route_update" => update_desc,
                 "error" => format!("{e}"),
             );
         }
