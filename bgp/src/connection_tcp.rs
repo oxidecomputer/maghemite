@@ -12,10 +12,10 @@ use crate::{
     error::Error,
     log::{connection_log, connection_log_lite},
     messages::{
-        ErrorCode, ErrorSubcode, Header, Message, MessageParseError,
-        MessageType, NotificationMessage, NotificationParseError,
-        NotificationParseErrorReason, OpenErrorSubcode, OpenMessage,
-        OpenParseError, OpenParseErrorReason, RouteRefreshMessage,
+        ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode, Message,
+        MessageParseError, MessageType, NotificationMessage,
+        NotificationParseError, NotificationParseErrorReason, OpenErrorSubcode,
+        OpenMessage, OpenParseError, OpenParseErrorReason, RouteRefreshMessage,
         RouteRefreshParseError, RouteRefreshParseErrorReason, UpdateMessage,
     },
     session::{
@@ -852,7 +852,35 @@ impl BgpConnectionTcp {
                     }
                 }
             }
-            MessageType::KeepAlive => return Ok(Message::KeepAlive),
+            MessageType::KeepAlive => {
+                // RFC 4271 §4.4: KEEPALIVE must be exactly 19 bytes (16-byte header + 0-byte body)
+                if !msgbuf.is_empty() {
+                    connection_log_lite!(log,
+                        error,
+                        "KEEPALIVE parse error: message body not empty";
+                        "direction" => direction,
+                        "connection" => format!("{stream:?}"),
+                        "body_length" => msgbuf.len()
+                    );
+                    return Err(RecvError::Parse(
+                        MessageParseError::Notification(
+                            NotificationParseError {
+                                error_code: ErrorCode::Header,
+                                error_subcode: ErrorSubcode::Header(
+                                    HeaderErrorSubcode::BadMessageLength,
+                                ),
+                                reason: NotificationParseErrorReason::Other {
+                                    detail: format!(
+                                        "KEEPALIVE message must have zero body, got {} bytes",
+                                        msgbuf.len()
+                                    ),
+                                },
+                            },
+                        ),
+                    ));
+                }
+                return Ok(Message::KeepAlive);
+            }
             MessageType::RouteRefresh => {
                 match RouteRefreshMessage::from_wire(&msgbuf) {
                     Ok(m) => m.into(),
