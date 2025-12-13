@@ -8134,20 +8134,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, pc: &PeerConnection<Cnx>) {
-        let originated4 = match self.db.get_origin4() {
-            Ok(value) => value,
-            Err(e) => {
-                session_log!(
-                    self,
-                    error,
-                    pc.conn,
-                    "failed to get originated ipv4 routes from db: {e}";
-                    "error" => format!("{e}")
-                );
-                Vec::new()
-            }
-        };
-
         let nexthop = match update.nexthop() {
             Ok(nh) => match nh {
                 BgpNexthop::Ipv4(ip4) => IpAddr::V4(ip4),
@@ -8174,7 +8160,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let withdrawn: Vec<Prefix> = update
             .withdrawn
             .iter()
-            .filter(|p| !originated4.contains(p) && p.valid_for_rib())
+            .filter(|p| p.valid_for_rib())
             .copied()
             .map(Prefix::V4)
             .collect();
@@ -8186,8 +8172,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             .nlri
             .iter()
             .filter(|p| {
-                !originated4.contains(p)
-                    && p.valid_for_rib()
+                p.valid_for_rib()
                     && !self.prefix_via_self(Prefix::V4(**p), nexthop)
             })
             .copied()
@@ -8234,8 +8219,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .nlri
                         .iter()
                         .filter(|p| {
-                            !originated4.contains(p)
-                                && p.valid_for_rib()
+                            p.valid_for_rib()
                                 && !self.prefix_via_self(
                                     Prefix::V4(**p),
                                     mp_nexthop,
@@ -8272,20 +8256,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 }
                 MpReachNlri::Ipv6Unicast(reach6) => {
-                    let originated6 = match self.db.get_origin6() {
-                        Ok(value) => value,
-                        Err(e) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "failed to get originated ipv6 routes from db: {e}";
-                                "error" => format!("{e}")
-                            );
-                            Vec::new()
-                        }
-                    };
-
                     let nexthop6 = match &reach6.nexthop {
                         BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
                         BgpNexthop::Ipv6Double((gua, _ll)) => IpAddr::V6(*gua),
@@ -8307,8 +8277,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .nlri
                         .iter()
                         .filter(|p| {
-                            !originated6.contains(p)
-                                && p.valid_for_rib()
+                            p.valid_for_rib()
                                 && !self
                                     .prefix_via_self(Prefix::V6(**p), nexthop6)
                         })
@@ -8352,9 +8321,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let mp_withdrawn4: Vec<Prefix> = unreach4
                         .withdrawn
                         .iter()
-                        .filter(|p| {
-                            !originated4.contains(p) && p.valid_for_rib()
-                        })
+                        .filter(|p| p.valid_for_rib())
                         .copied()
                         .map(Prefix::V4)
                         .collect();
@@ -8365,26 +8332,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     );
                 }
                 MpUnreachNlri::Ipv6Unicast(unreach6) => {
-                    let originated6 = match self.db.get_origin6() {
-                        Ok(value) => value,
-                        Err(e) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "failed to get originated ipv6 routes for withdrawal: {e}";
-                                "error" => format!("{e}")
-                            );
-                            Vec::new()
-                        }
-                    };
-
                     let withdrawn6: Vec<Prefix> = unreach6
                         .withdrawn
                         .iter()
-                        .filter(|p| {
-                            !originated6.contains(p) && p.valid_for_rib()
-                        })
+                        .filter(|p| p.valid_for_rib())
                         .copied()
                         .map(Prefix::V6)
                         .collect();
