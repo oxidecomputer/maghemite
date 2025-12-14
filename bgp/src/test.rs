@@ -8,6 +8,7 @@ use crate::{
     connection_channel::{BgpConnectionChannel, BgpListenerChannel},
     connection_tcp::{BgpConnectionTcp, BgpListenerTcp},
     dispatcher::Dispatcher,
+    params::Ipv6UnicastConfig,
     router::Router,
     session::{
         AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, SessionEndpoint,
@@ -18,7 +19,7 @@ use lazy_static::lazy_static;
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
-use rdb::{Asn, Prefix, Prefix4};
+use rdb::{Asn, ImportExportPolicy6, Prefix, Prefix4};
 use std::{
     collections::BTreeMap,
     net::{IpAddr, SocketAddr},
@@ -260,16 +261,52 @@ fn basic_peering_helper<
     r2_addr: SocketAddr,
 ) {
     let is_tcp = std::any::type_name::<Cnx>().contains("Tcp");
-    let test_str = match (passive, is_tcp) {
-        (true, true) => "basic_peering_passive_tcp",
-        (false, true) => "basic_peering_active_tcp",
-        (true, false) => "basic_peering_passive",
-        (false, false) => "basic_peering_active",
+    let is_ipv6 = r1_addr.ip().is_ipv6();
+    let test_str = match (passive, is_tcp, is_ipv6) {
+        (true, true, true) => "basic_peering_passive_tcp_ipv6",
+        (false, true, true) => "basic_peering_active_tcp_ipv6",
+        (true, false, true) => "basic_peering_passive_ipv6",
+        (false, false, true) => "basic_peering_active_ipv6",
+        (true, true, false) => "basic_peering_passive_tcp",
+        (false, true, false) => "basic_peering_active_tcp",
+        (true, false, false) => "basic_peering_passive",
+        (false, false, false) => "basic_peering_active",
+    };
+
+    // Helper to create session_info with appropriate AF config based on address family
+    let create_session_info = |peer_config: &PeerConfig, passive: bool| {
+        let mut info = SessionInfo::from_peer_config(peer_config);
+        info.passive_tcp_establishment = passive;
+        match peer_config.host.ip() {
+            IpAddr::V4(_) => {
+                // IPv4: keep default (IPv4 enabled, IPv6 disabled)
+            }
+            IpAddr::V6(_) => {
+                // IPv6-only: disable IPv4, enable IPv6
+                info.ipv4_unicast = None;
+                info.ipv6_unicast = Some(Ipv6UnicastConfig {
+                    import_policy: ImportExportPolicy6::NoFiltering,
+                    export_policy: ImportExportPolicy6::NoFiltering,
+                });
+            }
+        }
+        info
     };
 
     let peer_config_r1 = PeerConfig {
         name: "r2".into(),
         host: r2_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+
+    let peer_config_r2 = PeerConfig {
+        name: "r1".into(),
+        host: r1_addr,
         hold_time: 6,
         idle_hold_time: 0,
         delay_open: 0,
@@ -287,12 +324,10 @@ fn basic_peering_helper<
             bind_addr: Some(r1_addr),
             neighbors: vec![Neighbor {
                 peer_config: peer_config_r1.clone(),
-                session_info: Some({
-                    let mut info =
-                        SessionInfo::from_peer_config(&peer_config_r1);
-                    info.passive_tcp_establishment = passive;
-                    info
-                }),
+                session_info: Some(create_session_info(
+                    &peer_config_r1,
+                    passive,
+                )),
             }],
         },
         LogicalRouter {
@@ -302,17 +337,11 @@ fn basic_peering_helper<
             listen_addr: r2_addr,
             bind_addr: Some(r2_addr),
             neighbors: vec![Neighbor {
-                peer_config: PeerConfig {
-                    name: "r1".into(),
-                    host: r1_addr,
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                },
-                session_info: None,
+                peer_config: peer_config_r2.clone(),
+                session_info: Some(create_session_info(
+                    &peer_config_r2,
+                    !passive,
+                )),
             }],
         },
     ];
@@ -451,10 +480,53 @@ fn basic_update_helper<
     r2_addr: SocketAddr,
 ) {
     let is_tcp = std::any::type_name::<Cnx>().contains("Tcp");
-    let test_name = if is_tcp {
-        "basic_update_tcp"
-    } else {
-        "basic_update"
+    let is_ipv6 = r1_addr.ip().is_ipv6();
+    let test_name = match (is_tcp, is_ipv6) {
+        (true, true) => "basic_update_ipv6_tcp",
+        (true, false) => "basic_update_tcp",
+        (false, true) => "basic_update_ipv6",
+        (false, false) => "basic_update",
+    };
+
+    // Helper to create session_info with appropriate AF config based on address family
+    let create_session_info = |peer_config: &PeerConfig| {
+        let mut info = SessionInfo::from_peer_config(peer_config);
+        match peer_config.host.ip() {
+            IpAddr::V4(_) => {
+                // IPv4: keep default (IPv4 enabled, IPv6 disabled)
+            }
+            IpAddr::V6(_) => {
+                // IPv6-only: disable IPv4, enable IPv6
+                info.ipv4_unicast = None;
+                info.ipv6_unicast = Some(Ipv6UnicastConfig {
+                    import_policy: ImportExportPolicy6::NoFiltering,
+                    export_policy: ImportExportPolicy6::NoFiltering,
+                });
+            }
+        }
+        info
+    };
+
+    let peer_config_r1 = PeerConfig {
+        name: "r2".into(),
+        host: r2_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+
+    let peer_config_r2 = PeerConfig {
+        name: "r1".into(),
+        host: r1_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
     };
 
     let routers = vec![
@@ -465,17 +537,8 @@ fn basic_update_helper<
             listen_addr: r1_addr,
             bind_addr: Some(r1_addr),
             neighbors: vec![Neighbor {
-                peer_config: PeerConfig {
-                    name: "r2".into(),
-                    host: r2_addr,
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                },
-                session_info: None,
+                peer_config: peer_config_r1.clone(),
+                session_info: Some(create_session_info(&peer_config_r1)),
             }],
         },
         LogicalRouter {
@@ -485,17 +548,8 @@ fn basic_update_helper<
             listen_addr: r2_addr,
             bind_addr: Some(r2_addr),
             neighbors: vec![Neighbor {
-                peer_config: PeerConfig {
-                    name: "r1".into(),
-                    host: r1_addr,
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                },
-                session_info: None,
+                peer_config: peer_config_r2.clone(),
+                session_info: Some(create_session_info(&peer_config_r2)),
             }],
         },
     ];
@@ -518,14 +572,18 @@ fn basic_update_helper<
     wait_for_eq!(r1_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
-    // originate a prefix
-    r1.router
-        .create_origin4(vec![ip!("1.2.3.0/24")])
-        .expect("originate");
-
-    // create handle to rdb::Prefix -- create_origin4 takes messages::Prefix,
-    // so we can't pass this same handle to the earlier method call.
-    let prefix = Prefix::V4(cidr!("1.2.3.0/24"));
+    // originate a prefix (IPv4 for IPv4 tests, IPv6 for IPv6 tests)
+    let prefix = if is_ipv6 {
+        r1.router
+            .create_origin6(vec![ip!("3fff:db8::/32")])
+            .expect("originate");
+        Prefix::V6(cidr!("3fff:db8::/32"))
+    } else {
+        r1.router
+            .create_origin4(vec![ip!("1.2.3.0/24")])
+            .expect("originate");
+        Prefix::V4(cidr!("1.2.3.0/24"))
+    };
 
     wait_for!(!r2.router.db.get_prefix_paths(&prefix).is_empty());
 
@@ -975,7 +1033,10 @@ fn test_import_export_policy_filtering() {
     };
     let r1_session_info = {
         let mut info = SessionInfo::from_peer_config(&r1_peer_config);
-        info.allow_export4 = ImportExportPolicy4::Allow(export_allow.clone());
+        if let Some(ref mut cfg) = info.ipv4_unicast {
+            cfg.export_policy =
+                ImportExportPolicy4::Allow(export_allow.clone());
+        }
         info
     };
 
@@ -992,7 +1053,10 @@ fn test_import_export_policy_filtering() {
     };
     let r2_session_info = {
         let mut info = SessionInfo::from_peer_config(&r2_peer_config);
-        info.allow_import4 = ImportExportPolicy4::Allow(import_allow.clone());
+        if let Some(ref mut cfg) = info.ipv4_unicast {
+            cfg.import_policy =
+                ImportExportPolicy4::Allow(import_allow.clone());
+        }
         info
     };
 
@@ -1098,7 +1162,9 @@ fn test_import_export_policy_filtering() {
     );
     let r1_session_info_no_export = {
         let mut info = SessionInfo::from_peer_config(&r1_peer_config);
-        info.allow_export4 = ImportExportPolicy4::NoFiltering;
+        if let Some(ref mut cfg) = info.ipv4_unicast {
+            cfg.export_policy = ImportExportPolicy4::NoFiltering;
+        }
         info
     };
     r1.router
@@ -1141,7 +1207,9 @@ fn test_import_export_policy_filtering() {
     // Now remove r2's import policy - prefix_c should appear via route-refresh
     let r2_session_info_no_import = {
         let mut info = SessionInfo::from_peer_config(&r2_peer_config);
-        info.allow_import4 = ImportExportPolicy4::NoFiltering;
+        if let Some(ref mut cfg) = info.ipv4_unicast {
+            cfg.import_policy = ImportExportPolicy4::NoFiltering;
+        }
         info
     };
     r2.router
@@ -1188,4 +1256,59 @@ fn test_import_export_policy_filtering() {
     // Clean up
     r1.shutdown();
     r2.shutdown();
+}
+
+// IPv6-only tests added via basic_update and basic_peering helpers
+// Tests with IPv6 addresses will have IPv6-only config automatically applied
+
+#[test]
+fn test_basic_update_ipv6() {
+    basic_update_helper::<BgpConnectionChannel, BgpListenerChannel>(
+        sockaddr!(&format!("[3fff::]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::1]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_basic_update_ipv6_tcp() {
+    basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        sockaddr!(&format!("[3fff::2]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::3]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_ipv6_basic_peering_passive() {
+    basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
+        true,
+        sockaddr!(&format!("[3fff::4]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::5]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_ipv6_basic_peering_active() {
+    basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
+        false,
+        sockaddr!(&format!("[3fff::6]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::7]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_ipv6_basic_peering_passive_tcp() {
+    basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        true,
+        sockaddr!(&format!("[3fff::8]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::9]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_ipv6_basic_peering_active_tcp() {
+    basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        false,
+        sockaddr!(&format!("[3fff::a]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::b]:{TEST_BGP_PORT}")),
+    )
 }

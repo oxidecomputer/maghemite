@@ -18,14 +18,15 @@ use crate::{
         OpenMessage, PathAttributeValue, RouteRefreshMessage, Safi,
         UpdateMessage,
     },
+    params::{Ipv4UnicastConfig, Ipv6UnicastConfig},
     policy::{CheckerResult, ShaperResult},
     recv_event_loop, recv_event_return,
     router::Router,
 };
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{
-    AddressFamily, Asn, BgpPathProperties, Db, ImportExportPolicy,
-    ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4, Prefix6,
+    AddressFamily, Asn, BgpPathProperties, Db, ImportExportPolicy4,
+    ImportExportPolicy6, Prefix, Prefix4, Prefix6, TypedImportExportPolicy,
 };
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
 use schemars::JsonSchema;
@@ -456,7 +457,7 @@ pub enum AdminEvent {
 
     /// Fires when an export policy has changed.
     /// Contains the previous policy for determining routes to re-advertise.
-    ExportPolicyChanged(ImportExportPolicy),
+    ExportPolicyChanged(TypedImportExportPolicy),
 
     // The checker for the router has changed. Event contains previous checker.
     // Current checker is available in the router policy object.
@@ -490,8 +491,8 @@ impl AdminEvent {
             AdminEvent::ShaperChanged(_) => "shaper changed",
             AdminEvent::CheckerChanged(_) => "checker changed",
             AdminEvent::ExportPolicyChanged(p) => match p {
-                ImportExportPolicy::V4(_) => "ipv4 export policy changed",
-                ImportExportPolicy::V6(_) => "ipv6 export policy changed",
+                TypedImportExportPolicy::V4(_) => "ipv4 export policy changed",
+                TypedImportExportPolicy::V6(_) => "ipv6 export policy changed",
             },
             AdminEvent::Reset => "reset",
             AdminEvent::ManualStart => "manual start",
@@ -786,14 +787,10 @@ pub struct SessionInfo {
     /// Ensure that routes received from eBGP peers have the peer's ASN as the
     /// first element in the AS path.
     pub enforce_first_as: bool,
-    /// Per-address-family import policy for IPv4 routes.
-    pub allow_import4: ImportExportPolicy4,
-    /// Per-address-family export policy for IPv4 routes.
-    pub allow_export4: ImportExportPolicy4,
-    /// Per-address-family import policy for IPv6 routes.
-    pub allow_import6: ImportExportPolicy6,
-    /// Per-address-family export policy for IPv6 routes.
-    pub allow_export6: ImportExportPolicy6,
+    /// IPv4 Unicast address family configuration (None = disabled)
+    pub ipv4_unicast: Option<Ipv4UnicastConfig>,
+    /// IPv6 Unicast address family configuration (None = disabled)
+    pub ipv6_unicast: Option<Ipv6UnicastConfig>,
     /// Vlan tag to assign to data plane routes created by this session.
     pub vlan_id: Option<u16>,
     /// Timer intervals for session and connection management
@@ -821,10 +818,6 @@ pub struct SessionInfo {
     /// resolution even when one connection is already in Established state.
     /// When false, Established connection always wins (timing-based resolution).
     pub deterministic_collision_resolution: bool,
-    /// This session is configured to support the IPv4 Unicast MP-BGP AFI/SAFI
-    pub ipv4_enabled: bool,
-    /// This session is configured to support the IPv6 Unicast MP-BGP AFI/SAFI
-    pub ipv6_enabled: bool,
 }
 
 impl SessionInfo {
@@ -842,10 +835,11 @@ impl SessionInfo {
             communities: BTreeSet::new(),
             local_pref: None,
             enforce_first_as: false,
-            allow_import4: ImportExportPolicy4::default(),
-            allow_export4: ImportExportPolicy4::default(),
-            allow_import6: ImportExportPolicy6::default(),
-            allow_export6: ImportExportPolicy6::default(),
+            ipv4_unicast: Some(Ipv4UnicastConfig {
+                import_policy: ImportExportPolicy4::default(),
+                export_policy: ImportExportPolicy4::default(),
+            }),
+            ipv6_unicast: None,
             vlan_id: None,
             connect_retry_time: Duration::from_secs(peer_config.connect_retry),
             keepalive_time: Duration::from_secs(peer_config.keepalive),
@@ -857,10 +851,6 @@ impl SessionInfo {
             connect_retry_jitter: None,
             // XXX: plumb this through to the neighbor API endpoint
             deterministic_collision_resolution: false,
-            // XXX: plumb this through to the neighbor API endpoint
-            ipv4_enabled: true,
-            // XXX: plumb this through to the neighbor API endpoint
-            ipv6_enabled: false,
         }
     }
 }
@@ -2042,10 +2032,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             },
             Capability::RouteRefresh {},
         ]);
-        if lock!(self.session).ipv4_enabled {
+        if lock!(self.session).ipv4_unicast.is_some() {
             caps.insert(Capability::ipv4_unicast());
         }
-        if lock!(self.session).ipv6_enabled {
+        if lock!(self.session).ipv6_unicast.is_some() {
             caps.insert(Capability::ipv6_unicast());
         }
         *lock!(self.caps_tx) = caps;
@@ -6032,7 +6022,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 AdminEvent::ExportPolicyChanged(previous) => {
                     match previous {
-                        ImportExportPolicy::V4(previous4) => {
+                        TypedImportExportPolicy::V4(previous4) => {
                             let originated = match self.db.get_origin4() {
                                 Ok(value) => value,
                                 Err(e) => {
@@ -6064,11 +6054,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 };
 
                             let originated_after: BTreeSet<Prefix4> =
-                                match &session.allow_export4 {
-                                    ImportExportPolicy4::NoFiltering => {
+                                match session
+                                    .ipv4_unicast
+                                    .as_ref()
+                                    .map(|c| &c.export_policy)
+                                {
+                                    Some(ImportExportPolicy4::NoFiltering)
+                                    | None => {
                                         originated.iter().cloned().collect()
                                     }
-                                    ImportExportPolicy4::Allow(list) => {
+                                    Some(ImportExportPolicy4::Allow(list)) => {
                                         originated
                                             .clone()
                                             .into_iter()
@@ -6130,7 +6125,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                             FsmState::Established(pc)
                         }
-                        ImportExportPolicy::V6(previous6) => {
+                        TypedImportExportPolicy::V6(previous6) => {
                             let originated = match self.db.get_origin6() {
                                 Ok(value) => value,
                                 Err(e) => {
@@ -6162,11 +6157,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 };
 
                             let originated_after: BTreeSet<Prefix6> =
-                                match &session.allow_export6 {
-                                    ImportExportPolicy6::NoFiltering => {
+                                match session
+                                    .ipv6_unicast
+                                    .as_ref()
+                                    .map(|c| &c.export_policy)
+                                {
+                                    Some(ImportExportPolicy6::NoFiltering)
+                                    | None => {
                                         originated.iter().cloned().collect()
                                     }
-                                    ImportExportPolicy6::Allow(list) => {
+                                    Some(ImportExportPolicy6::Allow(list)) => {
                                         originated
                                             .clone()
                                             .into_iter()
@@ -7380,7 +7380,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Apply export policy filtering to UPDATE message.
-    /// Filters NLRI based on allow_export configuration.
+    /// Filters NLRI based on per-AF export policy configuration.
     fn apply_export_policy(
         &self,
         update: &mut UpdateMessage,
@@ -7388,7 +7388,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let session = lock!(self.session);
 
         // Filter traditional NLRI field (IPv4) using IPv4 export policy
-        if let ImportExportPolicy4::Allow(ref policy4) = session.allow_export4 {
+        if let Some(config4) = &session.ipv4_unicast
+            && let ImportExportPolicy4::Allow(ref policy4) =
+                config4.export_policy
+        {
             update.nlri.retain(|p| policy4.contains(p));
         }
 
@@ -7396,15 +7399,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Some(reach) = update.mp_reach_mut() {
             match reach {
                 MpReachNlri::Ipv4Unicast(reach4) => {
-                    if let ImportExportPolicy4::Allow(ref policy4) =
-                        session.allow_export4
+                    if let Some(config4) = &session.ipv4_unicast
+                        && let ImportExportPolicy4::Allow(ref policy4) =
+                            config4.export_policy
                     {
                         reach4.nlri.retain(|p| policy4.contains(p));
                     }
                 }
                 MpReachNlri::Ipv6Unicast(reach6) => {
-                    if let ImportExportPolicy6::Allow(ref policy6) =
-                        session.allow_export6
+                    if let Some(config6) = &session.ipv6_unicast
+                        && let ImportExportPolicy6::Allow(ref policy6) =
+                            config6.export_policy
                     {
                         reach6.nlri.retain(|p| policy6.contains(p));
                     }
@@ -7891,8 +7896,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             let session = lock!(self.session);
 
             // Filter traditional NLRI field (IPv4) using IPv4 import policy
-            if let ImportExportPolicy4::Allow(ref policy4) =
-                session.allow_import4
+            if let Some(config4) = &session.ipv4_unicast
+                && let ImportExportPolicy4::Allow(ref policy4) =
+                    config4.import_policy
             {
                 update.nlri.retain(|p| policy4.contains(p));
             }
@@ -7901,15 +7907,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             if let Some(reach) = update.mp_reach_mut() {
                 match reach {
                     MpReachNlri::Ipv4Unicast(reach4) => {
-                        if let ImportExportPolicy4::Allow(ref policy4) =
-                            session.allow_import4
+                        if let Some(config4) = &session.ipv4_unicast
+                            && let ImportExportPolicy4::Allow(ref policy4) =
+                                config4.import_policy
                         {
                             reach4.nlri.retain(|p| policy4.contains(p));
                         }
                     }
                     MpReachNlri::Ipv6Unicast(reach6) => {
-                        if let ImportExportPolicy6::Allow(ref policy6) =
-                            session.allow_import6
+                        if let Some(config6) = &session.ipv6_unicast
+                            && let ImportExportPolicy6::Allow(ref policy6) =
+                                config6.import_policy
                         {
                             reach6.nlri.retain(|p| policy6.contains(p));
                         }
@@ -8138,7 +8146,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             Ok(nh) => match nh {
                 BgpNexthop::Ipv4(ip4) => IpAddr::V4(ip4),
                 BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(ip6),
-                BgpNexthop::Ipv6Double((gua, _ll)) => IpAddr::V6(gua),
+                BgpNexthop::Ipv6Double(addrs) => IpAddr::V6(addrs.global),
             },
             Err(e) => {
                 session_log!(
@@ -8212,7 +8220,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let mp_nexthop = match &reach4.nexthop {
                         BgpNexthop::Ipv4(ip4) => IpAddr::V4(*ip4),
                         BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
-                        BgpNexthop::Ipv6Double((gua, _ll)) => IpAddr::V6(*gua),
+                        BgpNexthop::Ipv6Double(addrs) => {
+                            IpAddr::V6(addrs.global)
+                        }
                     };
 
                     let mp_nlri4: Vec<Prefix> = reach4
@@ -8258,7 +8268,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 MpReachNlri::Ipv6Unicast(reach6) => {
                     let nexthop6 = match &reach6.nexthop {
                         BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
-                        BgpNexthop::Ipv6Double((gua, _ll)) => IpAddr::V6(*gua),
+                        BgpNexthop::Ipv6Double(addrs) => {
+                            IpAddr::V6(addrs.global)
+                        }
                         BgpNexthop::Ipv4(ip4) => {
                             // IPv4 nexthop for IPv6 routes is unusual but possible
                             // in some configurations (e.g., IPv4-mapped IPv6)
@@ -8567,13 +8579,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         // Handle per-AF import policy changes (trigger route refresh)
-        if current.allow_import4 != info.allow_import4 {
-            current.allow_import4 = info.allow_import4;
+        if current.ipv4_unicast.as_ref().map(|c| &c.import_policy)
+            != info.ipv4_unicast.as_ref().map(|c| &c.import_policy)
+        {
+            current.ipv4_unicast = info.ipv4_unicast.clone();
             refresh_needed4 = true;
         }
 
-        if current.allow_import6 != info.allow_import6 {
-            current.allow_import6 = info.allow_import6;
+        if current.ipv6_unicast.as_ref().map(|c| &c.import_policy)
+            != info.ipv6_unicast.as_ref().map(|c| &c.import_policy)
+        {
+            current.ipv6_unicast = info.ipv6_unicast.clone();
             refresh_needed6 = true;
         }
 
@@ -8595,24 +8611,43 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .set_jitter_range(info.idle_hold_jitter);
         }
 
-        if current.allow_export4 != info.allow_export4 {
-            let previous4 = current.allow_export4.clone();
-            current.allow_export4 = info.allow_export4;
-            self.event_tx
-                .send(FsmEvent::Admin(AdminEvent::ExportPolicyChanged(
-                    ImportExportPolicy::V4(previous4),
-                )))
-                .map_err(|e| Error::EventSend(e.to_string()))?;
+        // Handle per-AF export policy changes
+        if current.ipv4_unicast.as_ref().map(|c| &c.export_policy)
+            != info.ipv4_unicast.as_ref().map(|c| &c.export_policy)
+        {
+            if let Some(previous4) = current
+                .ipv4_unicast
+                .as_ref()
+                .map(|c| c.export_policy.clone())
+            {
+                current.ipv4_unicast = info.ipv4_unicast.clone();
+                self.event_tx
+                    .send(FsmEvent::Admin(AdminEvent::ExportPolicyChanged(
+                        TypedImportExportPolicy::V4(previous4),
+                    )))
+                    .map_err(|e| Error::EventSend(e.to_string()))?;
+            } else {
+                current.ipv4_unicast = info.ipv4_unicast.clone();
+            }
         }
 
-        if current.allow_export6 != info.allow_export6 {
-            let previous6 = current.allow_export6.clone();
-            current.allow_export6 = info.allow_export6;
-            self.event_tx
-                .send(FsmEvent::Admin(AdminEvent::ExportPolicyChanged(
-                    ImportExportPolicy::V6(previous6),
-                )))
-                .map_err(|e| Error::EventSend(e.to_string()))?;
+        if current.ipv6_unicast.as_ref().map(|c| &c.export_policy)
+            != info.ipv6_unicast.as_ref().map(|c| &c.export_policy)
+        {
+            if let Some(previous6) = current
+                .ipv6_unicast
+                .as_ref()
+                .map(|c| c.export_policy.clone())
+            {
+                current.ipv6_unicast = info.ipv6_unicast.clone();
+                self.event_tx
+                    .send(FsmEvent::Admin(AdminEvent::ExportPolicyChanged(
+                        TypedImportExportPolicy::V6(previous6),
+                    )))
+                    .map_err(|e| Error::EventSend(e.to_string()))?;
+            } else {
+                current.ipv6_unicast = info.ipv6_unicast.clone();
+            }
         }
 
         drop(current);
