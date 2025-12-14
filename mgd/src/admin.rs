@@ -145,13 +145,13 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn read_neighbors(
         ctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+    ) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError> {
         bgp_admin::read_neighbors(ctx, request).await
     }
 
     async fn create_neighbor(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<Neighbor>,
+        request: TypedBody<NeighborV1>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::create_neighbor(ctx, request).await
     }
@@ -159,13 +159,13 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn read_neighbor(
         ctx: RequestContext<Self::Context>,
         request: Query<NeighborSelector>,
-    ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
+    ) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
         bgp_admin::read_neighbor(ctx, request).await
     }
 
     async fn update_neighbor(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<Neighbor>,
+        request: TypedBody<NeighborV1>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::update_neighbor(ctx, request).await
     }
@@ -175,6 +175,41 @@ impl MgAdminApi for MgAdminApiImpl {
         request: Query<NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         bgp_admin::delete_neighbor(ctx, request).await
+    }
+
+    async fn read_neighbors_v2(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+        bgp_admin::read_neighbors_v2(ctx, request).await
+    }
+
+    async fn create_neighbor_v2(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::create_neighbor_v2(ctx, request).await
+    }
+
+    async fn read_neighbor_v2(
+        ctx: RequestContext<Self::Context>,
+        request: Query<NeighborSelector>,
+    ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
+        bgp_admin::read_neighbor_v2(ctx, request).await
+    }
+
+    async fn update_neighbor_v2(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::update_neighbor_v2(ctx, request).await
+    }
+
+    async fn delete_neighbor_v2(
+        ctx: RequestContext<Self::Context>,
+        request: Query<NeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        bgp_admin::delete_neighbor_v2(ctx, request).await
     }
 
     async fn clear_neighbor(
@@ -291,9 +326,16 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn bgp_apply(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<ApplyRequest>,
+        request: TypedBody<ApplyRequestV1>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::bgp_apply(ctx, request).await
+    }
+
+    async fn bgp_apply_v2(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<ApplyRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::bgp_apply_v2(ctx, request).await
     }
 
     async fn message_history(

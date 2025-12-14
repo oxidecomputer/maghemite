@@ -355,27 +355,27 @@ pub struct BgpRouterInfo {
 }
 
 // ============================================================================
-// API Compatibility Type (ImportExportPolicyV1)
+// API Compatibility Type (ImportExportPolicy)
 // ============================================================================
-// This type maintains backward compatibility with the existing API encoding.
+// This type maintains backward compatibility with the existing v1/v2 API.
 // It uses the mixed Prefix type (V4/V6) and is used at the API boundary.
-// Internally, code should use ImportExportPolicy (V4/V6 enum) for type safety.
+// Internally, code should use ImportExportPolicy4/6 for type safety.
 
-/// Legacy import/export policy type for API compatibility.
+/// Legacy import/export policy type for v1/v2 API compatibility.
 ///
 /// This type uses mixed IPv4/IPv6 prefixes and is used at the API boundary.
-/// For internal use, convert to `ImportExportPolicy` variants using
+/// For internal use, convert to typed variants using
 /// `as_ipv4_policy()` and `as_ipv6_policy()`.
 #[derive(
     Default, Debug, Serialize, Deserialize, Clone, JsonSchema, Eq, PartialEq,
 )]
-pub enum ImportExportPolicyV1 {
+pub enum ImportExportPolicy {
     #[default]
     NoFiltering,
     Allow(BTreeSet<Prefix>),
 }
 
-impl ImportExportPolicyV1 {
+impl ImportExportPolicy {
     /// Extract IPv4 prefixes from this policy as a typed IPv4 policy.
     ///
     /// If this policy is `NoFiltering`, returns `ImportExportPolicy4::NoFiltering`.
@@ -383,10 +383,8 @@ impl ImportExportPolicyV1 {
     /// If the policy has prefixes but none are IPv4, returns `NoFiltering` for IPv4.
     pub fn as_ipv4_policy(&self) -> ImportExportPolicy4 {
         match self {
-            ImportExportPolicyV1::NoFiltering => {
-                ImportExportPolicy4::NoFiltering
-            }
-            ImportExportPolicyV1::Allow(prefixes) => {
+            ImportExportPolicy::NoFiltering => ImportExportPolicy4::NoFiltering,
+            ImportExportPolicy::Allow(prefixes) => {
                 let v4_prefixes: BTreeSet<Prefix4> = prefixes
                     .iter()
                     .filter_map(|p| match p {
@@ -411,10 +409,8 @@ impl ImportExportPolicyV1 {
     /// If the policy has prefixes but none are IPv6, returns `NoFiltering` for IPv6.
     pub fn as_ipv6_policy(&self) -> ImportExportPolicy6 {
         match self {
-            ImportExportPolicyV1::NoFiltering => {
-                ImportExportPolicy6::NoFiltering
-            }
-            ImportExportPolicyV1::Allow(prefixes) => {
+            ImportExportPolicy::NoFiltering => ImportExportPolicy6::NoFiltering,
+            ImportExportPolicy::Allow(prefixes) => {
                 let v6_prefixes: BTreeSet<Prefix6> = prefixes
                     .iter()
                     .filter_map(|p| match p {
@@ -444,14 +440,14 @@ impl ImportExportPolicyV1 {
             (
                 ImportExportPolicy4::NoFiltering,
                 ImportExportPolicy6::NoFiltering,
-            ) => ImportExportPolicyV1::NoFiltering,
+            ) => ImportExportPolicy::NoFiltering,
             (
                 ImportExportPolicy4::Allow(v4_prefixes),
                 ImportExportPolicy6::NoFiltering,
             ) => {
                 let prefixes: BTreeSet<Prefix> =
                     v4_prefixes.iter().map(|p| Prefix::V4(*p)).collect();
-                ImportExportPolicyV1::Allow(prefixes)
+                ImportExportPolicy::Allow(prefixes)
             }
             (
                 ImportExportPolicy4::NoFiltering,
@@ -459,7 +455,7 @@ impl ImportExportPolicyV1 {
             ) => {
                 let prefixes: BTreeSet<Prefix> =
                     v6_prefixes.iter().map(|p| Prefix::V6(*p)).collect();
-                ImportExportPolicyV1::Allow(prefixes)
+                ImportExportPolicy::Allow(prefixes)
             }
             (
                 ImportExportPolicy4::Allow(v4_prefixes),
@@ -468,7 +464,7 @@ impl ImportExportPolicyV1 {
                 let mut prefixes: BTreeSet<Prefix> =
                     v4_prefixes.iter().map(|p| Prefix::V4(*p)).collect();
                 prefixes.extend(v6_prefixes.iter().map(|p| Prefix::V6(*p)));
-                ImportExportPolicyV1::Allow(prefixes)
+                ImportExportPolicy::Allow(prefixes)
             }
         }
     }
@@ -494,9 +490,10 @@ pub enum ImportExportPolicy6 {
     Allow(BTreeSet<Prefix6>),
 }
 
-/// Address-family-specific import/export policy.
+/// Address-family-specific import/export policy wrapper for internal use.
+/// This is distinct from the API-facing `ImportExportPolicy` type.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum ImportExportPolicy {
+pub enum TypedImportExportPolicy {
     V4(ImportExportPolicy4),
     V6(ImportExportPolicy6),
 }
@@ -522,6 +519,14 @@ pub struct BgpNeighborInfo {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
+    /// Whether IPv4 unicast is enabled for this neighbor.
+    /// Defaults to true for backward compatibility with legacy data.
+    #[serde(default = "default_ipv4_enabled")]
+    pub ipv4_enabled: bool,
+    /// Whether IPv6 unicast is enabled for this neighbor.
+    /// Defaults to false for backward compatibility with legacy data.
+    #[serde(default)]
+    pub ipv6_enabled: bool,
     /// Per-address-family import policy for IPv4 routes.
     #[serde(default)]
     pub allow_import4: ImportExportPolicy4,
@@ -535,6 +540,11 @@ pub struct BgpNeighborInfo {
     #[serde(default)]
     pub allow_export6: ImportExportPolicy6,
     pub vlan_id: Option<u16>,
+}
+
+/// Default value for ipv4_enabled - true for backward compatibility
+fn default_ipv4_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, JsonSchema)]

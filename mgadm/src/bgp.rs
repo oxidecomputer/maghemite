@@ -8,11 +8,12 @@ use colored::*;
 use mg_admin_client::{
     Client,
     types::{
-        self, ImportExportPolicy, NeighborResetOp as MgdNeighborResetOp,
+        self, ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
+        Ipv6UnicastConfig, NeighborResetOp as MgdNeighborResetOp,
         NeighborResetRequest,
     },
 };
-use rdb::types::{PolicyAction, Prefix, Prefix4, Prefix6};
+use rdb::types::{PolicyAction, Prefix4, Prefix6};
 use std::fs::read_to_string;
 use std::io::{Write, stdout};
 use std::net::{IpAddr, SocketAddr};
@@ -543,11 +544,29 @@ pub struct Neighbor {
     #[arg(long)]
     pub vlan_id: Option<u16>,
 
+    /// Enable IPv4 unicast address family.
     #[arg(long)]
-    pub allow_export: Option<Vec<Prefix4>>,
+    pub enable_ipv4: bool,
 
+    /// Enable IPv6 unicast address family.
     #[arg(long)]
-    pub allow_import: Option<Vec<Prefix4>>,
+    pub enable_ipv6: bool,
+
+    /// IPv4 prefixes to allow importing (requires --enable-ipv4).
+    #[arg(long)]
+    pub allow_import4: Option<Vec<Prefix4>>,
+
+    /// IPv4 prefixes to allow exporting (requires --enable-ipv4).
+    #[arg(long)]
+    pub allow_export4: Option<Vec<Prefix4>>,
+
+    /// IPv6 prefixes to allow importing (requires --enable-ipv6).
+    #[arg(long)]
+    pub allow_import6: Option<Vec<Prefix6>>,
+
+    /// IPv6 prefixes to allow exporting (requires --enable-ipv6).
+    #[arg(long)]
+    pub allow_export6: Option<Vec<Prefix6>>,
 
     /// Autonomous system number for the router to add the neighbor to.
     #[clap(env)]
@@ -556,6 +575,50 @@ pub struct Neighbor {
 
 impl From<Neighbor> for types::Neighbor {
     fn from(n: Neighbor) -> types::Neighbor {
+        // Build IPv4 unicast config if enabled
+        let ipv4_unicast = if n.enable_ipv4 {
+            let import_policy = match n.allow_import4 {
+                Some(prefixes) => {
+                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy4::NoFiltering,
+            };
+            let export_policy = match n.allow_export4 {
+                Some(prefixes) => {
+                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy4::NoFiltering,
+            };
+            Some(Ipv4UnicastConfig {
+                import_policy,
+                export_policy,
+            })
+        } else {
+            None
+        };
+
+        // Build IPv6 unicast config if enabled
+        let ipv6_unicast = if n.enable_ipv6 {
+            let import_policy = match n.allow_import6 {
+                Some(prefixes) => {
+                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy6::NoFiltering,
+            };
+            let export_policy = match n.allow_export6 {
+                Some(prefixes) => {
+                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy6::NoFiltering,
+            };
+            Some(Ipv6UnicastConfig {
+                import_policy,
+                export_policy,
+            })
+        } else {
+            None
+        };
+
         types::Neighbor {
             asn: n.asn,
             remote_asn: n.remote_asn,
@@ -575,26 +638,8 @@ impl From<Neighbor> for types::Neighbor {
             communities: n.communities,
             local_pref: n.local_pref,
             enforce_first_as: n.enforce_first_as,
-            allow_export: match n.allow_export {
-                Some(prefixes) => ImportExportPolicy::Allow(
-                    prefixes
-                        .clone()
-                        .into_iter()
-                        .map(|x| Prefix::V4(Prefix4::new(x.value, x.length)))
-                        .collect(),
-                ),
-                None => ImportExportPolicy::NoFiltering,
-            },
-            allow_import: match n.allow_import {
-                Some(prefixes) => ImportExportPolicy::Allow(
-                    prefixes
-                        .clone()
-                        .into_iter()
-                        .map(|x| Prefix::V4(Prefix4::new(x.value, x.length)))
-                        .collect(),
-                ),
-                None => ImportExportPolicy::NoFiltering,
-            },
+            ipv4_unicast,
+            ipv6_unicast,
             vlan_id: n.vlan_id,
         }
     }
@@ -819,29 +864,29 @@ async fn get_exported(c: Client, asn: u32) -> Result<()> {
 }
 
 async fn list_nbr(asn: u32, c: Client) -> Result<()> {
-    let nbrs = c.read_neighbors(asn).await?;
+    let nbrs = c.read_neighbors_v2(asn).await?;
     println!("{nbrs:#?}");
     Ok(())
 }
 
 async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
-    c.create_neighbor(&nbr.into()).await?;
+    c.create_neighbor_v2(&nbr.into()).await?;
     Ok(())
 }
 
 async fn read_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
-    let nbr = c.read_neighbor(&addr, asn).await?.into_inner();
+    let nbr = c.read_neighbor_v2(&addr, asn).await?.into_inner();
     println!("{nbr:#?}");
     Ok(())
 }
 
 async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
-    c.update_neighbor(&nbr.into()).await?;
+    c.update_neighbor_v2(&nbr.into()).await?;
     Ok(())
 }
 
 async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
-    c.delete_neighbor(&addr, asn).await?;
+    c.delete_neighbor_v2(&addr, asn).await?;
     Ok(())
 }
 
@@ -941,7 +986,7 @@ async fn read_origin6(asn: u32, c: Client) -> Result<()> {
 async fn apply(filename: String, c: Client) -> Result<()> {
     let contents = read_to_string(filename)?;
     let request: types::ApplyRequest = serde_json::from_str(&contents)?;
-    c.bgp_apply(&request).await?;
+    c.bgp_apply_v2(&request).await?;
     Ok(())
 }
 

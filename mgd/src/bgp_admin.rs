@@ -29,7 +29,8 @@ use mg_api::{
     MessageHistoryResponseV1, NeighborResetRequest, NeighborSelector, Rib,
 };
 use mg_common::lock;
-use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicyV1, Prefix};
+use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
+use rdb::{ImportExportPolicy4, ImportExportPolicy6};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -167,7 +168,7 @@ pub async fn delete_router(
 pub async fn read_neighbors(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -179,7 +180,7 @@ pub async fn read_neighbors(
     let result = nbrs
         .into_iter()
         .filter(|x| x.asn == rq.asn)
-        .map(|x| Neighbor::from_rdb_neighbor_info(rq.asn, &x))
+        .map(|x| NeighborV1::from_rdb_neighbor_info(rq.asn, &x))
         .collect();
 
     Ok(HttpResponseOk(result))
@@ -187,18 +188,18 @@ pub async fn read_neighbors(
 
 pub async fn create_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<Neighbor>,
+    request: TypedBody<NeighborV1>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    helpers::add_neighbor(ctx.clone(), rq, false)?;
+    helpers::add_neighbor_v1(ctx.clone(), rq, false)?;
     Ok(HttpResponseUpdatedNoContent())
 }
 
 pub async fn read_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<NeighborSelector>,
-) -> Result<HttpResponseOk<Neighbor>, HttpError> {
+) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
     let rq = request.into_inner();
     let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
         HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
@@ -211,17 +212,17 @@ pub async fn read_neighbor(
             format!("neighbor {} not found in db", rq.addr),
         ))?;
 
-    let result = Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+    let result = NeighborV1::from_rdb_neighbor_info(rq.asn, neighbor_info);
     Ok(HttpResponseOk(result))
 }
 
 pub async fn update_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<Neighbor>,
+    request: TypedBody<NeighborV1>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    helpers::add_neighbor(ctx.clone(), rq, true)?;
+    helpers::add_neighbor_v1(ctx.clone(), rq, true)?;
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -241,6 +242,77 @@ pub async fn clear_neighbor(
     let rq = request.into_inner();
     let ctx = ctx.context();
     Ok(helpers::reset_neighbor(ctx.clone(), rq.asn, rq.addr, rq.op).await?)
+}
+
+// V3 API handlers (new Neighbor type with optional per-AF configs)
+pub async fn read_neighbors_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let nbrs = ctx
+        .db
+        .get_bgp_neighbors()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    let result = nbrs
+        .into_iter()
+        .filter(|x| x.asn == rq.asn)
+        .map(|x| Neighbor::from_rdb_neighbor_info(rq.asn, &x))
+        .collect();
+
+    Ok(HttpResponseOk(result))
+}
+
+pub async fn create_neighbor_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<Neighbor>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    helpers::add_neighbor(ctx.clone(), rq, false)?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn read_neighbor_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<NeighborSelector>,
+) -> Result<HttpResponseOk<Neighbor>, HttpError> {
+    let rq = request.into_inner();
+    let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
+        HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
+    })?;
+    let neighbor_info = db_neighbors
+        .iter()
+        .find(|n| n.host.ip() == rq.addr)
+        .ok_or(HttpError::for_not_found(
+            None,
+            format!("neighbor {} not found in db", rq.addr),
+        ))?;
+
+    let result = Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+    Ok(HttpResponseOk(result))
+}
+
+pub async fn update_neighbor_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<Neighbor>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    helpers::add_neighbor(ctx.clone(), rq, true)?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn delete_neighbor_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<NeighborSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
 }
 
 pub async fn create_origin4(
@@ -417,13 +489,13 @@ pub async fn get_exported(
             .collect();
 
         // Combine per-AF export policies into legacy format for filtering
-        let allow_export = ImportExportPolicyV1::from_per_af_policies(
+        let allow_export = ImportExportPolicy::from_per_af_policies(
             &n.allow_export4,
             &n.allow_export6,
         );
         let mut exported_routes: Vec<Prefix> = match allow_export {
-            ImportExportPolicyV1::NoFiltering => orig_routes,
-            ImportExportPolicyV1::Allow(epol) => {
+            ImportExportPolicy::NoFiltering => orig_routes,
+            ImportExportPolicy::Allow(epol) => {
                 orig_routes.retain(|p| epol.contains(p));
                 orig_routes
             }
@@ -580,6 +652,14 @@ pub async fn get_neighbors_v2(
 }
 
 pub async fn bgp_apply(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<ApplyRequestV1>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    // Convert v1 request to current format (hardcodes IPv4-only)
+    do_bgp_apply(ctx.context(), ApplyRequest::from(request.into_inner())).await
+}
+
+pub async fn bgp_apply_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<ApplyRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -1031,9 +1111,9 @@ pub(crate) mod helpers {
         Ok(HttpResponseDeleted())
     }
 
-    pub(crate) fn add_neighbor(
+    pub(crate) fn add_neighbor_v1(
         ctx: Arc<HandlerContext>,
-        rq: Neighbor,
+        rq: NeighborV1,
         ensure: bool,
     ) -> Result<(), Error> {
         let log = &ctx.log;
@@ -1043,10 +1123,9 @@ pub(crate) mod helpers {
 
         let (event_tx, event_rx) = channel();
 
+        // V1 API is IPv4-only; extract only IPv4 policies
         let allow_import4 = rq.allow_import.as_ipv4_policy();
         let allow_export4 = rq.allow_export.as_ipv4_policy();
-        let allow_import6 = rq.allow_import.as_ipv6_policy();
-        let allow_export6 = rq.allow_export.as_ipv6_policy();
 
         // XXX: Do we really want both rq and info?
         //      SessionInfo and Neighbor types could probably be merged.
@@ -1059,11 +1138,12 @@ pub(crate) mod helpers {
             communities: rq.communities.clone().into_iter().collect(),
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
-            // Derive per-AF policies from legacy fields
-            allow_import4: allow_import4.clone(),
-            allow_export4: allow_export4.clone(),
-            allow_import6: allow_import6.clone(),
-            allow_export6: allow_export6.clone(),
+            // V1 API is IPv4-only; IPv6 support didn't exist in legacy API
+            ipv4_unicast: Some(Ipv4UnicastConfig {
+                import_policy: allow_import4.clone(),
+                export_policy: allow_export4.clone(),
+            }),
+            ipv6_unicast: None,
             vlan_id: rq.vlan_id,
             remote_id: None,
             bind_addr: None,
@@ -1076,8 +1156,6 @@ pub(crate) mod helpers {
             idle_hold_jitter: Some((0.75, 1.0)),
             connect_retry_jitter: None,
             deterministic_collision_resolution: false,
-            ipv4_enabled: true,
-            ipv6_enabled: false,
         };
 
         let start_session = if ensure {
@@ -1121,6 +1199,125 @@ pub(crate) mod helpers {
             communities: rq.communities,
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
+            // V1 API is IPv4-only; IPv6 support didn't exist in legacy API
+            ipv4_enabled: true,
+            ipv6_enabled: false,
+            allow_import4,
+            allow_export4,
+            allow_import6: ImportExportPolicy6::NoFiltering,
+            allow_export6: ImportExportPolicy6::NoFiltering,
+            vlan_id: rq.vlan_id,
+        })?;
+
+        if start_session {
+            start_bgp_session(&event_tx)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn add_neighbor(
+        ctx: Arc<HandlerContext>,
+        rq: Neighbor,
+        ensure: bool,
+    ) -> Result<(), Error> {
+        let log = &ctx.log;
+        bgp_log!(log, info, "add neighbor {}", rq.host.ip();
+            "params" => format!("{rq:#?}")
+        );
+
+        // Validate that at least one AF is enabled
+        rq.validate().map_err(Error::Conflict)?;
+
+        let (event_tx, event_rx) = channel();
+
+        // Build SessionInfo with optional per-AF config directly from the new Neighbor type
+        let info = SessionInfo {
+            passive_tcp_establishment: rq.passive,
+            remote_asn: rq.remote_asn,
+            min_ttl: rq.min_ttl,
+            md5_auth_key: rq.md5_auth_key.clone(),
+            multi_exit_discriminator: rq.multi_exit_discriminator,
+            communities: rq.communities.clone().into_iter().collect(),
+            local_pref: rq.local_pref,
+            enforce_first_as: rq.enforce_first_as,
+            ipv4_unicast: rq.ipv4_unicast.clone(),
+            ipv6_unicast: rq.ipv6_unicast.clone(),
+            vlan_id: rq.vlan_id,
+            remote_id: None,
+            bind_addr: None,
+            connect_retry_time: Duration::from_secs(rq.connect_retry),
+            keepalive_time: Duration::from_secs(rq.keepalive),
+            hold_time: Duration::from_secs(rq.hold_time),
+            idle_hold_time: Duration::from_secs(rq.idle_hold_time),
+            delay_open_time: Duration::from_secs(rq.delay_open),
+            resolution: Duration::from_millis(rq.resolution),
+            idle_hold_jitter: Some((0.75, 1.0)),
+            connect_retry_jitter: None,
+            deterministic_collision_resolution: false,
+        };
+
+        let start_session = if ensure {
+            match get_router!(&ctx, rq.asn)?.ensure_session(
+                rq.clone().into(),
+                None,
+                event_tx.clone(),
+                event_rx,
+                info,
+            )? {
+                EnsureSessionResult::New(_) => true,
+                EnsureSessionResult::Updated(_) => false,
+            }
+        } else {
+            get_router!(&ctx, rq.asn)?.new_session(
+                rq.clone().into(),
+                None,
+                event_tx.clone(),
+                event_rx,
+                info,
+            )?;
+            true
+        };
+
+        // Extract per-AF policies for database storage
+        let (allow_import4, allow_export4) = match &rq.ipv4_unicast {
+            Some(cfg) => (cfg.import_policy.clone(), cfg.export_policy.clone()),
+            None => (
+                ImportExportPolicy4::NoFiltering,
+                ImportExportPolicy4::NoFiltering,
+            ),
+        };
+
+        let (allow_import6, allow_export6) = match &rq.ipv6_unicast {
+            Some(cfg) => (cfg.import_policy.clone(), cfg.export_policy.clone()),
+            None => (
+                ImportExportPolicy6::NoFiltering,
+                ImportExportPolicy6::NoFiltering,
+            ),
+        };
+
+        ctx.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
+            asn: rq.asn,
+            remote_asn: rq.remote_asn,
+            min_ttl: rq.min_ttl,
+            name: rq.name.clone(),
+            host: rq.host,
+            hold_time: rq.hold_time,
+            idle_hold_time: rq.idle_hold_time,
+            delay_open: rq.delay_open,
+            connect_retry: rq.connect_retry,
+            keepalive: rq.keepalive,
+            resolution: rq.resolution,
+            group: rq.group.clone(),
+            passive: rq.passive,
+            md5_auth_key: rq.md5_auth_key,
+            multi_exit_discriminator: rq.multi_exit_discriminator,
+            communities: rq.communities,
+            local_pref: rq.local_pref,
+            enforce_first_as: rq.enforce_first_as,
+            // Derive enablement from whether the AF config is present
+            ipv4_enabled: rq.ipv4_unicast.is_some(),
+            ipv6_enabled: rq.ipv6_unicast.is_some(),
             allow_import4,
             allow_export4,
             allow_import6,
@@ -1343,9 +1540,9 @@ mod tests {
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
-    use bgp::params::{ApplyRequest, BgpPeerConfig};
+    use bgp::params::{ApplyRequestV1, BgpPeerConfigV1};
     use mg_common::stats::MgLowerStats;
-    use rdb::{Db, ImportExportPolicy4, ImportExportPolicy6};
+    use rdb::Db;
     use std::{
         collections::{BTreeMap, HashMap},
         env::temp_dir,
@@ -1384,7 +1581,7 @@ mod tests {
         let mut peers = HashMap::new();
         peers.insert(
             String::from("qsfp0"),
-            vec![BgpPeerConfig {
+            vec![BgpPeerConfigV1 {
                 host: SocketAddr::new("203.0.113.1".parse().unwrap(), 179),
                 name: String::from("bob"),
                 hold_time: 3,
@@ -1401,16 +1598,14 @@ mod tests {
                 communities: Vec::default(),
                 local_pref: None,
                 enforce_first_as: false,
-                allow_import4: ImportExportPolicy4::NoFiltering,
-                allow_export4: ImportExportPolicy4::NoFiltering,
-                allow_import6: ImportExportPolicy6::NoFiltering,
-                allow_export6: ImportExportPolicy6::NoFiltering,
+                allow_import: rdb::ImportExportPolicy::NoFiltering,
+                allow_export: rdb::ImportExportPolicy::NoFiltering,
                 vlan_id: None,
             }],
         );
         peers.insert(
             String::from("qsfp1"),
-            vec![BgpPeerConfig {
+            vec![BgpPeerConfigV1 {
                 host: SocketAddr::new("203.0.113.2".parse().unwrap(), 179),
                 name: String::from("alice"),
                 hold_time: 3,
@@ -1427,15 +1622,13 @@ mod tests {
                 communities: Vec::default(),
                 local_pref: None,
                 enforce_first_as: false,
-                allow_import4: ImportExportPolicy4::NoFiltering,
-                allow_export4: ImportExportPolicy4::NoFiltering,
-                allow_import6: ImportExportPolicy6::NoFiltering,
-                allow_export6: ImportExportPolicy6::NoFiltering,
+                allow_import: rdb::ImportExportPolicy::NoFiltering,
+                allow_export: rdb::ImportExportPolicy::NoFiltering,
                 vlan_id: None,
             }],
         );
 
-        let mut req = ApplyRequest {
+        let mut req = ApplyRequestV1 {
             asn: 47,
             originate: Vec::default(),
             checker: None,
@@ -1443,7 +1636,7 @@ mod tests {
             peers,
         };
 
-        do_bgp_apply(&ctx, req.clone())
+        do_bgp_apply(&ctx, req.clone().into())
             .await
             .expect("bgp apply request");
 
@@ -1454,7 +1647,7 @@ mod tests {
 
         req.peers.remove("qsfp0");
 
-        do_bgp_apply(&ctx, req.clone())
+        do_bgp_apply(&ctx, req.clone().into())
             .await
             .expect("bgp apply request");
 

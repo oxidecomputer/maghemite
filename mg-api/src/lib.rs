@@ -11,8 +11,9 @@ use std::{
 use bfd::BfdPeerState;
 use bgp::{
     params::{
-        ApplyRequest, CheckerSource, Neighbor, NeighborResetOp, Origin4,
-        Origin6, PeerInfo, PeerInfoV1, Router, ShaperSource,
+        ApplyRequest, ApplyRequestV1, CheckerSource, Neighbor, NeighborResetOp,
+        NeighborV1, Origin4, Origin6, PeerInfo, PeerInfoV1, Router,
+        ShaperSource,
     },
     session::{FsmEventRecord, MessageHistory, MessageHistoryV1},
 };
@@ -40,6 +41,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (4, MP_BGP),
     (3, SWITCH_IDENTIFIERS),
     (2, IPV6_BASIC),
     (1, INITIAL),
@@ -113,36 +115,69 @@ pub trait MgAdminApi {
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbors" }]
-    async fn read_neighbors(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError>;
-
-    #[endpoint { method = PUT, path = "/bgp/config/neighbor" }]
+    // V1/V2 API - legacy Neighbor type with combined import/export policies
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
     async fn create_neighbor(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Neighbor>,
+        request: TypedBody<NeighborV1>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbor" }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
     async fn read_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: Query<NeighborSelector>,
-    ) -> Result<HttpResponseOk<Neighbor>, HttpError>;
+    ) -> Result<HttpResponseOk<NeighborV1>, HttpError>;
 
-    #[endpoint { method = POST, path = "/bgp/config/neighbor" }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = ..VERSION_MP_BGP }]
+    async fn read_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError>;
+
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
     async fn update_neighbor(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Neighbor>,
+        request: TypedBody<NeighborV1>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = DELETE, path = "/bgp/config/neighbor" }]
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
     async fn delete_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: Query<NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
+    // V3 API - new Neighbor type with explicit per-AF configuration
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP.. }]
+    async fn create_neighbor_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP.. }]
+    async fn read_neighbor_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<NeighborSelector>,
+    ) -> Result<HttpResponseOk<Neighbor>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = VERSION_MP_BGP.. }]
+    async fn read_neighbors_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError>;
+
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP.. }]
+    async fn update_neighbor_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP.. }]
+    async fn delete_neighbor_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<NeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    // Common operations (not versioned - works with both APIs)
     #[endpoint { method = POST, path = "/bgp/clear/neighbor" }]
     async fn clear_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -243,8 +278,16 @@ pub trait MgAdminApi {
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError>;
 
-    #[endpoint { method = POST, path = "/bgp/omicron/apply" }]
+    // V1/V2 API - ApplyRequestV1 with combined import/export policies
+    #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = ..VERSION_MP_BGP }]
     async fn bgp_apply(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<ApplyRequestV1>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // V3 API - ApplyRequest with per-AF policies
+    #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = VERSION_MP_BGP.. }]
+    async fn bgp_apply_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;

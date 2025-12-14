@@ -1163,7 +1163,7 @@ impl Db {
             .copied()
             .collect();
         let peer_routes6: Vec<_> = self
-            .full_rib(Some(AddressFamily::Ipv4))
+            .full_rib(Some(AddressFamily::Ipv6))
             .keys()
             .copied()
             .collect();

@@ -271,15 +271,16 @@ impl LoopbackIpManager {
     }
 
     /// Install a single IP address with proper refcount management
-    /// Skips 127.0.0.1 as it's always present on loopback interfaces
+    /// Skips 127.0.0.1/::1 as they're always present on loopback interfaces
     fn install_single_ip_static(
         ifname: &str,
         log: &Logger,
         ip: &mut ManagedIp,
     ) -> Result<(), std::io::Error> {
-        // Skip 127.0.0.1 as it's always present on loopback interfaces by default
-        if ip.address.to_string() == "127.0.0.1" {
-            info!(log, "skipping 127.0.0.1 (always present on loopback)");
+        // Skip 127.0.0.1/::1 as they're always present on loopback interfaces by default
+        let ip_str = ip.address.to_string();
+        if ip_str == "127.0.0.1" || ip_str == "::1" {
+            info!(log, "skipping {ip_str} (always present on loopback)");
             ip.installed = true; // Mark as installed but don't create lockfile
             return Ok(());
         }
@@ -317,7 +318,11 @@ impl LoopbackIpManager {
         log: &Logger,
         ip: &ManagedIp,
     ) -> Result<(), std::io::Error> {
-        let addr_str = format!("{}/32", ip.address);
+        let mask = match ip.address {
+            IpAddr::V4(_) => 32,
+            IpAddr::V6(_) => 128,
+        };
+        let addr_str = format!("{}/{mask}", ip.address);
 
         #[cfg(target_os = "illumos")]
         let output = {
@@ -342,9 +347,15 @@ impl LoopbackIpManager {
             .output()?;
 
         #[cfg(target_os = "macos")]
-        let output = Command::new("sudo")
-            .args(["ifconfig", ifname, "alias", &addr_str])
-            .output()?;
+        let output = {
+            let af = match ip.address {
+                IpAddr::V4(_) => "inet",
+                IpAddr::V6(_) => "inet6",
+            };
+            Command::new("sudo")
+                .args(["ifconfig", ifname, af, &addr_str, "alias"])
+                .output()?
+        };
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -467,16 +478,32 @@ impl LoopbackIpManager {
 
         #[cfg(target_os = "linux")]
         let output = {
-            let addr_str = format!("{}/32", ip.address);
+            let mask = match ip.address {
+                IpAddr::V4(_) => 32,
+                IpAddr::V6(_) => 128,
+            };
+            let addr_str = format!("{}/{mask}", ip.address);
             Command::new("sudo")
                 .args(["ip", "addr", "del", &addr_str, "dev", ifname])
                 .output()
         };
 
         #[cfg(target_os = "macos")]
-        let output = Command::new("sudo")
-            .args(["ifconfig", ifname, "-alias", &ip.address.to_string()])
-            .output();
+        let output = {
+            let af = match ip.address {
+                IpAddr::V4(_) => "inet",
+                IpAddr::V6(_) => "inet6",
+            };
+            Command::new("sudo")
+                .args([
+                    "ifconfig",
+                    ifname,
+                    af,
+                    &ip.address.to_string(),
+                    "-alias",
+                ])
+                .output()
+        };
 
         match output {
             Ok(output) => {

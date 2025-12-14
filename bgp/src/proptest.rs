@@ -13,9 +13,10 @@
 //! - RFC 7606 compliance (attribute deduplication, MP-BGP ordering)
 
 use crate::messages::{
-    As4PathSegment, AsPathType, BgpNexthop, BgpWireFormat, MpReachNlri,
-    MpUnreachNlri, PathAttribute, PathAttributeType, PathAttributeTypeCode,
-    PathAttributeValue, PathOrigin, UpdateMessage, path_attribute_flags,
+    As4PathSegment, AsPathType, BgpNexthop, BgpWireFormat, Ipv6DoubleNexthop,
+    MpReachNlri, MpUnreachNlri, PathAttribute, PathAttributeType,
+    PathAttributeTypeCode, PathAttributeValue, PathOrigin, UpdateMessage,
+    path_attribute_flags,
 };
 use proptest::prelude::*;
 use rdb::types::{Prefix4, Prefix6};
@@ -65,11 +66,11 @@ fn nexthop_ipv6_single_strategy() -> impl Strategy<Value = BgpNexthop> {
 
 /// Strategy for generating IPv6 double next-hops (global + link-local)
 fn nexthop_ipv6_double_strategy() -> impl Strategy<Value = BgpNexthop> {
-    (any::<u128>(), any::<u128>()).prop_map(|(global, link_local)| {
-        BgpNexthop::Ipv6Double((
-            Ipv6Addr::from(global),
-            Ipv6Addr::from(link_local),
-        ))
+    (any::<u128>(), any::<u128>()).prop_map(|(global_bits, link_local_bits)| {
+        BgpNexthop::Ipv6Double(Ipv6DoubleNexthop {
+            global: Ipv6Addr::from(global_bits),
+            link_local: Ipv6Addr::from(link_local_bits),
+        })
     })
 }
 

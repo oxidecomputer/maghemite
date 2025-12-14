@@ -767,6 +767,7 @@ pub struct UpdateMessage {
     /// SessionReset errors cause early return and are not collected here.
     /// Not serialized - only used for internal signaling.
     #[serde(skip)]
+    #[schemars(skip)]
     pub errors: Vec<(UpdateParseErrorReason, AttributeAction)>,
 }
 
@@ -1883,6 +1884,20 @@ impl Aggregator {
         buf.extend_from_slice(&self.address.octets());
         buf
     }
+
+    /// Serialize AGGREGATOR to fixed-size byte array
+    pub fn to_bytes(&self) -> [u8; 6] {
+        let asn_bytes = self.asn.to_be_bytes();
+        let addr_bytes = self.address.octets();
+        [
+            asn_bytes[0],
+            asn_bytes[1],
+            addr_bytes[0],
+            addr_bytes[1],
+            addr_bytes[2],
+            addr_bytes[3],
+        ]
+    }
 }
 
 /// AS4_AGGREGATOR path attribute (RFC 6793)
@@ -1925,6 +1940,22 @@ impl As4Aggregator {
         buf.extend_from_slice(&self.asn.to_be_bytes());
         buf.extend_from_slice(&self.address.octets());
         buf
+    }
+
+    /// Serialize AS4_AGGREGATOR to fixed-size byte array
+    pub fn to_bytes(&self) -> [u8; 8] {
+        let asn_bytes = self.asn.to_be_bytes();
+        let addr_bytes = self.address.octets();
+        [
+            asn_bytes[0],
+            asn_bytes[1],
+            asn_bytes[2],
+            asn_bytes[3],
+            addr_bytes[0],
+            addr_bytes[1],
+            addr_bytes[2],
+            addr_bytes[3],
+        ]
     }
 }
 
@@ -2490,6 +2521,18 @@ pub enum AsPathType {
     AsSequence = 2,
 }
 
+/// IPv6 double nexthop: global unicast address + link-local address.
+/// Per RFC 2545, when advertising IPv6 routes, both addresses may be present.
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
+)]
+pub struct Ipv6DoubleNexthop {
+    /// Global unicast address
+    pub global: Ipv6Addr,
+    /// Link-local address
+    pub link_local: Ipv6Addr,
+}
+
 /// BGP next-hops can come in multiple forms, defined in several different RFCs.
 /// This enum represents the forms supported by this implementation.
 ///
@@ -2571,7 +2614,7 @@ pub enum AsPathType {
 pub enum BgpNexthop {
     Ipv4(Ipv4Addr),
     Ipv6Single(Ipv6Addr),
-    Ipv6Double((Ipv6Addr, Ipv6Addr)),
+    Ipv6Double(Ipv6DoubleNexthop),
 }
 
 impl BgpNexthop {
@@ -2621,10 +2664,10 @@ impl BgpNexthop {
                 let mut bytes2 = [0u8; 16];
                 bytes1.copy_from_slice(&nh_bytes[..16]);
                 bytes2.copy_from_slice(&nh_bytes[16..32]);
-                Ok(BgpNexthop::Ipv6Double((
-                    Ipv6Addr::from(bytes1),
-                    Ipv6Addr::from(bytes2),
-                )))
+                Ok(BgpNexthop::Ipv6Double(Ipv6DoubleNexthop {
+                    global: Ipv6Addr::from(bytes1),
+                    link_local: Ipv6Addr::from(bytes2),
+                }))
             }
             _ => Err(Error::InvalidAddress(format!(
                 "invalid next-hop length {} for AFI {:?}",
@@ -2650,10 +2693,10 @@ impl BgpNexthop {
         match self {
             BgpNexthop::Ipv4(addr) => addr.octets().to_vec(),
             BgpNexthop::Ipv6Single(addr) => addr.octets().to_vec(),
-            BgpNexthop::Ipv6Double((addr1, addr2)) => {
+            BgpNexthop::Ipv6Double(addrs) => {
                 let mut buf = Vec::new();
-                buf.extend_from_slice(&addr1.octets());
-                buf.extend_from_slice(&addr2.octets());
+                buf.extend_from_slice(&addrs.global.octets());
+                buf.extend_from_slice(&addrs.link_local.octets());
                 buf
             }
         }
@@ -2665,7 +2708,9 @@ impl Display for BgpNexthop {
         match self {
             BgpNexthop::Ipv4(a4) => write!(f, "{a4}"),
             BgpNexthop::Ipv6Single(a6) => write!(f, "{a6}"),
-            BgpNexthop::Ipv6Double((a, b)) => write!(f, "({a}, {b})"),
+            BgpNexthop::Ipv6Double(addrs) => {
+                write!(f, "({}, {})", addrs.global, addrs.link_local)
+            }
         }
     }
 }
@@ -2684,7 +2729,10 @@ impl From<Ipv6Addr> for BgpNexthop {
 
 impl From<(Ipv6Addr, Ipv6Addr)> for BgpNexthop {
     fn from(value: (Ipv6Addr, Ipv6Addr)) -> Self {
-        BgpNexthop::Ipv6Double(value)
+        BgpNexthop::Ipv6Double(Ipv6DoubleNexthop {
+            global: value.0,
+            link_local: value.1,
+        })
     }
 }
 
@@ -5310,13 +5358,13 @@ impl From<Prefix> for PrefixV1 {
 }
 
 /// V1 UpdateMessage type for API compatibility
-/// Uses PrefixV1 for NLRI and withdrawn prefixes
+/// Uses PrefixV1 for NLRI and withdrawn prefixes, PathAttributeV1 for attributes
 #[derive(
     Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize, JsonSchema,
 )]
 pub struct UpdateMessageV1 {
     pub withdrawn: Vec<PrefixV1>,
-    pub path_attributes: Vec<PathAttribute>,
+    pub path_attributes: Vec<PathAttributeV1>,
     pub nlri: Vec<PrefixV1>,
 }
 
@@ -5328,7 +5376,12 @@ impl From<UpdateMessage> for UpdateMessageV1 {
                 .into_iter()
                 .map(|p| PrefixV1::from(Prefix::V4(p)))
                 .collect(),
-            path_attributes: msg.path_attributes,
+            // Filter out attributes that don't have V1 equivalents (MP-BGP, AtomicAggregate)
+            path_attributes: msg
+                .path_attributes
+                .into_iter()
+                .filter_map(Option::<PathAttributeV1>::from)
+                .collect(),
             nlri: msg
                 .nlri
                 .into_iter()
@@ -5361,6 +5414,186 @@ impl From<Message> for MessageV1 {
             Message::KeepAlive => Self::KeepAlive,
             Message::RouteRefresh(rr) => Self::RouteRefresh(rr),
         }
+    }
+}
+
+// ============================================================================
+// V1 API Compatibility Types for PathAttribute
+// ============================================================================
+// These types maintain backward compatibility with the v1/v2 API.
+// - PathAttributeValueV1: Without AtomicAggregate, MpReachNlri, MpUnreachNlri
+// - PathAttributeTypeCodeV1: Without MpReachNlri, MpUnreachNlri type codes
+// - PathAttributeV1: Uses PathAttributeValueV1
+// - Aggregator is [u8; 6], NextHop is IpAddr (matching v1/v2 schema)
+
+/// An enumeration describing available path attribute type codes.
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
+)]
+#[schemars(rename = "PathAttributeTypeCode")]
+#[serde(rename_all = "snake_case")]
+pub enum PathAttributeTypeCodeV1 {
+    /// RFC 4271
+    Origin = 1,
+    AsPath = 2,
+    NextHop = 3,
+    MultiExitDisc = 4,
+    LocalPref = 5,
+    AtomicAggregate = 6,
+    Aggregator = 7,
+    Communities = 8,
+    /// RFC 6793
+    As4Path = 17,
+    As4Aggregator = 18,
+}
+
+impl From<PathAttributeTypeCode> for PathAttributeTypeCodeV1 {
+    fn from(code: PathAttributeTypeCode) -> Self {
+        match code {
+            PathAttributeTypeCode::Origin => PathAttributeTypeCodeV1::Origin,
+            PathAttributeTypeCode::AsPath => PathAttributeTypeCodeV1::AsPath,
+            PathAttributeTypeCode::NextHop => PathAttributeTypeCodeV1::NextHop,
+            PathAttributeTypeCode::MultiExitDisc => {
+                PathAttributeTypeCodeV1::MultiExitDisc
+            }
+            PathAttributeTypeCode::LocalPref => {
+                PathAttributeTypeCodeV1::LocalPref
+            }
+            PathAttributeTypeCode::AtomicAggregate => {
+                PathAttributeTypeCodeV1::AtomicAggregate
+            }
+            PathAttributeTypeCode::Aggregator => {
+                PathAttributeTypeCodeV1::Aggregator
+            }
+            PathAttributeTypeCode::Communities => {
+                PathAttributeTypeCodeV1::Communities
+            }
+            // MP-BGP type codes map to As4Path as a fallback (they won't appear in V1)
+            PathAttributeTypeCode::MpReachNlri => {
+                PathAttributeTypeCodeV1::As4Path
+            }
+            PathAttributeTypeCode::MpUnreachNlri => {
+                PathAttributeTypeCodeV1::As4Path
+            }
+            PathAttributeTypeCode::As4Path => PathAttributeTypeCodeV1::As4Path,
+            PathAttributeTypeCode::As4Aggregator => {
+                PathAttributeTypeCodeV1::As4Aggregator
+            }
+        }
+    }
+}
+
+/// The value encoding of a path attribute.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename = "PathAttributeValue")]
+#[serde(rename_all = "snake_case")]
+pub enum PathAttributeValueV1 {
+    /// The type of origin associated with a path
+    Origin(PathOrigin),
+    /// The AS set associated with a path
+    AsPath(Vec<As4PathSegment>),
+    /// The nexthop associated with a path
+    NextHop(IpAddr),
+    /// A metric used for external (inter-AS) links to discriminate among
+    /// multiple entry or exit points.
+    MultiExitDisc(u32),
+    /// Local pref is included in update messages sent to internal peers and
+    /// indicates a degree of preference.
+    LocalPref(u32),
+    /// This attribute is included in routes that are formed by aggregation.
+    Aggregator([u8; 6]),
+    /// Indicates communities associated with a path.
+    Communities(Vec<Community>),
+    /// The 4-byte encoded AS set associated with a path
+    As4Path(Vec<As4PathSegment>),
+    /// This attribute is included in routes that are formed by aggregation.
+    As4Aggregator([u8; 8]),
+}
+
+impl From<PathAttributeValue> for Option<PathAttributeValueV1> {
+    fn from(val: PathAttributeValue) -> Self {
+        match val {
+            PathAttributeValue::Origin(o) => {
+                Some(PathAttributeValueV1::Origin(o))
+            }
+            PathAttributeValue::AsPath(p) => {
+                Some(PathAttributeValueV1::AsPath(p))
+            }
+            PathAttributeValue::NextHop(nh) => {
+                Some(PathAttributeValueV1::NextHop(IpAddr::V4(nh)))
+            }
+            PathAttributeValue::MultiExitDisc(m) => {
+                Some(PathAttributeValueV1::MultiExitDisc(m))
+            }
+            PathAttributeValue::LocalPref(l) => {
+                Some(PathAttributeValueV1::LocalPref(l))
+            }
+            PathAttributeValue::Aggregator(a) => {
+                Some(PathAttributeValueV1::Aggregator(a.to_bytes()))
+            }
+            PathAttributeValue::Communities(c) => {
+                Some(PathAttributeValueV1::Communities(c))
+            }
+            PathAttributeValue::AtomicAggregate => {
+                // AtomicAggregate was not in v1/v2 API
+                None
+            }
+            PathAttributeValue::As4Path(p) => {
+                Some(PathAttributeValueV1::As4Path(p))
+            }
+            PathAttributeValue::As4Aggregator(a) => {
+                Some(PathAttributeValueV1::As4Aggregator(a.to_bytes()))
+            }
+            PathAttributeValue::MpReachNlri(_) => {
+                // MP-BGP attributes not in v1/v2 API
+                None
+            }
+            PathAttributeValue::MpUnreachNlri(_) => {
+                // MP-BGP attributes not in v1/v2 API
+                None
+            }
+        }
+    }
+}
+
+/// Type encoding for a path attribute.
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
+)]
+#[schemars(rename = "PathAttributeType")]
+pub struct PathAttributeTypeV1 {
+    /// Flags may include, Optional, Transitive, Partial and Extended Length.
+    pub flags: u8,
+    /// Type code for the path attribute.
+    pub type_code: PathAttributeTypeCodeV1,
+}
+
+impl From<PathAttributeType> for PathAttributeTypeV1 {
+    fn from(t: PathAttributeType) -> Self {
+        Self {
+            flags: t.flags,
+            type_code: PathAttributeTypeCodeV1::from(t.type_code),
+        }
+    }
+}
+
+/// A self-describing BGP path attribute
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename = "PathAttribute")]
+pub struct PathAttributeV1 {
+    /// Type encoding for the attribute
+    pub typ: PathAttributeTypeV1,
+    /// Value of the attribute
+    pub value: PathAttributeValueV1,
+}
+
+impl From<PathAttribute> for Option<PathAttributeV1> {
+    fn from(attr: PathAttribute) -> Self {
+        let value_opt: Option<PathAttributeValueV1> = attr.value.into();
+        value_opt.map(|value| PathAttributeV1 {
+            typ: PathAttributeTypeV1::from(attr.typ),
+            value,
+        })
     }
 }
 
@@ -5939,7 +6172,10 @@ mod tests {
 
         let nh = BgpNexthop::from_bytes(&bytes, 32, Afi::Ipv6)
             .expect("valid IPv6 double nexthop");
-        assert_eq!(nh, BgpNexthop::Ipv6Double((global, link_local)));
+        assert_eq!(
+            nh,
+            BgpNexthop::Ipv6Double(Ipv6DoubleNexthop { global, link_local })
+        );
     }
 
     #[test]
@@ -6002,10 +6238,10 @@ mod tests {
             BgpNexthop::Ipv6Single(Ipv6Addr::from_str("2001:db8::1").unwrap());
         assert_eq!(ipv6_single.byte_len(), 16);
 
-        let ipv6_double = BgpNexthop::Ipv6Double((
-            Ipv6Addr::from_str("2001:db8::1").unwrap(),
-            Ipv6Addr::from_str("fe80::1").unwrap(),
-        ));
+        let ipv6_double = BgpNexthop::Ipv6Double(Ipv6DoubleNexthop {
+            global: Ipv6Addr::from_str("2001:db8::1").unwrap(),
+            link_local: Ipv6Addr::from_str("fe80::1").unwrap(),
+        });
         assert_eq!(ipv6_double.byte_len(), 32);
     }
 
@@ -6034,10 +6270,10 @@ mod tests {
         );
 
         // IPv6 double
-        let ipv6_double = BgpNexthop::Ipv6Double((
-            Ipv6Addr::from_str("2001:db8::1").unwrap(),
-            Ipv6Addr::from_str("fe80::1").unwrap(),
-        ));
+        let ipv6_double = BgpNexthop::Ipv6Double(Ipv6DoubleNexthop {
+            global: Ipv6Addr::from_str("2001:db8::1").unwrap(),
+            link_local: Ipv6Addr::from_str("fe80::1").unwrap(),
+        });
         let wire = ipv6_double.to_bytes();
         let decoded =
             BgpNexthop::from_bytes(&wire, wire.len() as u8, Afi::Ipv6)
