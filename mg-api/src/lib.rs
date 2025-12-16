@@ -40,6 +40,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (3, SWITCH_IDENTIFIERS),
     (2, IPV6_BASIC),
     (1, INITIAL),
 ]);
@@ -372,7 +373,7 @@ pub trait MgAdminApi {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
 
-    #[endpoint {method = GET, path = "/switch/identifiers" }]
+    #[endpoint {method = GET, path = "/switch/identifiers", versions = VERSION_SWITCH_IDENTIFIERS.. }]
     async fn switch_identifiers(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<SwitchIdentifiers>, HttpError>;
