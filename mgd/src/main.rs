@@ -17,7 +17,7 @@ use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
 use signal::handle_signals;
 use slog::Logger;
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::thread::Builder;
 use uuid::Uuid;
@@ -88,6 +88,10 @@ struct RunArgs {
     /// Id of the sled this router is running on.
     #[arg(long)]
     sled_uuid: Option<Uuid>,
+
+    /// SocketAddr the MGS service is listening on.
+    #[arg(long, default_value = "[::1]:12225")]
+    mgs_addr: SocketAddr,
 }
 
 fn main() {
@@ -122,6 +126,12 @@ async fn run(args: RunArgs) {
         stats_server_running: Mutex::new(false),
         oximeter_port: args.oximeter_port,
     });
+
+    detect_switch_slot(
+        context.clone(),
+        args.mgs_addr,
+        tokio::runtime::Handle::current(),
+    );
 
     if let Err(e) = sig_tx.send(context.clone()).await {
         dlog!(log, error, "error sending handler context to signal handler: {e}";
@@ -200,6 +210,44 @@ async fn run(args: RunArgs) {
     )
     .expect("start API server");
     j.await.expect("API server quit unexpectedly");
+}
+
+fn detect_switch_slot(
+    ctx: Arc<HandlerContext>,
+    mgs_socket_addr: SocketAddr,
+    rt: tokio::runtime::Handle,
+) {
+    let url = format!("http://{mgs_socket_addr}");
+    let client_log = ctx.log.new(slog::o!("unit" => "gateway-client"));
+    let task = async move || {
+        let client = gateway_client::Client::new(&url, client_log);
+        let ctx = ctx.clone();
+
+        loop {
+            // check in with gateway
+            let gateway_client::types::SpIdentifier { slot, .. } = match client
+                .sp_local_switch_id()
+                .await
+            {
+                Ok(v) => *v,
+                Err(e) => {
+                    slog::error!(ctx.log, "failed to resolve switch slot"; "error" => %e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10))
+                        .await;
+                    continue;
+                }
+            };
+
+            slog::info!(ctx.log, "we are in switch slot {slot}");
+
+            // update db
+            let mut db = ctx.db.clone();
+            db.set_slot(Some(slot));
+            break;
+        }
+    };
+
+    rt.spawn(task());
 }
 
 fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
