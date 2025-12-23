@@ -1399,9 +1399,9 @@ dependencies = [
 
 [[package]]
 name = "drift"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "beebeb5f38023a0c6586ffd39e43bb3280926e18faf576a3e10c95895c99651e"
+checksum = "a9ba64b39d5fd68e09169e63c8e82b7a50c9b6082f2c44f52db2a11e3b9d7dd4"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -1413,9 +1413,9 @@ dependencies = [
 
 [[package]]
 name = "dropshot"
-version = "0.16.5"
+version = "0.16.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ee062e12b3b08e748f90e92efe0b93d53a28403bd900fd9e69e6be66bbddc4f"
+checksum = "4d0df98c06659ab85a454f32dc36ca5dbc6500bd2a58f25ede4dc1f1d478904e"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1427,7 +1427,7 @@ dependencies = [
  "dropshot_endpoint",
  "form_urlencoded",
  "futures",
- "hostname 0.4.1",
+ "hostname 0.4.2",
  "http",
  "http-body-util",
  "hyper",
@@ -1464,9 +1464,9 @@ dependencies = [
 
 [[package]]
 name = "dropshot-api-manager"
-version = "0.2.4"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aee20ca777e652264a3334e41c9b548bdd848562e3918541ab04d6ceb3b7dd56"
+checksum = "f45b53c5eab26bfb0246e53c6c586558331c6e4efa3dc29ff9fb0373a6c3d87a"
 dependencies = [
  "anyhow",
  "atomicwrites",
@@ -1494,9 +1494,9 @@ dependencies = [
 
 [[package]]
 name = "dropshot-api-manager-types"
-version = "0.2.4"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0103ef0b1a219c1a620e0b01659f6a27185df697876388144b1fb9637123e63"
+checksum = "b78a68bd7f0470aec18807e53b0f975661453dae80995c03bbb370d9d0c6eb6f"
 dependencies = [
  "anyhow",
  "camino",
@@ -1507,9 +1507,9 @@ dependencies = [
 
 [[package]]
 name = "dropshot_endpoint"
-version = "0.16.5"
+version = "0.16.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0430a45e1a3cc8aaf1396c2ca2a4c1215ab253cbcda7ca7ed7beb107e0591bd1"
+checksum = "7e53aef8838e0e341485590738ab180a6dceff3565ffcb198d5f365fea650378"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -2271,23 +2271,22 @@ dependencies = [
 
 [[package]]
 name = "hostname"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a56f203cd1c76362b69e3863fd987520ac36cf70a8c92627449b2f64a8cf7d65"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
 dependencies = [
  "cfg-if",
  "libc",
- "windows-link 0.1.3",
+ "windows-link 0.2.0",
 ]
 
 [[package]]
 name = "http"
-version = "1.3.1"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4a85d31aea989eead29a3aaf9e1115a180df8282431156e533de47660892565"
+checksum = "e3ba2a386d7f85a81f119ad7498ebe444d2e22c2af0b86b069416ace48b3311a"
 dependencies = [
  "bytes",
- "fnv",
  "itoa",
 ]
 
@@ -4101,9 +4100,9 @@ dependencies = [
 
 [[package]]
 name = "owo-colors"
-version = "4.2.2"
+version = "4.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48dd4f4a2c8405440fd0462561f0e5806bd0f77e86f51c761481bdd4018b545e"
+checksum = "9c6901729fa79e91a0913333229e9ca5dc725089d1c363b2f4b4760709dc4a52"
 
 [[package]]
 name = "oxide-tokio-rt"
@@ -7496,13 +7495,13 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.18.1"
+version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f87b8aa10b915a06587d0dec516c282ff295b475d94abf425d62b57710070a2"
+checksum = "e2e054861b4bd027cd373e18e8d8d8e6548085000e41290d95ce0c373a654b4a"
 dependencies = [
  "getrandom 0.3.3",
  "js-sys",
- "serde",
+ "serde_core",
  "wasm-bindgen",
 ]
 
