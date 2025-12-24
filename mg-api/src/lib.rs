@@ -40,6 +40,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (3, DROPSHOT_API_MANAGER_0_3_0),
     (2, IPV6_BASIC),
     (1, INITIAL),
 ]);
