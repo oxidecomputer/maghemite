@@ -114,6 +114,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "api_identity"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
+dependencies = [
+ "omicron-workspace-hack",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -288,7 +299,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "mg-common",
- "num_enum",
+ "num_enum 0.7.4",
  "pretty_assertions",
  "rand 0.8.5",
  "rdb",
@@ -311,7 +322,7 @@ dependencies = [
  "libnet",
  "mg-common",
  "nom",
- "num_enum",
+ "num_enum 0.7.4",
  "oxnet",
  "pretty-hex",
  "pretty_assertions",
@@ -331,7 +342,7 @@ dependencies = [
 [[package]]
 name = "bhyve_api"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/propolis?rev=827e6615bfebfd94d41504dcd1517a0f22e3166a#827e6615bfebfd94d41504dcd1517a0f22e3166a"
+source = "git+https://github.com/oxidecomputer/propolis?rev=3f1752e6cee9a2f8ecdce6e2ad3326781182e2d9#3f1752e6cee9a2f8ecdce6e2ad3326781182e2d9"
 dependencies = [
  "bhyve_api_sys",
  "libc",
@@ -341,7 +352,7 @@ dependencies = [
 [[package]]
 name = "bhyve_api_sys"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/propolis?rev=827e6615bfebfd94d41504dcd1517a0f22e3166a#827e6615bfebfd94d41504dcd1517a0f22e3166a"
+source = "git+https://github.com/oxidecomputer/propolis?rev=3f1752e6cee9a2f8ecdce6e2ad3326781182e2d9#3f1752e6cee9a2f8ecdce6e2ad3326781182e2d9"
 dependencies = [
  "libc",
  "strum 0.26.3",
@@ -652,7 +663,7 @@ checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 [[package]]
 name = "clickhouse-admin-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "anyhow",
  "atomicwrites",
@@ -663,7 +674,7 @@ dependencies = [
  "derive_more",
  "expectorate",
  "itertools 0.14.0",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "schemars",
  "serde",
@@ -708,11 +719,11 @@ dependencies = [
 [[package]]
 name = "cockroach-admin-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "chrono",
  "csv",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "schemars",
  "serde",
@@ -741,7 +752,7 @@ source = "git+https://github.com/oxidecomputer/dendrite?branch=main#738c80d18d5e
 dependencies = [
  "anyhow",
  "chrono",
- "oximeter",
+ "oximeter 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
  "oxnet",
  "rand 0.9.2",
  "schemars",
@@ -940,7 +951,7 @@ dependencies = [
 [[package]]
 name = "crucible-smf"
 version = "0.0.0"
-source = "git+https://github.com/oxidecomputer/crucible?rev=65ca41e821ef53ec9c28909357f23e3348169e4f#65ca41e821ef53ec9c28909357f23e3348169e4f"
+source = "git+https://github.com/oxidecomputer/crucible?rev=7103cd3a3d7b0112d2949dd135db06fef0c156bb#7103cd3a3d7b0112d2949dd135db06fef0c156bb"
 dependencies = [
  "crucible-workspace-hack",
  "libc",
@@ -1119,10 +1130,10 @@ dependencies = [
  "ispf",
  "libnet",
  "mg-common",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3d1263ced8177893d46da54a914e4c510dc2bfc8)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=3d1263ced8177893d46da54a914e4c510dc2bfc8)",
- "oximeter",
+ "oximeter 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "oximeter-producer",
  "oxnet",
  "pretty_assertions",
@@ -1340,7 +1351,7 @@ source = "git+https://github.com/oxidecomputer/dlpi-sys#555fa6e1315a64f40c72716e
 dependencies = [
  "libc",
  "libdlpi-sys",
- "num_enum",
+ "num_enum 0.7.4",
  "pretty-hex",
  "thiserror 2.0.17",
 ]
@@ -1617,10 +1628,10 @@ dependencies = [
 [[package]]
 name = "ereport-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "dropshot",
- "omicron-uuid-kinds",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "schemars",
  "serde",
@@ -1897,7 +1908,7 @@ dependencies = [
 [[package]]
 name = "gateway-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1905,7 +1916,7 @@ dependencies = [
  "ereport-types",
  "gateway-messages",
  "gateway-types",
- "omicron-uuid-kinds",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "progenitor 0.10.0",
  "rand 0.9.2",
@@ -1922,7 +1933,7 @@ dependencies = [
 [[package]]
 name = "gateway-messages"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/management-gateway-service?rev=6bd2660d651332f38949cdfd3d23d751ca54b120#6bd2660d651332f38949cdfd3d23d751ca54b120"
+source = "git+https://github.com/oxidecomputer/management-gateway-service?rev=ea2f39ccdea124b5affcad0ca17bc5dacf65823a#ea2f39ccdea124b5affcad0ca17bc5dacf65823a"
 dependencies = [
  "bitflags 2.9.4",
  "hubpack",
@@ -1939,14 +1950,14 @@ dependencies = [
 [[package]]
 name = "gateway-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "daft",
  "dropshot",
  "gateway-messages",
  "hex",
- "omicron-common",
- "omicron-uuid-kinds",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "schemars",
  "serde",
@@ -2544,9 +2555,9 @@ dependencies = [
 
 [[package]]
 name = "iddqd"
-version = "0.3.14"
+version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bac5efd33e0c5eb0ac45cbd210541a214dac576896ca97ba08e16e3b1079cdd8"
+checksum = "6b215e67ed1d1a4b1702acd787c487d16e4c977c5dcbcc4587bdb5ea26b6ce06"
 dependencies = [
  "allocator-api2",
  "daft",
@@ -2588,6 +2599,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "illumos-devinfo"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/illumos-devinfo?branch=main#4323b17bfdd0c94d2875ac64b47f0e60fac1d640"
+dependencies = [
+ "anyhow",
+ "libc",
+ "num_enum 0.5.11",
+]
+
+[[package]]
 name = "illumos-sys-hdrs"
 version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/opte?rev=3d1263ced8177893d46da54a914e4c510dc2bfc8#3d1263ced8177893d46da54a914e4c510dc2bfc8"
@@ -2606,7 +2627,7 @@ dependencies = [
 [[package]]
 name = "illumos-utils"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2624,8 +2645,9 @@ dependencies = [
  "itertools 0.14.0",
  "libc",
  "macaddr",
- "omicron-common",
- "omicron-uuid-kinds",
+ "nix",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "opte-ioctl 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=795a1e0aeefb7a2c6fe4139779fdf66930d09b80)",
  "oxide-vpc 0.1.0 (git+https://github.com/oxidecomputer/opte?rev=795a1e0aeefb7a2c6fe4139779fdf66930d09b80)",
@@ -2637,6 +2659,7 @@ dependencies = [
  "slog-error-chain",
  "smf 0.2.3",
  "thiserror 2.0.17",
+ "tofino",
  "tokio",
  "uuid",
  "whoami",
@@ -2725,14 +2748,14 @@ dependencies = [
 [[package]]
 name = "internal-dns-resolver"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "futures",
  "hickory-proto 0.25.2",
  "hickory-resolver 0.25.2",
  "internal-dns-types",
- "omicron-common",
- "omicron-uuid-kinds",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "qorb",
  "reqwest",
@@ -2743,15 +2766,16 @@ dependencies = [
 [[package]]
 name = "internal-dns-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "anyhow",
  "chrono",
- "omicron-common",
- "omicron-uuid-kinds",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "schemars",
  "serde",
+ "strum 0.27.2",
 ]
 
 [[package]]
@@ -3024,7 +3048,7 @@ dependencies = [
  "colored",
  "dlpi",
  "libc",
- "num_enum",
+ "num_enum 0.7.4",
  "nvpair",
  "nvpair-sys",
  "oxnet",
@@ -3295,7 +3319,7 @@ dependencies = [
  "clap",
  "libc",
  "libnet",
- "oximeter",
+ "oximeter 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "oximeter-producer",
  "oxnet",
  "schemars",
@@ -3401,9 +3425,9 @@ dependencies = [
  "mg-api",
  "mg-common",
  "mg-lower",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "oxide-tokio-rt",
- "oximeter",
+ "oximeter 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "oximeter-producer",
  "proptest",
  "rand 0.8.5",
@@ -3495,9 +3519,9 @@ dependencies = [
 
 [[package]]
 name = "newtype-uuid"
-version = "1.3.1"
+version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74d1216f62e63be5fb25a9ecd1e2b37b1556a9b8c02f4831770f5d01df85c226"
+checksum = "5c012d14ef788ab066a347d19e3dda699916c92293b05b85ba2c76b8c82d2830"
 dependencies = [
  "schemars",
  "serde",
@@ -3531,16 +3555,14 @@ dependencies = [
 [[package]]
 name = "nexus-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "chrono",
  "futures",
  "iddqd",
- "nexus-sled-agent-shared",
  "nexus-types",
- "omicron-common",
- "omicron-passwords",
- "omicron-uuid-kinds",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "oxnet",
  "progenitor 0.10.0",
@@ -3556,18 +3578,17 @@ dependencies = [
 [[package]]
 name = "nexus-sled-agent-shared"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "camino",
  "chrono",
  "daft",
- "id-map",
  "iddqd",
  "illumos-utils",
  "indent_write",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-passwords",
- "omicron-uuid-kinds",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "schemars",
  "serde",
@@ -3582,10 +3603,10 @@ dependencies = [
 [[package]]
 name = "nexus-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "anyhow",
- "api_identity",
+ "api_identity 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "async-trait",
  "base64 0.22.1",
  "chrono",
@@ -3597,12 +3618,12 @@ dependencies = [
  "derive-where",
  "derive_more",
  "dropshot",
+ "ereport-types",
  "futures",
  "gateway-client",
  "gateway-types",
  "http",
  "humantime",
- "id-map",
  "iddqd",
  "illumos-utils",
  "indent_write",
@@ -3612,9 +3633,9 @@ dependencies = [
  "newtype-uuid",
  "newtype_derive",
  "nexus-sled-agent-shared",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-passwords",
- "omicron-uuid-kinds",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "openssl",
  "oximeter-db",
@@ -3627,6 +3648,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "sled-hardware-types",
  "slog",
  "slog-error-chain",
  "steno",
@@ -3778,12 +3800,33 @@ dependencies = [
 
 [[package]]
 name = "num_enum"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f646caf906c20226733ed5b1374287eb97e3c2a5c227ce668c1f2ce20ae57c9"
+dependencies = [
+ "num_enum_derive 0.5.11",
+]
+
+[[package]]
+name = "num_enum"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a973b4e44ce6cad84ce69d797acf9a044532e4184c4f267913d1b546a0727b7a"
 dependencies = [
- "num_enum_derive",
+ "num_enum_derive 0.7.4",
  "rustversion",
+]
+
+[[package]]
+name = "num_enum_derive"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcbff9bc912032c62bf65ef1d5aea88983b420f4f839db1e9b0c281a25c9c799"
+dependencies = [
+ "proc-macro-crate 1.3.1",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -3792,7 +3835,7 @@ version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77e878c846a8abae00dd069496dbe8751b16ac1c3d6bd2a7283a938e8228f90d"
 dependencies = [
- "proc-macro-crate",
+ "proc-macro-crate 3.3.0",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
@@ -3839,7 +3882,7 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
 dependencies = [
  "anyhow",
- "api_identity",
+ "api_identity 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
  "async-trait",
  "backoff",
  "camino",
@@ -3854,7 +3897,51 @@ dependencies = [
  "ipnetwork",
  "macaddr",
  "mg-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=08f2a34d487658e87545ffbba3add632a82baf0d)",
- "omicron-uuid-kinds",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "omicron-workspace-hack",
+ "oxnet",
+ "parse-display",
+ "progenitor-client 0.10.0",
+ "protocol",
+ "rand 0.9.2",
+ "regress",
+ "reqwest",
+ "schemars",
+ "semver 1.0.27",
+ "serde",
+ "serde_human_bytes",
+ "serde_json",
+ "serde_with",
+ "slog",
+ "slog-error-chain",
+ "strum 0.27.2",
+ "thiserror 2.0.17",
+ "tokio",
+ "tufaceous-artifact",
+ "uuid",
+]
+
+[[package]]
+name = "omicron-common"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
+dependencies = [
+ "anyhow",
+ "api_identity 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
+ "async-trait",
+ "backoff",
+ "camino",
+ "chrono",
+ "daft",
+ "dropshot",
+ "futures",
+ "hex",
+ "http",
+ "iddqd",
+ "ipnetwork",
+ "macaddr",
+ "mg-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=08f2a34d487658e87545ffbba3add632a82baf0d)",
+ "omicron-uuid-kinds 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "oxnet",
  "parse-display",
@@ -3881,7 +3968,7 @@ dependencies = [
 [[package]]
 name = "omicron-passwords"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "argon2",
  "omicron-workspace-hack",
@@ -3897,6 +3984,18 @@ dependencies = [
 name = "omicron-uuid-kinds"
 version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+dependencies = [
+ "daft",
+ "newtype-uuid",
+ "newtype-uuid-macros",
+ "paste",
+ "schemars",
+]
+
+[[package]]
+name = "omicron-uuid-kinds"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "daft",
  "newtype-uuid",
@@ -4153,10 +4252,29 @@ dependencies = [
  "chrono",
  "clap",
  "omicron-workspace-hack",
- "oximeter-macro-impl",
- "oximeter-schema",
- "oximeter-timeseries-macro",
- "oximeter-types",
+ "oximeter-macro-impl 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "oximeter-schema 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "oximeter-timeseries-macro 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "prettyplease",
+ "syn 2.0.111",
+ "toml 0.8.23",
+ "uuid",
+]
+
+[[package]]
+name = "oximeter"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "omicron-workspace-hack",
+ "oximeter-macro-impl 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
+ "oximeter-schema 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
+ "oximeter-timeseries-macro 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "prettyplease",
  "syn 2.0.111",
  "toml 0.8.23",
@@ -4166,7 +4284,7 @@ dependencies = [
 [[package]]
 name = "oximeter-db"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "anyhow",
  "async-recursion",
@@ -4189,10 +4307,10 @@ dependencies = [
  "libc",
  "nom",
  "num",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "oxide-tokio-rt",
- "oximeter",
+ "oximeter 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "oxql-types",
  "parse-display",
  "qorb",
@@ -4228,18 +4346,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "oximeter-macro-impl"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
+dependencies = [
+ "omicron-workspace-hack",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
+
+[[package]]
 name = "oximeter-producer"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "chrono",
  "dropshot",
  "internal-dns-resolver",
  "internal-dns-types",
  "nexus-client",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
- "oximeter",
+ "oximeter 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "schemars",
  "serde",
  "slog",
@@ -4259,7 +4388,28 @@ dependencies = [
  "clap",
  "heck 0.5.0",
  "omicron-workspace-hack",
- "oximeter-types",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "schemars",
+ "serde",
+ "slog-error-chain",
+ "syn 2.0.111",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "oximeter-schema"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "heck 0.5.0",
+ "omicron-workspace-hack",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -4276,8 +4426,21 @@ version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
 dependencies = [
  "omicron-workspace-hack",
- "oximeter-schema",
- "oximeter-types",
+ "oximeter-schema 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
+
+[[package]]
+name = "oximeter-timeseries-macro"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
+dependencies = [
+ "omicron-workspace-hack",
+ "oximeter-schema 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
@@ -4292,7 +4455,27 @@ dependencies = [
  "chrono",
  "float-ord",
  "num",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=main)",
+ "omicron-workspace-hack",
+ "parse-display",
+ "regex",
+ "schemars",
+ "serde",
+ "strum 0.27.2",
+ "thiserror 2.0.17",
+ "uuid",
+]
+
+[[package]]
+name = "oximeter-types"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
+dependencies = [
+ "bytes",
+ "chrono",
+ "float-ord",
+ "num",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "parse-display",
  "regex",
@@ -4306,7 +4489,7 @@ dependencies = [
 [[package]]
 name = "oxlog"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "anyhow",
  "camino",
@@ -4322,9 +4505,9 @@ dependencies = [
 
 [[package]]
 name = "oxnet"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8200429754152e6379fbb1dd06eea90156c3b67591f6e31d08e787d010ef0168"
+checksum = "5dc6fb07ecd6d2a17ff1431bc5b3ce11036c0b6dd93a3c4904db5b910817b162"
 dependencies = [
  "ipnetwork",
  "schemars",
@@ -4335,14 +4518,14 @@ dependencies = [
 [[package]]
 name = "oxql-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "anyhow",
  "chrono",
  "highway",
  "num",
  "omicron-workspace-hack",
- "oximeter-types",
+ "oximeter-types 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "schemars",
  "serde",
  "serde_json",
@@ -4608,6 +4791,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "poptrie"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/poptrie?branch=multipath#ca52bef3f87ff1a67d81b3c6e601dcb5fdbcc165"
+
+[[package]]
 name = "portable-atomic"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4682,6 +4870,16 @@ checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
  "syn 2.0.111",
+]
+
+[[package]]
+name = "proc-macro-crate"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f4c021e1093a56626774e81216a4ce732a735e5bad4868a03f3ed65ca0c3919"
+dependencies = [
+ "once_cell",
+ "toml_edit 0.19.15",
 ]
 
 [[package]]
@@ -5152,7 +5350,9 @@ dependencies = [
  "clap",
  "itertools 0.14.0",
  "mg-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "oxnet",
+ "poptrie",
  "proptest",
  "rdb-types",
  "schemars",
@@ -5961,10 +6161,10 @@ dependencies = [
 [[package]]
 name = "sled-hardware-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "illumos-utils",
- "omicron-common",
+ "omicron-common 0.1.0 (git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle)",
  "omicron-workspace-hack",
  "schemars",
  "serde",
@@ -6716,6 +6916,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
+name = "tofino"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/tofino#7e56ab6e9a64ebae27cd97cd6e10ebf2cfdc3a33"
+dependencies = [
+ "anyhow",
+ "cc",
+ "illumos-devinfo",
+]
+
+[[package]]
 name = "tokio"
 version = "1.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7299,7 +7509,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 [[package]]
 name = "update-engine"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#b36f03290d085a065e5339b5e6bde3a0f99dc56d"
+source = "git+https://github.com/oxidecomputer/omicron?branch=zl%2Fmcast-implicit-lifecycle#07a36a1dabacaec9ebfe9fa48ab51adf99a67278"
 dependencies = [
  "anyhow",
  "cancel-safe-futures",
