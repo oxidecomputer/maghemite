@@ -56,12 +56,18 @@ pub struct HandlerContext {
     log: Logger,
 }
 
+/// THIS TYPE IS FOR DDM PROTOCOL VERSION 1. IT SHALL NEVER CHANGE. THIS TYPE
+/// CAN BE REMOVED WHEN DDMV1 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
+/// DEFINITION SHALL NEVER CHANGE.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct UpdateV1 {
     pub announce: HashSet<PathVector>,
     pub withdraw: HashSet<PathVector>,
 }
 
+/// THIS TYPE IS FOR DDM PROTOCOL VERSION 2. IT SHALL NEVER CHANGE. THIS TYPE
+/// CAN BE REMOVED WHEN DDMV2 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
+/// DEFINITION SHALL NEVER CHANGE.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct UpdateV2 {
     pub underlay: Option<UnderlayUpdateV2>,
@@ -147,6 +153,9 @@ pub struct PullResponse {
     pub tunnel: Option<HashSet<TunnelOrigin>>,
 }
 
+/// THIS TYPE IS FOR DDM PROTOCOL VERSION 2. IT SHALL NEVER CHANGE. THIS TYPE
+/// CAN BE REMOVED WHEN DDMV2 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
+/// DEFINITION SHALL NEVER CHANGE.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct PullResponseV2 {
     pub underlay: Option<HashSet<PathVectorV2>>,
@@ -181,6 +190,9 @@ pub struct UnderlayUpdate {
     pub withdraw: HashSet<PathVector>,
 }
 
+/// THIS TYPE IS FOR DDM PROTOCOL VERSION 2. IT SHALL NEVER CHANGE. THIS TYPE
+/// CAN BE REMOVED WHEN DDMV2 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
+/// DEFINITION SHALL NEVER CHANGE.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct UnderlayUpdateV2 {
     pub announce: HashSet<PathVectorV2>,
@@ -264,6 +276,9 @@ pub struct TunnelUpdate {
     pub withdraw: HashSet<TunnelOrigin>,
 }
 
+/// THIS TYPE IS FOR DDM PROTOCOL VERSION 2. IT SHALL NEVER CHANGE. THIS TYPE
+/// CAN BE REMOVED WHEN DDMV2 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
+/// DEFINITION SHALL NEVER CHANGE.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub struct TunnelUpdateV2 {
     pub announce: HashSet<TunnelOriginV2>,

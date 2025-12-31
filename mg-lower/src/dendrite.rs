@@ -433,42 +433,51 @@ pub(crate) fn get_routes_for_prefix(
                 };
             }
 
-            dpd_routes
-                .into_iter()
-                .map(|r| {
-                    RouteHash::new(
-                        cidr.into(),
-                        r.port_id.clone(),
-                        r.link_id,
-                        r.tgt_ip.into(),
-                        r.vlan_id,
-                    )
-                    .unwrap()
-                })
-                .collect()
+            result
         }
         Prefix::V6(p) => {
             let cidr = Ipv6Net::new(p.value, p.length)?;
-            let dpd_routes = rt
-                .block_on(async { dpd.route_ipv6_get(&cidr).await })?
+            let dpd_routes =
+                match rt.block_on(async { dpd.route_ipv6_get(&cidr).await }) {
+                    Ok(routes) => routes,
+                    Err(e) => {
+                        if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+                            return Ok(HashSet::new());
+                        }
+                        return Err(e.into());
+                    }
+                }
                 .into_inner();
 
-            dpd_routes
-                .into_iter()
-                .map(|r| {
-                    RouteHash::new(
-                        cidr.into(),
-                        r.port_id.clone(),
-                        r.link_id,
-                        r.tgt_ip.into(),
-                        r.vlan_id,
-                    )
-                    .unwrap()
-                })
-                .collect()
+            let mut result: Vec<RouteHash> = Vec::new();
+            for r in dpd_routes.iter() {
+                if r.tag != MG_LOWER_TAG {
+                    continue;
+                }
+                match RouteHash::new(
+                    cidr.into(),
+                    r.port_id.clone(),
+                    r.link_id,
+                    r.tgt_ip.into(),
+                    r.vlan_id,
+                ) {
+                    Ok(rh) => result.push(rh),
+                    Err(e) => {
+                        dpd_log!(log,
+                            error,
+                            "route hash creation failed for {prefix} (port: {}, link: {}, tgt_ip: {}, vlan_id: {:?}): {e}",
+                            r.port_id.clone(), r.link_id, r.tgt_ip, r.vlan_id;
+                            "error" => format!("{e}"),
+                            "prefix" => format!("r:?")
+                        );
+                        continue;
+                    }
+                };
+            }
+            result
         }
     };
-    Ok(result)
+    Ok(result.into_iter().collect())
 }
 
 /// Create a new Dendrite/dpd client. The lower half always runs on the same

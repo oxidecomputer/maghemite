@@ -338,6 +338,8 @@ impl SwitchZone for ProductionSwitchZone {
 /// This module contains platform trait implementations for testing.
 #[cfg(test)]
 pub(crate) mod test {
+    use crate::MG_LOWER_TAG;
+
     use super::*;
     use std::sync::Mutex;
     use std::{collections::HashMap, net::IpAddr};
@@ -577,7 +579,7 @@ pub(crate) mod test {
         }
 
         fn tag(&self) -> String {
-            String::from("mg_lower_test")
+            String::from(MG_LOWER_TAG)
         }
     }
 
