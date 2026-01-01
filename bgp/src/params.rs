@@ -39,9 +39,42 @@ pub enum NeighborResetOp {
     SoftOutbound,
 }
 
+/// Jitter range with minimum and maximum multiplier values.
+/// When applied to a timer, the timer duration is multiplied by a random value
+/// within [min, max] to help break synchronization patterns.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq)]
+pub struct JitterRange {
+    /// Minimum jitter multiplier (typically 0.75 or similar)
+    pub min: f64,
+    /// Maximum jitter multiplier (typically 1.0 or similar)
+    pub max: f64,
+}
+
+impl std::str::FromStr for JitterRange {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(',').collect();
+        if parts.len() != 2 {
+            return Err(
+                "jitter range must be in format 'min,max' (e.g., '0.75,1.0')"
+                    .to_string(),
+            );
+        }
+        let min = parts[0].trim().parse::<f64>().map_err(|_| {
+            format!("min value '{}' is not a valid float", parts[0].trim())
+        })?;
+        let max = parts[1].trim().parse::<f64>().map_err(|_| {
+            format!("max value '{}' is not a valid float", parts[1].trim())
+        })?;
+        Ok(JitterRange { min, max })
+    }
+}
+
 /// Per-address-family configuration for IPv4 Unicast
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 pub struct Ipv4UnicastConfig {
+    pub nexthop: Option<IpAddr>,
     pub import_policy: ImportExportPolicy4,
     pub export_policy: ImportExportPolicy4,
 }
@@ -49,6 +82,7 @@ pub struct Ipv4UnicastConfig {
 /// Per-address-family configuration for IPv6 Unicast
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 pub struct Ipv6UnicastConfig {
+    pub nexthop: Option<IpAddr>,
     pub import_policy: ImportExportPolicy6,
     pub export_policy: ImportExportPolicy6,
 }
@@ -79,14 +113,60 @@ pub struct Neighbor {
     /// IPv6 Unicast address family configuration (None = disabled)
     pub ipv6_unicast: Option<Ipv6UnicastConfig>,
     pub vlan_id: Option<u16>,
+    pub connect_retry_jitter: Option<JitterRange>,
+    pub idle_hold_jitter: Option<JitterRange>,
+    pub deterministic_collision_resolution: bool,
 }
 
 impl Neighbor {
     /// Validate that at least one address family is enabled
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate_address_families(&self) -> Result<(), String> {
         if self.ipv4_unicast.is_none() && self.ipv6_unicast.is_none() {
             return Err("at least one address family must be enabled".into());
         }
+        Ok(())
+    }
+
+    /// Validate nexthop address family matches configured address families.
+    /// Initially strict: IPv4 nexthop requires IPv4, IPv6 requires IPv6.
+    /// Can be relaxed in future for Extended Next-Hop (RFC 5549).
+    ///
+    /// Additionally validates cross-AF scenarios:
+    /// - IPv4 Unicast enabled for IPv6 peer requires configured IPv4 nexthop
+    /// - IPv6 Unicast enabled for IPv4 peer requires configured IPv6 nexthop
+    pub fn validate_nexthop(&self) -> Result<(), String> {
+        if let Some(cfg) = &self.ipv4_unicast {
+            if let Some(nh) = cfg.nexthop {
+                if !nh.is_ipv4() {
+                    return Err(format!(
+                        "IPv4 unicast nexthop must be IPv4 address, got {}",
+                        nh
+                    ));
+                }
+            } else if self.host.is_ipv6() {
+                return Err(
+                    "IPv4 Unicast enabled for IPv6 peer requires configured IPv4 nexthop"
+                        .into(),
+                );
+            }
+        }
+
+        if let Some(cfg) = &self.ipv6_unicast {
+            if let Some(nh) = cfg.nexthop {
+                if !nh.is_ipv6() {
+                    return Err(format!(
+                        "IPv6 unicast nexthop must be IPv6 address, got {}",
+                        nh
+                    ));
+                }
+            } else if !self.host.is_ipv6() {
+                return Err(
+                    "IPv6 Unicast enabled for IPv4 peer requires configured IPv6 nexthop"
+                        .into(),
+                );
+            }
+        }
+
         Ok(())
     }
 }
@@ -222,24 +302,6 @@ impl Neighbor {
         group: String,
         rq: BgpPeerConfig,
     ) -> Self {
-        let ipv4_unicast = if rq.ipv4_enabled {
-            Some(Ipv4UnicastConfig {
-                import_policy: rq.allow_import4,
-                export_policy: rq.allow_export4,
-            })
-        } else {
-            None
-        };
-
-        let ipv6_unicast = if rq.ipv6_enabled {
-            Some(Ipv6UnicastConfig {
-                import_policy: rq.allow_import6,
-                export_policy: rq.allow_export6,
-            })
-        } else {
-            None
-        };
-
         Self {
             asn,
             remote_asn: rq.remote_asn,
@@ -259,9 +321,13 @@ impl Neighbor {
             communities: rq.communities,
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
-            ipv4_unicast,
-            ipv6_unicast,
+            ipv4_unicast: rq.ipv4_unicast,
+            ipv6_unicast: rq.ipv6_unicast,
             vlan_id: rq.vlan_id,
+            connect_retry_jitter: rq.connect_retry_jitter,
+            idle_hold_jitter: rq.idle_hold_jitter,
+            deterministic_collision_resolution: rq
+                .deterministic_collision_resolution,
         }
     }
 
@@ -269,6 +335,7 @@ impl Neighbor {
         // Use explicit enablement flags from the database
         let ipv4_unicast = if rq.ipv4_enabled {
             Some(Ipv4UnicastConfig {
+                nexthop: rq.nexthop4,
                 import_policy: rq.allow_import4.clone(),
                 export_policy: rq.allow_export4.clone(),
             })
@@ -278,6 +345,7 @@ impl Neighbor {
 
         let ipv6_unicast = if rq.ipv6_enabled {
             Some(Ipv6UnicastConfig {
+                nexthop: rq.nexthop6,
                 import_policy: rq.allow_import6.clone(),
                 export_policy: rq.allow_export6.clone(),
             })
@@ -307,6 +375,12 @@ impl Neighbor {
             ipv4_unicast,
             ipv6_unicast,
             vlan_id: rq.vlan_id,
+            connect_retry_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
+            idle_hold_jitter: None,
+            deterministic_collision_resolution: false,
         }
     }
 }
@@ -490,23 +564,24 @@ pub struct BgpPeerConfig {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
-    /// Whether IPv4 unicast is enabled for this peer.
-    pub ipv4_enabled: bool,
-    /// Whether IPv6 unicast is enabled for this peer.
-    pub ipv6_enabled: bool,
-    /// Per-address-family import policy for IPv4 routes (only used if ipv4_enabled).
-    #[serde(default)]
-    pub allow_import4: ImportExportPolicy4,
-    /// Per-address-family export policy for IPv4 routes (only used if ipv4_enabled).
-    #[serde(default)]
-    pub allow_export4: ImportExportPolicy4,
-    /// Per-address-family import policy for IPv6 routes (only used if ipv6_enabled).
-    #[serde(default)]
-    pub allow_import6: ImportExportPolicy6,
-    /// Per-address-family export policy for IPv6 routes (only used if ipv6_enabled).
-    #[serde(default)]
-    pub allow_export6: ImportExportPolicy6,
+    /// IPv4 Unicast address family configuration (None = disabled)
+    pub ipv4_unicast: Option<Ipv4UnicastConfig>,
+    /// IPv6 Unicast address family configuration (None = disabled)
+    pub ipv6_unicast: Option<Ipv6UnicastConfig>,
     pub vlan_id: Option<u16>,
+    /// Jitter range for connect_retry timer. When used, the connect_retry timer
+    /// is multiplied by a random value within the (min, max) range supplied.
+    /// Useful to help break repeated synchronization of connection collisions.
+    pub connect_retry_jitter: Option<JitterRange>,
+    /// Jitter range for idle hold timer. When used, the idle hold timer is
+    /// multiplied by a random value within the (min, max) range supplied.
+    /// Useful to help break repeated synchronization of connection collisions.
+    pub idle_hold_jitter: Option<JitterRange>,
+    /// Enable deterministic collision resolution in Established state.
+    /// When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision
+    /// resolution even when one connection is already in Established state.
+    /// When false, Established connection always wins (timing-based resolution).
+    pub deterministic_collision_resolution: bool,
 }
 
 impl From<BgpPeerConfigV1> for BgpPeerConfig {
@@ -529,13 +604,19 @@ impl From<BgpPeerConfigV1> for BgpPeerConfig {
             communities: cfg.communities,
             local_pref: cfg.local_pref,
             enforce_first_as: cfg.enforce_first_as,
-            ipv4_enabled: true,
-            ipv6_enabled: false,
-            allow_import4: cfg.allow_import.as_ipv4_policy(),
-            allow_export4: cfg.allow_export.as_ipv4_policy(),
-            allow_import6: ImportExportPolicy6::NoFiltering,
-            allow_export6: ImportExportPolicy6::NoFiltering,
+            ipv4_unicast: Some(Ipv4UnicastConfig {
+                nexthop: None,
+                import_policy: cfg.allow_import.as_ipv4_policy(),
+                export_policy: cfg.allow_export.as_ipv4_policy(),
+            }),
+            ipv6_unicast: None,
             vlan_id: cfg.vlan_id,
+            connect_retry_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
+            idle_hold_jitter: None,
+            deterministic_collision_resolution: false,
         }
     }
 }

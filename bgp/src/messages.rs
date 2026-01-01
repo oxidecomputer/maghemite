@@ -1550,7 +1550,7 @@ impl Display for UpdateMessage {
 
         write!(
             f,
-            "Update[ treat-as-withdraw: ({}) path_attributes: ({p_str}) withdrawn({}) nlri({}) ]",
+            "Update[ treat-as-withdraw: ({}) withdrawn({}) path_attributes: ({p_str}) nlri({}) ]",
             self.treat_as_withdraw,
             if !w_str.is_empty() { &w_str } else { "empty" },
             if !n_str.is_empty() { &n_str } else { "empty" }
