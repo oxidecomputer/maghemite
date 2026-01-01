@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
+use bgp::params::JitterRange;
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
 use mg_admin_client::{
@@ -492,9 +493,17 @@ pub struct Neighbor {
     #[arg(long, default_value_t = 0)]
     idle_hold_time: u64,
 
+    /// Jitter range for idle hold timer (min,max format, e.g., "0.75,1.0").
+    #[arg(long)]
+    pub idle_hold_jitter: Option<JitterRange>,
+
     /// How long to wait between connection retries (s).
     #[arg(long, default_value_t = 5)]
     connect_retry_time: u64,
+
+    /// Jitter range for connect_retry timer (min,max format, e.g., "0.75,1.0").
+    #[arg(long)]
+    pub connect_retry_jitter: Option<JitterRange>,
 
     /// Interval for sending keepalive messages (s).
     #[arg(long, default_value_t = 2)]
@@ -504,9 +513,13 @@ pub struct Neighbor {
     #[arg(long, default_value_t = 0)]
     delay_open_time: u64,
 
-    /// Blocking interval for message loops (ms).
+    /// Enable deterministic collision resolution in Established state.
+    #[arg(long, default_value_t = false)]
+    pub deterministic_collision_resolution: bool,
+
+    /// Timer granularity in ms (how often do timers tick).
     #[arg(long, default_value_t = 100)]
-    resolution: u64,
+    clock_resolution: u64,
 
     /// Do not initiate connections, only accept them.
     #[arg(long, default_value_t = false)]
@@ -548,25 +561,33 @@ pub struct Neighbor {
     #[arg(long)]
     pub enable_ipv4: bool,
 
+    /// IPv4 prefixes to allow importing (requires --enable-ipv4).
+    #[arg(long, requires = "enable_ipv4")]
+    pub allow_import4: Option<Vec<Prefix4>>,
+
+    /// IPv4 prefixes to allow exporting (requires --enable-ipv4).
+    #[arg(long, requires = "enable_ipv4")]
+    pub allow_export4: Option<Vec<Prefix4>>,
+
+    /// IPv4 nexthop override for this neighbor (requires --enable-ipv4).
+    #[arg(long, requires = "enable_ipv4")]
+    pub nexthop4: Option<IpAddr>,
+
     /// Enable IPv6 unicast address family.
     #[arg(long)]
     pub enable_ipv6: bool,
 
-    /// IPv4 prefixes to allow importing (requires --enable-ipv4).
-    #[arg(long)]
-    pub allow_import4: Option<Vec<Prefix4>>,
-
-    /// IPv4 prefixes to allow exporting (requires --enable-ipv4).
-    #[arg(long)]
-    pub allow_export4: Option<Vec<Prefix4>>,
-
     /// IPv6 prefixes to allow importing (requires --enable-ipv6).
-    #[arg(long)]
+    #[arg(long, requires = "enable_ipv6")]
     pub allow_import6: Option<Vec<Prefix6>>,
 
     /// IPv6 prefixes to allow exporting (requires --enable-ipv6).
-    #[arg(long)]
+    #[arg(long, requires = "enable_ipv6")]
     pub allow_export6: Option<Vec<Prefix6>>,
+
+    /// IPv6 nexthop override for this neighbor (requires --enable-ipv6).
+    #[arg(long, requires = "enable_ipv6")]
+    pub nexthop6: Option<IpAddr>,
 
     /// Autonomous system number for the router to add the neighbor to.
     #[clap(env)]
@@ -590,6 +611,7 @@ impl From<Neighbor> for types::Neighbor {
                 None => ImportExportPolicy4::NoFiltering,
             };
             Some(Ipv4UnicastConfig {
+                nexthop: n.nexthop4,
                 import_policy,
                 export_policy,
             })
@@ -612,6 +634,7 @@ impl From<Neighbor> for types::Neighbor {
                 None => ImportExportPolicy6::NoFiltering,
             };
             Some(Ipv6UnicastConfig {
+                nexthop: n.nexthop6,
                 import_policy,
                 export_policy,
             })
@@ -630,7 +653,7 @@ impl From<Neighbor> for types::Neighbor {
             connect_retry: n.connect_retry_time,
             keepalive: n.keepalive_time,
             delay_open: n.delay_open_time,
-            resolution: n.resolution,
+            resolution: n.clock_resolution,
             group: n.group,
             passive: n.passive_connection,
             md5_auth_key: n.md5_auth_key.clone(),
@@ -641,6 +664,10 @@ impl From<Neighbor> for types::Neighbor {
             ipv4_unicast,
             ipv6_unicast,
             vlan_id: n.vlan_id,
+            connect_retry_jitter: n.connect_retry_jitter,
+            idle_hold_jitter: n.idle_hold_jitter,
+            deterministic_collision_resolution: n
+                .deterministic_collision_resolution,
         }
     }
 }

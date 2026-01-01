@@ -1140,6 +1140,7 @@ pub(crate) mod helpers {
             enforce_first_as: rq.enforce_first_as,
             // V1 API is IPv4-only; IPv6 support didn't exist in legacy API
             ipv4_unicast: Some(Ipv4UnicastConfig {
+                nexthop: None,
                 import_policy: allow_import4.clone(),
                 export_policy: allow_export4.clone(),
             }),
@@ -1153,7 +1154,10 @@ pub(crate) mod helpers {
             idle_hold_time: Duration::from_secs(rq.idle_hold_time),
             delay_open_time: Duration::from_secs(rq.delay_open),
             resolution: Duration::from_millis(rq.resolution),
-            idle_hold_jitter: Some((0.75, 1.0)),
+            idle_hold_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
             connect_retry_jitter: None,
             deterministic_collision_resolution: false,
         };
@@ -1199,14 +1203,17 @@ pub(crate) mod helpers {
             communities: rq.communities,
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
-            // V1 API is IPv4-only; IPv6 support didn't exist in legacy API
-            ipv4_enabled: true,
-            ipv6_enabled: false,
             allow_import4,
             allow_export4,
+            vlan_id: rq.vlan_id,
+
+            // V1 API is IPv4-only and doesn't support nexthop override
+            ipv4_enabled: true,
+            ipv6_enabled: false,
             allow_import6: ImportExportPolicy6::NoFiltering,
             allow_export6: ImportExportPolicy6::NoFiltering,
-            vlan_id: rq.vlan_id,
+            nexthop4: None,
+            nexthop6: None,
         })?;
 
         if start_session {
@@ -1227,7 +1234,11 @@ pub(crate) mod helpers {
         );
 
         // Validate that at least one AF is enabled
-        rq.validate().map_err(Error::Conflict)?;
+        rq.validate_address_families()
+            .map_err(Error::InvalidRequest)?;
+
+        // Validate nexthop address families
+        rq.validate_nexthop().map_err(Error::InvalidRequest)?;
 
         let (event_tx, event_rx) = channel();
 
@@ -1252,7 +1263,10 @@ pub(crate) mod helpers {
             idle_hold_time: Duration::from_secs(rq.idle_hold_time),
             delay_open_time: Duration::from_secs(rq.delay_open),
             resolution: Duration::from_millis(rq.resolution),
-            idle_hold_jitter: Some((0.75, 1.0)),
+            idle_hold_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
             connect_retry_jitter: None,
             deterministic_collision_resolution: false,
         };
@@ -1279,20 +1293,30 @@ pub(crate) mod helpers {
             true
         };
 
-        // Extract per-AF policies for database storage
-        let (allow_import4, allow_export4) = match &rq.ipv4_unicast {
-            Some(cfg) => (cfg.import_policy.clone(), cfg.export_policy.clone()),
+        // Extract per-AF policies and nexthop for database storage
+        let (allow_import4, allow_export4, nexthop4) = match &rq.ipv4_unicast {
+            Some(cfg) => (
+                cfg.import_policy.clone(),
+                cfg.export_policy.clone(),
+                cfg.nexthop,
+            ),
             None => (
                 ImportExportPolicy4::NoFiltering,
                 ImportExportPolicy4::NoFiltering,
+                None,
             ),
         };
 
-        let (allow_import6, allow_export6) = match &rq.ipv6_unicast {
-            Some(cfg) => (cfg.import_policy.clone(), cfg.export_policy.clone()),
+        let (allow_import6, allow_export6, nexthop6) = match &rq.ipv6_unicast {
+            Some(cfg) => (
+                cfg.import_policy.clone(),
+                cfg.export_policy.clone(),
+                cfg.nexthop,
+            ),
             None => (
                 ImportExportPolicy6::NoFiltering,
                 ImportExportPolicy6::NoFiltering,
+                None,
             ),
         };
 
@@ -1322,6 +1346,8 @@ pub(crate) mod helpers {
             allow_export4,
             allow_import6,
             allow_export6,
+            nexthop4,
+            nexthop6,
             vlan_id: rq.vlan_id,
         })?;
 

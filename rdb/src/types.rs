@@ -539,6 +539,14 @@ pub struct BgpNeighborInfo {
     /// Per-address-family export policy for IPv6 routes.
     #[serde(default)]
     pub allow_export6: ImportExportPolicy6,
+    /// Optional next-hop address for IPv4 unicast announcements.
+    /// If None, derives from TCP connection's local IP.
+    #[serde(default)]
+    pub nexthop4: Option<IpAddr>,
+    /// Optional next-hop address for IPv6 unicast announcements.
+    /// If None, derives from TCP connection's local IP.
+    #[serde(default)]
+    pub nexthop6: Option<IpAddr>,
     pub vlan_id: Option<u16>,
 }
 

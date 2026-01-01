@@ -97,6 +97,7 @@ rand = "0.8.5"
 backoff = "0.4"
 mg-api = { path = "mg-api" }
 mg-common = { path = "mg-common" }
+bgp = { path = "bgp" }
 rdb-types = { path = "rdb-types" }
 chrono = { version = "0.4.42", features = ["serde"] }
 oxide-tokio-rt = "0.1.2"
