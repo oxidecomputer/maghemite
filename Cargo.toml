@@ -22,6 +22,7 @@ default-members = [
     "mgd",
     "mg-lower",
     "mg-common",
+    "ndp",
     "xtask",
 ]
 
@@ -48,6 +49,7 @@ members = [
     "mgd",
     "mg-lower",
     "mg-common",
+    "ndp",
     "xtask",
 ]
 
@@ -114,6 +116,8 @@ proptest = "1.4"
 serial_test = "3.2"
 ddm-api = { path = "ddm-api" }
 ddm-types = { path = "ddm-types" }
+internet-checksum = "0.2.1"
+network-interface = { git = "https://github.com/oxidecomputer/network-interface", branch = "illumos" }
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
