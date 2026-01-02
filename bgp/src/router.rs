@@ -295,6 +295,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         let neighbor = NeighborInfo {
             name: Arc::new(Mutex::new(peer.name.clone())),
+            peer_group: peer.group.clone(),
             host: peer.host,
         };
 

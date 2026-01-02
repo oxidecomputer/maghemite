@@ -834,7 +834,7 @@ async fn delete_router(asn: u32, c: Client) -> Result<()> {
 }
 
 async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
-    let result = c.get_neighbors_v2(asn).await?;
+    let result = c.get_neighbors_v3(asn).await?;
     let mut sorted: Vec<_> = result.iter().collect();
     sorted.sort_by_key(|(ip, _)| ip.parse::<IpAddr>().ok());
 
@@ -857,9 +857,9 @@ async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
             "{}\t{:?}\t{:?}\t{:}\t{}/{}\t{}/{}",
             addr,
             info.asn,
-            info.state,
+            info.fsm_state,
             humantime::Duration::from(Duration::from_millis(
-                info.duration_millis
+                info.fsm_state_duration
             ),),
             humantime::Duration::from(Duration::from_secs(
                 info.timers.hold.configured.secs
