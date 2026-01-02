@@ -571,16 +571,16 @@ pub async fn get_neighbors(
                 )
             };
 
-        let pi = PeerInfo {
+        let pi = PeerInfoV2 {
             state: s.state(),
             asn: s.remote_asn(),
             duration_millis: dur as u64,
-            timers: PeerTimers {
-                hold: DynamicTimerInfo {
+            timers: PeerTimersV1 {
+                hold: DynamicTimerInfoV1 {
                     configured: conf_holdtime,
                     negotiated: neg_holdtime,
                 },
-                keepalive: DynamicTimerInfo {
+                keepalive: DynamicTimerInfoV1 {
                     configured: conf_keepalive,
                     negotiated: neg_keepalive,
                 },
@@ -596,7 +596,7 @@ pub async fn get_neighbors(
 pub async fn get_neighbors_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -630,22 +630,42 @@ pub async fn get_neighbors_v2(
 
         peers.insert(
             s.neighbor.host.ip(),
-            PeerInfo {
+            PeerInfoV2 {
                 state: s.state(),
                 asn: s.remote_asn(),
                 duration_millis: dur as u64,
-                timers: PeerTimers {
-                    hold: DynamicTimerInfo {
+                timers: PeerTimersV1 {
+                    hold: DynamicTimerInfoV1 {
                         configured: conf_holdtime,
                         negotiated: neg_holdtime,
                     },
-                    keepalive: DynamicTimerInfo {
+                    keepalive: DynamicTimerInfoV1 {
                         configured: conf_keepalive,
                         negotiated: neg_keepalive,
                     },
                 },
             },
         );
+    }
+
+    Ok(HttpResponseOk(peers))
+}
+
+pub async fn get_neighbors_v3(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let mut peers = HashMap::new();
+    let routers = lock!(ctx.bgp.router);
+    let r = routers
+        .get(&rq.asn)
+        .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
+
+    for s in lock!(r.sessions).values() {
+        peers.insert(s.neighbor.host.ip(), s.get_peer_info());
     }
 
     Ok(HttpResponseOk(peers))
@@ -1154,11 +1174,12 @@ pub(crate) mod helpers {
             idle_hold_time: Duration::from_secs(rq.idle_hold_time),
             delay_open_time: Duration::from_secs(rq.delay_open),
             resolution: Duration::from_millis(rq.resolution),
-            idle_hold_jitter: Some(JitterRange {
+            // insert default values for fields not present in the v1 API
+            idle_hold_jitter: None,
+            connect_retry_jitter: Some(JitterRange {
                 min: 0.75,
                 max: 1.0,
             }),
-            connect_retry_jitter: None,
             deterministic_collision_resolution: false,
         };
 
@@ -1263,12 +1284,10 @@ pub(crate) mod helpers {
             idle_hold_time: Duration::from_secs(rq.idle_hold_time),
             delay_open_time: Duration::from_secs(rq.delay_open),
             resolution: Duration::from_millis(rq.resolution),
-            idle_hold_jitter: Some(JitterRange {
-                min: 0.75,
-                max: 1.0,
-            }),
-            connect_retry_jitter: None,
-            deterministic_collision_resolution: false,
+            idle_hold_jitter: rq.idle_hold_jitter,
+            connect_retry_jitter: rq.connect_retry_jitter,
+            deterministic_collision_resolution: rq
+                .deterministic_collision_resolution,
         };
 
         let start_session = if ensure {

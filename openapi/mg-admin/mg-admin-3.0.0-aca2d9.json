@@ -1003,7 +1003,7 @@
     },
     "/bgp/status/neighbors": {
       "get": {
-        "operationId": "get_neighbors_v2",
+        "operationId": "get_neighbors_v3",
         "parameters": [
           {
             "in": "query",
@@ -1405,6 +1405,25 @@
           "routes"
         ]
       },
+      "AfiSafi": {
+        "type": "object",
+        "properties": {
+          "afi": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "safi": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "afi",
+          "safi"
+        ]
+      },
       "Aggregator": {
         "description": "AGGREGATOR path attribute (RFC 4271 §5.1.8)\n\nThe AGGREGATOR attribute is an optional transitive attribute that contains the AS number and IP address of the last BGP speaker that formed the aggregate route.",
         "type": "object",
@@ -1670,8 +1689,81 @@
           }
         ]
       },
+      "BgpCapability": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "RouteRefresh"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "MultiprotocolExtensions": {
+                "$ref": "#/components/schemas/AfiSafi"
+              }
+            },
+            "required": [
+              "MultiprotocolExtensions"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "FourOctetAsn": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "FourOctetAsn"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "AddPath": {
+                "type": "object",
+                "properties": {
+                  "elements": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AfiSafi"
+                    }
+                  }
+                },
+                "required": [
+                  "elements"
+                ]
+              }
+            },
+            "required": [
+              "AddPath"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Unknown": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "Unknown"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
       "BgpNexthop": {
-        "description": "BGP next-hops can come in multiple forms, defined in several different RFCs. This enum represents the forms supported by this implementation.\n\nIn the case of IPv6, RFC 2545 defined the use of either: 1) A single non-link-local next-hop (length=16) 2) A non-link-local plus a link-local next-hop (length=32)\n\nThis does not account for only a link-local address as the sole next-hop. As such, many different implementations decided they would encode this in a variety of ways (since there was no canonical source of truth): a) Single-address encoding just the link-local (length=16) b) Double-address encoding the link-local in both positions (length=32) c) Double-address encoding the link-local in its normal position, but 0's in the non-link-local position (length=32) etc. This led to `draft-ietf-idr-linklocal-capability` which specifies more detailed encoding and error handling standards, signaled via a new Link-Local Next Hop Capability.\n\nIn addition to this, RFC 8950 (formerly RFC 5549) specified the advertisement of IPv4 NLRI via an IPv6 next-hop, enabled via the Extended Next Hop capability. This excerpt contains the encoding logic from RFC 8950: ```text Specifically, this document allows advertising the MP_REACH_NLRI attribute [RFC4760] with this content:\n\n*  AFI = 1\n\n*  SAFI = 1, 2, or 4\n\n*  Length of Next Hop Address = 16 or 32\n\n*  Next Hop Address = IPv6 address of a next hop (potentially followed by the link-local IPv6 address of the next hop).  This field is to be constructed as per Section 3 of [RFC2545].\n\n*  NLRI = NLRI as per the AFI/SAFI definition\n\n[..]\n\nThis is in addition to the existing mode of operation allowing advertisement of NLRI for <AFI/SAFI> of <1/1>, <1/2>, and <1/4> with a next-hop address of an IPv4 type and advertisement of NLRI for an <AFI/SAFI> of <1/128> and <1/129> with a next-hop address of a VPN- IPv4 type.\n\nThe BGP speaker receiving the advertisement MUST use the Length of Next Hop Address field to determine which network-layer protocol the next-hop address belongs to.\n\n*  When the AFI/SAFI is <1/1>, <1/2>, or <1/4> and when the Length of Next Hop Address field is equal to 16 or 32, the next-hop address is of type IPv6.\n\n*  When the AFI/SAFI is <1/128> or <1/129> and when the Length of Next Hop Address field is equal to 24 or 48, the next-hop address is of type VPN-IPv6. ```\n\nRFC 8950 also goes on to state that Extended Next Hop is not specified for any AFI/SAFI other than IPv4 {Unicast, Multicast, Labeled Unicast, Unicast VPN, Multicast VPN}, because IPv4 next-hops can already be signaled within IPv6 or VPN-IPv6 encoding (via IPv4-mapped IPv6 addresses).\n\nSo for our purposes, IPv4 Unicast NLRI may have Next-hops in the form of: a) IPv4 nexthop b) IPv6 single GUA (w/ Extended Next-Hop) c) IPv6 single LL (w/ Extended Next-Hop + Link-Local Next Hop) d) IPv6 double (w/ Extended Next-Hop)\n\nand IPv6 Unicast NLRI may have Next-hops in the form of: a) IPv6 single (IPv4-mapped) b) IPv6 single GUA c) IPv6 single LL (w/ Link-Local Next Hop) d) IPv6 double",
+        "description": "A BGP next-hop address in one of three formats: IPv4, IPv6 single, or IPv6 double.",
         "oneOf": [
           {
             "type": "object",
@@ -2482,11 +2574,15 @@
           },
           "negotiated": {
             "$ref": "#/components/schemas/Duration"
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/Duration"
           }
         },
         "required": [
           "configured",
-          "negotiated"
+          "negotiated",
+          "remaining"
         ]
       },
       "Error": {
@@ -3986,6 +4082,272 @@
           }
         ]
       },
+      "PeerCounters": {
+        "description": "Session-level counters that persist across connection changes These serve as aggregate counters across all connections for the session",
+        "type": "object",
+        "properties": {
+          "active_connections_accepted": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "active_connections_declined": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "connect_retry_counter": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "connection_retries": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "connector_panics": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "hold_timer_expirations": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "idle_hold_timer_expirations": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "keepalive_send_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "keepalives_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "keepalives_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "md5_auth_failures": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "notification_send_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "notifications_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "notifications_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "open_handle_failures": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "open_send_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "opens_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "opens_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "passive_connections_accepted": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "passive_connections_declined": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "prefixes_advertised": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "prefixes_imported": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "route_refresh_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "route_refresh_send_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "route_refresh_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "tcp_connection_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_active": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_connect": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_connection_collision": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_established": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_idle": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_open_confirm": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_open_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_session_setup": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unexpected_keepalive_message": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unexpected_notification_message": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unexpected_open_message": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unexpected_route_refresh_message": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unexpected_update_message": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "update_nexhop_missing": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "update_send_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "active_connections_accepted",
+          "active_connections_declined",
+          "connect_retry_counter",
+          "connection_retries",
+          "connector_panics",
+          "hold_timer_expirations",
+          "idle_hold_timer_expirations",
+          "keepalive_send_failure",
+          "keepalives_received",
+          "keepalives_sent",
+          "md5_auth_failures",
+          "notification_send_failure",
+          "notifications_received",
+          "notifications_sent",
+          "open_handle_failures",
+          "open_send_failure",
+          "opens_received",
+          "opens_sent",
+          "passive_connections_accepted",
+          "passive_connections_declined",
+          "prefixes_advertised",
+          "prefixes_imported",
+          "route_refresh_received",
+          "route_refresh_send_failure",
+          "route_refresh_sent",
+          "tcp_connection_failure",
+          "transitions_to_active",
+          "transitions_to_connect",
+          "transitions_to_connection_collision",
+          "transitions_to_established",
+          "transitions_to_idle",
+          "transitions_to_open_confirm",
+          "transitions_to_open_sent",
+          "transitions_to_session_setup",
+          "unexpected_keepalive_message",
+          "unexpected_notification_message",
+          "unexpected_open_message",
+          "unexpected_route_refresh_message",
+          "unexpected_update_message",
+          "update_nexhop_missing",
+          "update_send_failure",
+          "updates_received",
+          "updates_sent"
+        ]
+      },
       "PeerInfo": {
         "type": "object",
         "properties": {
@@ -3995,36 +4357,119 @@
             "format": "uint32",
             "minimum": 0
           },
-          "duration_millis": {
+          "counters": {
+            "$ref": "#/components/schemas/PeerCounters"
+          },
+          "fsm_state": {
+            "$ref": "#/components/schemas/FsmStateKind"
+          },
+          "fsm_state_duration": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
-          "state": {
-            "$ref": "#/components/schemas/FsmStateKind"
+          "id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "ipv4_unicast": {
+            "$ref": "#/components/schemas/Ipv4UnicastConfig"
+          },
+          "ipv6_unicast": {
+            "$ref": "#/components/schemas/Ipv6UnicastConfig"
+          },
+          "local_ip": {
+            "type": "string",
+            "format": "ip"
+          },
+          "local_tcp_port": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "peer_group": {
+            "type": "string"
+          },
+          "received_capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BgpCapability"
+            }
+          },
+          "remote_ip": {
+            "type": "string",
+            "format": "ip"
+          },
+          "remote_tcp_port": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
           },
           "timers": {
             "$ref": "#/components/schemas/PeerTimers"
           }
         },
         "required": [
-          "duration_millis",
-          "state",
+          "counters",
+          "fsm_state",
+          "fsm_state_duration",
+          "ipv4_unicast",
+          "ipv6_unicast",
+          "local_ip",
+          "local_tcp_port",
+          "name",
+          "peer_group",
+          "received_capabilities",
+          "remote_ip",
+          "remote_tcp_port",
           "timers"
         ]
       },
       "PeerTimers": {
         "type": "object",
         "properties": {
+          "connect_retry": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "connect_retry_jitter": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
+          "delay_open": {
+            "$ref": "#/components/schemas/Duration"
+          },
           "hold": {
             "$ref": "#/components/schemas/DynamicTimerInfo"
+          },
+          "idle_hold": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "idle_hold_jitter": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
           },
           "keepalive": {
             "$ref": "#/components/schemas/DynamicTimerInfo"
           }
         },
         "required": [
+          "connect_retry",
+          "delay_open",
           "hold",
+          "idle_hold",
           "keepalive"
         ]
       },

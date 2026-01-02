@@ -18,7 +18,10 @@ use crate::{
         OpenMessage, PathAttributeValue, RouteRefreshMessage, Safi,
         UpdateMessage,
     },
-    params::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange},
+    params::{
+        BgpCapability, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
+        JitterRange, PeerCounters, PeerInfo, PeerTimers,
+    },
     policy::{CheckerResult, ShaperResult},
     recv_event_loop, recv_event_return,
     router::Router,
@@ -35,7 +38,7 @@ use slog::Logger;
 use std::{
     collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -906,6 +909,7 @@ impl SessionInfo {
 #[derive(Debug, Clone)]
 pub struct NeighborInfo {
     pub name: Arc<Mutex<String>>,
+    pub peer_group: String,
     pub host: SocketAddr,
 }
 
@@ -1504,7 +1508,7 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     id: u32,
 
     /// Capabilities to send to the peer
-    caps_tx: Arc<Mutex<BTreeSet<Capability>>>,
+    pub caps_tx: Arc<Mutex<BTreeSet<Capability>>>,
 
     shutdown: AtomicBool,
     running: AtomicBool,
@@ -8548,6 +8552,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         None
     }
 
+    /// Return the learned remote BGP-ID of the peer (if any).
+    pub fn remote_id(&self) -> Option<u32> {
+        // Query the registry's primary connection
+        if let Some(ConnectionKind::Full(pc)) =
+            lock!(self.connection_registry).primary()
+        {
+            return Some(pc.id);
+        }
+        None
+    }
+
     /// Return how long the BGP peer state machine has been in the current
     /// state.
     pub fn current_state_duration(&self) -> Duration {
@@ -8776,6 +8791,166 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Get the number of connections owned by this SessionRunner
     pub fn connection_count(&self) -> u8 {
         lock!(self.connection_registry).count()
+    }
+
+    fn get_counters(&self) -> PeerCounters {
+        PeerCounters::from(self.counters.as_ref())
+    }
+
+    fn get_timers(&self) -> PeerTimers {
+        let connect_retry = lock!(self.clock.timers.connect_retry).remaining();
+        let idle_hold = lock!(self.clock.timers.idle_hold).remaining();
+        let session_conf = lock!(self.session);
+        let connect_retry_jitter = session_conf.connect_retry_jitter;
+        let idle_hold_jitter = session_conf.idle_hold_jitter;
+
+        match self.primary_connection() {
+            Some(primary) => {
+                let clock = primary.connection().clock();
+                PeerTimers {
+                    hold: DynamicTimerInfo {
+                        configured: clock.timers.config_hold_time,
+                        negotiated: lock!(clock.timers.hold).interval,
+                        remaining: lock!(clock.timers.hold).remaining(),
+                    },
+                    keepalive: DynamicTimerInfo {
+                        configured: clock.timers.config_keepalive_time,
+                        negotiated: lock!(clock.timers.keepalive).interval,
+                        remaining: lock!(clock.timers.keepalive).remaining(),
+                    },
+                    connect_retry,
+                    connect_retry_jitter,
+                    idle_hold,
+                    idle_hold_jitter,
+                    delay_open: lock!(clock.timers.delay_open).remaining(),
+                }
+            }
+            None => PeerTimers {
+                hold: DynamicTimerInfo {
+                    configured: session_conf.hold_time,
+                    negotiated: session_conf.hold_time,
+                    remaining: session_conf.hold_time,
+                },
+                keepalive: DynamicTimerInfo {
+                    configured: session_conf.keepalive_time,
+                    negotiated: session_conf.keepalive_time,
+                    remaining: session_conf.keepalive_time,
+                },
+                connect_retry,
+                connect_retry_jitter,
+                idle_hold,
+                idle_hold_jitter,
+                delay_open: session_conf.delay_open_time,
+            },
+        }
+    }
+
+    pub fn get_peer_info(&self) -> PeerInfo {
+        let fsm_state = self.state();
+        let dur = self.current_state_duration().as_millis() % u64::MAX as u128;
+        let fsm_state_duration = dur as u64;
+        let counters = self.get_counters();
+        let name = lock!(self.neighbor.name).clone();
+        let peer_group = self.neighbor.peer_group.clone();
+        let session_conf = lock!(self.session);
+        let ipv4_unicast =
+            session_conf
+                .ipv4_unicast
+                .clone()
+                .unwrap_or(Ipv4UnicastConfig {
+                    nexthop: None,
+                    import_policy: Default::default(),
+                    export_policy: Default::default(),
+                });
+        let ipv6_unicast =
+            session_conf
+                .ipv6_unicast
+                .clone()
+                .unwrap_or(Ipv6UnicastConfig {
+                    nexthop: None,
+                    import_policy: Default::default(),
+                    export_policy: Default::default(),
+                });
+
+        match self.primary_connection() {
+            Some(pconn) => match pconn {
+                ConnectionKind::Partial(conn) => {
+                    let local = conn.local();
+                    let remote = conn.peer();
+                    PeerInfo {
+                        name,
+                        peer_group: peer_group.clone(),
+                        fsm_state,
+                        fsm_state_duration,
+                        asn: None,
+                        id: None,
+                        local_ip: local.ip(),
+                        remote_ip: remote.ip(),
+                        local_tcp_port: local.port(),
+                        remote_tcp_port: remote.port(),
+                        received_capabilities: vec![],
+                        timers: self.get_timers(),
+                        counters,
+                        ipv4_unicast,
+                        ipv6_unicast,
+                    }
+                }
+                ConnectionKind::Full(pc) => {
+                    let local = pc.conn.local();
+                    let remote = pc.conn.peer();
+                    let received_capabilities =
+                        pc.caps.iter().map(BgpCapability::from).collect();
+                    PeerInfo {
+                        name,
+                        peer_group: peer_group.clone(),
+                        fsm_state,
+                        fsm_state_duration,
+                        asn: Some(pc.asn),
+                        id: Some(pc.id),
+                        local_ip: local.ip(),
+                        remote_ip: remote.ip(),
+                        local_tcp_port: local.port(),
+                        remote_tcp_port: remote.port(),
+                        received_capabilities,
+                        timers: self.get_timers(),
+                        counters,
+                        ipv4_unicast,
+                        ipv6_unicast,
+                    }
+                }
+            },
+            None => {
+                let remote_ip = self.neighbor.host.ip();
+                // We don't have an active connection, so just display the
+                // configured next-hop if it's set or use the unspec addr if not
+                let local_ip = match remote_ip {
+                    IpAddr::V4(_) => ipv4_unicast
+                        .nexthop
+                        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+                    IpAddr::V6(_) => ipv6_unicast
+                        .nexthop
+                        .unwrap_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED)),
+                };
+
+                PeerInfo {
+                    name,
+                    peer_group: peer_group.clone(),
+                    fsm_state,
+                    fsm_state_duration,
+                    asn: None,
+                    id: None,
+                    local_ip,
+                    remote_ip,
+                    local_tcp_port: 0u16,
+                    remote_tcp_port: self.neighbor.host.port(),
+                    received_capabilities: vec![],
+                    timers: self.get_timers(),
+                    counters,
+                    ipv4_unicast,
+                    ipv6_unicast,
+                }
+            }
+        }
     }
 }
 

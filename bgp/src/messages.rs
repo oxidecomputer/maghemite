@@ -2611,6 +2611,9 @@ pub struct Ipv6DoubleNexthop {
 #[derive(
     Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema,
 )]
+#[schemars(
+    description = "A BGP next-hop address in one of three formats: IPv4, IPv6 single, or IPv6 double."
+)]
 pub enum BgpNexthop {
     Ipv4(Ipv4Addr),
     Ipv6Single(Ipv6Addr),
@@ -4188,6 +4191,11 @@ impl Capability {
             Self::Reserved { code: _ } => Err(Error::ReservedCapability),
             x => Err(Error::UnsupportedCapability(x.clone())),
         }
+    }
+
+    /// Get the CapabilityCode for this capability variant
+    pub fn code(&self) -> CapabilityCode {
+        self.clone().into()
     }
 
     pub fn from_wire(input: &[u8]) -> Result<(&[u8], Capability), Error> {

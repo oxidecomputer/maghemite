@@ -2,19 +2,22 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::config::PeerConfig;
-use crate::session::FsmStateKind;
+use crate::{
+    config::PeerConfig,
+    messages::{AddPathElement, Capability},
+    session::{FsmStateKind, SessionCounters},
+};
 use rdb::{
     ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6, PolicyAction,
     Prefix4, Prefix6,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::time::Duration;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     net::{IpAddr, SocketAddr},
+    sync::atomic::Ordering,
+    time::Duration,
 };
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -201,6 +204,7 @@ impl From<Neighbor> for PeerConfig {
     fn from(rq: Neighbor) -> Self {
         Self {
             name: rq.name.clone(),
+            group: rq.group.clone(),
             host: rq.host,
             hold_time: rq.hold_time,
             idle_hold_time: rq.idle_hold_time,
@@ -216,6 +220,7 @@ impl From<NeighborV1> for PeerConfig {
     fn from(rq: NeighborV1) -> Self {
         Self {
             name: rq.name.clone(),
+            group: rq.group.clone(),
             host: rq.host,
             hold_time: rq.hold_time,
             idle_hold_time: rq.idle_hold_time,
@@ -455,28 +460,275 @@ pub struct GetRouersResponse {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RouterInfo {
     pub asn: u32,
-    pub peers: BTreeMap<IpAddr, PeerInfo>,
+    pub peers: BTreeMap<IpAddr, PeerInfoV2>,
     pub graceful_shutdown: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "DynamicTimerInfo")]
+pub struct DynamicTimerInfoV1 {
+    pub configured: Duration,
+    pub negotiated: Duration,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DynamicTimerInfo {
     pub configured: Duration,
     pub negotiated: Duration,
+    pub remaining: Duration,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PeerTimers {
     pub hold: DynamicTimerInfo,
     pub keepalive: DynamicTimerInfo,
+    pub connect_retry: Duration,
+    pub connect_retry_jitter: Option<JitterRange>,
+    pub idle_hold: Duration,
+    pub idle_hold_jitter: Option<JitterRange>,
+    pub delay_open: Duration,
+}
+
+/// Session-level counters that persist across connection changes
+/// These serve as aggregate counters across all connections for the session
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerCounters {
+    // FSM Counters
+    pub connect_retry_counter: u64,
+    pub connection_retries: u64,
+    pub active_connections_accepted: u64,
+    pub active_connections_declined: u64,
+    pub passive_connections_accepted: u64,
+    pub passive_connections_declined: u64,
+    pub transitions_to_idle: u64,
+    pub transitions_to_connect: u64,
+    pub transitions_to_active: u64,
+    pub transitions_to_open_sent: u64,
+    pub transitions_to_open_confirm: u64,
+    pub transitions_to_connection_collision: u64,
+    pub transitions_to_session_setup: u64,
+    pub transitions_to_established: u64,
+    pub hold_timer_expirations: u64,
+    pub idle_hold_timer_expirations: u64,
+
+    // NLRI counters
+    pub prefixes_advertised: u64,
+    pub prefixes_imported: u64,
+
+    // Message counters
+    pub keepalives_sent: u64,
+    pub keepalives_received: u64,
+    pub route_refresh_sent: u64,
+    pub route_refresh_received: u64,
+    pub opens_sent: u64,
+    pub opens_received: u64,
+    pub notifications_sent: u64,
+    pub notifications_received: u64,
+    pub updates_sent: u64,
+    pub updates_received: u64,
+
+    // Message error counters
+    pub unexpected_update_message: u64,
+    pub unexpected_keepalive_message: u64,
+    pub unexpected_open_message: u64,
+    pub unexpected_route_refresh_message: u64,
+    pub unexpected_notification_message: u64,
+    pub update_nexhop_missing: u64,
+    pub open_handle_failures: u64,
+
+    // Send failure counters
+    pub notification_send_failure: u64,
+    pub open_send_failure: u64,
+    pub keepalive_send_failure: u64,
+    pub route_refresh_send_failure: u64,
+    pub update_send_failure: u64,
+
+    // Connection failure counters
+    pub tcp_connection_failure: u64,
+    pub md5_auth_failures: u64,
+    pub connector_panics: u64,
+}
+
+impl From<&SessionCounters> for PeerCounters {
+    fn from(value: &SessionCounters) -> Self {
+        Self {
+            connect_retry_counter: value
+                .connect_retry_counter
+                .load(Ordering::Relaxed),
+            connection_retries: value
+                .connection_retries
+                .load(Ordering::Relaxed),
+            active_connections_accepted: value
+                .active_connections_accepted
+                .load(Ordering::Relaxed),
+            active_connections_declined: value
+                .active_connections_declined
+                .load(Ordering::Relaxed),
+            passive_connections_accepted: value
+                .passive_connections_accepted
+                .load(Ordering::Relaxed),
+            passive_connections_declined: value
+                .passive_connections_declined
+                .load(Ordering::Relaxed),
+            transitions_to_idle: value
+                .transitions_to_idle
+                .load(Ordering::Relaxed),
+            transitions_to_connect: value
+                .transitions_to_connect
+                .load(Ordering::Relaxed),
+            transitions_to_active: value
+                .transitions_to_active
+                .load(Ordering::Relaxed),
+            transitions_to_open_sent: value
+                .transitions_to_open_sent
+                .load(Ordering::Relaxed),
+            transitions_to_open_confirm: value
+                .transitions_to_open_confirm
+                .load(Ordering::Relaxed),
+            transitions_to_connection_collision: value
+                .transitions_to_connection_collision
+                .load(Ordering::Relaxed),
+            transitions_to_session_setup: value
+                .transitions_to_session_setup
+                .load(Ordering::Relaxed),
+            transitions_to_established: value
+                .transitions_to_established
+                .load(Ordering::Relaxed),
+            hold_timer_expirations: value
+                .hold_timer_expirations
+                .load(Ordering::Relaxed),
+            idle_hold_timer_expirations: value
+                .idle_hold_timer_expirations
+                .load(Ordering::Relaxed),
+            prefixes_advertised: value
+                .prefixes_advertised
+                .load(Ordering::Relaxed),
+            prefixes_imported: value.prefixes_imported.load(Ordering::Relaxed),
+            keepalives_sent: value.keepalives_sent.load(Ordering::Relaxed),
+            keepalives_received: value
+                .keepalives_received
+                .load(Ordering::Relaxed),
+            route_refresh_sent: value
+                .route_refresh_sent
+                .load(Ordering::Relaxed),
+            route_refresh_received: value
+                .route_refresh_received
+                .load(Ordering::Relaxed),
+            opens_sent: value.opens_sent.load(Ordering::Relaxed),
+            opens_received: value.opens_received.load(Ordering::Relaxed),
+            notifications_sent: value
+                .notifications_sent
+                .load(Ordering::Relaxed),
+            notifications_received: value
+                .notifications_received
+                .load(Ordering::Relaxed),
+            updates_sent: value.updates_sent.load(Ordering::Relaxed),
+            updates_received: value.updates_received.load(Ordering::Relaxed),
+            unexpected_update_message: value
+                .unexpected_update_message
+                .load(Ordering::Relaxed),
+            unexpected_keepalive_message: value
+                .unexpected_keepalive_message
+                .load(Ordering::Relaxed),
+            unexpected_open_message: value
+                .unexpected_open_message
+                .load(Ordering::Relaxed),
+            unexpected_route_refresh_message: value
+                .unexpected_route_refresh_message
+                .load(Ordering::Relaxed),
+            unexpected_notification_message: value
+                .unexpected_notification_message
+                .load(Ordering::Relaxed),
+            update_nexhop_missing: value
+                .update_nexhop_missing
+                .load(Ordering::Relaxed),
+            open_handle_failures: value
+                .open_handle_failures
+                .load(Ordering::Relaxed),
+            notification_send_failure: value
+                .notification_send_failure
+                .load(Ordering::Relaxed),
+            open_send_failure: value.open_send_failure.load(Ordering::Relaxed),
+            keepalive_send_failure: value
+                .keepalive_send_failure
+                .load(Ordering::Relaxed),
+            route_refresh_send_failure: value
+                .route_refresh_send_failure
+                .load(Ordering::Relaxed),
+            update_send_failure: value
+                .update_send_failure
+                .load(Ordering::Relaxed),
+            tcp_connection_failure: value
+                .tcp_connection_failure
+                .load(Ordering::Relaxed),
+            md5_auth_failures: value.md5_auth_failures.load(Ordering::Relaxed),
+            connector_panics: value.connector_panics.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AfiSafi {
+    afi: u16,
+    safi: u8,
+}
+
+impl From<&AddPathElement> for AfiSafi {
+    fn from(value: &AddPathElement) -> Self {
+        Self {
+            afi: value.afi,
+            safi: value.safi,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub enum BgpCapability {
+    MultiprotocolExtensions(AfiSafi),
+    RouteRefresh,
+    FourOctetAsn(u32),
+    AddPath { elements: Vec<AfiSafi> },
+    Unknown(u8),
+}
+
+impl From<&Capability> for BgpCapability {
+    fn from(value: &Capability) -> Self {
+        match value {
+            Capability::MultiprotocolExtensions { afi, safi } => {
+                BgpCapability::MultiprotocolExtensions(AfiSafi {
+                    afi: *afi,
+                    safi: *safi,
+                })
+            }
+            Capability::RouteRefresh {} => BgpCapability::RouteRefresh,
+            Capability::FourOctetAs { asn } => {
+                BgpCapability::FourOctetAsn(*asn)
+            }
+            Capability::AddPath { elements } => BgpCapability::AddPath {
+                elements: elements.iter().map(AfiSafi::from).collect(),
+            },
+            c => BgpCapability::Unknown(c.code() as u8),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PeerInfo {
-    pub state: FsmStateKind,
+    pub name: String,
+    pub peer_group: String,
+    pub fsm_state: FsmStateKind,
+    pub fsm_state_duration: u64,
     pub asn: Option<u32>,
-    pub duration_millis: u64,
+    pub id: Option<u32>,
+    pub local_ip: IpAddr,
+    pub remote_ip: IpAddr,
+    pub local_tcp_port: u16,
+    pub remote_tcp_port: u16,
+    pub received_capabilities: Vec<BgpCapability>,
     pub timers: PeerTimers,
+    pub counters: PeerCounters,
+    pub ipv4_unicast: Ipv4UnicastConfig,
+    pub ipv6_unicast: Ipv6UnicastConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
@@ -648,6 +900,7 @@ pub enum PolicyKind {
 #[derive(
     Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, JsonSchema,
 )]
+#[schemars(rename = "FsmStateKind")]
 pub enum FsmStateKindV1 {
     /// Initial state. Refuse all incomming BGP connections. No resources
     /// allocated to peer.
@@ -693,15 +946,16 @@ impl From<FsmStateKind> for FsmStateKindV1 {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "PeerInfo")]
 pub struct PeerInfoV1 {
     pub state: FsmStateKindV1,
     pub asn: Option<u32>,
     pub duration_millis: u64,
-    pub timers: PeerTimers,
+    pub timers: PeerTimersV1,
 }
 
-impl From<PeerInfo> for PeerInfoV1 {
-    fn from(info: PeerInfo) -> Self {
+impl From<PeerInfoV2> for PeerInfoV1 {
+    fn from(info: PeerInfoV2) -> Self {
         Self {
             state: FsmStateKindV1::from(info.state),
             asn: info.asn,
@@ -709,6 +963,22 @@ impl From<PeerInfo> for PeerInfoV1 {
             timers: info.timers,
         }
     }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "PeerInfo")]
+pub struct PeerInfoV2 {
+    pub state: FsmStateKind,
+    pub asn: Option<u32>,
+    pub duration_millis: u64,
+    pub timers: PeerTimersV1,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "PeerTimers")]
+pub struct PeerTimersV1 {
+    pub hold: DynamicTimerInfoV1,
+    pub keepalive: DynamicTimerInfoV1,
 }
 
 // ============================================================================

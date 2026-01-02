@@ -12,7 +12,7 @@ use bfd::BfdPeerState;
 use bgp::{
     params::{
         ApplyRequest, ApplyRequestV1, CheckerSource, Neighbor, NeighborResetOp,
-        NeighborV1, Origin4, Origin6, PeerInfo, PeerInfoV1, Router,
+        NeighborV1, Origin4, Origin6, PeerInfo, PeerInfoV1, PeerInfoV2, Router,
         ShaperSource,
     },
     session::{FsmEventRecord, MessageHistory, MessageHistoryV1},
@@ -272,8 +272,14 @@ pub trait MgAdminApi {
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC.. }]
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP }]
     async fn get_neighbors_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_MP_BGP.. }]
+    async fn get_neighbors_v3(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError>;

@@ -317,6 +317,7 @@ where
             // Create PeerConfig from neighbor's configuration for compatibility with new_session
             let peer_config = PeerConfig {
                 name: neighbor.peer_name.clone(),
+                group: String::new(),
                 host: neighbor.remote_host,
                 hold_time: 6,
                 idle_hold_time: 0,
@@ -733,6 +734,7 @@ fn three_router_chain_helper<
                 remote_host: r2_addr,
                 session_info: SessionInfo::from_peer_config(&PeerConfig {
                     name: "r2".into(),
+                    group: String::new(),
                     host: r2_addr,
                     hold_time: 6,
                     idle_hold_time: 0,
@@ -755,6 +757,7 @@ fn three_router_chain_helper<
                     remote_host: r1_addr,
                     session_info: SessionInfo::from_peer_config(&PeerConfig {
                         name: "r1".into(),
+                        group: String::new(),
                         host: r1_addr,
                         hold_time: 6,
                         idle_hold_time: 0,
@@ -769,6 +772,7 @@ fn three_router_chain_helper<
                     remote_host: r3_addr,
                     session_info: SessionInfo::from_peer_config(&PeerConfig {
                         name: "r3".into(),
+                        group: String::new(),
                         host: r3_addr,
                         hold_time: 6,
                         idle_hold_time: 0,
@@ -791,6 +795,7 @@ fn three_router_chain_helper<
                 remote_host: r2_addr,
                 session_info: SessionInfo::from_peer_config(&PeerConfig {
                     name: "r2".into(),
+                    group: String::new(),
                     host: r2_addr,
                     hold_time: 6,
                     idle_hold_time: 0,
@@ -993,6 +998,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
 
     let r1_peer_config = PeerConfig {
         name: "r2".into(),
+        group: String::new(),
         host: r2_addr,
         hold_time: 6,
         idle_hold_time: 0,
@@ -1004,6 +1010,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
 
     let r2_peer_config = PeerConfig {
         name: "r1".into(),
+        group: String::new(),
         host: r1_addr,
         hold_time: 6,
         idle_hold_time: 0,
@@ -1168,6 +1175,7 @@ fn test_import_export_policy_filtering() {
     // Configure r1 with export policy
     let r1_peer_config = PeerConfig {
         name: "r2".into(),
+        group: String::new(),
         host: r2_addr,
         hold_time: 6,
         idle_hold_time: 0,
@@ -1188,6 +1196,7 @@ fn test_import_export_policy_filtering() {
     // Configure r2 with import policy
     let r2_peer_config = PeerConfig {
         name: "r1".into(),
+        group: String::new(),
         host: r1_addr,
         hold_time: 6,
         idle_hold_time: 0,
