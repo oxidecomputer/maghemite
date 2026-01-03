@@ -15,10 +15,11 @@ use crate::log::rdb_log;
 use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
+use ndp::Ipv6NetworkInterface;
 use sled::Tree;
 use slog::Logger;
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU8;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -105,8 +106,11 @@ pub struct Db {
     /// A set of watchers that are notified when changes to the data store occur.
     watchers: Arc<RwLock<Vec<Watcher>>>,
 
-    /// Reaps expired routes from the local RIB
+    /// Reaps expired routes from the local RIB.
     reaper: Arc<Reaper>,
+
+    /// A map from peer addresses to the corresponding local interface.
+    unnumbered_nexthop: Arc<Mutex<HashMap<Ipv6Addr, Ipv6NetworkInterface>>>,
 
     log: Logger,
 }
@@ -133,6 +137,7 @@ impl Db {
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
             reaper: Reaper::new(rib_loc),
+            unnumbered_nexthop: Arc::new(Mutex::new(HashMap::new())),
             log,
         })
     }
@@ -1308,6 +1313,38 @@ impl Db {
                 path.replace(t);
             }
         });
+    }
+
+    pub fn add_unnumbered_nexthop(
+        &self,
+        nexthop: Ipv6Addr,
+        interface: Ipv6NetworkInterface,
+    ) {
+        self.unnumbered_nexthop
+            .lock()
+            .unwrap()
+            .insert(nexthop, interface);
+    }
+
+    pub fn remove_unnumbered_nexthop_for_interface(
+        &self,
+        interface: &Ipv6NetworkInterface,
+    ) {
+        self.unnumbered_nexthop
+            .lock()
+            .unwrap()
+            .retain(|_k, v| v != interface);
+    }
+
+    pub fn get_interface_for_unnumbered_nexthop(
+        &self,
+        nexthop: Ipv6Addr,
+    ) -> Option<Ipv6NetworkInterface> {
+        self.unnumbered_nexthop
+            .lock()
+            .unwrap()
+            .get(&nexthop)
+            .cloned()
     }
 }
 

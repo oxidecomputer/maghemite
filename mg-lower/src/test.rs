@@ -42,6 +42,11 @@ async fn sync_prefix_test() {
         );
 
         let log = util::test::logger();
+        let db = rdb::Db::new(
+            &format!("/tmp/{}.db", uuid::Uuid::new_v4()),
+            log.clone(),
+        )
+        .expect("new db");
 
         crate::sync_prefix(
             tep,
@@ -50,6 +55,7 @@ async fn sync_prefix_test() {
             &dpd,
             &ddm,
             &sw,
+            &db,
             &log,
             &rt,
         )
@@ -90,6 +96,11 @@ async fn sync_link_down_test() {
 
         let log = util::test::logger();
         let mut rib = Rib::default();
+        let db = rdb::Db::new(
+            &format!("/tmp/{}.db", uuid::Uuid::new_v4()),
+            log.clone(),
+        )
+        .expect("new db");
 
         test_setup(tep, &dpd, &ddm, &mut rib);
 
@@ -101,6 +112,7 @@ async fn sync_link_down_test() {
                 &dpd,
                 &ddm,
                 &sw,
+                &db,
                 &log,
                 &rt,
             )

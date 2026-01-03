@@ -98,6 +98,7 @@ impl UnnumberedNeighborManager {
     ) -> Result<(), ResolveNeighborError> {
         let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
         self.ndp_mgr.remove_interface(ifx.clone());
+        self.db.remove_unnumbered_nexthop_for_interface(&ifx);
         self.pending_sessions.lock().unwrap().remove(&NbrKey {
             asn,
             interface: ifx,
@@ -265,6 +266,9 @@ impl UnnumberedNeighborManager {
             return;
         };
         drop(router_guard);
+
+        self.db
+            .add_unnumbered_nexthop(peer_addr, key.interface.clone());
 
         // if we are here the session has started, remove it from pending
         self.pending_sessions.lock().unwrap().remove(&key);
