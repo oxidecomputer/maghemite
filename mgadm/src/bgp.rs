@@ -13,10 +13,13 @@ use mg_admin_client::{
     },
 };
 use rdb::types::{PolicyAction, Prefix, Prefix4, Prefix6};
-use std::fs::read_to_string;
-use std::io::{Write, stdout};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
+use std::{fs::read_to_string, ops::Deref};
+use std::{
+    io::{Write, stdout},
+    ops::DerefMut,
+};
 use tabwriter::TabWriter;
 
 #[derive(Subcommand, Debug)]
@@ -229,9 +232,17 @@ pub enum NeighborCmd {
         #[clap(env)]
         asn: u32,
     },
+    /// List the unnumbered neighbors of a given router.
+    ListUnnumbered {
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Create a neighbor configuration.
     Create(Neighbor),
+
+    /// Create an unnumbered neighbor configuration.
+    CreateUnnumbered(UnnumberedNeighbor),
 
     /// Read a neighbor configuration.
     Read {
@@ -240,12 +251,29 @@ pub enum NeighborCmd {
         asn: u32,
     },
 
+    /// Read an unnumbered neighbor configuration.
+    ReadUnnumbered {
+        interface: String,
+        #[clap(env)]
+        asn: u32,
+    },
+
     /// Update a neighbor's configuration.
     Update(Neighbor),
+
+    /// Update an unnumbered neighbor's configuration.
+    UpdateUnnumbered(UnnumberedNeighbor),
 
     /// Delete a neighbor configuration
     Delete {
         addr: IpAddr,
+        #[clap(env)]
+        asn: u32,
+    },
+
+    /// Delete an unnumbered neighbor configuration
+    DeleteUnnumbered {
+        interface: String,
         #[clap(env)]
         asn: u32,
     },
@@ -470,11 +498,52 @@ pub struct Withdraw4 {
 
 #[derive(Args, Debug)]
 pub struct Neighbor {
-    /// Name for this neighbor
-    name: String,
-
     /// Neighbor address
     addr: IpAddr,
+
+    #[command(flatten)]
+    common: NeighborCommon,
+}
+
+impl Deref for Neighbor {
+    type Target = NeighborCommon;
+    fn deref(&self) -> &Self::Target {
+        &self.common
+    }
+}
+
+impl DerefMut for Neighbor {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.common
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct UnnumberedNeighbor {
+    /// Neighbor address
+    interface: String,
+
+    #[command(flatten)]
+    common: NeighborCommon,
+}
+
+impl Deref for UnnumberedNeighbor {
+    type Target = NeighborCommon;
+    fn deref(&self) -> &Self::Target {
+        &self.common
+    }
+}
+
+impl DerefMut for UnnumberedNeighbor {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.common
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct NeighborCommon {
+    /// Name for this neighbor
+    name: String,
 
     /// Peer group to add the neighbor to.
     group: String,
@@ -560,7 +629,7 @@ impl From<Neighbor> for types::Neighbor {
             asn: n.asn,
             remote_asn: n.remote_asn,
             min_ttl: n.min_ttl,
-            name: n.name,
+            name: n.name.clone(),
             host: SocketAddr::new(n.addr, n.port).to_string(),
             hold_time: n.hold_time,
             idle_hold_time: n.idle_hold_time,
@@ -568,14 +637,14 @@ impl From<Neighbor> for types::Neighbor {
             keepalive: n.keepalive_time,
             delay_open: n.delay_open_time,
             resolution: n.resolution,
-            group: n.group,
+            group: n.group.clone(),
             passive: n.passive_connection,
             md5_auth_key: n.md5_auth_key.clone(),
             multi_exit_discriminator: n.med,
-            communities: n.communities,
+            communities: n.communities.clone(),
             local_pref: n.local_pref,
             enforce_first_as: n.enforce_first_as,
-            allow_export: match n.allow_export {
+            allow_export: match &n.allow_export {
                 Some(prefixes) => ImportExportPolicy::Allow(
                     prefixes
                         .clone()
@@ -585,7 +654,53 @@ impl From<Neighbor> for types::Neighbor {
                 ),
                 None => ImportExportPolicy::NoFiltering,
             },
-            allow_import: match n.allow_import {
+            allow_import: match &n.allow_import {
+                Some(prefixes) => ImportExportPolicy::Allow(
+                    prefixes
+                        .clone()
+                        .into_iter()
+                        .map(|x| Prefix::V4(Prefix4::new(x.value, x.length)))
+                        .collect(),
+                ),
+                None => ImportExportPolicy::NoFiltering,
+            },
+            vlan_id: n.vlan_id,
+        }
+    }
+}
+
+impl From<UnnumberedNeighbor> for types::UnnumberedNeighbor {
+    fn from(n: UnnumberedNeighbor) -> types::UnnumberedNeighbor {
+        types::UnnumberedNeighbor {
+            asn: n.asn,
+            remote_asn: n.remote_asn,
+            min_ttl: n.min_ttl,
+            name: n.name.clone(),
+            interface: n.interface.clone(),
+            hold_time: n.hold_time,
+            idle_hold_time: n.idle_hold_time,
+            connect_retry: n.connect_retry_time,
+            keepalive: n.keepalive_time,
+            delay_open: n.delay_open_time,
+            resolution: n.resolution,
+            group: n.group.clone(),
+            passive: n.passive_connection,
+            md5_auth_key: n.md5_auth_key.clone(),
+            multi_exit_discriminator: n.med,
+            communities: n.communities.clone(),
+            local_pref: n.local_pref,
+            enforce_first_as: n.enforce_first_as,
+            allow_export: match &n.allow_export {
+                Some(prefixes) => ImportExportPolicy::Allow(
+                    prefixes
+                        .clone()
+                        .into_iter()
+                        .map(|x| Prefix::V4(Prefix4::new(x.value, x.length)))
+                        .collect(),
+                ),
+                None => ImportExportPolicy::NoFiltering,
+            },
+            allow_import: match &n.allow_import {
                 Some(prefixes) => ImportExportPolicy::Allow(
                     prefixes
                         .clone()
@@ -620,6 +735,21 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
                 NeighborCmd::Update(nbr) => update_nbr(nbr, c).await?,
                 NeighborCmd::Delete { asn, addr } => {
                     delete_nbr(asn, addr, c).await?
+                }
+                NeighborCmd::ListUnnumbered { asn } => {
+                    list_unnumbered_nbr(asn, c).await?
+                }
+                NeighborCmd::CreateUnnumbered(nbr) => {
+                    create_unnumbered_nbr(nbr, c).await?
+                }
+                NeighborCmd::ReadUnnumbered { asn, interface } => {
+                    read_unnumbered_nbr(asn, interface, c).await?
+                }
+                NeighborCmd::UpdateUnnumbered(nbr) => {
+                    update_unnumbered_nbr(nbr, c).await?
+                }
+                NeighborCmd::DeleteUnnumbered { asn, interface } => {
+                    delete_unnumbered_nbr(asn, interface, c).await?
                 }
             },
 
@@ -842,6 +972,50 @@ async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
 
 async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
     c.delete_neighbor(&addr, asn).await?;
+    Ok(())
+}
+
+async fn list_unnumbered_nbr(asn: u32, c: Client) -> Result<()> {
+    let nbrs = c.read_unnumbered_neighbors(asn).await?;
+    println!("{nbrs:#?}");
+    Ok(())
+}
+
+async fn create_unnumbered_nbr(
+    nbr: UnnumberedNeighbor,
+    c: Client,
+) -> Result<()> {
+    c.create_unnumbered_neighbor(&nbr.into()).await?;
+    Ok(())
+}
+
+async fn read_unnumbered_nbr(
+    asn: u32,
+    interface: String,
+    c: Client,
+) -> Result<()> {
+    let nbr = c
+        .read_unnumbered_neighbor(asn, &interface)
+        .await?
+        .into_inner();
+    println!("{nbr:#?}");
+    Ok(())
+}
+
+async fn update_unnumbered_nbr(
+    nbr: UnnumberedNeighbor,
+    c: Client,
+) -> Result<()> {
+    c.update_unnumbered_neighbor(&nbr.into()).await?;
+    Ok(())
+}
+
+async fn delete_unnumbered_nbr(
+    asn: u32,
+    interface: String,
+    c: Client,
+) -> Result<()> {
+    c.delete_unnumbered_neighbor(asn, &interface).await?;
     Ok(())
 }
 
