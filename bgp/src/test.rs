@@ -259,15 +259,27 @@ where
         None
     };
 
+    // Extract the actual test function name from the thread name.
+    // The Rust test harness names threads like "test::test_function_name".
+    // This ensures each test function gets its own database, even if helpers
+    // are called with identical parameters by different tests.
+    let thread_name = std::thread::current();
+    let actual_test_name = thread_name
+        .name()
+        .and_then(|name| name.split("::").last())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| test_name.to_string());
+
     // Create all routers first
     for logical_router in routers.iter() {
         let log = init_file_logger(&format!(
-            "{}.{test_name}.log",
+            "{}.{actual_test_name}.log",
             logical_router.name
         ));
 
-        // Create database
-        let db_path = format!("/tmp/{}.{test_name}.db", logical_router.name);
+        // Create database with unique path per test function
+        let db_path =
+            format!("/tmp/{}.{actual_test_name}.db", logical_router.name);
         let _ = std::fs::remove_dir_all(&db_path);
         let db = rdb::Db::new(&db_path, log.clone()).expect("create db");
 
