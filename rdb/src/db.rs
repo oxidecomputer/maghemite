@@ -605,7 +605,16 @@ impl Db {
             );
             NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
         });
+        self.do_update_rib4_loc(rib_in, rib_loc, prefix, fanout);
+    }
 
+    fn do_update_rib4_loc(
+        &self,
+        rib_in: &Rib4,
+        rib_loc: &mut Rib4,
+        prefix: &Prefix4,
+        fanout: NonZeroU8,
+    ) {
         match rib_in.get(prefix) {
             // rib-in has paths worth evaluating for loc-rib
             Some(paths) => {
@@ -642,7 +651,16 @@ impl Db {
             );
             NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
         });
+        self.do_update_rib6_loc(rib_in, rib_loc, prefix, fanout);
+    }
 
+    fn do_update_rib6_loc(
+        &self,
+        rib_in: &Rib6,
+        rib_loc: &mut Rib6,
+        prefix: &Prefix6,
+        fanout: NonZeroU8,
+    ) {
         match rib_in.get(prefix) {
             // rib-in has paths worth evaluating for loc-rib
             Some(paths) => {
@@ -671,13 +689,29 @@ impl Db {
     where
         F: Fn(&Prefix, &HashMap<PathKey, Path>) -> bool,
     {
+        // Read fanout once to avoid repeated disk I/O during the loop
+        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
+            rdb_log!(
+                self,
+                error,
+                "failed to get bestpath fanout: {e}";
+                "unit" => UNIT_PERSISTENT
+            );
+            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
+        });
+
         {
             // only grab the lock once, release it once the loop ends
             let rib4_in = lock!(self.rib4_in);
             let mut rib4_loc = lock!(self.rib4_loc);
-            for (prefix, paths) in self.full_rib4().iter() {
+            for (prefix, paths) in rib4_in.iter() {
                 if bestpath_needed(&Prefix::from(*prefix), paths) {
-                    self.update_rib4_loc(&rib4_in, &mut rib4_loc, prefix);
+                    self.do_update_rib4_loc(
+                        &rib4_in,
+                        &mut rib4_loc,
+                        prefix,
+                        fanout,
+                    );
                 }
             }
         }
@@ -686,9 +720,14 @@ impl Db {
             // only grab the lock once, release it once the loop ends
             let rib6_in = lock!(self.rib6_in);
             let mut rib6_loc = lock!(self.rib6_loc);
-            for (prefix, paths) in self.full_rib6().iter() {
+            for (prefix, paths) in rib6_in.iter() {
                 if bestpath_needed(&Prefix::from(*prefix), paths) {
-                    self.update_rib6_loc(&rib6_in, &mut rib6_loc, prefix);
+                    self.do_update_rib6_loc(
+                        &rib6_in,
+                        &mut rib6_loc,
+                        prefix,
+                        fanout,
+                    );
                 }
             }
         }
@@ -917,6 +956,18 @@ impl Db {
     pub fn set_nexthop_shutdown(&self, nexthop: IpAddr, shutdown: bool) {
         let mut pcn = PrefixChangeNotification::default();
         let mut pcn6 = PrefixChangeNotification::default();
+
+        // Read fanout once to avoid repeated disk I/O during the loops
+        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
+            rdb_log!(
+                self,
+                error,
+                "failed to get bestpath fanout: {e}";
+                "unit" => UNIT_PERSISTENT
+            );
+            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
+        });
+
         {
             let mut rib4_in = lock!(self.rib4_in);
             let mut rib4_loc = lock!(self.rib4_loc);
@@ -932,7 +983,12 @@ impl Db {
             }
             for prefix in pcn.changed.iter() {
                 if let Prefix::V4(p4) = prefix {
-                    self.update_rib4_loc(&rib4_in, &mut rib4_loc, p4);
+                    self.do_update_rib4_loc(
+                        &rib4_in,
+                        &mut rib4_loc,
+                        p4,
+                        fanout,
+                    );
                 }
             }
         }
@@ -952,7 +1008,12 @@ impl Db {
             }
             for prefix in pcn6.changed.iter() {
                 if let Prefix::V6(p6) = prefix {
-                    self.update_rib6_loc(&rib6_in, &mut rib6_loc, p6);
+                    self.do_update_rib6_loc(
+                        &rib6_in,
+                        &mut rib6_loc,
+                        p6,
+                        fanout,
+                    );
                 }
             }
         }
