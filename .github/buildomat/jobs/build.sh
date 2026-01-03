@@ -41,6 +41,7 @@ rustc --version
 banner "check"
 cargo fmt -- --check
 cargo clippy --all-targets -- --deny warnings
+cargo xtask openapi check
 
 banner "build"
 ptime -m cargo build
