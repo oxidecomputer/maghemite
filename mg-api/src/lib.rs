@@ -4,6 +4,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    iter::FromIterator,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     num::NonZeroU8,
 };
@@ -640,34 +641,47 @@ pub struct Rib(BTreeMap<String, BTreeSet<RdbPath>>);
 
 impl From<rdb::db::Rib> for Rib {
     fn from(value: rdb::db::Rib) -> Self {
-        Rib(value.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+        Rib(value
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.into_values().collect()))
+            .collect())
+    }
+}
+
+impl FromIterator<(rdb::Prefix, BTreeSet<RdbPath>)> for Rib {
+    fn from_iter<T: IntoIterator<Item = (rdb::Prefix, BTreeSet<RdbPath>)>>(
+        iter: T,
+    ) -> Self {
+        Rib(iter.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
     }
 }
 
 pub fn filter_rib_by_protocol(
-    rib: BTreeMap<Prefix, BTreeSet<RdbPath>>,
+    rib: BTreeMap<Prefix, HashMap<rdb::PathKey, RdbPath>>,
     protocol_filter: Option<ProtocolFilter>,
-) -> BTreeMap<Prefix, BTreeSet<RdbPath>> {
+) -> Rib {
     match protocol_filter {
-        None => rib,
-        Some(filter) => {
-            let mut filtered = BTreeMap::new();
-
-            for (prefix, paths) in rib {
+        None => rib
+            .into_iter()
+            .map(|(prefix, paths)| (prefix, paths.into_values().collect()))
+            .collect(),
+        Some(filter) => rib
+            .into_iter()
+            .filter_map(|(prefix, paths)| {
                 let filtered_paths: BTreeSet<RdbPath> = paths
-                    .into_iter()
+                    .into_values()
                     .filter(|path| match filter {
                         ProtocolFilter::Bgp => path.bgp.is_some(),
                         ProtocolFilter::Static => path.bgp.is_none(),
                     })
                     .collect();
 
-                if !filtered_paths.is_empty() {
-                    filtered.insert(prefix, filtered_paths);
+                if filtered_paths.is_empty() {
+                    None
+                } else {
+                    Some((prefix, filtered_paths))
                 }
-            }
-
-            filtered
-        }
+            })
+            .collect(),
     }
 }

@@ -44,6 +44,22 @@ pub struct Ipv4Marker;
 #[derive(Clone, Copy, Debug)]
 pub struct Ipv6Marker;
 
+/// Uniquely identifies a path for deduplication.
+/// Two paths with the same PathKey represent the same logical
+/// path and should replace each other in the RIB.
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub enum PathKey {
+    /// BGP path identified by peer IP.
+    /// All paths from the same peer replace each other.
+    // XXX: Include AddPathId when AddPath is fully supported
+    Bgp(IpAddr),
+    /// Static route identified by (nexthop, vlan_id) tuple.
+    Static {
+        nexthop: IpAddr,
+        vlan_id: Option<u16>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct Path {
     pub nexthop: IpAddr,
@@ -51,6 +67,19 @@ pub struct Path {
     pub rib_priority: u8,
     pub bgp: Option<BgpPathProperties>,
     pub vlan_id: Option<u16>,
+}
+
+impl Path {
+    /// Returns the identity key for this path.
+    pub fn key(&self) -> PathKey {
+        match &self.bgp {
+            Some(bgp) => PathKey::Bgp(bgp.peer),
+            None => PathKey::Static {
+                nexthop: self.nexthop,
+                vlan_id: self.vlan_id,
+            },
+        }
+    }
 }
 
 // Define a basic ordering on paths so bestpath selection is deterministic

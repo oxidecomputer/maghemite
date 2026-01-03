@@ -18,7 +18,7 @@ use mg_common::{lock, read_lock, write_lock};
 use sled::Tree;
 use slog::{Logger, error};
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU8;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -68,9 +68,9 @@ const BESTPATH_FANOUT: &str = "bestpath_fanout";
 /// Default bestpath fanout value. Maximum number of ECMP paths in RIB.
 const DEFAULT_BESTPATH_FANOUT: u8 = 1;
 
-pub type Rib = BTreeMap<Prefix, BTreeSet<Path>>;
-pub type Rib4 = BTreeMap<Prefix4, BTreeSet<Path>>;
-pub type Rib6 = BTreeMap<Prefix6, BTreeSet<Path>>;
+pub type Rib = BTreeMap<Prefix, HashMap<PathKey, Path>>;
+pub type Rib4 = BTreeMap<Prefix4, HashMap<PathKey, Path>>;
+pub type Rib6 = BTreeMap<Prefix6, HashMap<PathKey, Path>>;
 
 /// The central routing information base. Both persistent an volatile route
 /// information is managed through this structure.
@@ -548,14 +548,24 @@ impl Db {
                 let rib = lock!(self.rib4_in);
                 match rib.get(p4) {
                     None => Vec::new(),
-                    Some(p) => p.iter().cloned().collect(),
+                    Some(paths) => {
+                        let mut result: Vec<Path> =
+                            paths.values().cloned().collect();
+                        result.sort();
+                        result
+                    }
                 }
             }
             Prefix::V6(p6) => {
                 let rib = lock!(self.rib6_in);
                 match rib.get(p6) {
                     None => Vec::new(),
-                    Some(p) => p.iter().cloned().collect(),
+                    Some(paths) => {
+                        let mut result: Vec<Path> =
+                            paths.values().cloned().collect();
+                        result.sort();
+                        result
+                    }
                 }
             }
         }
@@ -567,14 +577,14 @@ impl Db {
                 let rib = lock!(self.rib4_loc);
                 match rib.get(p4) {
                     None => Vec::new(),
-                    Some(p) => p.iter().cloned().collect(),
+                    Some(paths) => paths.values().cloned().collect(),
                 }
             }
             Prefix::V6(p6) => {
                 let rib = lock!(self.rib6_loc);
                 match rib.get(p6) {
                     None => Vec::new(),
-                    Some(p) => p.iter().cloned().collect(),
+                    Some(paths) => paths.values().cloned().collect(),
                 }
             }
         }
@@ -601,8 +611,8 @@ impl Db {
             Some(paths) => {
                 match bestpaths(paths, fanout.get() as usize) {
                     // bestpath found at least 1 path for loc-rib
-                    Some(bp) => {
-                        rib_loc.insert(*prefix, bp.clone());
+                    Some(bp_paths) => {
+                        rib_loc.insert(*prefix, bp_paths);
                     }
                     // bestpath found no suitable paths
                     None => {
@@ -638,8 +648,8 @@ impl Db {
             Some(paths) => {
                 match bestpaths(paths, fanout.get() as usize) {
                     // bestpath found at least 1 path for loc-rib
-                    Some(bp) => {
-                        rib_loc.insert(*prefix, bp.clone());
+                    Some(bp_paths) => {
+                        rib_loc.insert(*prefix, bp_paths);
                     }
                     // bestpath found no suitable paths
                     None => {
@@ -659,7 +669,7 @@ impl Db {
     // bestpath is run against via the bestpath_needed closure
     pub fn trigger_bestpath_when<F>(&self, bestpath_needed: F)
     where
-        F: Fn(&Prefix, &BTreeSet<Path>) -> bool,
+        F: Fn(&Prefix, &HashMap<PathKey, Path>) -> bool,
     {
         {
             // only grab the lock once, release it once the loop ends
@@ -691,12 +701,17 @@ impl Db {
         rib_in: &mut Rib4,
         rib_loc: &mut Rib4,
     ) {
+        let key = path.key();
         match rib_in.get_mut(p4) {
             Some(paths) => {
-                paths.replace(path.clone());
+                // HashMap::insert() will replace any existing path with the same key,
+                // ensuring only one path per source (peer for BGP, nexthop+vlan for static).
+                paths.insert(key, path.clone());
             }
             None => {
-                rib_in.insert(*p4, BTreeSet::from([path.clone()]));
+                let mut paths = HashMap::new();
+                paths.insert(key, path.clone());
+                rib_in.insert(*p4, paths);
             }
         }
         self.update_rib4_loc(rib_in, rib_loc, p4);
@@ -709,12 +724,17 @@ impl Db {
         rib_in: &mut Rib6,
         rib_loc: &mut Rib6,
     ) {
+        let key = path.key();
         match rib_in.get_mut(p6) {
             Some(paths) => {
-                paths.replace(path.clone());
+                // HashMap::insert() will replace any existing path with the same key,
+                // ensuring only one path per source (peer for BGP, nexthop+vlan for static).
+                paths.insert(key, path.clone());
             }
             None => {
-                rib_in.insert(*p6, BTreeSet::from([path.clone()]));
+                let mut paths = HashMap::new();
+                paths.insert(key, path.clone());
+                rib_in.insert(*p6, paths);
             }
         }
         self.update_rib6_loc(rib_in, rib_loc, p6);
@@ -901,11 +921,11 @@ impl Db {
             let mut rib4_in = lock!(self.rib4_in);
             let mut rib4_loc = lock!(self.rib4_loc);
             for (prefix, paths) in rib4_in.iter_mut() {
-                for p in paths.clone().into_iter() {
-                    if p.nexthop == nexthop && p.shutdown != shutdown {
-                        let mut replacement = p.clone();
+                for (key, path) in paths.clone().into_iter() {
+                    if path.nexthop == nexthop && path.shutdown != shutdown {
+                        let mut replacement = path.clone();
                         replacement.shutdown = shutdown;
-                        paths.insert(replacement);
+                        paths.insert(key, replacement);
                         pcn.changed.insert(Prefix::from(*prefix));
                     }
                 }
@@ -921,11 +941,11 @@ impl Db {
             let mut rib6_in = lock!(self.rib6_in);
             let mut rib6_loc = lock!(self.rib6_loc);
             for (prefix, paths) in rib6_in.iter_mut() {
-                for p in paths.clone().into_iter() {
-                    if p.nexthop == nexthop && p.shutdown != shutdown {
-                        let mut replacement = p.clone();
+                for (key, path) in paths.clone().into_iter() {
+                    if path.nexthop == nexthop && path.shutdown != shutdown {
+                        let mut replacement = path.clone();
                         replacement.shutdown = shutdown;
-                        paths.insert(replacement);
+                        paths.insert(key, replacement);
                         pcn6.changed.insert(Prefix::from(*prefix));
                     }
                 }
@@ -951,7 +971,7 @@ impl Db {
         F: Fn(&Path) -> bool,
     {
         if let Some(paths) = rib_in.get_mut(prefix) {
-            paths.retain(|p| !prefix_cmp(p));
+            paths.retain(|_key, path| !prefix_cmp(path));
             if paths.is_empty() {
                 rib_in.remove(prefix);
             }
@@ -970,7 +990,7 @@ impl Db {
         F: Fn(&Path) -> bool,
     {
         if let Some(paths) = rib_in.get_mut(prefix) {
-            paths.retain(|p| !prefix_cmp(p));
+            paths.retain(|_key, path| !prefix_cmp(path));
             if paths.is_empty() {
                 rib_in.remove(prefix);
             }
@@ -1230,44 +1250,26 @@ impl Db {
 
     pub fn mark_bgp_peer_stale4(&self, peer: IpAddr) {
         let mut rib = lock!(self.rib4_loc);
-        rib.iter_mut().for_each(|(_prefix, path)| {
-            let targets: Vec<Path> = path
-                .iter()
-                .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref()
-                        && bgp.peer == peer
-                    {
-                        let mut marked = p.clone();
-                        marked.bgp = Some(bgp.as_stale());
-                        return Some(marked);
-                    }
-                    None
-                })
-                .collect();
-            for t in targets.into_iter() {
-                path.replace(t);
+        rib.iter_mut().for_each(|(_prefix, paths)| {
+            for (_key, path) in paths.iter_mut() {
+                if let Some(bgp) = path.bgp.as_mut()
+                    && bgp.peer == peer
+                {
+                    bgp.stale = Some(Utc::now());
+                }
             }
         });
     }
 
     pub fn mark_bgp_peer_stale6(&self, peer: IpAddr) {
         let mut rib = lock!(self.rib6_loc);
-        rib.iter_mut().for_each(|(_prefix, path)| {
-            let targets: Vec<Path> = path
-                .iter()
-                .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref()
-                        && bgp.peer == peer
-                    {
-                        let mut marked = p.clone();
-                        marked.bgp = Some(bgp.as_stale());
-                        return Some(marked);
-                    }
-                    None
-                })
-                .collect();
-            for t in targets.into_iter() {
-                path.replace(t);
+        rib.iter_mut().for_each(|(_prefix, paths)| {
+            for (_key, path) in paths.iter_mut() {
+                if let Some(bgp) = path.bgp.as_mut()
+                    && bgp.peer == peer
+                {
+                    bgp.stale = Some(Utc::now());
+                }
             }
         });
     }
@@ -1328,7 +1330,7 @@ impl Reaper {
             .unwrap()
             .iter_mut()
             .for_each(|(_prefix, paths)| {
-                paths.retain(|p| {
+                paths.retain(|_key, p| {
                     p.bgp
                         .as_ref()
                         .map(|b| {
@@ -1348,8 +1350,9 @@ impl Reaper {
 #[cfg(test)]
 mod test {
     use crate::{
-        AddressFamily, DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4,
-        Prefix6, StaticRouteKey, db::Db, test::TestDb, types::PrefixDbKey,
+        AddressFamily, BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
+        DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4, Prefix6,
+        StaticRouteKey, db::Db, test::TestDb, types::PrefixDbKey,
     };
     use mg_common::log::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -1382,13 +1385,23 @@ mod test {
         true
     }
 
+    // Helper function to create a static route key with explicit priority
+    fn make_static_route(
+        prefix: Prefix,
+        nexthop: IpAddr,
+        vlan_id: Option<u16>,
+        priority: u8,
+    ) -> StaticRouteKey {
+        StaticRouteKey {
+            prefix,
+            nexthop,
+            vlan_id,
+            rib_priority: priority,
+        }
+    }
+
     #[test]
     fn test_rib() {
-        use crate::StaticRouteKey;
-        use crate::{
-            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-            DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4, db::Db,
-        };
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
         let p1 = Prefix::from("192.168.1.0/24".parse::<Prefix4>().unwrap());
@@ -1447,19 +1460,19 @@ mod test {
             }),
             vlan_id: None,
         };
-        let static_key0 = StaticRouteKey {
-            prefix: p0,
-            nexthop: remote_ip0,
-            vlan_id: None,
-            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
-        };
+        let static_key0 = make_static_route(
+            p0,
+            remote_ip0,
+            None,
+            DEFAULT_RIB_PRIORITY_STATIC,
+        );
         let static_path0 = Path::from(static_key0);
-        let static_key1 = StaticRouteKey {
-            prefix: p0,
-            nexthop: remote_ip0,
-            vlan_id: None,
-            rib_priority: DEFAULT_RIB_PRIORITY_STATIC + 10,
-        };
+        let static_key1 = make_static_route(
+            p0,
+            remote_ip0,
+            None,
+            DEFAULT_RIB_PRIORITY_STATIC + 10,
+        );
         let static_path1 = Path::from(static_key1);
 
         // setup
@@ -1475,27 +1488,33 @@ mod test {
         assert!(db.full_rib(None).is_empty());
         assert!(db.loc_rib(None).is_empty());
 
-        // both paths have the same next-hop, but not all fields
-        // from StaticRouteKey match (rib_priority is different).
-        db.add_static_routes(&[static_key0, static_key1]).expect(
-            "add_static_routes failed for {static_key0} and {static_key1}",
-        );
+        // add static route with DEFAULT_RIB_PRIORITY_STATIC
+        db.add_static_routes(&[static_key0])
+            .expect("add_static_routes failed for {static_key0}");
 
         // expected current state
         // rib_in:
-        // - p0 via static_path0, static_path1
+        // - p0 via static_path0
         // loc_rib:
-        // - p0 via static_path0  (win by rib_priority)
-        let rib_in_paths = vec![static_path0.clone(), static_path1.clone()];
+        // - p0 via static_path0
+        let rib_in_paths = vec![static_path0.clone()];
         let loc_rib_paths = vec![static_path0.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
 
-        // rib_priority differs, so removal of static_key0
-        // should not affect path from static_key1
-        db.remove_static_routes(&[static_key0])
-            .expect("remove_static_routes_failed for {static_key0}");
+        // add a second static route with higher rib_priority (worse).
+        // Since it has the same (nexthop, vlan_id), it replaces static_key0.
+        // Only static_path1 (priority 11) remains in the RIB after replacement.
+        db.add_static_routes(&[static_key1])
+            .expect("add_static_routes failed for {static_key1}");
         let rib_in_paths = vec![static_path1.clone()];
         let loc_rib_paths = vec![static_path1.clone()];
+        assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
+
+        // remove static_key1
+        db.remove_static_routes(&[static_key1])
+            .expect("remove_static_routes failed for {static_key1}");
+        let rib_in_paths = Vec::new();
+        let loc_rib_paths = Vec::new();
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
 
         // install bgp routes
@@ -1505,15 +1524,15 @@ mod test {
 
         // expected current state
         // rib_in:
-        // - p0 via static_path1, bgp_path0
+        // - p0 via bgp_path0
         // - p1 via bgp_path{0,1,2}
         // - p2 via bgp_path{1,2}
         // loc_rib:
-        // - p0 via static_path1 (win by rib_priority/protocol)
+        // - p0 via bgp_path0    (only path available)
         // - p1 via bgp_path2    (win by local pref)
         // - p2 via bgp_path2    (win by local pref)
-        let rib_in_paths = vec![static_path1.clone(), bgp_path0.clone()];
-        let loc_rib_paths = vec![static_path1.clone()];
+        let rib_in_paths = vec![bgp_path0.clone()];
+        let loc_rib_paths = vec![bgp_path0.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
         let rib_in_paths =
             vec![bgp_path0.clone(), bgp_path1.clone(), bgp_path2.clone()];
@@ -1527,15 +1546,15 @@ mod test {
         db.remove_bgp_prefixes(&[p2], &bgp_path1.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
-        // - p0 via static_path1, bgp_path0
+        // - p0 via bgp_path0
         // - p1 via bgp_path{0,1,2}
         // - p2 via bgp_path2
         // loc_rib:
-        // - p0 via static_path1 (win by rib_priority/protocol)
+        // - p0 via bgp_path0    (only path available)
         // - p1 via bgp_path2    (win by local pref)
         // - p2 via bgp_path2    (win by local pref)
-        let rib_in_paths = vec![static_path1.clone(), bgp_path0.clone()];
-        let loc_rib_paths = vec![static_path1.clone()];
+        let rib_in_paths = vec![bgp_path0.clone()];
+        let loc_rib_paths = vec![bgp_path0.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
         let rib_in_paths =
             vec![bgp_path0.clone(), bgp_path1.clone(), bgp_path2.clone()];
@@ -1549,15 +1568,15 @@ mod test {
         db.remove_bgp_prefixes_from_peer(&bgp_path0.bgp.unwrap().peer);
         // expected current state
         // rib_in:
-        // - p0 via static_path1
+        // - p0 is empty (bgp_path0 removed)
         // - p1 via bgp_path{1,2}
         // - p2 via bgp_path2
         // loc_rib:
-        // - p0 via static_path1 (only path)
+        // - p0 is empty
         // - p1 via bgp_path2    (local pref)
         // - p2 via bgp_path2    (only path)
-        let rib_in_paths = vec![static_path1.clone()];
-        let loc_rib_paths = vec![static_path1.clone()];
+        let rib_in_paths = vec![];
+        let loc_rib_paths = vec![];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
         let rib_in_paths = vec![bgp_path1.clone(), bgp_path2.clone()];
         let loc_rib_paths = vec![bgp_path2.clone()];
@@ -1567,17 +1586,17 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // yank all routes from bgp_path2, simulating peer shutdown
-        // bgp_path2 should be unaffected, despite also having the same RID
+        // bgp_path1 should be unaffected, despite also having the same RID
         db.remove_bgp_prefixes_from_peer(&bgp_path2.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
-        // - p0 via static_path1
+        // - p0 is empty
         // - p1 via bgp_path1
         // loc_rib:
-        // - p0 via static_path1  (only path)
+        // - p0 is empty
         // - p1 via bgp_path1     (only path)
-        let rib_in_paths = vec![static_path1.clone()];
-        let loc_rib_paths = vec![static_path1.clone()];
+        let rib_in_paths = vec![];
+        let loc_rib_paths = vec![];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
         let rib_in_paths = vec![bgp_path1.clone()];
         let loc_rib_paths = vec![bgp_path1.clone()];
@@ -1587,15 +1606,15 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // yank all routes from bgp_path1, simulating peer shutdown
-        // p0 should be unaffected, still retaining the static path
+        // p0 should already be empty from earlier removal
         db.remove_bgp_prefixes_from_peer(&bgp_path1.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
-        // - p0 via static_path1
+        // - p0 is empty
         // loc_rib:
-        // - p0 via static_path1 (only path)
-        let rib_in_paths = vec![static_path1.clone()];
-        let loc_rib_paths = vec![static_path1.clone()];
+        // - p0 is empty
+        let rib_in_paths = vec![];
+        let loc_rib_paths = vec![];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
         let rib_in_paths = vec![];
         let loc_rib_paths = vec![];
@@ -1624,6 +1643,216 @@ mod test {
         // rib should be empty again
         assert!(db.full_rib(None).is_empty());
         assert!(db.loc_rib(None).is_empty());
+    }
+
+    #[test]
+    fn test_static_pathkey_coexistence() {
+        let db = get_test_db();
+        let prefix = Prefix::from("192.168.1.0/24".parse::<Prefix4>().unwrap());
+        let nexthop = IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap());
+
+        // Create two static routes with same prefix and nexthop but different vlan_id
+        // These should have different PathKeys and coexist in the RIB
+        let route_no_vlan = make_static_route(
+            prefix,
+            nexthop,
+            None,
+            DEFAULT_RIB_PRIORITY_STATIC,
+        );
+        let route_with_vlan = make_static_route(
+            prefix,
+            nexthop,
+            Some(100),
+            DEFAULT_RIB_PRIORITY_STATIC,
+        );
+
+        // Add both routes
+        db.add_static_routes(&[route_no_vlan, route_with_vlan])
+            .expect("Failed to add static routes");
+
+        // Verify both routes exist in rib_in (2 paths with different PathKeys)
+        let rib_in_paths = db.get_prefix_paths(&prefix);
+        assert_eq!(
+            rib_in_paths.len(),
+            2,
+            "Expected 2 paths in rib_in (different vlan_id should not replace)"
+        );
+
+        // Verify both routes exist in loc_rib (with default max=1, only one should be selected)
+        let loc_rib_paths = db.get_selected_prefix_paths(&prefix);
+        assert_eq!(
+            loc_rib_paths.len(),
+            1,
+            "With default bestpath max=1, only 1 should be selected"
+        );
+
+        // Now test with fanout=2 to allow both to be selected
+        db.set_bestpath_fanout(std::num::NonZeroU8::new(2).unwrap())
+            .expect("Failed to set bestpath fanout");
+
+        let loc_rib_paths = db.get_selected_prefix_paths(&prefix);
+        assert_eq!(
+            loc_rib_paths.len(),
+            2,
+            "With fanout=2, both paths should be in loc_rib"
+        );
+    }
+
+    #[test]
+    fn test_static_priority_update_affects_selection() {
+        let db = get_test_db();
+        let prefix = Prefix::from("10.0.0.0/8".parse::<Prefix4>().unwrap());
+        let static_nexthop =
+            IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap());
+        let bgp_peer = IpAddr::V4(Ipv4Addr::from_str("203.0.113.1").unwrap());
+
+        // Add a static route with priority 1 (better than BGP default 20)
+        let static_route_priority_1 =
+            make_static_route(prefix, static_nexthop, None, 1);
+        db.add_static_routes(&[static_route_priority_1])
+            .expect("Failed to add static route");
+
+        // Add a BGP route with priority 20
+        let bgp_path = Path {
+            nexthop: bgp_peer,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 1111,
+                peer: bgp_peer,
+                id: 1111,
+                med: Some(0),
+                local_pref: Some(100),
+                as_path: vec![1111],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+        db.add_bgp_prefixes(&[prefix], bgp_path.clone());
+
+        // Verify static route is selected (priority 1 < 20)
+        let loc_rib_paths = db.get_selected_prefix_paths(&prefix);
+        assert_eq!(loc_rib_paths.len(), 1, "Should have 1 path selected");
+        assert_eq!(
+            loc_rib_paths[0].nexthop, static_nexthop,
+            "Static route (priority 1) should be selected"
+        );
+
+        // Now update the static route with priority 30 (worse than BGP priority 20)
+        let static_route_priority_30 =
+            make_static_route(prefix, static_nexthop, None, 30);
+        db.add_static_routes(&[static_route_priority_30])
+            .expect("Failed to update static route priority");
+
+        // Verify BGP route is now selected (priority 20 < 30)
+        let loc_rib_paths = db.get_selected_prefix_paths(&prefix);
+        assert_eq!(loc_rib_paths.len(), 1, "Should have 1 path selected");
+        assert_eq!(
+            loc_rib_paths[0].nexthop, bgp_peer,
+            "BGP route (priority 20) should now be selected"
+        );
+
+        // Update static route back to priority 1
+        let static_route_priority_1_again =
+            make_static_route(prefix, static_nexthop, None, 1);
+        db.add_static_routes(&[static_route_priority_1_again])
+            .expect("Failed to update static route priority back");
+
+        // Verify static route is selected again
+        let loc_rib_paths = db.get_selected_prefix_paths(&prefix);
+        assert_eq!(loc_rib_paths.len(), 1, "Should have 1 path selected");
+        assert_eq!(
+            loc_rib_paths[0].nexthop, static_nexthop,
+            "Static route (priority 1) should be selected again"
+        );
+    }
+
+    #[test]
+    fn test_pathkey_identity_matrix() {
+        let db = get_test_db();
+        let prefix = Prefix::from("10.0.0.0/8".parse::<Prefix4>().unwrap());
+
+        // Create paths with all different PathKey combinations:
+        let peer1 = IpAddr::V4(Ipv4Addr::from_str("203.0.113.1").unwrap());
+        let peer2 = IpAddr::V4(Ipv4Addr::from_str("203.0.113.2").unwrap());
+        let nh1 = IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap());
+        let nh2 = IpAddr::V4(Ipv4Addr::from_str("192.168.1.2").unwrap());
+
+        // BGP path 1: peer1
+        let bgp_path1 = Path {
+            nexthop: peer1,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 1111,
+                peer: peer1,
+                id: 1111,
+                med: Some(100),
+                local_pref: Some(100),
+                as_path: vec![1111],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        // BGP path 2: peer2 (different PathKey than path1)
+        let bgp_path2 = Path {
+            nexthop: peer2,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 2222,
+                peer: peer2,
+                id: 2222,
+                med: Some(100),
+                local_pref: Some(100),
+                as_path: vec![2222],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        // Add BGP paths
+        db.add_bgp_prefixes(&[prefix], bgp_path1.clone());
+        db.add_bgp_prefixes(&[prefix], bgp_path2.clone());
+
+        // Add static routes
+        let static_key1 =
+            make_static_route(prefix, nh1, None, DEFAULT_RIB_PRIORITY_STATIC);
+        let static_key2 = make_static_route(
+            prefix,
+            nh1,
+            Some(100),
+            DEFAULT_RIB_PRIORITY_STATIC,
+        );
+        let static_key3 =
+            make_static_route(prefix, nh2, None, DEFAULT_RIB_PRIORITY_STATIC);
+        db.add_static_routes(&[static_key1, static_key2, static_key3])
+            .expect("Failed to add static routes");
+
+        // Verify all 5 paths exist in rib_in (all different PathKeys)
+        let rib_in_paths = db.get_prefix_paths(&prefix);
+        assert_eq!(
+            rib_in_paths.len(),
+            5,
+            "Expected all 5 paths with different PathKeys to coexist"
+        );
+
+        // Verify the paths have the expected nexthops
+        let nexthops: Vec<IpAddr> =
+            rib_in_paths.iter().map(|p| p.nexthop).collect();
+        assert!(nexthops.contains(&peer1));
+        assert!(nexthops.contains(&peer2));
+        assert!(nexthops.contains(&nh1));
+        assert!(nexthops.contains(&nh2));
+
+        // Verify static routes are in storage
+        let stored_routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert_eq!(
+            stored_routes.len(),
+            3,
+            "All 3 static routes should be stored"
+        );
     }
 
     #[test]

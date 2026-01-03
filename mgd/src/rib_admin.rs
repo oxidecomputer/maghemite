@@ -21,7 +21,7 @@ pub async fn get_rib_imported(
     let query = query.into_inner();
     let imported = ctx.db.full_rib(query.address_family);
     let filtered = filter_rib_by_protocol(imported, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
+    Ok(HttpResponseOk(filtered))
 }
 
 pub async fn get_rib_selected(
@@ -32,7 +32,7 @@ pub async fn get_rib_selected(
     let query = query.into_inner();
     let selected = ctx.db.loc_rib(query.address_family);
     let filtered = filter_rib_by_protocol(selected, query.protocol);
-    Ok(HttpResponseOk(filtered.into()))
+    Ok(HttpResponseOk(filtered))
 }
 
 pub async fn read_rib_bestpath_fanout(
