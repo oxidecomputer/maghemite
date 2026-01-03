@@ -20,6 +20,9 @@ pub enum Error {
 
     #[error("internal communication error: {0}")]
     InternalCommunication(String),
+
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
 }
 
 impl From<Error> for HttpError {
@@ -42,6 +45,9 @@ impl From<Error> for HttpError {
             },
             Error::InternalCommunication(_) => {
                 Self::for_internal_error(value.to_string())
+            }
+            Error::InvalidRequest(_) => {
+                Self::for_bad_request(None, value.to_string())
             }
         }
     }

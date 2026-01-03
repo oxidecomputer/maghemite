@@ -3311,6 +3311,7 @@ dependencies = [
 name = "mg-admin-client"
 version = "0.1.0"
 dependencies = [
+ "bgp",
  "chrono",
  "colored",
  "progenitor 0.11.2",

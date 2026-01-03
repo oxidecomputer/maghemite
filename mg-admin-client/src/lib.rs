@@ -22,6 +22,7 @@ progenitor::generate_api!(
         Prefix = rdb_types::Prefix,
         AddressFamily = rdb_types::AddressFamily,
         ProtocolFilter = rdb_types::ProtocolFilter,
+        JitterRange = bgp::params::JitterRange,
     }
 );
 

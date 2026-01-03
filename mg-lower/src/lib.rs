@@ -224,7 +224,7 @@ pub(crate) fn sync_prefix(
     // The best routes in the RIB
     let mut best: HashSet<RouteHash> = HashSet::new();
     if let Some(paths) = rib_loc.get(prefix) {
-        for path in paths {
+        for path in paths.values() {
             best.insert(RouteHash::for_prefix_path(sw, *prefix, path.clone())?);
         }
     }
