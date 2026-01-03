@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use crate::unnumbered_manager::ResolveNeighborError;
 use dropshot::{ClientErrorStatusCode, HttpError};
 
 #[derive(thiserror::Error, Debug)]
@@ -17,6 +18,9 @@ pub enum Error {
 
     #[error("bgp error: {0}")]
     Bgp(#[from] bgp::error::Error),
+
+    #[error("error adding an unnumbered error: {0}")]
+    AddUnnumberedNeighbor(#[from] ResolveNeighborError),
 
     #[error("internal communication error: {0}")]
     InternalCommunication(String),
@@ -39,6 +43,18 @@ impl From<Error> for HttpError {
                     )
                 }
                 _ => Self::for_internal_error(value.to_string()),
+            },
+            Error::AddUnnumberedNeighbor(ref err) => match err {
+                ResolveNeighborError::NoSuchInterface
+                | ResolveNeighborError::NotIpv6Interface => {
+                    Self::for_client_error_with_status(
+                        Some(err.to_string()),
+                        ClientErrorStatusCode::BAD_REQUEST,
+                    )
+                }
+                ResolveNeighborError::System(e) => {
+                    Self::for_internal_error(e.to_string())
+                }
             },
             Error::InternalCommunication(_) => {
                 Self::for_internal_error(value.to_string())

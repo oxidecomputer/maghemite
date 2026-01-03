@@ -8,6 +8,7 @@ use rdb::{ImportExportPolicy, PolicyAction, Prefix4, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::SocketAddrV6;
 use std::time::Duration;
 use std::{
     collections::BTreeMap,
@@ -40,25 +41,20 @@ pub enum NeighborResetOp {
 pub struct Neighbor {
     pub asn: u32,
     pub name: String,
-    pub host: SocketAddr,
-    pub hold_time: u64,
-    pub idle_hold_time: u64,
-    pub delay_open: u64,
-    pub connect_retry: u64,
-    pub keepalive: u64,
-    pub resolution: u64,
     pub group: String,
-    pub passive: bool,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
-    pub md5_auth_key: Option<String>,
-    pub multi_exit_discriminator: Option<u32>,
-    pub communities: Vec<u32>,
-    pub local_pref: Option<u32>,
-    pub enforce_first_as: bool,
-    pub allow_import: ImportExportPolicy,
-    pub allow_export: ImportExportPolicy,
-    pub vlan_id: Option<u16>,
+    pub host: SocketAddr,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParameters,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+pub struct UnnumberedNeighbor {
+    pub asn: u32,
+    pub name: String,
+    pub group: String,
+    pub interface: String,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParameters,
 }
 
 impl From<Neighbor> for PeerConfig {
@@ -66,12 +62,12 @@ impl From<Neighbor> for PeerConfig {
         Self {
             name: rq.name.clone(),
             host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
+            hold_time: rq.parameters.hold_time,
+            idle_hold_time: rq.parameters.idle_hold_time,
+            delay_open: rq.parameters.delay_open,
+            connect_retry: rq.parameters.connect_retry,
+            keepalive: rq.parameters.keepalive,
+            resolution: rq.parameters.resolution,
         }
     }
 }
@@ -84,52 +80,102 @@ impl Neighbor {
     ) -> Self {
         Self {
             asn,
-            remote_asn: rq.remote_asn,
-            min_ttl: rq.min_ttl,
-            name: rq.name.clone(),
-            host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
-            passive: rq.passive,
             group: group.clone(),
-            md5_auth_key: rq.md5_auth_key,
-            multi_exit_discriminator: rq.multi_exit_discriminator,
-            communities: rq.communities,
-            local_pref: rq.local_pref,
-            enforce_first_as: rq.enforce_first_as,
-            allow_import: rq.allow_import,
-            allow_export: rq.allow_export,
-            vlan_id: rq.vlan_id,
+            host: rq.host,
+            name: rq.name.clone(),
+            parameters: rq.parameters.clone(),
         }
     }
 
     pub fn from_rdb_neighbor_info(asn: u32, rq: &rdb::BgpNeighborInfo) -> Self {
         Self {
             asn,
-            remote_asn: rq.remote_asn,
-            min_ttl: rq.min_ttl,
+            group: rq.group.clone(),
             name: rq.name.clone(),
             host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
-            passive: rq.passive,
+            parameters: BgpPeerParameters {
+                remote_asn: rq.parameters.remote_asn,
+                min_ttl: rq.parameters.min_ttl,
+                hold_time: rq.parameters.hold_time,
+                idle_hold_time: rq.parameters.idle_hold_time,
+                delay_open: rq.parameters.delay_open,
+                connect_retry: rq.parameters.connect_retry,
+                keepalive: rq.parameters.keepalive,
+                resolution: rq.parameters.resolution,
+                passive: rq.parameters.passive,
+                md5_auth_key: rq.parameters.md5_auth_key.clone(),
+                multi_exit_discriminator: rq
+                    .parameters
+                    .multi_exit_discriminator,
+                communities: rq.parameters.communities.clone(),
+                local_pref: rq.parameters.local_pref,
+                enforce_first_as: rq.parameters.enforce_first_as,
+                allow_import: rq.parameters.allow_import.clone(),
+                allow_export: rq.parameters.allow_export.clone(),
+                vlan_id: rq.parameters.vlan_id,
+            },
+        }
+    }
+}
+
+impl UnnumberedNeighbor {
+    pub fn from_bgp_peer_config(
+        asn: u32,
+        group: String,
+        rq: UnnumberedBgpPeerConfig,
+    ) -> Self {
+        Self {
+            asn,
+            group: group.clone(),
+            interface: rq.interface.clone(),
+            name: rq.name.clone(),
+            parameters: rq.parameters.clone(),
+        }
+    }
+
+    pub fn to_peer_config(&self, addr: SocketAddrV6) -> PeerConfig {
+        PeerConfig {
+            name: self.name.clone(),
+            host: addr.into(),
+            hold_time: self.parameters.hold_time,
+            idle_hold_time: self.parameters.idle_hold_time,
+            delay_open: self.parameters.delay_open,
+            connect_retry: self.parameters.connect_retry,
+            keepalive: self.parameters.keepalive,
+            resolution: self.parameters.resolution,
+        }
+    }
+
+    pub fn from_rdb_neighbor_info(
+        asn: u32,
+        rq: &rdb::BgpUnnumberedNeighborInfo,
+    ) -> Self {
+        Self {
+            asn,
             group: rq.group.clone(),
-            md5_auth_key: rq.md5_auth_key.clone(),
-            multi_exit_discriminator: rq.multi_exit_discriminator,
-            communities: rq.communities.clone(),
-            local_pref: rq.local_pref,
-            enforce_first_as: rq.enforce_first_as,
-            allow_import: rq.allow_import.clone(),
-            allow_export: rq.allow_export.clone(),
-            vlan_id: rq.vlan_id,
+            name: rq.name.clone(),
+            interface: rq.interface.clone(),
+            parameters: BgpPeerParameters {
+                remote_asn: rq.parameters.remote_asn,
+                min_ttl: rq.parameters.min_ttl,
+                hold_time: rq.parameters.hold_time,
+                idle_hold_time: rq.parameters.idle_hold_time,
+                delay_open: rq.parameters.delay_open,
+                connect_retry: rq.parameters.connect_retry,
+                keepalive: rq.parameters.keepalive,
+                resolution: rq.parameters.resolution,
+                passive: rq.parameters.passive,
+                md5_auth_key: rq.parameters.md5_auth_key.clone(),
+                multi_exit_discriminator: rq
+                    .parameters
+                    .multi_exit_discriminator,
+                communities: rq.parameters.communities.clone(),
+                local_pref: rq.parameters.local_pref,
+                enforce_first_as: rq.parameters.enforce_first_as,
+                allow_import: rq.parameters.allow_import.clone(),
+                allow_export: rq.parameters.allow_export.clone(),
+                vlan_id: rq.parameters.vlan_id,
+            },
         }
     }
 }
@@ -268,10 +314,24 @@ pub struct ApplyRequest {
     pub peers: HashMap<String, Vec<BgpPeerConfig>>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
 pub struct BgpPeerConfig {
     pub host: SocketAddr,
     pub name: String,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParameters,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+pub struct UnnumberedBgpPeerConfig {
+    pub interface: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParameters,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+pub struct BgpPeerParameters {
     pub hold_time: u64,
     pub idle_hold_time: u64,
     pub delay_open: u64,

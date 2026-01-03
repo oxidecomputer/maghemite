@@ -3477,6 +3477,8 @@ dependencies = [
  "mg-api",
  "mg-common",
  "mg-lower",
+ "ndp",
+ "network-interface",
  "omicron-common",
  "oxide-tokio-rt",
  "oximeter",

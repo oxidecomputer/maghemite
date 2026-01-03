@@ -45,6 +45,10 @@ const BGP_ROUTER: &str = "bgp_router";
 /// information.
 const BGP_NEIGHBOR: &str = "bgp_neighbor";
 
+/// The handle used to open a persistent key-value tree for BGP neighbor
+/// information.
+const BGP_UNNUMBERED_NEIGHBOR: &str = "bgp_unnumbered_neighbor";
+
 /// The handle used to open a persistent key-value tree for settings
 /// information.
 const SETTINGS: &str = "settings";
@@ -347,6 +351,45 @@ impl Db {
                             self,
                             error,
                             "error parsing bgp neighbor entry value {value:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
+                        );
+                        return None;
+                    }
+                };
+                Some(value)
+            })
+            .collect();
+        Ok(result)
+    }
+
+    pub fn get_unnumbered_bgp_neighbors(
+        &self,
+    ) -> Result<Vec<BgpUnnumberedNeighborInfo>, Error> {
+        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
+        let result = tree
+            .scan_prefix(vec![])
+            .filter_map(|item| {
+                let (_key, value) = match item {
+                    Ok(item) => item,
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error fetching unnumbered bgp neighbor entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
+                        );
+                        return None;
+                    }
+                };
+                let value = String::from_utf8_lossy(&value);
+                let value: BgpUnnumberedNeighborInfo = match serde_json::from_str(&value)
+                {
+                    Ok(item) => item,
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing unnumbered bgp neighbor entry value {value:?}: {e}";
                             "unit" => UNIT_PERSISTENT
                         );
                         return None;

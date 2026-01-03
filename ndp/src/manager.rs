@@ -8,7 +8,6 @@ use crate::packet::{Icmp6RouterAdvertisement, Icmp6RouterSolicitation};
 use crate::util::{
     ALL_NODES_MCAST, ListeningSocketError, ReceivedAdvertisement, send_ra,
 };
-use oxnet::Ipv6Net;
 use slog::{Logger, error};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::mem::MaybeUninit;
@@ -176,7 +175,7 @@ impl InterfaceNdpManager {
             if self.stop.load(Ordering::SeqCst) {
                 break;
             }
-            send_ra(self.ifx.ip.addr(), None, self.ifx.index, &self.log);
+            send_ra(self.ifx.ip, None, self.ifx.index, &self.log);
             sleep(RA_INTERVAL);
         }
     }
@@ -197,7 +196,7 @@ impl InterfaceNdpManager {
     /// Handle a router solicitation by sending an announcement to the
     /// sender.
     fn handle_rs(&self, _rs: Icmp6RouterSolicitation, src: Ipv6Addr) {
-        send_ra(self.ifx.ip.addr(), Some(src), self.ifx.index, &self.log);
+        send_ra(self.ifx.ip, Some(src), self.ifx.index, &self.log);
     }
 
     /// Check to see if the reachable time for our current peer (if any)
@@ -253,12 +252,12 @@ impl Drop for InterfaceNdpManager {
 }
 
 /// Information about a network interface managed by the NDP manager.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Ipv6NetworkInterface {
     /// Interface's name
     pub name: String,
     /// Interface's address
-    pub ip: Ipv6Net,
+    pub ip: Ipv6Addr,
     /// Interface's index
     pub index: u32,
 }
