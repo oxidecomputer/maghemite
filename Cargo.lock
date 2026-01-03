@@ -2852,6 +2852,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "internet-checksum"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc6d6206008e25125b1f97fbe5d309eb7b85141cf9199d52dbd3729a1584dd16"
+
+[[package]]
 name = "ipconfig"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3471,6 +3477,8 @@ dependencies = [
  "mg-api",
  "mg-common",
  "mg-lower",
+ "ndp",
+ "network-interface",
  "omicron-common",
  "oxide-tokio-rt",
  "oximeter",
@@ -3552,6 +3560,31 @@ dependencies = [
  "mime",
  "spin 0.9.8",
  "version_check",
+]
+
+[[package]]
+name = "ndp"
+version = "0.1.0"
+dependencies = [
+ "internet-checksum",
+ "ispf",
+ "network-interface",
+ "oxnet",
+ "serde",
+ "slog",
+ "socket2 0.5.10",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "network-interface"
+version = "0.1.7"
+source = "git+https://github.com/oxidecomputer/network-interface?branch=illumos#5a696e910333bdc50ef56cebe9cdd78e40127d87"
+dependencies = [
+ "cc",
+ "libc",
+ "thiserror 1.0.69",
+ "winapi",
 ]
 
 [[package]]

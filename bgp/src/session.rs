@@ -17,6 +17,7 @@ use crate::{
         OpenMessage, PathAttributeValue, RouteRefreshMessage, Safi,
         UpdateMessage,
     },
+    params::BgpPeerParameters,
     policy::{CheckerResult, ShaperResult},
     recv_event_loop, recv_event_return,
     router::Router,
@@ -589,6 +590,35 @@ impl SessionInfo {
             idle_hold_jitter: Some((0.75, 1.0)),
             connect_retry_jitter: None,
             // XXX: plumb this through to the neighbor API endpoint
+            deterministic_collision_resolution: false,
+        }
+    }
+}
+
+impl From<&BgpPeerParameters> for SessionInfo {
+    fn from(value: &BgpPeerParameters) -> Self {
+        SessionInfo {
+            passive_tcp_establishment: value.passive,
+            remote_asn: value.remote_asn,
+            min_ttl: value.min_ttl,
+            md5_auth_key: value.md5_auth_key.clone(),
+            multi_exit_discriminator: value.multi_exit_discriminator,
+            communities: value.communities.clone().into_iter().collect(),
+            local_pref: value.local_pref,
+            enforce_first_as: value.enforce_first_as,
+            allow_import: value.allow_import.clone(),
+            allow_export: value.allow_export.clone(),
+            vlan_id: value.vlan_id,
+            remote_id: None,
+            bind_addr: None,
+            connect_retry_time: Duration::from_secs(value.connect_retry),
+            keepalive_time: Duration::from_secs(value.keepalive),
+            hold_time: Duration::from_secs(value.hold_time),
+            idle_hold_time: Duration::from_secs(value.idle_hold_time),
+            delay_open_time: Duration::from_secs(value.delay_open),
+            resolution: Duration::from_millis(value.resolution),
+            idle_hold_jitter: Some((0.75, 1.0)),
+            connect_retry_jitter: None,
             deterministic_collision_resolution: false,
         }
     }
