@@ -644,7 +644,9 @@ fn basic_update_helper<
 
     // Originate and verify routes based on route_exchange variant
     match route_exchange {
-        RouteExchange::Ipv4 { .. } => {
+        RouteExchange::Ipv4 {
+            nexthop: initial_nexthop,
+        } => {
             // IPv4-only: originate and verify IPv4 prefix
             r1.router
                 .create_origin4(vec![cidr!("1.2.3.0/24")])
@@ -653,13 +655,61 @@ fn basic_update_helper<
             let prefix_rdb = Prefix::V4(cidr!("1.2.3.0/24"));
             wait_for!(!r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
 
+            // Verify initial nexthop if one was configured and test override change
+            let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
+            assert_eq!(paths.len(), 1);
+            if let Some(initial_nh) = initial_nexthop {
+                assert_eq!(paths[0].nexthop, initial_nh);
+
+                // Test nexthop override change
+                let new_nexthop = match initial_nh {
+                    IpAddr::V4(_) => ip!("10.255.255.254"),
+                    IpAddr::V6(_) => unreachable!(),
+                };
+
+                let peer_config = PeerConfig {
+                    name: "r2".into(),
+                    group: String::new(),
+                    host: r2_addr,
+                    hold_time: 6,
+                    idle_hold_time: 0,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                };
+                let mut session_info = create_test_session_info(
+                    route_exchange,
+                    r1_addr,
+                    r2_addr,
+                    false,
+                );
+                session_info.ipv4_unicast.as_mut().unwrap().nexthop =
+                    Some(new_nexthop);
+
+                r1.router
+                    .update_session(peer_config, session_info)
+                    .expect("update nexthop");
+
+                // Verify nexthop change is reflected in re-advertised route
+                wait_for!(
+                    {
+                        let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
+                        !paths.is_empty() && paths[0].nexthop == new_nexthop
+                    },
+                    "nexthop should be updated"
+                );
+            }
+
             // Shut down r1 and verify withdrawal
             r1.shutdown();
             wait_for_neq!(r1_session.state(), FsmStateKind::Established);
             wait_for_neq!(r2_session.state(), FsmStateKind::Established);
             wait_for!(r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
         }
-        RouteExchange::Ipv6 { .. } => {
+        RouteExchange::Ipv6 {
+            nexthop: initial_nexthop,
+        } => {
             // IPv6-only: originate and verify IPv6 prefix
             r1.router
                 .create_origin6(vec![cidr!("3fff:db8::/32")])
@@ -668,13 +718,62 @@ fn basic_update_helper<
             let prefix_rdb = Prefix::V6(cidr!("3fff:db8::/32"));
             wait_for!(!r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
 
+            // Verify initial nexthop if one was configured and test override change
+            let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
+            assert_eq!(paths.len(), 1);
+            if let Some(initial_nh) = initial_nexthop {
+                assert_eq!(paths[0].nexthop, initial_nh);
+
+                // Test nexthop override change
+                let new_nexthop = match initial_nh {
+                    IpAddr::V6(_) => ip!("3fff:ffff:ffff:ffff::ffff:fffe"),
+                    IpAddr::V4(_) => unreachable!(),
+                };
+
+                let peer_config = PeerConfig {
+                    name: "r2".into(),
+                    group: String::new(),
+                    host: r2_addr,
+                    hold_time: 6,
+                    idle_hold_time: 0,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                };
+                let mut session_info = create_test_session_info(
+                    route_exchange,
+                    r1_addr,
+                    r2_addr,
+                    false,
+                );
+                session_info.ipv6_unicast.as_mut().unwrap().nexthop =
+                    Some(new_nexthop);
+
+                r1.router
+                    .update_session(peer_config, session_info)
+                    .expect("update nexthop");
+
+                // Verify nexthop change is reflected in re-advertised route
+                wait_for!(
+                    {
+                        let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
+                        !paths.is_empty() && paths[0].nexthop == new_nexthop
+                    },
+                    "nexthop should be updated"
+                );
+            }
+
             // Shut down r1 and verify withdrawal
             r1.shutdown();
             wait_for_neq!(r1_session.state(), FsmStateKind::Established);
             wait_for_neq!(r2_session.state(), FsmStateKind::Established);
             wait_for!(r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
         }
-        RouteExchange::DualStack { .. } => {
+        RouteExchange::DualStack {
+            ipv4_nexthop,
+            ipv6_nexthop,
+        } => {
             // Dual-stack: originate and verify both IPv4 and IPv6 prefixes
             r1.router
                 .create_origin4(vec![cidr!("1.2.3.0/24")])
@@ -688,6 +787,81 @@ fn basic_update_helper<
 
             wait_for!(!r2.router.db.get_prefix_paths(&prefix4_rdb).is_empty());
             wait_for!(!r2.router.db.get_prefix_paths(&prefix6_rdb).is_empty());
+
+            // Verify initial nexthops if configured
+            let paths4 = r2.router.db.get_prefix_paths(&prefix4_rdb);
+            assert_eq!(paths4.len(), 1);
+            if let Some(expected_nexthop) = ipv4_nexthop {
+                assert_eq!(paths4[0].nexthop, expected_nexthop);
+            }
+
+            let paths6 = r2.router.db.get_prefix_paths(&prefix6_rdb);
+            assert_eq!(paths6.len(), 1);
+            if let Some(expected_nexthop) = ipv6_nexthop {
+                assert_eq!(paths6[0].nexthop, expected_nexthop);
+            }
+
+            // Test nexthop override changes if any were configured
+            if ipv4_nexthop.is_some() || ipv6_nexthop.is_some() {
+                let new_ipv4_nexthop =
+                    ipv4_nexthop.map(|_| ip!("10.255.255.254"));
+                let new_ipv6_nexthop =
+                    ipv6_nexthop.map(|_| ip!("3fff:ffff:ffff:ffff::ffff:fffe"));
+
+                let peer_config = PeerConfig {
+                    name: "r2".into(),
+                    group: String::new(),
+                    host: r2_addr,
+                    hold_time: 6,
+                    idle_hold_time: 0,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                };
+                let mut session_info = create_test_session_info(
+                    route_exchange,
+                    r1_addr,
+                    r2_addr,
+                    false,
+                );
+                if let Some(nexthop) = new_ipv4_nexthop {
+                    session_info.ipv4_unicast.as_mut().unwrap().nexthop =
+                        Some(nexthop);
+                }
+                if let Some(nexthop) = new_ipv6_nexthop {
+                    session_info.ipv6_unicast.as_mut().unwrap().nexthop =
+                        Some(nexthop);
+                }
+
+                r1.router
+                    .update_session(peer_config, session_info)
+                    .expect("update nexthop");
+
+                // Verify IPv4 nexthop change if applicable
+                if let Some(new_nh) = new_ipv4_nexthop {
+                    wait_for!(
+                        {
+                            let paths =
+                                r2.router.db.get_prefix_paths(&prefix4_rdb);
+                            !paths.is_empty() && paths[0].nexthop == new_nh
+                        },
+                        "IPv4 nexthop should be updated"
+                    );
+                }
+
+                // Verify IPv6 nexthop change if applicable
+                if let Some(new_nh) = new_ipv6_nexthop {
+                    wait_for!(
+                        {
+                            let paths =
+                                r2.router.db.get_prefix_paths(&prefix6_rdb);
+                            !paths.is_empty() && paths[0].nexthop == new_nh
+                        },
+                        "IPv6 nexthop should be updated"
+                    );
+                }
+            }
 
             // Shut down r1 and verify withdrawal of both
             r1.shutdown();

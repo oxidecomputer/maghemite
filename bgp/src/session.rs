@@ -526,9 +526,6 @@ pub enum AdminEvent {
 
     /// Fires when we need to re-send our routes to the peer.
     ReAdvertiseRoutes(Afi),
-
-    /// Fires when path attributes have changed.
-    PathAttributesChanged,
 }
 
 impl AdminEvent {
@@ -552,7 +549,6 @@ impl AdminEvent {
                 Afi::Ipv4 => "re-advertise routes (ipv4 unicast)",
                 Afi::Ipv6 => "re-advertise routes (ipv6 unicast)",
             },
-            AdminEvent::PathAttributesChanged => "path attributes changed",
         }
     }
 }
@@ -2154,8 +2150,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_)
-                    | AdminEvent::PathAttributesChanged => {
+                    | AdminEvent::ReAdvertiseRoutes(_) => {
                         let title = admin_event.title();
                         session_log_lite!(
                             self,
@@ -2400,8 +2395,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_)
-                    | AdminEvent::PathAttributesChanged => {
+                    | AdminEvent::ReAdvertiseRoutes(_) => {
                         let title = admin_event.title();
                         session_log_lite!(
                             self,
@@ -2763,8 +2757,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_)
-                    | AdminEvent::PathAttributesChanged => {
+                    | AdminEvent::ReAdvertiseRoutes(_) => {
                         let title = admin_event.title();
                         session_log_lite!(
                             self,
@@ -3138,8 +3131,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_)
-                    | AdminEvent::PathAttributesChanged => {
+                    | AdminEvent::ReAdvertiseRoutes(_) => {
                         let title = admin_event.title();
                         session_log!(
                             self,
@@ -3719,8 +3711,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 | AdminEvent::CheckerChanged(_)
                 | AdminEvent::ManualStart
                 | AdminEvent::SendRouteRefresh(_)
-                | AdminEvent::ReAdvertiseRoutes(_)
-                | AdminEvent::PathAttributesChanged => {
+                | AdminEvent::ReAdvertiseRoutes(_) => {
                     let title = admin_event.title();
                     session_log!(
                         self,
@@ -4245,8 +4236,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::ManualStart
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_)
-                    | AdminEvent::PathAttributesChanged => {
+                    | AdminEvent::ReAdvertiseRoutes(_) => {
                         let title = admin_event.title();
                         collision_log!(
                             self,
@@ -5101,8 +5091,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::ManualStart
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_)
-                    | AdminEvent::PathAttributesChanged => {
+                    | AdminEvent::ReAdvertiseRoutes(_) => {
                         let title = admin_event.title();
                         collision_log!(
                             self,
@@ -6308,23 +6297,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         return self.exit_established(pc);
                     }
                     FsmState::Established(pc)
-                }
-
-                AdminEvent::PathAttributesChanged => {
-                    match self.originate_update(&pc, ShaperApplication::Current)
-                    {
-                        Err(e) => {
-                            session_log!(
-                                self,
-                                error,
-                                pc.conn,
-                                "failed to originate update, fsm transition to idle";
-                                "error" => format!("{e}")
-                            );
-                            self.exit_established(pc)
-                        }
-                        Ok(()) => FsmState::Established(pc),
-                    }
                 }
 
                 AdminEvent::ManualStart => {
@@ -8628,7 +8600,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         info: SessionInfo,
     ) -> Result<bool, Error> {
         let mut reset_needed = false;
-        let mut path_attributes_changed = false;
+        let mut readvertise_needed4 = false;
+        let mut readvertise_needed6 = false;
         let mut refresh_needed4 = false;
         let mut refresh_needed6 = false;
         let mut current = lock!(self.session);
@@ -8657,12 +8630,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if current.multi_exit_discriminator != info.multi_exit_discriminator {
             current.multi_exit_discriminator = info.multi_exit_discriminator;
-            path_attributes_changed = true;
+            readvertise_needed4 = true;
+            readvertise_needed6 = true;
         }
 
         if current.communities != info.communities {
             current.communities.clone_from(&info.communities);
-            path_attributes_changed = true;
+            readvertise_needed4 = true;
+            readvertise_needed6 = true;
         }
 
         if current.local_pref != info.local_pref {
@@ -8692,6 +8667,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         {
             current.ipv6_unicast = info.ipv6_unicast.clone();
             refresh_needed6 = true;
+        }
+
+        // Handle per-AF nexthop override changes (trigger re-advertisement)
+        if current.ipv4_unicast.as_ref().map(|c| c.nexthop)
+            != info.ipv4_unicast.as_ref().map(|c| c.nexthop)
+        {
+            current.ipv4_unicast = info.ipv4_unicast.clone();
+            readvertise_needed4 = true;
+        }
+
+        if current.ipv6_unicast.as_ref().map(|c| c.nexthop)
+            != info.ipv6_unicast.as_ref().map(|c| c.nexthop)
+        {
+            current.ipv6_unicast = info.ipv6_unicast.clone();
+            readvertise_needed6 = true;
         }
 
         if current.vlan_id != info.vlan_id {
@@ -8753,9 +8743,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         drop(current);
 
-        if path_attributes_changed {
+        if readvertise_needed4 {
             self.event_tx
-                .send(FsmEvent::Admin(AdminEvent::PathAttributesChanged))
+                .send(FsmEvent::Admin(AdminEvent::ReAdvertiseRoutes(Afi::Ipv4)))
+                .map_err(|e| Error::EventSend(e.to_string()))?;
+        }
+
+        if readvertise_needed6 {
+            self.event_tx
+                .send(FsmEvent::Admin(AdminEvent::ReAdvertiseRoutes(Afi::Ipv6)))
                 .map_err(|e| Error::EventSend(e.to_string()))?;
         }
 
