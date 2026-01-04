@@ -1150,7 +1150,19 @@ pub(crate) mod helpers {
             "remove unnumbered neighbor (interface {interface}, asn {asn})"
         );
 
+        // If the unnumbered neighbor has a session, delete it first.
+        if let Some(addr) =
+            ctx.bgp.unnumbered_manager.get_neighbor_addr(interface)?
+        {
+            get_router!(&ctx, asn)?.delete_session(addr.into());
+        }
+
+        // If the neighbor manager is running for this interface, remove
+        // the neighbor
         ctx.bgp.unnumbered_manager.remove_neighbor(asn, interface)?;
+
+        // And now clear out the top level database entry
+        ctx.db.remove_unnumbered_bgp_neighbor(interface)?;
 
         Ok(HttpResponseDeleted())
     }
@@ -1239,6 +1251,35 @@ pub(crate) mod helpers {
         );
 
         let info = SessionInfo::from(&rq.parameters);
+
+        ctx.db
+            .add_unnumbered_bgp_neighbor(rdb::BgpUnnumberedNeighborInfo {
+                asn: rq.asn,
+                name: rq.name.clone(),
+                group: rq.group.clone(),
+                interface: rq.interface.clone(),
+                parameters: BgpNeighborParameters {
+                    remote_asn: rq.parameters.remote_asn,
+                    min_ttl: rq.parameters.min_ttl,
+                    hold_time: rq.parameters.hold_time,
+                    idle_hold_time: rq.parameters.idle_hold_time,
+                    delay_open: rq.parameters.delay_open,
+                    connect_retry: rq.parameters.connect_retry,
+                    keepalive: rq.parameters.keepalive,
+                    resolution: rq.parameters.resolution,
+                    passive: rq.parameters.passive,
+                    md5_auth_key: rq.parameters.md5_auth_key.clone(),
+                    multi_exit_discriminator: rq
+                        .parameters
+                        .multi_exit_discriminator,
+                    communities: rq.parameters.communities.clone(),
+                    local_pref: rq.parameters.local_pref,
+                    enforce_first_as: rq.parameters.enforce_first_as,
+                    allow_import: rq.parameters.allow_import.clone(),
+                    allow_export: rq.parameters.allow_export.clone(),
+                    vlan_id: rq.parameters.vlan_id,
+                },
+            })?;
 
         ctx.bgp.unnumbered_manager.add_neighbor(
             rq.asn,

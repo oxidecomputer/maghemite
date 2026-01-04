@@ -322,6 +322,28 @@ impl Db {
         Ok(())
     }
 
+    pub fn add_unnumbered_bgp_neighbor(
+        &self,
+        nbr: BgpUnnumberedNeighborInfo,
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
+        let key = nbr.interface.clone();
+        let value = serde_json::to_string(&nbr)?;
+        tree.insert(key.as_str(), value.as_str())?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn remove_unnumbered_bgp_neighbor(
+        &self,
+        interface: &str,
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
+        tree.remove(interface)?;
+        tree.flush()?;
+        Ok(())
+    }
+
     pub fn remove_bgp_neighbor(&self, addr: IpAddr) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
         let key = addr.to_string();

@@ -41,11 +41,15 @@ impl NdpManager {
     }
 
     /// Add an interface to the NDP manager. Discovery starts immediately.
-    pub fn add_interface(&self, ifx: Ipv6NetworkInterface) {
+    pub fn add_interface(
+        &self,
+        ifx: Ipv6NetworkInterface,
+    ) -> Result<(), NewInterfaceNdpManagerError> {
         self.interfaces
             .write()
             .unwrap()
-            .push(InterfaceNdpManager::new(ifx, self.log.clone()))
+            .push(InterfaceNdpManager::new(ifx, self.log.clone())?);
+        Ok(())
     }
 
     /// Remove an interface from the NDP manager. Discovery is stopped when
@@ -87,9 +91,24 @@ pub struct InterfaceNdpManager {
     log: Logger,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum NewInterfaceNdpManagerError {
+    #[error("socket create: {0}")]
+    SocketCreate(ListeningSocketError),
+
+    #[error("socket clone: {0}")]
+    SocketClone(std::io::Error),
+}
+
 impl InterfaceNdpManager {
     /// Create a new interface manager for a given interface.
-    pub fn new(ifx: Ipv6NetworkInterface, log: Logger) -> Self {
+    pub fn new(
+        ifx: Ipv6NetworkInterface,
+        log: Logger,
+    ) -> Result<Self, NewInterfaceNdpManagerError> {
+        let sk = Self::create_socket(ifx.index)
+            .map_err(NewInterfaceNdpManagerError::SocketCreate)?;
+
         let mgr = Self {
             ifx,
             neighbor_router: Arc::new(Mutex::new(None)),
@@ -97,13 +116,23 @@ impl InterfaceNdpManager {
             log,
         };
 
-        let s = mgr.clone();
-        spawn(move || s.tx_loop());
+        {
+            let sk = sk
+                .try_clone()
+                .map_err(NewInterfaceNdpManagerError::SocketClone)?;
+            let s = mgr.clone();
+            spawn(move || s.tx_loop(sk));
+        }
 
-        let s = mgr.clone();
-        spawn(move || s.rx_loop());
+        {
+            let sk = sk
+                .try_clone()
+                .map_err(NewInterfaceNdpManagerError::SocketClone)?;
+            let s = mgr.clone();
+            spawn(move || s.rx_loop(sk));
+        }
 
-        mgr
+        Ok(mgr)
     }
 
     /// Run the interface NDP manager receive loop. Advertisements are used to
@@ -113,56 +142,40 @@ impl InterfaceNdpManager {
     /// A read timeout of 1 second is used. When the time out hits instead of
     /// receiving a advertisement or solicitation packet, the current neighbor
     /// (if any) is checked for expiration.
-    pub fn rx_loop(&self) {
-        const BACKOFF_INTERVAL: Duration = Duration::from_secs(1);
+    pub fn rx_loop(&self, s: Socket) {
+        const INTERVAL: Duration = Duration::from_secs(1);
 
-        'outer: loop {
+        loop {
             if self.stop.load(Ordering::SeqCst) {
                 break;
             }
-            let s = match self.listening_socket() {
-                Ok(s) => s,
-                Err(e) => {
-                    error!(self.log, "rx_loop: new multicast socket: {e}");
-                    sleep(BACKOFF_INTERVAL);
-                    continue;
-                }
-            };
-            loop {
-                if self.stop.load(Ordering::SeqCst) {
-                    break 'outer;
-                }
-                let mut buf: [MaybeUninit<u8>; 1024] =
-                    unsafe { MaybeUninit::uninit().assume_init() };
+            sleep(INTERVAL);
 
-                match s.recv_from(&mut buf) {
-                    Ok((len, src)) => {
-                        let buf: &[u8] = unsafe {
-                            std::slice::from_raw_parts(buf.as_ptr().cast(), len)
-                        };
-                        let Some(src) = src.as_socket_ipv6().map(|x| *x.ip())
-                        else {
-                            continue;
-                        };
-                        if let Ok(ra) = Icmp6RouterAdvertisement::from_wire(buf)
-                        {
-                            self.handle_ra(ra, src);
-                            continue;
-                        }
-                        if let Ok(rs) = Icmp6RouterSolicitation::from_wire(buf)
-                        {
-                            self.handle_rs(rs, src);
-                            continue;
-                        }
+            let mut buf: [MaybeUninit<u8>; 1024] =
+                unsafe { MaybeUninit::uninit().assume_init() };
+
+            match s.recv_from(&mut buf) {
+                Ok((len, src)) => {
+                    let buf: &[u8] = unsafe {
+                        std::slice::from_raw_parts(buf.as_ptr().cast(), len)
+                    };
+                    let Some(src) = src.as_socket_ipv6().map(|x| *x.ip())
+                    else {
+                        continue;
+                    };
+                    if let Ok(ra) = Icmp6RouterAdvertisement::from_wire(buf) {
+                        self.handle_ra(ra, src);
                     }
-                    Err(e) => {
-                        if e.kind() == std::io::ErrorKind::WouldBlock {
-                            self.check_expired();
-                            continue;
-                        }
-                        error!(self.log, "rx: {e}");
+                    if let Ok(rs) = Icmp6RouterSolicitation::from_wire(buf) {
+                        self.handle_rs(&s, rs, src);
+                    }
+                }
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        self.check_expired();
                         continue;
                     }
+                    error!(self.log, "rx: {e}");
                 }
             }
         }
@@ -170,12 +183,12 @@ impl InterfaceNdpManager {
 
     /// Start the transmit loop, periodically sending out announcements every
     /// five seconds.
-    pub fn tx_loop(&self) {
+    pub fn tx_loop(&self, sk: Socket) {
         loop {
             if self.stop.load(Ordering::SeqCst) {
                 break;
             }
-            send_ra(self.ifx.ip, None, self.ifx.index, &self.log);
+            send_ra(&sk, self.ifx.ip, None, self.ifx.index, &self.log);
             sleep(RA_INTERVAL);
         }
     }
@@ -195,8 +208,13 @@ impl InterfaceNdpManager {
 
     /// Handle a router solicitation by sending an announcement to the
     /// sender.
-    fn handle_rs(&self, _rs: Icmp6RouterSolicitation, src: Ipv6Addr) {
-        send_ra(self.ifx.ip, Some(src), self.ifx.index, &self.log);
+    fn handle_rs(
+        &self,
+        sk: &Socket,
+        _rs: Icmp6RouterSolicitation,
+        src: Ipv6Addr,
+    ) {
+        send_ra(sk, self.ifx.ip, Some(src), self.ifx.index, &self.log);
     }
 
     /// Check to see if the reachable time for our current peer (if any)
@@ -214,25 +232,26 @@ impl InterfaceNdpManager {
     /// Create a listening socket for solicitations and advertisements. This
     /// socket listens on the unspecified address to pick up both unicast
     /// and multicast solicitations and advertisements.
-    fn listening_socket(&self) -> Result<Socket, ListeningSocketError> {
+    fn create_socket(index: u32) -> Result<Socket, ListeningSocketError> {
         use ListeningSocketError as E;
         const READ_TIMEOUT: Duration = Duration::from_secs(1);
 
         let s = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))
             .map_err(E::NewSocketError)?;
 
-        let sa = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, self.ifx.index)
-            .into();
+        let sa = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, index).into();
 
         s.set_reuse_address(true).map_err(E::ReuseAddress)?;
 
-        s.set_multicast_if_v6(self.ifx.index)
-            .map_err(E::SetMulticastIf)?;
+        s.set_multicast_if_v6(index).map_err(E::SetMulticastIf)?;
+
+        s.set_multicast_hops_v6(255)
+            .map_err(E::SetMulticastHopsV6)?;
 
         s.set_multicast_loop_v6(false)
             .map_err(E::SetMulticastLoop)?;
 
-        s.join_multicast_v6(&ALL_NODES_MCAST, self.ifx.index)
+        s.join_multicast_v6(&ALL_NODES_MCAST, index)
             .map_err(E::JoinAllNodesMulticast)?;
 
         s.bind(&sa).map_err(ListeningSocketError::Bind)?;

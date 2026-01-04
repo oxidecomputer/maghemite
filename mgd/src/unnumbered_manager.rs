@@ -8,8 +8,8 @@ use bgp::{
     router::Router,
     session::{SessionInfo, SessionRunner},
 };
-use ndp::{Ipv6NetworkInterface, NdpManager};
-use rdb::{BgpNeighborParameters, Db};
+use ndp::{Ipv6NetworkInterface, NdpManager, NewInterfaceNdpManagerError};
+use rdb::Db;
 use slog::{Logger, error, warn};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -49,6 +49,15 @@ pub enum ResolveNeighborError {
     System(#[from] network_interface::Error),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum AddNeighborError {
+    #[error("resolve neighbor error: {0}")]
+    Resolve(#[from] ResolveNeighborError),
+
+    #[error("add interface error: {0}")]
+    NdpManager(#[from] NewInterfaceNdpManagerError),
+}
+
 impl UnnumberedNeighborManager {
     pub fn new(
         routers: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
@@ -78,9 +87,9 @@ impl UnnumberedNeighborManager {
         interface: impl AsRef<str>,
         info: SessionInfo,
         nbr: UnnumberedNeighbor,
-    ) -> Result<(), ResolveNeighborError> {
+    ) -> Result<(), AddNeighborError> {
         let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
-        self.ndp_mgr.add_interface(ifx.clone());
+        self.ndp_mgr.add_interface(ifx.clone())?;
         self.pending_sessions.lock().unwrap().insert(
             NbrKey {
                 asn,
@@ -106,6 +115,13 @@ impl UnnumberedNeighborManager {
 
         Ok(())
     }
+    pub fn get_neighbor_addr(
+        self: &Arc<Self>,
+        interface: impl AsRef<str>,
+    ) -> Result<Option<Ipv6Addr>, ResolveNeighborError> {
+        let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
+        Ok(self.ndp_mgr.get_peer(&ifx))
+    }
 
     pub fn get_neighbor_session(
         self: &Arc<Self>,
@@ -115,8 +131,7 @@ impl UnnumberedNeighborManager {
         Option<Arc<SessionRunner<BgpConnectionTcp>>>,
         ResolveNeighborError,
     > {
-        let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
-        if let Some(addr) = self.ndp_mgr.get_peer(&ifx)
+        if let Some(addr) = self.get_neighbor_addr(interface)?
             && let Some(rtr) = self.routers.lock().unwrap().get(&asn)
             && let Some(session) = rtr.get_session(addr.into())
         {
@@ -221,9 +236,7 @@ impl UnnumberedNeighborManager {
 
         let (event_tx, event_rx) = channel();
 
-        let host = SocketAddrV6::new(
-            peer_addr, 0, 0, 179, //TODO hardcoded BGP port
-        );
+        let host = SocketAddrV6::new(peer_addr, 0, 0, key.interface.index);
 
         router
             .ensure_session(
@@ -235,36 +248,6 @@ impl UnnumberedNeighborManager {
             )
             .unwrap();
 
-        if let Err(e) = self.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
-            asn: neighbor.asn,
-            name: neighbor.name.clone(),
-            group: neighbor.group.clone(),
-            host: host.into(),
-            parameters: BgpNeighborParameters {
-                remote_asn: neighbor.parameters.remote_asn,
-                min_ttl: neighbor.parameters.min_ttl,
-                hold_time: neighbor.parameters.hold_time,
-                idle_hold_time: neighbor.parameters.idle_hold_time,
-                delay_open: neighbor.parameters.delay_open,
-                connect_retry: neighbor.parameters.connect_retry,
-                keepalive: neighbor.parameters.keepalive,
-                resolution: neighbor.parameters.resolution,
-                passive: neighbor.parameters.passive,
-                md5_auth_key: neighbor.parameters.md5_auth_key,
-                multi_exit_discriminator: neighbor
-                    .parameters
-                    .multi_exit_discriminator,
-                communities: neighbor.parameters.communities,
-                local_pref: neighbor.parameters.local_pref,
-                enforce_first_as: neighbor.parameters.enforce_first_as,
-                allow_import: neighbor.parameters.allow_import.clone(),
-                allow_export: neighbor.parameters.allow_export.clone(),
-                vlan_id: neighbor.parameters.vlan_id,
-            },
-        }) {
-            error!(log, "bgp neighbor add failed: {e}");
-            return;
-        };
         drop(router_guard);
 
         self.db

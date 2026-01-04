@@ -5,7 +5,7 @@
 // Copyright 2026 Oxide Computer Company
 
 use slog::{Logger, error};
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::Socket;
 use std::{
     net::{Ipv6Addr, SocketAddrV6},
     time::Instant,
@@ -40,6 +40,9 @@ pub enum ListeningSocketError {
     #[error("set multicast interface error: {0}")]
     SetMulticastIf(std::io::Error),
 
+    #[error("set multicast hops v6: {0}")]
+    SetMulticastHopsV6(std::io::Error),
+
     #[error("bind error: {0}")]
     Bind(std::io::Error),
 
@@ -54,29 +57,12 @@ pub enum ListeningSocketError {
 }
 
 pub fn send_ra(
+    s: &Socket,
     src: Ipv6Addr,
     dst: Option<Ipv6Addr>,
     ifindex: u32,
     log: &Logger,
 ) {
-    let s = match Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6)) {
-        Ok(s) => s,
-        Err(e) => {
-            error!(log, "send_ra: new socket: {e}");
-            return;
-        }
-    };
-    if let Err(e) = s.set_multicast_hops_v6(255) {
-        error!(log, "send_ra: set multicast hops: {e}");
-        return;
-    }
-
-    let sa = SocketAddrV6::new(src, 0, 0, ifindex);
-    if let Err(e) = s.bind(&sa.into()) {
-        error!(log, "send_ra: bind socket: {e}");
-        return;
-    }
-
     let pkt = Icmp6RouterAdvertisement::default();
     let mut out = match ispf::to_bytes_be(&pkt) {
         Ok(data) => data,
