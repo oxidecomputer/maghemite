@@ -12,8 +12,8 @@ use bfd::BfdPeerState;
 use bgp::{
     params::{
         ApplyRequest, CheckerSource, Neighbor, NeighborResetOp, Origin4,
-        Origin6, PeerInfo, PeerInfoV1, Router, ShaperSource,
-        UnnumberedNeighbor,
+        Origin6, PeerInfo, PeerInfoV1, PendingUnnumberedNeighbor, Router,
+        ShaperSource, UnnumberedNeighbor,
     },
     session::{FsmEventRecord, MessageHistory, MessageHistoryV1},
 };
@@ -153,6 +153,16 @@ pub trait MgAdminApi {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/unnumbered-pending",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn read_pending_unnumbered_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<PendingUnnumberedNeighbor>>, HttpError>;
 
     #[endpoint {
         method = GET,

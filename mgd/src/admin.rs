@@ -188,6 +188,13 @@ impl MgAdminApi for MgAdminApiImpl {
 
     // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+    async fn read_pending_unnumbered_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<PendingUnnumberedNeighbor>>, HttpError> {
+        bgp_admin::read_pending_unnumbered_neighbors(rqctx, request).await
+    }
+
     async fn read_unnumbered_neighbors(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,

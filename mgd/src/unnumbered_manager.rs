@@ -28,15 +28,15 @@ pub struct UnnumberedNeighborManager {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-struct NbrKey {
-    asn: u32,
-    interface: Ipv6NetworkInterface,
+pub struct NbrKey {
+    pub asn: u32,
+    pub interface: Ipv6NetworkInterface,
 }
 
 #[derive(Clone)]
-struct NbrInfo {
-    nbr: UnnumberedNeighbor,
-    session: SessionInfo,
+pub struct NbrInfo {
+    pub nbr: UnnumberedNeighbor,
+    pub session: SessionInfo,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -193,6 +193,10 @@ impl UnnumberedNeighborManager {
             ip: addr,
             index,
         })
+    }
+
+    pub fn get_pending(self: &Arc<Self>) -> HashMap<NbrKey, NbrInfo> {
+        self.pending_sessions.lock().unwrap().clone()
     }
 
     fn run(self: Arc<Self>, log: Logger) {

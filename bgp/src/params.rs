@@ -8,7 +8,7 @@ use rdb::{ImportExportPolicy, PolicyAction, Prefix4, Prefix6};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::SocketAddrV6;
+use std::net::{Ipv6Addr, SocketAddrV6};
 use std::time::Duration;
 use std::{
     collections::BTreeMap,
@@ -55,6 +55,12 @@ pub struct UnnumberedNeighbor {
     pub interface: String,
     #[serde(flatten)]
     pub parameters: BgpPeerParameters,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+pub struct PendingUnnumberedNeighbor {
+    pub interface: String,
+    pub local_addr: Ipv6Addr,
 }
 
 impl From<Neighbor> for PeerConfig {

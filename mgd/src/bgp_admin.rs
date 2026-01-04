@@ -257,6 +257,29 @@ pub async fn clear_neighbor(
 
 // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+pub async fn read_pending_unnumbered_neighbors(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<Vec<PendingUnnumberedNeighbor>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = rqctx.context();
+
+    let pending = ctx.bgp.unnumbered_manager.get_pending();
+    let mut result = Vec::default();
+
+    for k in pending.keys() {
+        if k.asn != rq.asn {
+            continue;
+        }
+        result.push(PendingUnnumberedNeighbor {
+            interface: k.interface.name.clone(),
+            local_addr: k.interface.ip,
+        });
+    }
+
+    Ok(HttpResponseOk(result))
+}
+
 pub async fn read_unnumbered_neighbors(
     rqctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,

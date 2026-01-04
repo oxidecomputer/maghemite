@@ -75,6 +75,11 @@ pub enum StatusCmd {
         asn: u32,
     },
 
+    PendingNeighbors {
+        #[clap(env)]
+        asn: u32,
+    },
+
     /// Get the prefixes exported by a BGP router.
     Exported {
         #[clap(env)]
@@ -806,6 +811,9 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
 
         Commands::Status(cmd) => match cmd.command {
             StatusCmd::Neighbors { asn } => get_neighbors(c, asn).await?,
+            StatusCmd::PendingNeighbors { asn } => {
+                list_unnumbered_pending(asn, c).await?
+            }
             StatusCmd::Exported { asn } => get_exported(c, asn).await?,
         },
 
@@ -972,6 +980,12 @@ async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
 
 async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
     c.delete_neighbor(&addr, asn).await?;
+    Ok(())
+}
+
+async fn list_unnumbered_pending(asn: u32, c: Client) -> Result<()> {
+    let pending = c.read_pending_unnumbered_neighbors(asn).await?;
+    println!("{pending:#?}");
     Ok(())
 }
 

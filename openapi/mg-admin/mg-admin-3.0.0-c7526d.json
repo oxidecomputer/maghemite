@@ -1060,6 +1060,46 @@
         }
       }
     },
+    "/bgp/config/unnumbered-pending": {
+      "get": {
+        "operationId": "read_pending_unnumbered_neighbors",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_PendingUnnumberedNeighbor",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PendingUnnumberedNeighbor"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/history/fsm": {
       "get": {
         "operationId": "fsm_history",
@@ -3775,6 +3815,22 @@
         "required": [
           "hold",
           "keepalive"
+        ]
+      },
+      "PendingUnnumberedNeighbor": {
+        "type": "object",
+        "properties": {
+          "interface": {
+            "type": "string"
+          },
+          "local_addr": {
+            "type": "string",
+            "format": "ipv6"
+          }
+        },
+        "required": [
+          "interface",
+          "local_addr"
         ]
       },
       "Prefix": {
