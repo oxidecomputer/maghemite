@@ -326,19 +326,24 @@ impl LoopbackIpManager {
 
         #[cfg(target_os = "illumos")]
         let output = {
-            let ip_descr = format!("{}", ip.address).replace('.', "dot");
-            let addr_obj = format!("{}/test{}", ifname, ip_descr);
-            Command::new("pfexec")
-                .args([
-                    "ipadm",
-                    "create-addr",
-                    "-T",
-                    "static",
-                    "-a",
-                    &addr_str,
-                    &addr_obj,
-                ])
-                .output()?
+            let v = match ip.address {
+                IpAddr::V4(_) => "v4",
+                IpAddr::V6(_) => "v6",
+            };
+            let mut ip_descr = format!("{v}{}", ip.address);
+            ip_descr.retain(|c| c.is_alphanumeric());
+            let addr_obj = format!("{}/{}", ifname, ip_descr);
+            let cmd = [
+                "ipadm",
+                "create-addr",
+                "-T",
+                "static",
+                "-a",
+                &addr_str,
+                &addr_obj,
+            ];
+            info!(log, "running cmd '{cmd:?}'");
+            Command::new("pfexec").args(cmd).output()?
         };
 
         #[cfg(target_os = "linux")]
@@ -469,7 +474,12 @@ impl LoopbackIpManager {
     ) {
         #[cfg(target_os = "illumos")]
         let output = {
-            let ip_descr = format!("{}", ip.address).replace('.', "dot");
+            let v = match ip.address {
+                IpAddr::V4(_) => "v4",
+                IpAddr::V6(_) => "v6",
+            };
+            let mut ip_descr = format!("{v}{}", ip.address);
+            ip_descr.retain(|c| c.is_alphanumeric());
             let addr_obj = format!("{}/test{}", ifname, ip_descr);
             Command::new("pfexec")
                 .args(["ipadm", "delete-addr", &addr_obj])
