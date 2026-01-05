@@ -50,7 +50,17 @@ lazy_static! {
             panic!("unsupported platform");
         };
 
-        let log = init_file_logger("loopback-manager.log");
+        // Extract test name from thread name for per-test log files.
+        // With cargo nextest, each test runs in its own process, so this
+        // will be unique per test process.
+        let thread_name = std::thread::current();
+        let test_name = thread_name
+            .name()
+            .and_then(|name| name.split("::").last())
+            .unwrap_or("unknown");
+        let log_filename = format!("loopback-manager.{}.log", test_name);
+
+        let log = init_file_logger(&log_filename);
 
         Arc::new(Mutex::new(LoopbackIpManager::new(ifname, log)))
     };
