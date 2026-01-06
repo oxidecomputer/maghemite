@@ -14,6 +14,7 @@ use std::net::{IpAddr, SocketAddr};
 
 mod bfd;
 mod bgp;
+mod mrib;
 mod rib;
 mod static_routing;
 
@@ -55,6 +56,10 @@ enum Commands {
     /// RIB configuration commands.
     #[command(subcommand)]
     Rib(rib::Commands),
+
+    /// Multicast RIB management commands.
+    #[command(subcommand)]
+    Mrib(mrib::Commands),
 }
 
 fn main() -> Result<()> {
@@ -77,6 +82,7 @@ async fn run() -> Result<()> {
         }
         Commands::Bfd(command) => bfd::commands(command, client).await?,
         Commands::Rib(command) => rib::commands(command, client).await?,
+        Commands::Mrib(command) => mrib::commands(command, client).await?,
     }
     Ok(())
 }

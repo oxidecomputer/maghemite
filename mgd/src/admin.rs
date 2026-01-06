@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{bfd_admin, bgp_admin, rib_admin, static_admin};
+use crate::{bfd_admin, bgp_admin, mrib_admin, rib_admin, static_admin};
 use bfd_admin::BfdContext;
 use bgp::params::*;
 use bgp_admin::BgpContext;
@@ -437,6 +437,56 @@ impl MgAdminApi for MgAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
         static_admin::static_list_v6_routes(ctx).await
+    }
+
+    async fn get_mrib_imported(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<MribQuery>,
+    ) -> Result<HttpResponseOk<Vec<rdb::types::MulticastRoute>>, HttpError>
+    {
+        mrib_admin::get_mrib_imported(rqctx, query).await
+    }
+
+    async fn get_mrib_selected(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<MribQuery>,
+    ) -> Result<HttpResponseOk<Vec<rdb::types::MulticastRoute>>, HttpError>
+    {
+        mrib_admin::get_mrib_selected(rqctx, query).await
+    }
+
+    async fn static_add_mcast_route(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribAddStaticRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        mrib_admin::static_add_mcast_route(rqctx, request).await
+    }
+
+    async fn static_remove_mcast_route(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribDeleteStaticRequest>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        mrib_admin::static_remove_mcast_route(rqctx, request).await
+    }
+
+    async fn static_list_mcast_routes(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<rdb::types::MulticastRoute>>, HttpError>
+    {
+        mrib_admin::static_list_mcast_routes(rqctx).await
+    }
+
+    async fn read_mrib_rpf_rebuild_interval(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<MribRpfRebuildIntervalResponse>, HttpError> {
+        mrib_admin::read_mrib_rpf_rebuild_interval(rqctx).await
+    }
+
+    async fn update_mrib_rpf_rebuild_interval(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribRpfRebuildIntervalRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        mrib_admin::update_mrib_rpf_rebuild_interval(rqctx, request).await
     }
 }
 
