@@ -4434,7 +4434,7 @@
         "type": "object",
         "properties": {
           "connect_retry": {
-            "$ref": "#/components/schemas/Duration"
+            "$ref": "#/components/schemas/StaticTimerInfo"
           },
           "connect_retry_jitter": {
             "nullable": true,
@@ -4445,13 +4445,13 @@
             ]
           },
           "delay_open": {
-            "$ref": "#/components/schemas/Duration"
+            "$ref": "#/components/schemas/StaticTimerInfo"
           },
           "hold": {
             "$ref": "#/components/schemas/DynamicTimerInfo"
           },
           "idle_hold": {
-            "$ref": "#/components/schemas/Duration"
+            "$ref": "#/components/schemas/StaticTimerInfo"
           },
           "idle_hold_jitter": {
             "nullable": true,
@@ -4707,6 +4707,7 @@
           "list"
         ]
       },
+<<<<<<< HEAD:openapi/mg-admin/mg-admin-3.0.0-aca2d9.json
       "SwitchIdentifiers": {
         "description": "Identifiers for a switch.",
         "type": "object",
@@ -4719,6 +4720,23 @@
             "minimum": 0
           }
         }
+=======
+      "StaticTimerInfo": {
+        "description": "Timer information for static (non-negotiated) timers",
+        "type": "object",
+        "properties": {
+          "configured": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/Duration"
+          }
+        },
+        "required": [
+          "configured",
+          "remaining"
+        ]
+>>>>>>> 4ce8064 (Fixup bgp neighbor status):openapi/mg-admin/mg-admin-3.0.0-ea8abe.json
       },
       "UpdateErrorSubcode": {
         "description": "Update message error subcode types",

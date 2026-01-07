@@ -23,6 +23,8 @@ progenitor::generate_api!(
         AddressFamily = rdb_types::AddressFamily,
         ProtocolFilter = rdb_types::ProtocolFilter,
         JitterRange = bgp::params::JitterRange,
+        PeerInfo = bgp::params::PeerInfo,
+        Duration = std::time::Duration,
     }
 );
 

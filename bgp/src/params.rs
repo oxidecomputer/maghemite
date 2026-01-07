@@ -5,7 +5,7 @@
 use crate::{
     config::PeerConfig,
     messages::{AddPathElement, Capability},
-    session::{FsmStateKind, SessionCounters},
+    session::{FsmStateKind, SessionCounters, SessionInfo},
 };
 use rdb::{
     ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6, PolicyAction,
@@ -71,6 +71,36 @@ impl std::str::FromStr for JitterRange {
             format!("max value '{}' is not a valid float", parts[1].trim())
         })?;
         Ok(JitterRange { min, max })
+    }
+}
+
+/// Timer configuration extracted from SessionInfo.
+/// This is a lightweight value type that can be cloned and passed without locks.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct TimerConfig {
+    pub connect_retry_time: Duration,
+    pub keepalive_time: Duration,
+    pub hold_time: Duration,
+    pub idle_hold_time: Duration,
+    pub delay_open_time: Duration,
+    pub resolution: Duration,
+    pub connect_retry_jitter: Option<JitterRange>,
+    pub idle_hold_jitter: Option<JitterRange>,
+}
+
+impl TimerConfig {
+    /// Extract timer config from SessionInfo without holding lock
+    pub fn from_session_info(session: &SessionInfo) -> Self {
+        Self {
+            connect_retry_time: session.connect_retry_time,
+            keepalive_time: session.keepalive_time,
+            hold_time: session.hold_time,
+            idle_hold_time: session.idle_hold_time,
+            delay_open_time: session.delay_open_time,
+            resolution: session.resolution,
+            connect_retry_jitter: session.connect_retry_jitter,
+            idle_hold_jitter: session.idle_hold_jitter,
+        }
     }
 }
 
@@ -471,10 +501,17 @@ pub struct DynamicTimerInfoV1 {
     pub negotiated: Duration,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct DynamicTimerInfo {
     pub configured: Duration,
     pub negotiated: Duration,
+    pub remaining: Duration,
+}
+
+/// Timer information for static (non-negotiated) timers
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct StaticTimerInfo {
+    pub configured: Duration,
     pub remaining: Duration,
 }
 
@@ -482,11 +519,11 @@ pub struct DynamicTimerInfo {
 pub struct PeerTimers {
     pub hold: DynamicTimerInfo,
     pub keepalive: DynamicTimerInfo,
-    pub connect_retry: Duration,
+    pub connect_retry: StaticTimerInfo,
     pub connect_retry_jitter: Option<JitterRange>,
-    pub idle_hold: Duration,
+    pub idle_hold: StaticTimerInfo,
     pub idle_hold_jitter: Option<JitterRange>,
-    pub delay_open: Duration,
+    pub delay_open: StaticTimerInfo,
 }
 
 /// Session-level counters that persist across connection changes

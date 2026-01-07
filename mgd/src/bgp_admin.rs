@@ -659,13 +659,20 @@ pub async fn get_neighbors_v3(
     let ctx = ctx.context();
 
     let mut peers = HashMap::new();
-    let routers = lock!(ctx.bgp.router);
-    let r = routers
-        .get(&rq.asn)
-        .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
 
-    for s in lock!(r.sessions).values() {
-        peers.insert(s.neighbor.host.ip(), s.get_peer_info());
+    // Clone sessions while holding locks, then release them
+    let sessions: Vec<_> = {
+        let routers = lock!(ctx.bgp.router);
+        let r = routers.get(&rq.asn).ok_or(HttpError::for_not_found(
+            None,
+            "ASN not found".to_string(),
+        ))?;
+        lock!(r.sessions).values().cloned().collect()
+    };
+
+    for s in sessions.iter() {
+        let peer_ip = s.neighbor.host.ip();
+        peers.insert(peer_ip, s.get_peer_info());
     }
 
     Ok(HttpResponseOk(peers))

@@ -17,7 +17,7 @@ use mg_admin_client::{
 use rdb::types::{PolicyAction, Prefix4, Prefix6};
 use std::fs::read_to_string;
 use std::io::{Write, stdout};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tabwriter::TabWriter;
 
@@ -60,6 +60,15 @@ pub enum ConfigCmd {
     Policy(PolicySubcommand),
 }
 
+#[derive(Clone, Debug, ValueEnum)]
+#[allow(non_camel_case_types)]
+pub enum NeighborDisplayMode {
+    /// Display summary information (default).
+    summary,
+    /// Display detailed information.
+    detail,
+}
+
 #[derive(Debug, Args)]
 pub struct StatusSubcommand {
     #[command(subcommand)]
@@ -72,6 +81,10 @@ pub enum StatusCmd {
     Neighbors {
         #[clap(env)]
         asn: u32,
+
+        /// Display mode: summary (default) or detail.
+        #[clap(long, value_enum, default_value = "summary")]
+        mode: NeighborDisplayMode,
     },
 
     /// Get the prefixes exported by a BGP router.
@@ -747,7 +760,9 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         },
 
         Commands::Status(cmd) => match cmd.command {
-            StatusCmd::Neighbors { asn } => get_neighbors(c, asn).await?,
+            StatusCmd::Neighbors { asn, mode } => {
+                get_neighbors(c, asn, mode).await?
+            }
             StatusCmd::Exported { asn } => get_exported(c, asn).await?,
         },
 
@@ -833,11 +848,37 @@ async fn delete_router(asn: u32, c: Client) -> Result<()> {
     Ok(())
 }
 
-async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
+async fn get_neighbors(
+    c: Client,
+    asn: u32,
+    mode: NeighborDisplayMode,
+) -> Result<()> {
     let result = c.get_neighbors_v3(asn).await?;
     let mut sorted: Vec<_> = result.iter().collect();
     sorted.sort_by_key(|(ip, _)| ip.parse::<IpAddr>().ok());
 
+    match mode {
+        NeighborDisplayMode::summary => {
+            display_neighbors_summary(&sorted)?;
+        }
+        NeighborDisplayMode::detail => {
+            display_neighbors_detail(&sorted)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Format a Duration as decimal seconds (e.g., "4.300s", "0.100s", "10.000s")
+fn format_duration_decimal(d: Duration) -> String {
+    let secs = d.as_secs();
+    let millis = d.subsec_millis();
+    format!("{}.{:03}s", secs, millis)
+}
+
+fn display_neighbors_summary(
+    neighbors: &[(&String, &bgp::params::PeerInfo)],
+) -> Result<()> {
     let mut tw = TabWriter::new(stdout());
     writeln!(
         &mut tw,
@@ -851,7 +892,7 @@ async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
     )
     .unwrap();
 
-    for (addr, info) in sorted.iter() {
+    for (addr, info) in neighbors.iter() {
         writeln!(
             &mut tw,
             "{}\t{:?}\t{:?}\t{:}\t{}/{}\t{}/{}",
@@ -861,22 +902,194 @@ async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
             humantime::Duration::from(Duration::from_millis(
                 info.fsm_state_duration
             ),),
-            humantime::Duration::from(Duration::from_secs(
-                info.timers.hold.configured.secs
-            )),
-            humantime::Duration::from(Duration::from_secs(
-                info.timers.hold.negotiated.secs
-            )),
-            humantime::Duration::from(Duration::from_secs(
-                info.timers.keepalive.configured.secs,
-            )),
-            humantime::Duration::from(Duration::from_secs(
-                info.timers.keepalive.negotiated.secs,
-            )),
+            humantime::Duration::from(info.timers.hold.configured),
+            humantime::Duration::from(info.timers.hold.negotiated),
+            humantime::Duration::from(info.timers.keepalive.configured),
+            humantime::Duration::from(info.timers.keepalive.negotiated),
         )
         .unwrap();
     }
     tw.flush().unwrap();
+    Ok(())
+}
+
+fn display_neighbors_detail(
+    neighbors: &[(&String, &bgp::params::PeerInfo)],
+) -> Result<()> {
+    for (i, (addr, info)) in neighbors.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+
+        println!("{}", "=".repeat(80));
+        println!("{}", format!("Neighbor: {}", addr).bold());
+        println!("{}", "=".repeat(80));
+
+        println!("\n{}", "Basic Information:".bold());
+        println!("  Name: {}", info.name);
+        println!("  Peer Group: {}", info.peer_group);
+        println!("  FSM State: {:?}", info.fsm_state);
+        println!(
+            "  FSM State Duration: {}",
+            humantime::Duration::from(Duration::from_millis(
+                info.fsm_state_duration
+            ))
+        );
+        if let Some(asn) = info.asn {
+            println!("  Peer ASN: {}", asn);
+        }
+        if let Some(id) = info.id {
+            println!("  Peer Router ID: {}", Ipv4Addr::from(id));
+        }
+
+        println!("\n{}", "Connection:".bold());
+        println!("  Local: {}:{}", info.local_ip, info.local_tcp_port);
+        println!("  Remote: {}:{}", info.remote_ip, info.remote_tcp_port);
+
+        println!("\n{}", "Address Families:".bold());
+        println!("  IPv4 Unicast:");
+        println!("    Import Policy: {:?}", info.ipv4_unicast.import_policy);
+        println!("    Export Policy: {:?}", info.ipv4_unicast.export_policy);
+        if let Some(nh) = info.ipv4_unicast.nexthop {
+            println!("    Nexthop: {}", nh);
+        }
+
+        println!("  IPv6 Unicast:");
+        println!("    Import Policy: {:?}", info.ipv6_unicast.import_policy);
+        println!("    Export Policy: {:?}", info.ipv6_unicast.export_policy);
+        if let Some(nh) = info.ipv6_unicast.nexthop {
+            println!("    Nexthop: {}", nh);
+        }
+
+        println!("\n{}", "Timers:".bold());
+        println!(
+            "  Hold Time: configured={}, negotiated={}, remaining={}",
+            format_duration_decimal(info.timers.hold.configured),
+            format_duration_decimal(info.timers.hold.negotiated),
+            format_duration_decimal(info.timers.hold.remaining),
+        );
+        println!(
+            "  Keepalive: configured={}, negotiated={}, remaining={}",
+            format_duration_decimal(info.timers.keepalive.configured),
+            format_duration_decimal(info.timers.keepalive.negotiated),
+            format_duration_decimal(info.timers.keepalive.remaining),
+        );
+        println!(
+            "  Connect Retry: configured={}, remaining={}",
+            format_duration_decimal(info.timers.connect_retry.configured),
+            format_duration_decimal(info.timers.connect_retry.remaining),
+        );
+        match info.timers.connect_retry_jitter {
+            Some(jitter) => {
+                println!("    Jitter: {}-{}", jitter.min, jitter.max)
+            }
+            None => println!("    Jitter: none"),
+        }
+        println!(
+            "  Idle Hold: configured={}, remaining={}",
+            format_duration_decimal(info.timers.idle_hold.configured),
+            format_duration_decimal(info.timers.idle_hold.remaining),
+        );
+        match info.timers.idle_hold_jitter {
+            Some(jitter) => {
+                println!("    Jitter: {}-{}", jitter.min, jitter.max)
+            }
+            None => println!("    Jitter: none"),
+        }
+        println!(
+            "  Delay Open: configured={}, remaining={}",
+            format_duration_decimal(info.timers.delay_open.configured),
+            format_duration_decimal(info.timers.delay_open.remaining),
+        );
+
+        if !info.received_capabilities.is_empty() {
+            println!("\n{}", "Received Capabilities:".bold());
+            for cap in &info.received_capabilities {
+                println!("  {:?}", cap);
+            }
+        }
+
+        println!("\n{}", "Counters:".bold());
+        println!("  Prefixes:");
+        println!("    Advertised: {}", info.counters.prefixes_advertised);
+        println!("    Imported: {}", info.counters.prefixes_imported);
+
+        println!("  Messages Sent:");
+        println!("    Opens: {}", info.counters.opens_sent);
+        println!("    Updates: {}", info.counters.updates_sent);
+        println!("    Keepalives: {}", info.counters.keepalives_sent);
+        println!("    Route Refresh: {}", info.counters.route_refresh_sent);
+        println!("    Notifications: {}", info.counters.notifications_sent);
+
+        println!("  Messages Received:");
+        println!("    Opens: {}", info.counters.opens_received);
+        println!("    Updates: {}", info.counters.updates_received);
+        println!("    Keepalives: {}", info.counters.keepalives_received);
+        println!(
+            "    Route Refresh: {}",
+            info.counters.route_refresh_received
+        );
+        println!(
+            "    Notifications: {}",
+            info.counters.notifications_received
+        );
+
+        println!("  FSM Transitions:");
+        println!(
+            "    To Established: {}",
+            info.counters.transitions_to_established
+        );
+        println!("    To Idle: {}", info.counters.transitions_to_idle);
+        println!("    To Connect: {}", info.counters.transitions_to_connect);
+
+        println!("  Connections:");
+        println!(
+            "    Active Accepted: {}",
+            info.counters.active_connections_accepted
+        );
+        println!(
+            "    Active Declined: {}",
+            info.counters.active_connections_declined
+        );
+        println!(
+            "    Passive Accepted: {}",
+            info.counters.passive_connections_accepted
+        );
+        println!(
+            "    Passive Declined: {}",
+            info.counters.passive_connections_declined
+        );
+        println!(
+            "    Connection Retries: {}",
+            info.counters.connection_retries
+        );
+
+        // Error Counters
+        println!("\n{}", "Error Counters:".bold());
+        println!(
+            "  TCP Connection Failures: {}",
+            info.counters.tcp_connection_failure
+        );
+        println!("  MD5 Auth Failures: {}", info.counters.md5_auth_failures);
+        println!(
+            "  Hold Timer Expirations: {}",
+            info.counters.hold_timer_expirations
+        );
+        println!(
+            "  Update Nexthop Missing: {}",
+            info.counters.update_nexhop_missing
+        );
+        println!(
+            "  Open Handle Failures: {}",
+            info.counters.open_handle_failures
+        );
+        println!(
+            "  Notification Send Failures: {}",
+            info.counters.notification_send_failure
+        );
+        println!("  Connector Panics: {}", info.counters.connector_panics);
+    }
+
     Ok(())
 }
 

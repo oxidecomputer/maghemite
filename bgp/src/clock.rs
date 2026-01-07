@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::connection::{BgpConnection, ConnectionId};
-use crate::params::JitterRange;
+use crate::params::{DynamicTimerInfo, JitterRange};
 use crate::session::{ConnectionEvent, FsmEvent, SessionEvent};
 use mg_common::lock;
 use mg_common::thread::ManagedThread;
@@ -178,6 +178,11 @@ impl Timer {
     pub fn set_jitter_range(&mut self, jitter_range: Option<JitterRange>) {
         self.jitter_range = jitter_range;
     }
+
+    /// Get the jitter range for this timer.
+    pub fn jitter_range(&self) -> Option<JitterRange> {
+        self.jitter_range
+    }
 }
 
 impl Display for Timer {
@@ -303,6 +308,27 @@ impl SessionClock {
         lock!(timers.connect_retry).stop();
         lock!(timers.idle_hold).stop();
     }
+
+    /// Get a snapshot of session-level timer state
+    pub fn get_timer_snapshot(&self) -> SessionTimerSnapshot {
+        let connect_retry = lock!(self.timers.connect_retry);
+        let idle_hold = lock!(self.timers.idle_hold);
+        SessionTimerSnapshot {
+            connect_retry_remaining: connect_retry.remaining(),
+            connect_retry_jitter: connect_retry.jitter_range(),
+            idle_hold_remaining: idle_hold.remaining(),
+            idle_hold_jitter: idle_hold.jitter_range(),
+        }
+    }
+}
+
+/// Snapshot of session-level timer state
+#[derive(Debug, Clone)]
+pub struct SessionTimerSnapshot {
+    pub connect_retry_remaining: Duration,
+    pub connect_retry_jitter: Option<JitterRange>,
+    pub idle_hold_remaining: Duration,
+    pub idle_hold_jitter: Option<JitterRange>,
 }
 
 impl Display for SessionClock {
@@ -445,6 +471,34 @@ impl ConnectionClock {
         lock!(timers.hold).disable();
         lock!(timers.delay_open).disable();
     }
+
+    /// Get a snapshot of connection-level timer state
+    pub fn get_timer_snapshot(&self) -> ConnectionTimerSnapshot {
+        let hold = lock!(self.timers.hold);
+        let keepalive = lock!(self.timers.keepalive);
+        let delay_open = lock!(self.timers.delay_open);
+        ConnectionTimerSnapshot {
+            hold: DynamicTimerInfo {
+                configured: self.timers.config_hold_time,
+                negotiated: hold.interval,
+                remaining: hold.remaining(),
+            },
+            keepalive: DynamicTimerInfo {
+                configured: self.timers.config_keepalive_time,
+                negotiated: keepalive.interval,
+                remaining: keepalive.remaining(),
+            },
+            delay_open_remaining: delay_open.remaining(),
+        }
+    }
+}
+
+/// Snapshot of connection-level timer state
+#[derive(Debug, Clone)]
+pub struct ConnectionTimerSnapshot {
+    pub hold: DynamicTimerInfo,
+    pub keepalive: DynamicTimerInfo,
+    pub delay_open_remaining: Duration,
 }
 
 impl Display for ConnectionClock {

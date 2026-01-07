@@ -20,7 +20,8 @@ use crate::{
     },
     params::{
         BgpCapability, DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig,
-        JitterRange, PeerCounters, PeerInfo, PeerTimers,
+        JitterRange, PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo,
+        TimerConfig,
     },
     policy::{CheckerResult, ShaperResult},
     recv_event_loop, recv_event_return,
@@ -8793,54 +8794,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         PeerCounters::from(self.counters.as_ref())
     }
 
-    fn get_timers(&self) -> PeerTimers {
-        let connect_retry = lock!(self.clock.timers.connect_retry).remaining();
-        let idle_hold = lock!(self.clock.timers.idle_hold).remaining();
-        let session_conf = lock!(self.session);
-        let connect_retry_jitter = session_conf.connect_retry_jitter;
-        let idle_hold_jitter = session_conf.idle_hold_jitter;
-
-        match self.primary_connection() {
-            Some(primary) => {
-                let clock = primary.connection().clock();
-                PeerTimers {
-                    hold: DynamicTimerInfo {
-                        configured: clock.timers.config_hold_time,
-                        negotiated: lock!(clock.timers.hold).interval,
-                        remaining: lock!(clock.timers.hold).remaining(),
-                    },
-                    keepalive: DynamicTimerInfo {
-                        configured: clock.timers.config_keepalive_time,
-                        negotiated: lock!(clock.timers.keepalive).interval,
-                        remaining: lock!(clock.timers.keepalive).remaining(),
-                    },
-                    connect_retry,
-                    connect_retry_jitter,
-                    idle_hold,
-                    idle_hold_jitter,
-                    delay_open: lock!(clock.timers.delay_open).remaining(),
-                }
-            }
-            None => PeerTimers {
-                hold: DynamicTimerInfo {
-                    configured: session_conf.hold_time,
-                    negotiated: session_conf.hold_time,
-                    remaining: session_conf.hold_time,
-                },
-                keepalive: DynamicTimerInfo {
-                    configured: session_conf.keepalive_time,
-                    negotiated: session_conf.keepalive_time,
-                    remaining: session_conf.keepalive_time,
-                },
-                connect_retry,
-                connect_retry_jitter,
-                idle_hold,
-                idle_hold_jitter,
-                delay_open: session_conf.delay_open_time,
-            },
-        }
-    }
-
     pub fn get_peer_info(&self) -> PeerInfo {
         let fsm_state = self.state();
         let dur = self.current_state_duration().as_millis() % u64::MAX as u128;
@@ -8848,26 +8801,87 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let counters = self.get_counters();
         let name = lock!(self.neighbor.name).clone();
         let peer_group = self.neighbor.peer_group.clone();
-        let session_conf = lock!(self.session);
-        let ipv4_unicast =
-            session_conf
-                .ipv4_unicast
-                .clone()
-                .unwrap_or(Ipv4UnicastConfig {
-                    nexthop: None,
-                    import_policy: Default::default(),
-                    export_policy: Default::default(),
-                });
-        let ipv6_unicast =
-            session_conf
-                .ipv6_unicast
-                .clone()
-                .unwrap_or(Ipv6UnicastConfig {
-                    nexthop: None,
-                    import_policy: Default::default(),
-                    export_policy: Default::default(),
-                });
 
+        // Extract config and runtime state WITHOUT holding any locks long-term
+        let (ipv4_unicast, ipv6_unicast, timer_config) = {
+            let session_conf = lock!(self.session);
+            let ipv4 = session_conf.ipv4_unicast.clone().unwrap_or(
+                Ipv4UnicastConfig {
+                    nexthop: None,
+                    import_policy: Default::default(),
+                    export_policy: Default::default(),
+                },
+            );
+            let ipv6 = session_conf.ipv6_unicast.clone().unwrap_or(
+                Ipv6UnicastConfig {
+                    nexthop: None,
+                    import_policy: Default::default(),
+                    export_policy: Default::default(),
+                },
+            );
+            let timers = TimerConfig::from_session_info(&session_conf);
+            (ipv4, ipv6, timers)
+        }; // Lock dropped here!
+
+        // Get timer runtime state from clocks (no SessionInfo lock needed)
+        let session_timers = self.clock.get_timer_snapshot();
+
+        // Build PeerTimers from snapshots
+        let timers = match self.primary_connection() {
+            Some(primary) => {
+                let conn_timers =
+                    primary.connection().clock().get_timer_snapshot();
+                PeerTimers {
+                    hold: conn_timers.hold,
+                    keepalive: conn_timers.keepalive,
+                    connect_retry: StaticTimerInfo {
+                        configured: timer_config.connect_retry_time,
+                        remaining: session_timers.connect_retry_remaining,
+                    },
+                    connect_retry_jitter: session_timers.connect_retry_jitter,
+                    idle_hold: StaticTimerInfo {
+                        configured: timer_config.idle_hold_time,
+                        remaining: session_timers.idle_hold_remaining,
+                    },
+                    idle_hold_jitter: session_timers.idle_hold_jitter,
+                    delay_open: StaticTimerInfo {
+                        configured: timer_config.delay_open_time,
+                        remaining: conn_timers.delay_open_remaining,
+                    },
+                }
+            }
+            None => {
+                // No connection - use configured values
+                PeerTimers {
+                    hold: DynamicTimerInfo {
+                        configured: timer_config.hold_time,
+                        negotiated: timer_config.hold_time,
+                        remaining: timer_config.hold_time,
+                    },
+                    keepalive: DynamicTimerInfo {
+                        configured: timer_config.keepalive_time,
+                        negotiated: timer_config.keepalive_time,
+                        remaining: timer_config.keepalive_time,
+                    },
+                    connect_retry: StaticTimerInfo {
+                        configured: timer_config.connect_retry_time,
+                        remaining: session_timers.connect_retry_remaining,
+                    },
+                    connect_retry_jitter: session_timers.connect_retry_jitter,
+                    idle_hold: StaticTimerInfo {
+                        configured: timer_config.idle_hold_time,
+                        remaining: session_timers.idle_hold_remaining,
+                    },
+                    idle_hold_jitter: session_timers.idle_hold_jitter,
+                    delay_open: StaticTimerInfo {
+                        configured: timer_config.delay_open_time,
+                        remaining: timer_config.delay_open_time,
+                    },
+                }
+            }
+        };
+
+        // Build and return PeerInfo
         match self.primary_connection() {
             Some(pconn) => match pconn {
                 ConnectionKind::Partial(conn) => {
@@ -8885,7 +8899,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         local_tcp_port: local.port(),
                         remote_tcp_port: remote.port(),
                         received_capabilities: vec![],
-                        timers: self.get_timers(),
+                        timers,
                         counters,
                         ipv4_unicast,
                         ipv6_unicast,
@@ -8908,7 +8922,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         local_tcp_port: local.port(),
                         remote_tcp_port: remote.port(),
                         received_capabilities,
-                        timers: self.get_timers(),
+                        timers,
                         counters,
                         ipv4_unicast,
                         ipv6_unicast,
@@ -8940,7 +8954,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     local_tcp_port: 0u16,
                     remote_tcp_port: self.neighbor.host.port(),
                     received_capabilities: vec![],
-                    timers: self.get_timers(),
+                    timers,
                     counters,
                     ipv4_unicast,
                     ipv6_unicast,
