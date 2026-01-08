@@ -118,7 +118,7 @@ gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "m
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "0f048374110d75ae61743ae3ec0de96960a2848d"
+rev = "e329820305b52aa415b4d4610c7cb0bd00b5f23e"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
