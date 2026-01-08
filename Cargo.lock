@@ -3466,6 +3466,7 @@ dependencies = [
  "chrono",
  "clap",
  "dropshot",
+ "gateway-client",
  "hostname 0.3.1",
  "http",
  "mg-api",

@@ -16,7 +16,7 @@ use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
 use sled::Tree;
-use slog::Logger;
+use slog::{Logger, error};
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
@@ -104,6 +104,10 @@ pub struct Db {
     /// Reaps expired routes from the local RIB
     reaper: Arc<Reaper>,
 
+    /// Switch slot reported from MGS.
+    /// Information is not available until first successful communication with MGS.
+    slot: Arc<RwLock<Option<u16>>>,
+
     log: Logger,
 }
 unsafe impl Sync for Db {}
@@ -129,6 +133,7 @@ impl Db {
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
             reaper: Reaper::new(rib_loc),
+            slot: Arc::new(RwLock::new(None)),
             log,
         })
     }
@@ -1265,6 +1270,21 @@ impl Db {
                 path.replace(t);
             }
         });
+    }
+
+    pub fn slot(&self) -> Option<u16> {
+        match self.slot.read() {
+            Ok(v) => *v,
+            Err(e) => {
+                error!(self.log, "unable to read switch slot"; "error" => %e);
+                None
+            }
+        }
+    }
+
+    pub fn set_slot(&mut self, slot: Option<u16>) {
+        let mut value = self.slot.write().unwrap();
+        *value = slot;
     }
 }
 
