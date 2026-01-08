@@ -8070,6 +8070,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         &self,
         pc: &PeerConnection<Cnx>,
     ) -> Result<(), Error> {
+        if !pc.ipv4_unicast.negotiated() {
+            return Ok(());
+        }
+
         let originated = match self.db.get_origin4() {
             Ok(value) => value,
             Err(e) => {
@@ -8099,6 +8103,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         &self,
         pc: &PeerConnection<Cnx>,
     ) -> Result<(), Error> {
+        if !pc.ipv6_unicast.negotiated() {
+            return Ok(());
+        }
+
         let originated = match self.db.get_origin6() {
             Ok(value) => value,
             Err(e) => {

@@ -4789,6 +4789,7 @@ impl From<Capability> for CapabilityCode {
     TryFromPrimitive,
     JsonSchema,
 )]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[repr(u16)]
 pub enum Afi {
     /// Internet protocol version 4

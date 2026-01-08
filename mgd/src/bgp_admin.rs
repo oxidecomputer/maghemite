@@ -26,7 +26,8 @@ use mg_api::{
     AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse, FsmEventBuffer,
     FsmHistoryRequest, FsmHistoryResponse, MessageDirection,
     MessageHistoryRequest, MessageHistoryRequestV1, MessageHistoryResponse,
-    MessageHistoryResponseV1, NeighborResetRequest, NeighborSelector, Rib,
+    MessageHistoryResponseV1, NeighborResetRequest, NeighborResetRequestV1,
+    NeighborSelector, Rib,
 };
 use mg_common::lock;
 use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
@@ -235,13 +236,25 @@ pub async fn delete_neighbor(
     Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
 }
 
+// Legacy API handler - hardcoded to IPv4 for backwards compatibility
 pub async fn clear_neighbor(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<NeighborResetRequestV1>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    Ok(helpers::reset_neighbor(ctx.clone(), rq.into()).await?)
+}
+
+// V2 API handler - supports per-AF operations
+pub async fn clear_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<NeighborResetRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    Ok(helpers::reset_neighbor(ctx.clone(), rq.asn, rq.addr, rq.op).await?)
+    Ok(helpers::reset_neighbor(ctx.clone(), rq).await?)
 }
 
 // V3 API handlers (new Neighbor type with optional per-AF configs)
@@ -1386,49 +1399,87 @@ pub(crate) mod helpers {
 
     pub(crate) async fn reset_neighbor(
         ctx: Arc<HandlerContext>,
-        asn: u32,
-        addr: IpAddr,
-        op: NeighborResetOp,
+        rq: NeighborResetRequest,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
-        bgp_log!(ctx.log, info, "clear neighbor {addr}, asn {asn}";
-            "op" => format!("{op:?}")
-        );
+        bgp_log!(ctx.log, info, "clear {rq}");
 
-        let session = get_router!(ctx, asn)?
-            .get_session(addr)
+        let session = get_router!(ctx, rq.asn)?
+            .get_session(rq.addr)
             .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
 
-        // XXX: Add IPv6 support -- needs API update
-        match op {
-            NeighborResetOp::Hard => session
-                .event_tx
-                .send(FsmEvent::Admin(AdminEvent::Reset))
-                .map_err(|e| {
-                    Error::InternalCommunication(format!(
-                        "failed to reset bgp session {e}",
-                    ))
-                })?,
-            NeighborResetOp::SoftInbound => {
-                // XXX: check if neighbor has negotiated route refresh cap
+        match rq.op {
+            NeighborResetOp::Hard => {
                 session
                     .event_tx
-                    .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh(
-                        Afi::Ipv4,
-                    )))
+                    .send(FsmEvent::Admin(AdminEvent::Reset))
                     .map_err(|e| {
                         Error::InternalCommunication(format!(
-                            "failed to generate route refresh {e}"
+                            "failed to reset bgp session {e}",
                         ))
-                    })?
+                    })?;
             }
-            NeighborResetOp::SoftOutbound => session
-                .event_tx
-                .send(FsmEvent::Admin(AdminEvent::ReAdvertiseRoutes(Afi::Ipv4)))
-                .map_err(|e| {
-                    Error::InternalCommunication(format!(
-                        "failed to trigger outbound update {e}"
-                    ))
-                })?,
+            NeighborResetOp::SoftInbound(afi) => {
+                // Send the request to the FSM; it will handle checking capabilities
+                // and which AFs are negotiated. None means all negotiated AFs.
+                match afi {
+                    Some(af) => {
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh(af)))
+                            .map_err(|e| {
+                                Error::InternalCommunication(format!(
+                                    "failed to generate route refresh for {af}: {e}"
+                                ))
+                            })?;
+                    }
+                    None => {
+                        // Send for both AFs; FSM will handle which are actually negotiated
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(
+                                AdminEvent::SendRouteRefresh(Afi::Ipv4),
+                            ))
+                            .ok();
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(
+                                AdminEvent::SendRouteRefresh(Afi::Ipv6),
+                            ))
+                            .ok();
+                    }
+                }
+            }
+            NeighborResetOp::SoftOutbound(afi) => {
+                // Send the request to the FSM; it will handle which AFs are negotiated.
+                // None means all negotiated AFs.
+                match afi {
+                    Some(af) => {
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(AdminEvent::ReAdvertiseRoutes(af)))
+                            .map_err(|e| {
+                                Error::InternalCommunication(format!(
+                                    "failed to trigger outbound update for {af}: {e}"
+                                ))
+                            })?;
+                    }
+                    None => {
+                        // Send for both AFs; FSM will handle which are actually negotiated
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(
+                                AdminEvent::ReAdvertiseRoutes(Afi::Ipv4),
+                            ))
+                            .ok();
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(
+                                AdminEvent::ReAdvertiseRoutes(Afi::Ipv6),
+                            ))
+                            .ok();
+                    }
+                }
+            }
         }
 
         Ok(HttpResponseUpdatedNoContent())

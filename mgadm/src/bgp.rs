@@ -3,22 +3,26 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
-use bgp::params::JitterRange;
+use bgp::{
+    messages::Afi,
+    params::{JitterRange, NeighborResetOp},
+};
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
 use mg_admin_client::{
     Client,
     types::{
         self, ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
-        Ipv6UnicastConfig, NeighborResetOp as MgdNeighborResetOp,
-        NeighborResetRequest,
+        Ipv6UnicastConfig, NeighborResetRequest,
     },
 };
 use rdb::types::{PolicyAction, Prefix4, Prefix6};
-use std::fs::read_to_string;
-use std::io::{Write, stdout};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::Duration;
+use std::{
+    fs::read_to_string,
+    io::{Write, stdout},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    time::Duration,
+};
 use tabwriter::TabWriter;
 
 #[derive(Subcommand, Debug)]
@@ -147,27 +151,6 @@ pub enum HistoryCmd {
     },
 }
 
-#[derive(Clone, Debug, ValueEnum)]
-#[allow(non_camel_case_types)]
-pub enum NeighborResetOp {
-    /// Perform a hard reset of the neighbor. This resets the TCP connection.
-    hard,
-    /// Send a route refresh to the neighbor. Does not reset the TCP connection.
-    soft_inbound,
-    /// Re-send all originated routes to the neighbor. Does not reset the TCP connection.
-    soft_outbound,
-}
-
-impl From<NeighborResetOp> for MgdNeighborResetOp {
-    fn from(op: NeighborResetOp) -> MgdNeighborResetOp {
-        match op {
-            NeighborResetOp::hard => MgdNeighborResetOp::Hard,
-            NeighborResetOp::soft_inbound => MgdNeighborResetOp::SoftInbound,
-            NeighborResetOp::soft_outbound => MgdNeighborResetOp::SoftOutbound,
-        }
-    }
-}
-
 #[derive(Debug, Args)]
 pub struct ClearSubcommand {
     #[command(subcommand)]
@@ -181,12 +164,63 @@ pub enum ClearCmd {
     Neighbor {
         /// IP address of the neighbor you want to clear the state of.
         addr: IpAddr,
-        #[clap(value_enum)]
-        clear_type: NeighborResetOp,
-        /// BGP Autonomous System number.  Can be a 16-bit or 32-bit unsigned value.
+
+        /// BGP Autonomous System number. Can be a 16-bit or 32-bit unsigned value.
         #[clap(env)]
         asn: u32,
+
+        #[command(subcommand)]
+        operation: NeighborOperation,
     },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum NeighborOperation {
+    /// Perform a hard reset of the neighbor. This resets the TCP connection.
+    Hard,
+
+    /// Perform a soft reset (does not reset TCP connection)
+    Soft {
+        #[command(subcommand)]
+        direction: SoftDirection,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum SoftDirection {
+    /// Send a route refresh to the neighbor
+    Inbound {
+        /// Address family to refresh (if not specified, refreshes all negotiated AFs)
+        #[clap(value_enum)]
+        afi: Option<Afi>,
+    },
+
+    /// Re-send all originated routes to the neighbor
+    Outbound {
+        /// Address family to re-advertise (if not specified, re-advertises all negotiated AFs)
+        #[clap(value_enum)]
+        afi: Option<Afi>,
+    },
+}
+
+impl From<NeighborOperation> for NeighborResetOp {
+    fn from(op: NeighborOperation) -> Self {
+        match op {
+            NeighborOperation::Hard => NeighborResetOp::Hard,
+            NeighborOperation::Soft { direction } => direction.into(),
+        }
+    }
+}
+
+impl From<SoftDirection> for NeighborResetOp {
+    fn from(direction: SoftDirection) -> Self {
+        match direction {
+            SoftDirection::Inbound { afi } => NeighborResetOp::SoftInbound(afi),
+            SoftDirection::Outbound { afi } => {
+                NeighborResetOp::SoftOutbound(afi)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -798,8 +832,8 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             ClearCmd::Neighbor {
                 asn,
                 addr,
-                clear_type,
-            } => clear_nbr(asn, addr, clear_type, c).await?,
+                operation,
+            } => clear_nbr(asn, addr, operation, c).await?,
         },
 
         Commands::Omicron(cmd) => match cmd.command {
@@ -1133,13 +1167,13 @@ async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
 async fn clear_nbr(
     asn: u32,
     addr: IpAddr,
-    op: NeighborResetOp,
+    operation: NeighborOperation,
     c: Client,
 ) -> Result<()> {
-    c.clear_neighbor(&NeighborResetRequest {
+    c.clear_neighbor_v2(&NeighborResetRequest {
         asn,
         addr,
-        op: op.into(),
+        op: operation.into(),
     })
     .await?;
     Ok(())

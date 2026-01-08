@@ -25,6 +25,8 @@ progenitor::generate_api!(
         JitterRange = bgp::params::JitterRange,
         PeerInfo = bgp::params::PeerInfo,
         Duration = std::time::Duration,
+        Afi = bgp::messages::Afi,
+        NeighborResetOp = bgp::params::NeighborResetOp,
     }
 );
 

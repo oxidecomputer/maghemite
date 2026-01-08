@@ -96,7 +96,7 @@
     },
     "/bgp/clear/neighbor": {
       "post": {
-        "operationId": "clear_neighbor",
+        "operationId": "clear_neighbor_v2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1403,6 +1403,25 @@
         },
         "required": [
           "routes"
+        ]
+      },
+      "Afi": {
+        "description": "Address families supported by Maghemite BGP.",
+        "oneOf": [
+          {
+            "description": "Internet protocol version 4",
+            "type": "string",
+            "enum": [
+              "Ipv4"
+            ]
+          },
+          {
+            "description": "Internet protocol version 6",
+            "type": "string",
+            "enum": [
+              "Ipv6"
+            ]
+          }
         ]
       },
       "AfiSafi": {
@@ -3507,11 +3526,51 @@
         ]
       },
       "NeighborResetOp": {
-        "type": "string",
-        "enum": [
-          "Hard",
-          "SoftInbound",
-          "SoftOutbound"
+        "description": "V2 API neighbor reset operations with per-AF support",
+        "oneOf": [
+          {
+            "description": "Hard reset - closes TCP connection and restarts session",
+            "type": "string",
+            "enum": [
+              "Hard"
+            ]
+          },
+          {
+            "description": "Soft inbound reset - sends route refresh for specified AF(s) None means all negotiated AFs",
+            "type": "object",
+            "properties": {
+              "SoftInbound": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Afi"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "SoftInbound"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Soft outbound reset - re-advertises routes for specified AF(s) None means all negotiated AFs",
+            "type": "object",
+            "properties": {
+              "SoftOutbound": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Afi"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "SoftOutbound"
+            ],
+            "additionalProperties": false
+          }
         ]
       },
       "NeighborResetRequest": {

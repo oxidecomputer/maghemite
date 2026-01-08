@@ -4,7 +4,7 @@
 
 use crate::{
     config::PeerConfig,
-    messages::{AddPathElement, Capability},
+    messages::{AddPathElement, Afi, Capability},
     session::{FsmStateKind, SessionCounters, SessionInfo},
 };
 use rdb::{
@@ -35,11 +35,40 @@ pub struct Router {
     pub graceful_shutdown: bool,
 }
 
+/// V1 API neighbor reset operations (backwards compatibility)
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub enum NeighborResetOp {
+#[schemars(rename = "NeighborResetOp")]
+pub enum NeighborResetOpV1 {
     Hard,
     SoftInbound,
     SoftOutbound,
+}
+
+/// V2 API neighbor reset operations with per-AF support
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub enum NeighborResetOp {
+    /// Hard reset - closes TCP connection and restarts session
+    Hard,
+    /// Soft inbound reset - sends route refresh for specified AF(s)
+    /// None means all negotiated AFs
+    SoftInbound(Option<Afi>),
+    /// Soft outbound reset - re-advertises routes for specified AF(s)
+    /// None means all negotiated AFs
+    SoftOutbound(Option<Afi>),
+}
+
+impl From<NeighborResetOpV1> for NeighborResetOp {
+    fn from(op: NeighborResetOpV1) -> Self {
+        match op {
+            NeighborResetOpV1::Hard => NeighborResetOp::Hard,
+            NeighborResetOpV1::SoftInbound => {
+                NeighborResetOp::SoftInbound(Some(Afi::Ipv4))
+            }
+            NeighborResetOpV1::SoftOutbound => {
+                NeighborResetOp::SoftOutbound(Some(Afi::Ipv4))
+            }
+        }
+    }
 }
 
 /// Jitter range with minimum and maximum multiplier values.

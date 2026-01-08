@@ -13,8 +13,8 @@ use bfd::BfdPeerState;
 use bgp::{
     params::{
         ApplyRequest, ApplyRequestV1, CheckerSource, Neighbor, NeighborResetOp,
-        NeighborV1, Origin4, Origin6, PeerInfo, PeerInfoV1, PeerInfoV2, Router,
-        ShaperSource,
+        NeighborResetOpV1, NeighborV1, Origin4, Origin6, PeerInfo, PeerInfoV1,
+        PeerInfoV2, Router, ShaperSource,
     },
     session::{FsmEventRecord, MessageHistory, MessageHistoryV1},
 };
@@ -178,9 +178,16 @@ pub trait MgAdminApi {
         request: Query<NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    // Common operations (not versioned - works with both APIs)
-    #[endpoint { method = POST, path = "/bgp/clear/neighbor" }]
+    // V1/V2 API clear neighbor (backwards compatibility w/ IPv4 only support)
+    #[endpoint { method = POST, path = "/bgp/clear/neighbor", versions = ..VERSION_MP_BGP }]
     async fn clear_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborResetRequestV1>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // V3 API clear neighbor with per-AF support
+    #[endpoint { method = POST, path = "/bgp/clear/neighbor", versions = VERSION_MP_BGP.. }]
+    async fn clear_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<NeighborResetRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
@@ -470,10 +477,38 @@ pub struct NeighborSelector {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[schemars(rename = "NeighborResetRequest")]
+pub struct NeighborResetRequestV1 {
+    pub asn: u32,
+    pub addr: IpAddr,
+    pub op: NeighborResetOpV1,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct NeighborResetRequest {
     pub asn: u32,
     pub addr: IpAddr,
     pub op: NeighborResetOp,
+}
+
+impl std::fmt::Display for NeighborResetRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "neighbor {} asn {} op {:?}",
+            self.addr, self.asn, self.op
+        )
+    }
+}
+
+impl From<NeighborResetRequestV1> for NeighborResetRequest {
+    fn from(req: NeighborResetRequestV1) -> Self {
+        Self {
+            asn: req.asn,
+            addr: req.addr,
+            op: req.op.into(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

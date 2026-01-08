@@ -214,9 +214,16 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn clear_neighbor(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<NeighborResetRequest>,
+        request: TypedBody<NeighborResetRequestV1>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::clear_neighbor(ctx, request).await
+    }
+
+    async fn clear_neighbor_v2(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborResetRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::clear_neighbor_v2(ctx, request).await
     }
 
     async fn create_origin4(
