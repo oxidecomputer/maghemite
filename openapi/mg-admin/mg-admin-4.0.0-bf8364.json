@@ -4766,20 +4766,6 @@
           "list"
         ]
       },
-<<<<<<< HEAD:openapi/mg-admin/mg-admin-3.0.0-aca2d9.json
-      "SwitchIdentifiers": {
-        "description": "Identifiers for a switch.",
-        "type": "object",
-        "properties": {
-          "slot": {
-            "nullable": true,
-            "description": "The slot number of the switch being managed.\n\nMGS uses u16 for this internally.",
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
-          }
-        }
-=======
       "StaticTimerInfo": {
         "description": "Timer information for static (non-negotiated) timers",
         "type": "object",
@@ -4795,7 +4781,19 @@
           "configured",
           "remaining"
         ]
->>>>>>> 4ce8064 (Fixup bgp neighbor status):openapi/mg-admin/mg-admin-3.0.0-ea8abe.json
+      },
+      "SwitchIdentifiers": {
+        "description": "Identifiers for a switch.",
+        "type": "object",
+        "properties": {
+          "slot": {
+            "nullable": true,
+            "description": "The slot number of the switch being managed.\n\nMGS uses u16 for this internally.",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        }
       },
       "UpdateErrorSubcode": {
         "description": "Update message error subcode types",
