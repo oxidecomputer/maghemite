@@ -1743,6 +1743,7 @@ dependencies = [
  "anyhow",
  "bgp",
  "clap",
+ "colored",
  "ddm-admin-client",
  "dpd-client",
  "libfalcon",

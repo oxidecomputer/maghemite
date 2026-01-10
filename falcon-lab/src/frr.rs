@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use crate::linux::LinuxNode;
 use anyhow::{Context, Result};
+use colored::Colorize;
 use libfalcon::{NodeRef, Runner};
 use slog::info;
 use tokio::time::sleep;
@@ -40,7 +41,12 @@ impl FrrNode {
     }
 
     pub async fn shell(&self, d: &Runner, script: &str) -> Result<()> {
-        info!(d.log, "{}: executing frr script {script}", self.name(d));
+        info!(
+            d.log,
+            "{}: executing frr script {}",
+            self.name(d),
+            script.dimmed()
+        );
         let args = script
             .lines()
             .map(|l| format!("'{l}'"))

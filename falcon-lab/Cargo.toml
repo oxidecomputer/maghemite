@@ -17,3 +17,4 @@ clap.workspace = true
 oxnet.workspace = true
 oxide-tokio-rt.workspace = true
 bgp.workspace = true
+colored.workspace = true

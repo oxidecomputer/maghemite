@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use libfalcon::{NodeRef, Runner};
 use slog::{debug, error};
 use std::{net::IpAddr, time::Duration};
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep};
 
 #[derive(Copy, Clone)]
 pub struct IllumosNode(pub NodeRef);
@@ -73,5 +73,28 @@ impl IllumosNode {
             }
         }
         Err(anyhow!("addrconf timed out"))
+    }
+
+    pub async fn wait_for_link(
+        &self,
+        d: &Runner,
+        name: &str,
+        timeout: Duration,
+    ) -> Result<()> {
+        let start = Instant::now();
+        loop {
+            let result = d
+                .exec(self.0, &format!("dladm show-link {name} -p -o link"))
+                .await
+                .map_err(|e| anyhow!("error showing link {name}: {e}"))?;
+            if result.as_str() == name {
+                return Ok(());
+            }
+            if start.elapsed() >= timeout {
+                break;
+            }
+            sleep(Duration::from_secs(1)).await
+        }
+        Err(anyhow!("timeout waiting for link {name}"))
     }
 }

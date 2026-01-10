@@ -3,14 +3,15 @@
 #![allow(dead_code)]
 
 use crate::illumos::IllumosNode;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use dpd_client::{
     Client,
     types::{LinkCreate, LinkId, PortId, PortSpeed},
 };
 use libfalcon::{NodeRef, Runner};
-use slog::info;
-use std::{net::IpAddr, sync::Arc};
+use slog::{Logger, debug, info};
+use std::{net::IpAddr, sync::Arc, time::Duration};
+use tokio::time::{Instant, sleep};
 
 #[derive(Copy, Clone)]
 pub struct DendriteNode(pub NodeRef);
@@ -95,4 +96,23 @@ pub async fn softnpu_link_create(c: &Client, name: &str) -> Result<()> {
     .await?;
     c.link_enabled_set(&port, &link, true).await?;
     Ok(())
+}
+
+pub async fn wait_for_dpd(
+    c: &Client,
+    timeout: Duration,
+    log: &Logger,
+) -> Result<()> {
+    let start = Instant::now();
+    loop {
+        match c.dpd_uptime().await {
+            Ok(_) => return Ok(()),
+            Err(e) => debug!(log, "wait for dpd: {e}"),
+        }
+        if start.elapsed() >= timeout {
+            break;
+        }
+        sleep(Duration::from_secs(1)).await
+    }
+    Err(anyhow!("timeout waiting for dpd"))
 }

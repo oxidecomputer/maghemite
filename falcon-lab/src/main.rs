@@ -12,6 +12,7 @@ mod linux;
 mod mgd;
 mod test;
 mod topo;
+mod util;
 
 #[derive(Debug, Parser)]
 struct Cli {

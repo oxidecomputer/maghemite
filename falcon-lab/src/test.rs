@@ -1,20 +1,24 @@
 //! Tests
 
+#![allow(clippy::iter_nth_zero)]
+
 use crate::{
     bgp::basic_unnumbered_neighbor,
-    dendrite::softnpu_link_create,
+    dendrite::{softnpu_link_create, wait_for_dpd},
     frr::FrrNode,
+    mgd::wait_for_mgd,
     topo::{Trio, trio},
+    wait_for_eq,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use bgp::session::FsmStateKind;
 use libfalcon::Runner;
 use mg_admin_client::types::Router;
 use slog::info;
 use std::time::Duration;
-use tokio::time::sleep;
 
 const TRIO_UNNUMBERED_TOPO_NAME: &str = "mgtriou";
+const OP_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn cleanup_unnumbered_test() -> Result<()> {
     // dropping this with out persistent set will destroy
@@ -60,9 +64,8 @@ pub async fn run_trio_unnumbered_test(
     let mgd = ox.client(&ad, addr).await?;
     let dpd = ox.dendrite().client(&ad, addr).await?;
 
-    // Wait for dendrite to start
-    // XXX do better than arbitrary wait
-    sleep(Duration::from_secs(5)).await;
+    // Wait for dpd to start
+    wait_for_dpd(&dpd, OP_TIMEOUT, &ad.log).await?;
 
     for link in ["qsfp0", "qsfp1"] {
         softnpu_link_create(&dpd, link)
@@ -70,23 +73,20 @@ pub async fn run_trio_unnumbered_test(
             .context(format!("create {link}"))?;
     }
 
-    // Wait for tfportd to create tfportqsfpX_X links
-    // XXX do better than arbitrary wait
-    sleep(Duration::from_secs(5)).await;
-
-    for link in ["tfportqsfp0_0/ll", "tfportqsfp1_0/ll"] {
+    for link in ["tfportqsfp0_0", "tfportqsfp1_0"] {
+        ox.illumos().wait_for_link(&ad, link, OP_TIMEOUT).await?;
+        let addr = format!("{link}/ll");
         ox.illumos()
-            .addrconf(&ad, link)
+            .addrconf(&ad, &addr)
             .await
-            .context(format!("create {link}"))?;
+            .context(format!("create {addr}"))?;
     }
 
     ox.run_mgd(&ad).await?;
     ox.ddm().run_ddm(&ad).await?;
 
     // Wait for mgd to start
-    // XXX do better than arbitrary wait
-    sleep(Duration::from_secs(5)).await;
+    wait_for_mgd(&mgd, OP_TIMEOUT, &ad.log).await?;
 
     let local_asn: u32 = 33;
 
@@ -119,58 +119,49 @@ pub async fn run_trio_unnumbered_test(
     .await
     .context("mgd: create cr2 unnumbered neighbor")?;
 
-    // Wait for session to come up
-    // XXX do better than arbitrary wait
-    sleep(Duration::from_secs(10)).await;
-
-    let nbrs = mgd
-        .get_neighbors_v3(local_asn)
-        .await
-        .context("get neighbor status")?;
-
-    let routes = mgd
-        .get_rib_imported(None, None)
-        .await
-        .context("get rib imported")?;
-
-    ensure!(
-        nbrs.len() == 2,
-        "should have two neighbors, found {}",
-        nbrs.len()
-    );
-    ensure!(
-        nbrs.values().collect::<Vec<_>>()[0].fsm_state
-            == FsmStateKind::Established,
-        "first neighbor should be established"
-    );
-    ensure!(
-        nbrs.values().collect::<Vec<_>>()[1].fsm_state
-            == FsmStateKind::Established,
-        "second neighbor should be established"
-    );
-    ensure!(
-        routes.len() == 1,
-        "should have one route, found {}",
-        routes.len()
-    );
-    let paths = routes.0.values().collect::<Vec<_>>()[0];
-    ensure!(
-        paths.len() == 2,
-        "should have two paths for first route, found {}",
-        paths.len()
+    wait_for_eq!(
+        mgd.get_neighbors_v3(local_asn)
+            .await
+            .map(|x| x.len())
+            .unwrap_or(0),
+        2,
+        "neighbors"
     );
 
-    let dpd_routes = dpd
-        .route_ipv4_list(None, None)
-        .await
-        .context("get dpd routes")?
-        .into_inner()
-        .items;
+    wait_for_eq!(
+        mgd.get_neighbors_v3(local_asn)
+            .await
+            .map(|x| x.values().nth(0).map(|y| y.fsm_state))
+            .unwrap_or(None),
+        Some(FsmStateKind::Established),
+        "first neighbor established"
+    );
 
-    ensure!(
-        dpd_routes.len() == 1,
-        "should have one selected route in dpd, found {}",
-        dpd_routes.len(),
+    wait_for_eq!(
+        mgd.get_rib_imported(None, None)
+            .await
+            .map(|x| x.len())
+            .unwrap_or(0),
+        1,
+        "one imported route"
+    );
+
+    wait_for_eq!(
+        mgd.get_rib_imported(None, None)
+            .await
+            .map(|x| x.values().nth(0).map(|x| x.len()))
+            .unwrap_or(None),
+        Some(2),
+        "two paths"
+    );
+
+    wait_for_eq!(
+        dpd.route_ipv4_list(None, None)
+            .await
+            .map(|x| x.items.len())
+            .unwrap_or(0),
+        1,
+        "dpd routes"
     );
 
     info!(ad.log, "trio bgp unnumbered test passed 🎉");
