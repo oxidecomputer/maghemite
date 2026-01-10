@@ -21,6 +21,7 @@ use std::{
     fs::read_to_string,
     io::{Write, stdout},
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    ops::{Deref, DerefMut},
     time::Duration,
 };
 use tabwriter::TabWriter;
@@ -89,6 +90,11 @@ pub enum StatusCmd {
         /// Display mode: summary (default) or detail.
         #[clap(long, value_enum, default_value = "summary")]
         mode: NeighborDisplayMode,
+    },
+
+    PendingNeighbors {
+        #[clap(env)]
+        asn: u32,
     },
 
     /// Get the prefixes exported by a BGP router.
@@ -278,9 +284,17 @@ pub enum NeighborCmd {
         #[clap(env)]
         asn: u32,
     },
+    /// List the unnumbered neighbors of a given router.
+    ListUnnumbered {
+        #[clap(env)]
+        asn: u32,
+    },
 
     /// Create a neighbor configuration.
     Create(Neighbor),
+
+    /// Create an unnumbered neighbor configuration.
+    CreateUnnumbered(UnnumberedNeighbor),
 
     /// Read a neighbor configuration.
     Read {
@@ -289,12 +303,29 @@ pub enum NeighborCmd {
         asn: u32,
     },
 
+    /// Read an unnumbered neighbor configuration.
+    ReadUnnumbered {
+        interface: String,
+        #[clap(env)]
+        asn: u32,
+    },
+
     /// Update a neighbor's configuration.
     Update(Neighbor),
+
+    /// Update an unnumbered neighbor's configuration.
+    UpdateUnnumbered(UnnumberedNeighbor),
 
     /// Delete a neighbor configuration
     Delete {
         addr: IpAddr,
+        #[clap(env)]
+        asn: u32,
+    },
+
+    /// Delete an unnumbered neighbor configuration
+    DeleteUnnumbered {
+        interface: String,
         #[clap(env)]
         asn: u32,
     },
@@ -519,11 +550,52 @@ pub struct Withdraw4 {
 
 #[derive(Args, Debug)]
 pub struct Neighbor {
-    /// Name for this neighbor
-    name: String,
-
     /// Neighbor address
     addr: IpAddr,
+
+    #[command(flatten)]
+    common: NeighborCommon,
+}
+
+impl Deref for Neighbor {
+    type Target = NeighborCommon;
+    fn deref(&self) -> &Self::Target {
+        &self.common
+    }
+}
+
+impl DerefMut for Neighbor {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.common
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct UnnumberedNeighbor {
+    /// Neighbor address
+    interface: String,
+
+    #[command(flatten)]
+    common: NeighborCommon,
+}
+
+impl Deref for UnnumberedNeighbor {
+    type Target = NeighborCommon;
+    fn deref(&self) -> &Self::Target {
+        &self.common
+    }
+}
+
+impl DerefMut for UnnumberedNeighbor {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.common
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct NeighborCommon {
+    /// Name for this neighbor
+    name: String,
 
     /// Peer group to add the neighbor to.
     group: String,
@@ -645,13 +717,13 @@ impl From<Neighbor> for types::Neighbor {
     fn from(n: Neighbor) -> types::Neighbor {
         // Build IPv4 unicast config if enabled
         let ipv4_unicast = if n.enable_ipv4 {
-            let import_policy = match n.allow_import4 {
+            let import_policy = match n.allow_import4.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy4::NoFiltering,
             };
-            let export_policy = match n.allow_export4 {
+            let export_policy = match n.allow_export4.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
@@ -668,13 +740,13 @@ impl From<Neighbor> for types::Neighbor {
 
         // Build IPv6 unicast config if enabled
         let ipv6_unicast = if n.enable_ipv6 {
-            let import_policy = match n.allow_import6 {
+            let import_policy = match n.allow_import6.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy6::NoFiltering,
             };
-            let export_policy = match n.allow_export6 {
+            let export_policy = match n.allow_export6.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
@@ -693,7 +765,7 @@ impl From<Neighbor> for types::Neighbor {
             asn: n.asn,
             remote_asn: n.remote_asn,
             min_ttl: n.min_ttl,
-            name: n.name,
+            name: n.name.clone(),
             host: SocketAddr::new(n.addr, n.port).to_string(),
             hold_time: n.hold_time,
             idle_hold_time: n.idle_hold_time,
@@ -701,11 +773,87 @@ impl From<Neighbor> for types::Neighbor {
             keepalive: n.keepalive_time,
             delay_open: n.delay_open_time,
             resolution: n.clock_resolution,
-            group: n.group,
+            group: n.group.clone(),
             passive: n.passive_connection,
             md5_auth_key: n.md5_auth_key.clone(),
             multi_exit_discriminator: n.med,
-            communities: n.communities,
+            communities: n.communities.clone(),
+            local_pref: n.local_pref,
+            enforce_first_as: n.enforce_first_as,
+            ipv4_unicast,
+            ipv6_unicast,
+            vlan_id: n.vlan_id,
+            connect_retry_jitter: n.connect_retry_jitter,
+            idle_hold_jitter: n.idle_hold_jitter,
+            deterministic_collision_resolution: n
+                .deterministic_collision_resolution,
+        }
+    }
+}
+
+impl From<UnnumberedNeighbor> for types::UnnumberedNeighbor {
+    fn from(n: UnnumberedNeighbor) -> types::UnnumberedNeighbor {
+        let ipv4_unicast = if n.enable_ipv4 {
+            let import_policy = match n.allow_import4.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy4::NoFiltering,
+            };
+            let export_policy = match n.allow_export4.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy4::NoFiltering,
+            };
+            Some(Ipv4UnicastConfig {
+                nexthop: n.nexthop4,
+                import_policy,
+                export_policy,
+            })
+        } else {
+            None
+        };
+
+        // Build IPv6 unicast config if enabled
+        let ipv6_unicast = if n.enable_ipv6 {
+            let import_policy = match n.allow_import6.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy6::NoFiltering,
+            };
+            let export_policy = match n.allow_export6.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy6::NoFiltering,
+            };
+            Some(Ipv6UnicastConfig {
+                nexthop: n.nexthop6,
+                import_policy,
+                export_policy,
+            })
+        } else {
+            None
+        };
+        types::UnnumberedNeighbor {
+            asn: n.asn,
+            remote_asn: n.remote_asn,
+            min_ttl: n.min_ttl,
+            name: n.name.clone(),
+            interface: n.interface.clone(),
+            hold_time: n.hold_time,
+            idle_hold_time: n.idle_hold_time,
+            connect_retry: n.connect_retry_time,
+            keepalive: n.keepalive_time,
+            delay_open: n.delay_open_time,
+            resolution: n.clock_resolution,
+            group: n.group.clone(),
+            passive: n.passive_connection,
+            md5_auth_key: n.md5_auth_key.clone(),
+            multi_exit_discriminator: n.med,
+            communities: n.communities.clone(),
             local_pref: n.local_pref,
             enforce_first_as: n.enforce_first_as,
             ipv4_unicast,
@@ -739,6 +887,21 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
                 NeighborCmd::Update(nbr) => update_nbr(nbr, c).await?,
                 NeighborCmd::Delete { asn, addr } => {
                     delete_nbr(asn, addr, c).await?
+                }
+                NeighborCmd::ListUnnumbered { asn } => {
+                    list_unnumbered_nbr(asn, c).await?
+                }
+                NeighborCmd::CreateUnnumbered(nbr) => {
+                    create_unnumbered_nbr(nbr, c).await?
+                }
+                NeighborCmd::ReadUnnumbered { asn, interface } => {
+                    read_unnumbered_nbr(asn, interface, c).await?
+                }
+                NeighborCmd::UpdateUnnumbered(nbr) => {
+                    update_unnumbered_nbr(nbr, c).await?
+                }
+                NeighborCmd::DeleteUnnumbered { asn, interface } => {
+                    delete_unnumbered_nbr(asn, interface, c).await?
                 }
             },
 
@@ -796,6 +959,9 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         Commands::Status(cmd) => match cmd.command {
             StatusCmd::Neighbors { asn, mode } => {
                 get_neighbors(c, asn, mode).await?
+            }
+            StatusCmd::PendingNeighbors { asn } => {
+                list_unnumbered_pending(asn, c).await?
             }
             StatusCmd::Exported { asn } => get_exported(c, asn).await?,
         },
@@ -1161,6 +1327,56 @@ async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
 
 async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
     c.delete_neighbor_v2(&addr, asn).await?;
+    Ok(())
+}
+
+async fn list_unnumbered_pending(asn: u32, c: Client) -> Result<()> {
+    let pending = c.read_pending_unnumbered_neighbors(asn).await?;
+    println!("{pending:#?}");
+    Ok(())
+}
+
+async fn list_unnumbered_nbr(asn: u32, c: Client) -> Result<()> {
+    let nbrs = c.read_unnumbered_neighbors(asn).await?;
+    println!("{nbrs:#?}");
+    Ok(())
+}
+
+async fn create_unnumbered_nbr(
+    nbr: UnnumberedNeighbor,
+    c: Client,
+) -> Result<()> {
+    c.create_unnumbered_neighbor(&nbr.into()).await?;
+    Ok(())
+}
+
+async fn read_unnumbered_nbr(
+    asn: u32,
+    interface: String,
+    c: Client,
+) -> Result<()> {
+    let nbr = c
+        .read_unnumbered_neighbor(asn, &interface)
+        .await?
+        .into_inner();
+    println!("{nbr:#?}");
+    Ok(())
+}
+
+async fn update_unnumbered_nbr(
+    nbr: UnnumberedNeighbor,
+    c: Client,
+) -> Result<()> {
+    c.update_unnumbered_neighbor(&nbr.into()).await?;
+    Ok(())
+}
+
+async fn delete_unnumbered_nbr(
+    asn: u32,
+    interface: String,
+    c: Client,
+) -> Result<()> {
+    c.delete_unnumbered_neighbor(asn, &interface).await?;
     Ok(())
 }
 

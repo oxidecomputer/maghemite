@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bgp = { path = "../bgp", features = ["clap"] }
-mg-common = { path = "../mg-common" }
-mg-admin-client = { path = "../mg-admin-client" }
+bgp = { workspace = true, features = ["clap"] }
+mg-common.workspace = true
+mg-admin-client.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 oxide-tokio-rt.workspace = true
@@ -19,4 +19,4 @@ humantime.workspace = true
 serde_json.workspace = true
 oxnet.workspace = true
 tabwriter.workspace = true
-rdb = { version = "0.1.0", path = "../rdb", features = ["clap"] }
+rdb.workspace = true
