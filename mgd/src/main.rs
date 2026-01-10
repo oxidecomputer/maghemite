@@ -294,9 +294,9 @@ fn start_bgp_routers(
     drop(guard);
 
     for nbr in neighbors {
-        bgp_admin::helpers::add_neighbor(
+        bgp_admin::helpers::add_neighbor_v1(
             context.clone(),
-            bgp::params::Neighbor {
+            bgp::params::NeighborV1 {
                 asn: nbr.asn,
                 remote_asn: nbr.remote_asn,
                 min_ttl: nbr.min_ttl,
@@ -315,8 +315,15 @@ fn start_bgp_routers(
                 communities: nbr.communities.clone(),
                 local_pref: nbr.local_pref,
                 enforce_first_as: nbr.enforce_first_as,
-                allow_import: nbr.allow_import.clone(),
-                allow_export: nbr.allow_export.clone(),
+                // Combine per-AF policies into legacy format for API compatibility
+                allow_import: rdb::ImportExportPolicy::from_per_af_policies(
+                    &nbr.allow_import4,
+                    &nbr.allow_import6,
+                ),
+                allow_export: rdb::ImportExportPolicy::from_per_af_policies(
+                    &nbr.allow_export4,
+                    &nbr.allow_export6,
+                ),
                 vlan_id: nbr.vlan_id,
             },
             true,

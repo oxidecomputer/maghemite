@@ -320,6 +320,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "clap",
  "itertools 0.14.0",
  "lazy_static",
  "libc",
@@ -3311,6 +3312,7 @@ dependencies = [
 name = "mg-admin-client"
 version = "0.1.0"
 dependencies = [
+ "bgp",
  "chrono",
  "colored",
  "progenitor 0.11.2",

@@ -139,6 +139,9 @@ pub enum Error {
     #[error("Unsupported optional parameter code {0:?}")]
     UnsupportedOptionalParameterCode(crate::messages::OptionalParameterCode),
 
+    #[error("Unsupported address family: AFI={0} SAFI={1}")]
+    UnsupportedAddressFamily(u16, u8),
+
     #[error("Self loop detected")]
     SelfLoopDetected,
 
@@ -207,6 +210,9 @@ pub enum Error {
 
     #[error("Connection registry is full: {0}")]
     RegistryFull(String),
+
+    #[error("Malformed attribute list: {0}")]
+    MalformedAttributeList(String),
 }
 
 #[derive(Debug)]

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bgp = { path = "../bgp" }
+bgp = { path = "../bgp", features = ["clap"] }
 mg-common = { path = "../mg-common" }
 mg-admin-client = { path = "../mg-admin-client" }
 clap.workspace = true

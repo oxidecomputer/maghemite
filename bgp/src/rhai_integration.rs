@@ -11,6 +11,7 @@ use crate::{
     },
     policy::{CheckerResult, ShaperResult},
 };
+use rdb::{Prefix4, Prefix6};
 use rhai::{Module, export_module, plugin::*};
 
 macro_rules! create_enum_module {
@@ -104,17 +105,17 @@ impl UpdateMessage {
 
     pub fn prefix_filter<F>(&mut self, f: F)
     where
-        F: Clone + Fn(&Prefix) -> bool,
+        F: Clone + Fn(&Prefix4) -> bool,
     {
         self.withdrawn.retain(f.clone());
         self.nlri.retain(f);
     }
 
-    pub fn get_nlri(&mut self) -> Vec<Prefix> {
+    pub fn get_nlri(&mut self) -> Vec<Prefix4> {
         self.nlri.clone()
     }
 
-    pub fn set_nlri(&mut self, value: Vec<Prefix>) {
+    pub fn set_nlri(&mut self, value: Vec<Prefix4>) {
         self.nlri = value;
     }
 }
@@ -187,5 +188,23 @@ pub fn prefix_within_rhai(prefix: &mut Prefix, x: &str) -> bool {
         Err(_) => return false,
     };
     let s = *prefix;
+    s.within(&x)
+}
+
+pub fn prefix4_within_rhai(prefix: &mut Prefix4, x: &str) -> bool {
+    let x: Prefix = match x.parse() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let s = Prefix::V4(*prefix);
+    s.within(&x)
+}
+
+pub fn prefix6_within_rhai(prefix: &mut Prefix6, x: &str) -> bool {
+    let x: Prefix = match x.parse() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let s = Prefix::V6(*prefix);
     s.within(&x)
 }
