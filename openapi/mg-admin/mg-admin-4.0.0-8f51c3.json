@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "3.0.0"
+    "version": "4.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -1601,6 +1601,29 @@
         "responses": {
           "204": {
             "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/switch/identifiers": {
+      "get": {
+        "operationId": "switch_identifiers",
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwitchIdentifiers"
+                }
+              }
+            }
           },
           "4XX": {
             "$ref": "#/components/responses/Error"
@@ -4365,6 +4388,19 @@
         "required": [
           "list"
         ]
+      },
+      "SwitchIdentifiers": {
+        "description": "Identifiers for a switch.",
+        "type": "object",
+        "properties": {
+          "slot": {
+            "nullable": true,
+            "description": "The slot number of the switch being managed.\n\nMGS uses u16 for this internally.",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        }
       },
       "UpdateErrorSubcode": {
         "description": "Update message error subcode types",

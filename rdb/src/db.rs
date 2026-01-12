@@ -163,6 +163,10 @@ pub struct Db {
     /// Reaps expired routes from the local RIB
     reaper: Arc<Reaper>,
 
+    /// Switch slot reported from MGS.
+    /// Information is not available until first successful communication with MGS.
+    slot: Arc<RwLock<Option<u16>>>,
+
     log: Logger,
 }
 
@@ -211,6 +215,7 @@ impl Db {
             generation: Arc::new(AtomicU64::new(0)),
             watchers: Arc::new(RwLock::new(Vec::new())),
             reaper: Reaper::new(rib_loc),
+            slot: Arc::new(RwLock::new(None)),
             log,
         };
 
@@ -245,6 +250,21 @@ impl Db {
 
     pub fn set_reaper_stale_max(&self, stale_max: chrono::Duration) {
         *lock!(self.reaper.stale_max) = stale_max;
+    }
+
+    pub fn slot(&self) -> Option<u16> {
+        match self.slot.read() {
+            Ok(v) => *v,
+            Err(e) => {
+                error!(self.log, "unable to read switch slot"; "error" => %e);
+                None
+            }
+        }
+    }
+
+    pub fn set_slot(&mut self, slot: Option<u16>) {
+        let mut value = self.slot.write().unwrap();
+        *value = slot;
     }
 
     // ------------------------------------------------------------------------

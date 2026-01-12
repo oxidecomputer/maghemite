@@ -40,7 +40,8 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
-    (3, MULTICAST_SUPPORT),
+    (4, MULTICAST_SUPPORT),
+    (3, SWITCH_IDENTIFIERS),
     (2, IPV6_BASIC),
     (1, INITIAL),
 ]);
@@ -373,6 +374,11 @@ pub trait MgAdminApi {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
 
+    #[endpoint {method = GET, path = "/switch/identifiers", versions = VERSION_SWITCH_IDENTIFIERS.. }]
+    async fn switch_identifiers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<SwitchIdentifiers>, HttpError>;
+
     // ========================= MRIB: Multicast ==============================
     //
     // Multicast routing is API-driven with Omicron as the source of truth.
@@ -438,6 +444,15 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MribRpfRebuildIntervalRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+}
+
+/// Identifiers for a switch.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct SwitchIdentifiers {
+    /// The slot number of the switch being managed.
+    ///
+    /// MGS uses u16 for this internally.
+    pub slot: Option<u16>,
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]

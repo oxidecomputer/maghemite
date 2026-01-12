@@ -439,6 +439,12 @@ impl MgAdminApi for MgAdminApiImpl {
         static_admin::static_list_v6_routes(ctx).await
     }
 
+    async fn switch_identifiers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<SwitchIdentifiers>, HttpError> {
+        static_admin::switch_identifiers(ctx).await
+    }
+
     async fn get_mrib_imported(
         rqctx: RequestContext<Self::Context>,
         query: Query<MribQuery>,
