@@ -735,7 +735,7 @@ pub fn dump_thread_stacks() -> Result<String, std::io::Error> {
     {
         // Use gdb to attach and dump thread backtraces
         let output = Command::new("gdb")
-            .args(&[
+            .args([
                 "-batch",
                 "-ex",
                 "thread apply all bt",
@@ -745,13 +745,10 @@ pub fn dump_thread_stacks() -> Result<String, std::io::Error> {
             .output()?;
 
         if !output.status.success() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "gdb failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            ));
+            return Err(std::io::Error::other(format!(
+                "gdb failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
