@@ -104,7 +104,7 @@ oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
 oxnet = { version = "0.1.4", default-features = false, features = ["schemars", "serde"] }
 omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
-poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipath" }
+poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "main" }
 uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
 libc = "0.2"

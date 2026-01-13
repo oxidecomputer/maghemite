@@ -4779,7 +4779,7 @@ dependencies = [
 [[package]]
 name = "poptrie"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/poptrie?branch=multipath#ca52bef3f87ff1a67d81b3c6e601dcb5fdbcc165"
+source = "git+https://github.com/oxidecomputer/poptrie?branch=main#5bf62f6b889c61e0608d8463ed11da28e130cb34"
 
 [[package]]
 name = "portable-atomic"

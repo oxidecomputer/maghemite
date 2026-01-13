@@ -255,9 +255,7 @@ impl RebuildJob {
             Self::V4 { rib, cache } => {
                 let snapshot = {
                     let r = lock!(rib);
-                    RpfTable::snapshot_rib(&r, |p| {
-                        (u32::from(p.value), p.length)
-                    })
+                    RpfTable::snapshot_rib(&r, |p| (p.value.octets(), p.length))
                 };
                 let mut table = poptrie::Ipv4RoutingTable::default();
                 for (addr, len, paths) in snapshot {
@@ -268,9 +266,7 @@ impl RebuildJob {
             Self::V6 { rib, cache } => {
                 let snapshot = {
                     let r = lock!(rib);
-                    RpfTable::snapshot_rib(&r, |p| {
-                        (u128::from(p.value), p.length)
-                    })
+                    RpfTable::snapshot_rib(&r, |p| (p.value.octets(), p.length))
                 };
                 let mut table = poptrie::Ipv6RoutingTable::default();
                 for (addr, len, paths) in snapshot {
