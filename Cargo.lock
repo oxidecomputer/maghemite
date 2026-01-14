@@ -1196,7 +1196,7 @@ dependencies = [
 name = "ddm-api"
 version = "0.1.0"
 dependencies = [
- "ddm-types",
+ "ddm-types-versions",
  "dropshot",
  "dropshot-api-manager-types",
  "mg-common",
@@ -1210,11 +1210,19 @@ dependencies = [
 name = "ddm-types"
 version = "0.1.0"
 dependencies = [
+ "ddm-types-versions",
+]
+
+[[package]]
+name = "ddm-types-versions"
+version = "0.1.0"
+dependencies = [
  "mg-common",
  "oxnet",
  "schemars",
  "serde",
  "serde_repr",
+ "uuid",
 ]
 
 [[package]]

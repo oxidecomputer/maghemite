@@ -4,7 +4,9 @@
 
 use crate::db::Db;
 use crate::sm::{AdminEvent, Event, PrefixSet, SmContext};
-use ddm_api::*;
+use ddm_api::DdmAdminApi;
+use ddm_api::ddm_admin_api_mod;
+use ddm_types::admin::{EnableStatsRequest, ExpirePathParams, PrefixMap};
 use ddm_types::db::{PeerInfo, TunnelRoute};
 use ddm_types::exchange::PathVector;
 use dropshot::ApiDescription;
