@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use mg_common::net::Ipv6Prefix;
 use oxnet::Ipv6Net;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -14,18 +15,24 @@ pub struct PathVector {
     pub path: Vec<String>,
 }
 
+/// THIS TYPE IS FOR DDM PROTOCOL VERSION 2. IT SHALL NEVER CHANGE. THIS TYPE
+/// CAN BE REMOVED WHEN DDMV2 CLIENTS AND SERVERS NO LONGER EXIST BUT ITS
+/// DEFINITION SHALL NEVER CHANGE.
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema,
 )]
 pub struct PathVectorV2 {
-    pub destination: Ipv6Net,
+    pub destination: Ipv6Prefix,
     pub path: Vec<String>,
 }
 
 impl From<PathVectorV2> for PathVector {
     fn from(value: PathVectorV2) -> Self {
         PathVector {
-            destination: value.destination,
+            destination: Ipv6Net::new_unchecked(
+                value.destination.addr,
+                value.destination.len,
+            ),
             path: value.path,
         }
     }
@@ -34,7 +41,10 @@ impl From<PathVectorV2> for PathVector {
 impl From<PathVector> for PathVectorV2 {
     fn from(value: PathVector) -> Self {
         PathVectorV2 {
-            destination: value.destination,
+            destination: Ipv6Prefix {
+                addr: value.destination.addr(),
+                len: value.destination.width(),
+            },
             path: value.path,
         }
     }

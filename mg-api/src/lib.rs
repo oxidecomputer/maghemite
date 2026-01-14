@@ -3,44 +3,44 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    num::NonZeroU8,
+collections::{BTreeMap, BTreeSet, HashMap},
+net::{IpAddr, Ipv4Addr, Ipv6Addr},
+num::NonZeroU8,
 };
 
 use bfd::BfdPeerState;
 use bgp::{
-    params::{
-        ApplyRequest, CheckerSource, Neighbor, NeighborResetOp, Origin4,
-        Origin6, PeerInfo, PeerInfoV1, Router, ShaperSource,
-    },
-    session::{FsmEventRecord, MessageHistory, MessageHistoryV1},
+params::{
+    ApplyRequest, CheckerSource, Neighbor, NeighborResetOp, Origin4,
+    Origin6, PeerInfo, PeerInfoV1, Router, ShaperSource,
+},
+session::{FsmEventRecord, MessageHistory, MessageHistoryV1},
 };
 use dropshot::{
-    HttpError, HttpResponseDeleted, HttpResponseOk,
-    HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
+HttpError, HttpResponseDeleted, HttpResponseOk,
+HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use dropshot_api_manager_types::api_versions;
 use rdb::{
-    BfdPeerConfig, Path as RdbPath, Prefix, Prefix4, Prefix6, StaticRouteKey,
-    types::{AddressFamily, ProtocolFilter},
+BfdPeerConfig, Path as RdbPath, Prefix, Prefix4, Prefix6, StaticRouteKey,
+types::{AddressFamily, ProtocolFilter},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 api_versions!([
-    // WHEN CHANGING THE API (part 1 of 2):
-    //
-    // +- Pick a new semver and define it in the list below.  The list MUST
-    // |  remain sorted, which generally means that your version should go at
-    // |  the very top.
-    // |
-    // |  Duplicate this line, uncomment the *second* copy, update that copy for
-    // |  your new API version, and leave the first copy commented out as an
-    // |  example for the next person.
-    // v
-    // (next_int, IDENT),
-    (3, DROPSHOT_API_MANAGER_0_3_0),
+// WHEN CHANGING THE API (part 1 of 2):
+//
+// +- Pick a new semver and define it in the list below.  The list MUST
+// |  remain sorted, which generally means that your version should go at
+// |  the very top.
+// |
+// |  Duplicate this line, uncomment the *second* copy, update that copy for
+// |  your new API version, and leave the first copy commented out as an
+// |  example for the next person.
+// v
+// (next_int, IDENT),
+    (3, SWITCH_IDENTIFIERS),
     (2, IPV6_BASIC),
     (1, INITIAL),
 ]);
@@ -372,6 +372,20 @@ pub trait MgAdminApi {
     async fn static_list_v6_routes(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
+
+    #[endpoint {method = GET, path = "/switch/identifiers", versions = VERSION_SWITCH_IDENTIFIERS.. }]
+    async fn switch_identifiers(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<SwitchIdentifiers>, HttpError>;
+}
+
+/// Identifiers for a switch.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct SwitchIdentifiers {
+    /// The slot number of the switch being managed.
+    ///
+    /// MGS uses u16 for this internally.
+    pub slot: Option<u16>,
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, JsonSchema)]

@@ -134,3 +134,10 @@ pub async fn static_list_v6_routes(
 
     Ok(HttpResponseOk(static_rib))
 }
+
+pub(crate) async fn switch_identifiers(
+    ctx: RequestContext<Arc<HandlerContext>>,
+) -> Result<HttpResponseOk<mg_api::SwitchIdentifiers>, HttpError> {
+    let slot = ctx.context().db.slot();
+    Ok(HttpResponseOk(mg_api::SwitchIdentifiers { slot }))
+}
