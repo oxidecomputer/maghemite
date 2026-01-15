@@ -761,7 +761,7 @@ impl BgpConnectionTcp {
                         "error" => format!("{e}")
                     );
 
-                    let (subcode, reason) = match &e {
+                    let (subcode, reason) = match e {
                         Error::UnsupportedCapability(cap) => (
                             OpenErrorSubcode::UnsupportedCapability,
                             OpenParseErrorReason::Other {
@@ -771,10 +771,14 @@ impl BgpConnectionTcp {
                                 ),
                             },
                         ),
-                        Error::UnsupportedCapabilityCode(code) => (
-                            OpenErrorSubcode::UnsupportedCapability,
-                            OpenParseErrorReason::UnsupportedCapability {
-                                code: *code as u8,
+                        Error::BadBgpIdentifier(id) => (
+                            OpenErrorSubcode::BadBgpIdentifier,
+                            OpenParseErrorReason::BadBgpIdentifier { id },
+                        ),
+                        Error::BadVersion(ver) => (
+                            OpenErrorSubcode::UnsupportedVersionNumber,
+                            OpenParseErrorReason::InvalidVersion {
+                                version: ver,
                             },
                         ),
                         _ => (

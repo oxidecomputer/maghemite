@@ -8,8 +8,8 @@ use crate::{
     session::{FsmStateKind, SessionCounters, SessionInfo},
 };
 use rdb::{
-    ImportExportPolicy, ImportExportPolicy4, ImportExportPolicy6, PolicyAction,
-    Prefix4, Prefix6,
+    ImportExportPolicy4, ImportExportPolicy6, ImportExportPolicyV1,
+    PolicyAction, Prefix4, Prefix6,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -134,7 +134,9 @@ impl TimerConfig {
 }
 
 /// Per-address-family configuration for IPv4 Unicast
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[derive(
+    Debug, Default, Clone, Deserialize, Serialize, JsonSchema, PartialEq,
+)]
 pub struct Ipv4UnicastConfig {
     pub nexthop: Option<IpAddr>,
     pub import_policy: ImportExportPolicy4,
@@ -142,7 +144,9 @@ pub struct Ipv4UnicastConfig {
 }
 
 /// Per-address-family configuration for IPv6 Unicast
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[derive(
+    Debug, Default, Clone, Deserialize, Serialize, JsonSchema, PartialEq,
+)]
 pub struct Ipv6UnicastConfig {
     pub nexthop: Option<IpAddr>,
     pub import_policy: ImportExportPolicy6,
@@ -254,8 +258,8 @@ pub struct NeighborV1 {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
-    pub allow_import: ImportExportPolicy,
-    pub allow_export: ImportExportPolicy,
+    pub allow_import: ImportExportPolicyV1,
+    pub allow_export: ImportExportPolicyV1,
     pub vlan_id: Option<u16>,
 }
 
@@ -343,11 +347,11 @@ impl NeighborV1 {
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
             // Combine per-AF policies into legacy format for API compatibility
-            allow_import: ImportExportPolicy::from_per_af_policies(
+            allow_import: ImportExportPolicyV1::from_per_af_policies(
                 &rq.allow_import4,
                 &rq.allow_import6,
             ),
-            allow_export: ImportExportPolicy::from_per_af_policies(
+            allow_export: ImportExportPolicyV1::from_per_af_policies(
                 &rq.allow_export4,
                 &rq.allow_export6,
             ),
@@ -560,7 +564,6 @@ pub struct PeerTimers {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PeerCounters {
     // FSM Counters
-    pub connect_retry_counter: u64,
     pub connection_retries: u64,
     pub active_connections_accepted: u64,
     pub active_connections_declined: u64,
@@ -601,6 +604,7 @@ pub struct PeerCounters {
     pub unexpected_notification_message: u64,
     pub update_nexhop_missing: u64,
     pub open_handle_failures: u64,
+    pub unnegotiated_address_family: u64,
 
     // Send failure counters
     pub notification_send_failure: u64,
@@ -618,9 +622,6 @@ pub struct PeerCounters {
 impl From<&SessionCounters> for PeerCounters {
     fn from(value: &SessionCounters) -> Self {
         Self {
-            connect_retry_counter: value
-                .connect_retry_counter
-                .load(Ordering::Relaxed),
             connection_retries: value
                 .connection_retries
                 .load(Ordering::Relaxed),
@@ -711,6 +712,9 @@ impl From<&SessionCounters> for PeerCounters {
             open_handle_failures: value
                 .open_handle_failures
                 .load(Ordering::Relaxed),
+            unnegotiated_address_family: value
+                .unnegotiated_address_family
+                .load(Ordering::Relaxed),
             notification_send_failure: value
                 .notification_send_failure
                 .load(Ordering::Relaxed),
@@ -783,7 +787,7 @@ pub struct PeerInfo {
     pub name: String,
     pub peer_group: String,
     pub fsm_state: FsmStateKind,
-    pub fsm_state_duration: u64,
+    pub fsm_state_duration: Duration,
     pub asn: Option<u32>,
     pub id: Option<u32>,
     pub local_ip: IpAddr,
@@ -858,8 +862,8 @@ pub struct BgpPeerConfigV1 {
     pub communities: Vec<u32>,
     pub local_pref: Option<u32>,
     pub enforce_first_as: bool,
-    pub allow_import: ImportExportPolicy,
-    pub allow_export: ImportExportPolicy,
+    pub allow_import: ImportExportPolicyV1,
+    pub allow_export: ImportExportPolicyV1,
     pub vlan_id: Option<u16>,
 }
 

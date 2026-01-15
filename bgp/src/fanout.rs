@@ -50,10 +50,7 @@ pub struct Egress<Cnx: BgpConnection> {
 // IPv4-specific implementation
 impl<Cnx: BgpConnection> Fanout<Cnx, Ipv4Marker> {
     /// Announce and/or withdraw IPv4 routes to all peers.
-    ///
-    /// Per RFC 7606, announcements and withdrawals are sent as separate
-    /// UPDATE messages to avoid mixing reachable and unreachable NLRI.
-    pub fn announce_all(&self, nlri: Vec<Prefix4>, withdrawn: Vec<Prefix4>) {
+    pub fn send_all(&self, nlri: Vec<Prefix4>, withdrawn: Vec<Prefix4>) {
         for egress in self.egress.values() {
             if !nlri.is_empty() {
                 let announce =
@@ -69,10 +66,7 @@ impl<Cnx: BgpConnection> Fanout<Cnx, Ipv4Marker> {
     }
 
     /// Announce and/or withdraw IPv4 routes to all peers except the origin.
-    ///
-    /// Per RFC 7606, announcements and withdrawals are sent as separate
-    /// UPDATE messages to avoid mixing reachable and unreachable NLRI.
-    pub fn announce_except(
+    pub fn send_except(
         &self,
         origin: IpAddr,
         nlri: Vec<Prefix4>,
@@ -99,10 +93,7 @@ impl<Cnx: BgpConnection> Fanout<Cnx, Ipv4Marker> {
 // IPv6-specific implementation
 impl<Cnx: BgpConnection> Fanout<Cnx, Ipv6Marker> {
     /// Announce and/or withdraw IPv6 routes to all peers.
-    ///
-    /// Per RFC 7606, announcements and withdrawals are sent as separate
-    /// UPDATE messages to avoid mixing reachable and unreachable NLRI.
-    pub fn announce_all(&self, nlri: Vec<Prefix6>, withdrawn: Vec<Prefix6>) {
+    pub fn send_all(&self, nlri: Vec<Prefix6>, withdrawn: Vec<Prefix6>) {
         for egress in self.egress.values() {
             if !nlri.is_empty() {
                 let announce =
@@ -118,10 +109,7 @@ impl<Cnx: BgpConnection> Fanout<Cnx, Ipv6Marker> {
     }
 
     /// Announce and/or withdraw IPv6 routes to all peers except the origin.
-    ///
-    /// Per RFC 7606, announcements and withdrawals are sent as separate
-    /// UPDATE messages to avoid mixing reachable and unreachable NLRI.
-    pub fn announce_except(
+    pub fn send_except(
         &self,
         origin: IpAddr,
         nlri: Vec<Prefix6>,

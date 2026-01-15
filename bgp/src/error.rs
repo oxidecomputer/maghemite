@@ -2,7 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{fmt::Display, net::IpAddr};
+use std::{
+    fmt::Display,
+    net::{IpAddr, Ipv4Addr},
+};
 
 use num_enum::TryFromPrimitiveError;
 
@@ -20,8 +23,11 @@ pub enum Error {
     #[error("invalid message type")]
     InvalidMessageType(u8),
 
-    #[error("bad version")]
-    BadVersion,
+    #[error("bad version: {0}")]
+    BadVersion(u8),
+
+    #[error("bad bgp identifier: {0}")]
+    BadBgpIdentifier(Ipv4Addr),
 
     #[error("reserved capability")]
     ReservedCapability,
@@ -120,9 +126,6 @@ pub enum Error {
 
     #[error("Session for peer already exists")]
     PeerExists,
-
-    #[error("Capability code not supported {0:?}")]
-    UnsupportedCapabilityCode(crate::messages::CapabilityCode),
 
     #[error("Capability not supported {0:?}")]
     UnsupportedCapability(crate::messages::Capability),

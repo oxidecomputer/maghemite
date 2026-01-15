@@ -30,7 +30,7 @@ use mg_api::{
     NeighborSelector, Rib,
 };
 use mg_common::lock;
-use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
+use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicyV1, Prefix};
 use rdb::{ImportExportPolicy4, ImportExportPolicy6};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -502,13 +502,13 @@ pub async fn get_exported(
             .collect();
 
         // Combine per-AF export policies into legacy format for filtering
-        let allow_export = ImportExportPolicy::from_per_af_policies(
+        let allow_export = ImportExportPolicyV1::from_per_af_policies(
             &n.allow_export4,
             &n.allow_export6,
         );
         let mut exported_routes: Vec<Prefix> = match allow_export {
-            ImportExportPolicy::NoFiltering => orig_routes,
-            ImportExportPolicy::Allow(epol) => {
+            ImportExportPolicyV1::NoFiltering => orig_routes,
+            ImportExportPolicyV1::Allow(epol) => {
                 orig_routes.retain(|p| epol.contains(p));
                 orig_routes
             }
@@ -560,7 +560,8 @@ pub async fn get_neighbors(
         .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
 
     for s in lock!(r.sessions).values() {
-        let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
+        let dur =
+            s.current_state_duration().as_millis().min(u64::MAX as u128) as u64;
 
         // If the session runner has a primary connection, pull the config and
         // runtime state from it. If not, just use the config owned by the
@@ -587,7 +588,7 @@ pub async fn get_neighbors(
         let pi = PeerInfoV2 {
             state: s.state(),
             asn: s.remote_asn(),
-            duration_millis: dur as u64,
+            duration_millis: dur,
             timers: PeerTimersV1 {
                 hold: DynamicTimerInfoV1 {
                     configured: conf_holdtime,
@@ -620,7 +621,8 @@ pub async fn get_neighbors_v2(
         .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
 
     for s in lock!(r.sessions).values() {
-        let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
+        let dur =
+            s.current_state_duration().as_millis().min(u64::MAX as u128) as u64;
 
         let (conf_holdtime, neg_holdtime, conf_keepalive, neg_keepalive) =
             if let Some(primary) = s.primary_connection() {
@@ -646,7 +648,7 @@ pub async fn get_neighbors_v2(
             PeerInfoV2 {
                 state: s.state(),
                 asn: s.remote_asn(),
-                duration_millis: dur as u64,
+                duration_millis: dur,
                 timers: PeerTimersV1 {
                     hold: DynamicTimerInfoV1 {
                         configured: conf_holdtime,
@@ -1701,8 +1703,8 @@ mod tests {
                 communities: Vec::default(),
                 local_pref: None,
                 enforce_first_as: false,
-                allow_import: rdb::ImportExportPolicy::NoFiltering,
-                allow_export: rdb::ImportExportPolicy::NoFiltering,
+                allow_import: rdb::ImportExportPolicyV1::NoFiltering,
+                allow_export: rdb::ImportExportPolicyV1::NoFiltering,
                 vlan_id: None,
             }],
         );
@@ -1725,8 +1727,8 @@ mod tests {
                 communities: Vec::default(),
                 local_pref: None,
                 enforce_first_as: false,
-                allow_import: rdb::ImportExportPolicy::NoFiltering,
-                allow_export: rdb::ImportExportPolicy::NoFiltering,
+                allow_import: rdb::ImportExportPolicyV1::NoFiltering,
+                allow_export: rdb::ImportExportPolicyV1::NoFiltering,
                 vlan_id: None,
             }],
         );

@@ -3,11 +3,22 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
-use bgp::{
-    messages::Afi,
-    params::{JitterRange, NeighborResetOp},
-};
+use bgp::{messages::Afi, params::JitterRange};
 use clap::{Args, Subcommand, ValueEnum};
+
+fn jitter_range_to_api(j: JitterRange) -> types::JitterRange {
+    types::JitterRange {
+        min: j.min,
+        max: j.max,
+    }
+}
+
+fn afi_to_api(afi: Afi) -> types::Afi {
+    match afi {
+        Afi::Ipv4 => types::Afi::Ipv4,
+        Afi::Ipv6 => types::Afi::Ipv6,
+    }
+}
 use colored::*;
 use mg_admin_client::{
     Client,
@@ -203,21 +214,23 @@ pub enum SoftDirection {
     },
 }
 
-impl From<NeighborOperation> for NeighborResetOp {
+impl From<NeighborOperation> for types::NeighborResetOp {
     fn from(op: NeighborOperation) -> Self {
         match op {
-            NeighborOperation::Hard => NeighborResetOp::Hard,
+            NeighborOperation::Hard => types::NeighborResetOp::Hard,
             NeighborOperation::Soft { direction } => direction.into(),
         }
     }
 }
 
-impl From<SoftDirection> for NeighborResetOp {
+impl From<SoftDirection> for types::NeighborResetOp {
     fn from(direction: SoftDirection) -> Self {
         match direction {
-            SoftDirection::Inbound { afi } => NeighborResetOp::SoftInbound(afi),
+            SoftDirection::Inbound { afi } => {
+                types::NeighborResetOp::SoftInbound(afi.map(afi_to_api))
+            }
             SoftDirection::Outbound { afi } => {
-                NeighborResetOp::SoftOutbound(afi)
+                types::NeighborResetOp::SoftOutbound(afi.map(afi_to_api))
             }
         }
     }
@@ -711,8 +724,10 @@ impl From<Neighbor> for types::Neighbor {
             ipv4_unicast,
             ipv6_unicast,
             vlan_id: n.vlan_id,
-            connect_retry_jitter: n.connect_retry_jitter,
-            idle_hold_jitter: n.idle_hold_jitter,
+            connect_retry_jitter: n
+                .connect_retry_jitter
+                .map(jitter_range_to_api),
+            idle_hold_jitter: n.idle_hold_jitter.map(jitter_range_to_api),
             deterministic_collision_resolution: n
                 .deterministic_collision_resolution,
         }
@@ -911,7 +926,7 @@ fn format_duration_decimal(d: Duration) -> String {
 }
 
 fn display_neighbors_summary(
-    neighbors: &[(&String, &bgp::params::PeerInfo)],
+    neighbors: &[(&String, &types::PeerInfo)],
 ) -> Result<()> {
     let mut tw = TabWriter::new(stdout());
     writeln!(
@@ -933,9 +948,7 @@ fn display_neighbors_summary(
             addr,
             info.asn,
             info.fsm_state,
-            humantime::Duration::from(Duration::from_millis(
-                info.fsm_state_duration
-            ),),
+            humantime::Duration::from(info.fsm_state_duration),
             humantime::Duration::from(info.timers.hold.configured),
             humantime::Duration::from(info.timers.hold.negotiated),
             humantime::Duration::from(info.timers.keepalive.configured),
@@ -948,7 +961,7 @@ fn display_neighbors_summary(
 }
 
 fn display_neighbors_detail(
-    neighbors: &[(&String, &bgp::params::PeerInfo)],
+    neighbors: &[(&String, &types::PeerInfo)],
 ) -> Result<()> {
     for (i, (addr, info)) in neighbors.iter().enumerate() {
         if i > 0 {
@@ -965,9 +978,7 @@ fn display_neighbors_detail(
         println!("  FSM State: {:?}", info.fsm_state);
         println!(
             "  FSM State Duration: {}",
-            humantime::Duration::from(Duration::from_millis(
-                info.fsm_state_duration
-            ))
+            humantime::Duration::from(info.fsm_state_duration)
         );
         if let Some(asn) = info.asn {
             println!("  Peer ASN: {}", asn);
@@ -1013,7 +1024,7 @@ fn display_neighbors_detail(
             format_duration_decimal(info.timers.connect_retry.configured),
             format_duration_decimal(info.timers.connect_retry.remaining),
         );
-        match info.timers.connect_retry_jitter {
+        match &info.timers.connect_retry_jitter {
             Some(jitter) => {
                 println!("    Jitter: {}-{}", jitter.min, jitter.max)
             }
@@ -1024,7 +1035,7 @@ fn display_neighbors_detail(
             format_duration_decimal(info.timers.idle_hold.configured),
             format_duration_decimal(info.timers.idle_hold.remaining),
         );
-        match info.timers.idle_hold_jitter {
+        match &info.timers.idle_hold_jitter {
             Some(jitter) => {
                 println!("    Jitter: {}-{}", jitter.min, jitter.max)
             }

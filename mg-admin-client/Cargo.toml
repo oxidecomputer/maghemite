@@ -16,6 +16,5 @@ schemars.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 rdb-types.workspace = true
-bgp.workspace = true
 tabwriter.workspace = true
 colored.workspace = true

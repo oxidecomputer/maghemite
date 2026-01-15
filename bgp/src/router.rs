@@ -427,7 +427,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             "count" => prefixes.len(),
         );
 
-        read_lock!(self.fanout4).announce_all(prefixes, vec![]);
+        read_lock!(self.fanout4).send_all(prefixes, vec![]);
     }
 
     fn withdraw_origin4(&self, prefixes: Vec<Prefix4>) {
@@ -449,7 +449,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             "count" => prefixes.len(),
         );
 
-        read_lock!(self.fanout4).announce_all(vec![], prefixes);
+        read_lock!(self.fanout4).send_all(vec![], prefixes);
     }
 
     pub fn create_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
@@ -531,7 +531,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             "count" => prefixes.len(),
         );
 
-        read_lock!(self.fanout6).announce_all(prefixes, vec![]);
+        read_lock!(self.fanout6).send_all(prefixes, vec![]);
     }
 
     fn withdraw_origin6(&self, prefixes: Vec<Prefix6>) {
@@ -553,7 +553,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             "count" => prefixes.len(),
         );
 
-        read_lock!(self.fanout6).announce_all(vec![], prefixes);
+        read_lock!(self.fanout6).send_all(vec![], prefixes);
     }
 
     pub fn base_attributes(&self) -> Vec<PathAttribute> {
@@ -631,7 +631,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
                 "count" => originated4.len(),
             );
 
-            read_lock!(self.fanout4).announce_all(originated4, vec![]);
+            read_lock!(self.fanout4).send_all(originated4, vec![]);
         }
 
         // Also announce IPv6 originated routes
@@ -645,7 +645,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
                 "count" => originated6.len(),
             );
 
-            read_lock!(self.fanout6).announce_all(originated6, vec![]);
+            read_lock!(self.fanout6).send_all(originated6, vec![]);
         }
 
         Ok(())

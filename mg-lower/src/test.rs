@@ -38,7 +38,6 @@ async fn sync_prefix_test() {
                 vlan_id: None,
             }]
             .into_iter()
-            .map(|p| (p.key(), p))
             .collect(),
         );
 
@@ -242,7 +241,6 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
             vlan_id: None,
         }]
         .into_iter()
-        .map(|p| (p.key(), p))
         .collect(),
     );
     rib.insert(
@@ -255,7 +253,6 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
             vlan_id: None,
         }]
         .into_iter()
-        .map(|p| (p.key(), p))
         .collect(),
     );
     rib.insert(
@@ -268,7 +265,6 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
             vlan_id: None,
         }]
         .into_iter()
-        .map(|p| (p.key(), p))
         .collect(),
     );
 }

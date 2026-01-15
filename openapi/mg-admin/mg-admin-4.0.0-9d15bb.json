@@ -4155,11 +4155,6 @@
             "format": "uint64",
             "minimum": 0
           },
-          "connect_retry_counter": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
           "connection_retries": {
             "type": "integer",
             "format": "uint64",
@@ -4340,6 +4335,11 @@
             "format": "uint64",
             "minimum": 0
           },
+          "unnegotiated_address_family": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "update_nexhop_missing": {
             "type": "integer",
             "format": "uint64",
@@ -4364,7 +4364,6 @@
         "required": [
           "active_connections_accepted",
           "active_connections_declined",
-          "connect_retry_counter",
           "connection_retries",
           "connector_panics",
           "hold_timer_expirations",
@@ -4401,6 +4400,7 @@
           "unexpected_open_message",
           "unexpected_route_refresh_message",
           "unexpected_update_message",
+          "unnegotiated_address_family",
           "update_nexhop_missing",
           "update_send_failure",
           "updates_received",
@@ -4423,9 +4423,7 @@
             "$ref": "#/components/schemas/FsmStateKind"
           },
           "fsm_state_duration": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
+            "$ref": "#/components/schemas/Duration"
           },
           "id": {
             "nullable": true,

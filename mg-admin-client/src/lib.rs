@@ -22,11 +22,7 @@ progenitor::generate_api!(
         Prefix = rdb_types::Prefix,
         AddressFamily = rdb_types::AddressFamily,
         ProtocolFilter = rdb_types::ProtocolFilter,
-        JitterRange = bgp::params::JitterRange,
-        PeerInfo = bgp::params::PeerInfo,
         Duration = std::time::Duration,
-        Afi = bgp::messages::Afi,
-        NeighborResetOp = bgp::params::NeighborResetOp,
     }
 );
 

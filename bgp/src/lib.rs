@@ -32,6 +32,7 @@ mod test;
 pub mod connection_channel;
 
 pub const BGP_PORT: u16 = 179;
+pub const BGP_VERSION: u8 = 4;
 pub const COMPONENT_BGP: &str = "bgp";
 pub const MOD_ROUTER: &str = "router";
 pub const MOD_NEIGHBOR: &str = "neighbor";

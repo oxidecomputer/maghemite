@@ -200,7 +200,6 @@ fn update_traditional_strategy() -> impl Strategy<Value = UpdateMessage> {
             withdrawn,
             path_attributes,
             nlri,
-            treat_as_withdraw: false,
             errors: vec![],
         })
 }
@@ -220,7 +219,6 @@ fn update_mp_reach_strategy() -> impl Strategy<Value = UpdateMessage> {
                 withdrawn: vec![],
                 path_attributes: attrs,
                 nlri: vec![],
-                treat_as_withdraw: false,
                 errors: vec![],
             }
         },
@@ -239,7 +237,6 @@ fn update_mp_unreach_strategy() -> impl Strategy<Value = UpdateMessage> {
             value: PathAttributeValue::MpUnreachNlri(mp_unreach),
         }],
         nlri: vec![],
-        treat_as_withdraw: false,
         errors: vec![],
     })
 }
@@ -296,7 +293,6 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![],
             nlri: prefixes.clone(),
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -313,7 +309,6 @@ proptest! {
             withdrawn: prefixes.clone(),
             path_attributes: vec![],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -341,7 +336,6 @@ proptest! {
                 value: PathAttributeValue::MpReachNlri(mp_reach),
             }],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -376,7 +370,6 @@ proptest! {
                 value: PathAttributeValue::MpUnreachNlri(mp_unreach),
             }],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -414,7 +407,6 @@ proptest! {
                 value: PathAttributeValue::MpReachNlri(mp_reach),
             }],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -449,7 +441,6 @@ proptest! {
                 value: PathAttributeValue::MpUnreachNlri(mp_unreach),
             }],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -489,7 +480,6 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![attr],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -517,7 +507,6 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![attr],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -544,7 +533,6 @@ proptest! {
             withdrawn: vec![],
             path_attributes: vec![attr],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -737,7 +725,6 @@ proptest! {
                 )),
             ],
             nlri: nlri_prefixes.clone(),
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -772,7 +759,6 @@ proptest! {
             withdrawn: vec![],
             path_attributes: mp_attrs,
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 

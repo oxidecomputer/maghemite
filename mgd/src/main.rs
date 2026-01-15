@@ -316,11 +316,11 @@ fn start_bgp_routers(
                 local_pref: nbr.local_pref,
                 enforce_first_as: nbr.enforce_first_as,
                 // Combine per-AF policies into legacy format for API compatibility
-                allow_import: rdb::ImportExportPolicy::from_per_af_policies(
+                allow_import: rdb::ImportExportPolicyV1::from_per_af_policies(
                     &nbr.allow_import4,
                     &nbr.allow_import6,
                 ),
-                allow_export: rdb::ImportExportPolicy::from_per_af_policies(
+                allow_export: rdb::ImportExportPolicyV1::from_per_af_policies(
                     &nbr.allow_export4,
                     &nbr.allow_export6,
                 ),

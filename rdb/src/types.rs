@@ -44,22 +44,6 @@ pub struct Ipv4Marker;
 #[derive(Clone, Copy, Debug)]
 pub struct Ipv6Marker;
 
-/// Uniquely identifies a path for deduplication.
-/// Two paths with the same PathKey represent the same logical
-/// path and should replace each other in the RIB.
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub enum PathKey {
-    /// BGP path identified by peer IP.
-    /// All paths from the same peer replace each other.
-    // XXX: Include AddPathId when AddPath is fully supported
-    Bgp(IpAddr),
-    /// Static route identified by (nexthop, vlan_id) tuple.
-    Static {
-        nexthop: IpAddr,
-        vlan_id: Option<u16>,
-    },
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct Path {
     pub nexthop: IpAddr,
@@ -67,19 +51,6 @@ pub struct Path {
     pub rib_priority: u8,
     pub bgp: Option<BgpPathProperties>,
     pub vlan_id: Option<u16>,
-}
-
-impl Path {
-    /// Returns the identity key for this path.
-    pub fn key(&self) -> PathKey {
-        match &self.bgp {
-            Some(bgp) => PathKey::Bgp(bgp.peer),
-            None => PathKey::Static {
-                nexthop: self.nexthop,
-                vlan_id: self.vlan_id,
-            },
-        }
-    }
 }
 
 // Define a basic ordering on paths so bestpath selection is deterministic
@@ -90,6 +61,25 @@ impl PartialOrd for Path {
 }
 impl Ord for Path {
     fn cmp(&self, other: &Self) -> Ordering {
+        // Paths from the same source are considered equal for set membership.
+        // This enables BTreeSet::replace() to update paths from the same source.
+        //
+        // BGP paths: identified by peer IP
+        if let (Some(a), Some(b)) = (&self.bgp, &other.bgp)
+            && a.peer == b.peer
+        {
+            return Ordering::Equal;
+        }
+
+        // Static paths: identified by (nexthop, vlan_id)
+        if self.bgp.is_none()
+            && other.bgp.is_none()
+            && self.nexthop == other.nexthop
+            && self.vlan_id == other.vlan_id
+        {
+            return Ordering::Equal;
+        }
+
         if self.nexthop != other.nexthop {
             return self.nexthop.cmp(&other.nexthop);
         }
@@ -398,13 +388,14 @@ pub struct BgpRouterInfo {
 #[derive(
     Default, Debug, Serialize, Deserialize, Clone, JsonSchema, Eq, PartialEq,
 )]
-pub enum ImportExportPolicy {
+#[schemars(rename = "ImportExportPolicy")]
+pub enum ImportExportPolicyV1 {
     #[default]
     NoFiltering,
     Allow(BTreeSet<Prefix>),
 }
 
-impl ImportExportPolicy {
+impl ImportExportPolicyV1 {
     /// Extract IPv4 prefixes from this policy as a typed IPv4 policy.
     ///
     /// If this policy is `NoFiltering`, returns `ImportExportPolicy4::NoFiltering`.
@@ -412,8 +403,10 @@ impl ImportExportPolicy {
     /// If the policy has prefixes but none are IPv4, returns `NoFiltering` for IPv4.
     pub fn as_ipv4_policy(&self) -> ImportExportPolicy4 {
         match self {
-            ImportExportPolicy::NoFiltering => ImportExportPolicy4::NoFiltering,
-            ImportExportPolicy::Allow(prefixes) => {
+            ImportExportPolicyV1::NoFiltering => {
+                ImportExportPolicy4::NoFiltering
+            }
+            ImportExportPolicyV1::Allow(prefixes) => {
                 let v4_prefixes: BTreeSet<Prefix4> = prefixes
                     .iter()
                     .filter_map(|p| match p {
@@ -438,8 +431,10 @@ impl ImportExportPolicy {
     /// If the policy has prefixes but none are IPv6, returns `NoFiltering` for IPv6.
     pub fn as_ipv6_policy(&self) -> ImportExportPolicy6 {
         match self {
-            ImportExportPolicy::NoFiltering => ImportExportPolicy6::NoFiltering,
-            ImportExportPolicy::Allow(prefixes) => {
+            ImportExportPolicyV1::NoFiltering => {
+                ImportExportPolicy6::NoFiltering
+            }
+            ImportExportPolicyV1::Allow(prefixes) => {
                 let v6_prefixes: BTreeSet<Prefix6> = prefixes
                     .iter()
                     .filter_map(|p| match p {
@@ -469,14 +464,14 @@ impl ImportExportPolicy {
             (
                 ImportExportPolicy4::NoFiltering,
                 ImportExportPolicy6::NoFiltering,
-            ) => ImportExportPolicy::NoFiltering,
+            ) => ImportExportPolicyV1::NoFiltering,
             (
                 ImportExportPolicy4::Allow(v4_prefixes),
                 ImportExportPolicy6::NoFiltering,
             ) => {
                 let prefixes: BTreeSet<Prefix> =
                     v4_prefixes.iter().map(|p| Prefix::V4(*p)).collect();
-                ImportExportPolicy::Allow(prefixes)
+                ImportExportPolicyV1::Allow(prefixes)
             }
             (
                 ImportExportPolicy4::NoFiltering,
@@ -484,7 +479,7 @@ impl ImportExportPolicy {
             ) => {
                 let prefixes: BTreeSet<Prefix> =
                     v6_prefixes.iter().map(|p| Prefix::V6(*p)).collect();
-                ImportExportPolicy::Allow(prefixes)
+                ImportExportPolicyV1::Allow(prefixes)
             }
             (
                 ImportExportPolicy4::Allow(v4_prefixes),
@@ -493,7 +488,7 @@ impl ImportExportPolicy {
                 let mut prefixes: BTreeSet<Prefix> =
                     v4_prefixes.iter().map(|p| Prefix::V4(*p)).collect();
                 prefixes.extend(v6_prefixes.iter().map(|p| Prefix::V6(*p)));
-                ImportExportPolicy::Allow(prefixes)
+                ImportExportPolicyV1::Allow(prefixes)
             }
         }
     }
@@ -522,7 +517,7 @@ pub enum ImportExportPolicy6 {
 /// Address-family-specific import/export policy wrapper for internal use.
 /// This is distinct from the API-facing `ImportExportPolicy` type.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum TypedImportExportPolicy {
+pub enum ImportExportPolicy {
     V4(ImportExportPolicy4),
     V6(ImportExportPolicy6),
 }
@@ -640,5 +635,38 @@ impl Display for PrefixChangeNotification {
             pcn.push_str(&format!("{p} "));
         }
         write!(f, "PrefixChangeNotification [ {pcn}]")
+    }
+}
+
+#[cfg(test)]
+pub mod test_helpers {
+    use super::Path;
+    use std::collections::BTreeSet;
+
+    /// Full structural equality for Path.
+    /// Compares ALL fields, unlike Ord which only compares identity.
+    ///
+    /// This exists because Path's Ord implementation treats paths from the
+    /// same source (same peer for BGP, same nexthop+vlan for static) as equal,
+    /// enabling BTreeSet::replace() semantics. But for tests, we often want
+    /// to verify all fields match exactly.
+    pub fn paths_equal(a: &Path, b: &Path) -> bool {
+        a.nexthop == b.nexthop
+            && a.shutdown == b.shutdown
+            && a.rib_priority == b.rib_priority
+            && a.vlan_id == b.vlan_id
+            && a.bgp == b.bgp
+    }
+
+    /// Compare two BTreeSet<Path> using full structural equality.
+    pub fn path_sets_equal(a: &BTreeSet<Path>, b: &BTreeSet<Path>) -> bool {
+        a.len() == b.len()
+            && a.iter().zip(b.iter()).all(|(x, y)| paths_equal(x, y))
+    }
+
+    /// Compare two Vec<Path> or slices using full structural equality.
+    pub fn path_vecs_equal(a: &[Path], b: &[Path]) -> bool {
+        a.len() == b.len()
+            && a.iter().zip(b.iter()).all(|(x, y)| paths_equal(x, y))
     }
 }

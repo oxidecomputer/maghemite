@@ -2,13 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::error::Error;
+use crate::{BGP_VERSION, error::Error};
 use nom::{
     bytes::complete::{tag, take},
     number::complete::{be_u8, be_u16, be_u32, u8 as parse_u8},
 };
 use num_enum::FromPrimitive;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use path_attribute_flags::*;
 pub use rdb::types::Prefix;
 use rdb::types::{AddressFamily, Prefix4, Prefix6};
 use schemars::JsonSchema;
@@ -40,6 +41,30 @@ pub trait BgpWireFormat<T>: Sized {
     fn from_wire(input: &[u8]) -> Result<(&[u8], T), Self::Error>;
 }
 
+/// NLRI section identifier for error context
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NlriSection {
+    /// Withdrawn routes section
+    Withdrawn,
+    /// IPv4 NLRI section (non-MP-BGP)
+    Nlri,
+    /// MP_REACH_NLRI attribute
+    MpReach,
+    /// MP_UNREACH_NLRI attribute
+    MpUnreach,
+}
+
+impl Display for NlriSection {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Withdrawn => write!(f, "withdrawn"),
+            Self::Nlri => write!(f, "nlri"),
+            Self::MpReach => write!(f, "mp_reach"),
+            Self::MpUnreach => write!(f, "mp_unreach"),
+        }
+    }
+}
+
 /// Errors from parsing NLRI prefixes.
 ///
 /// These preserve the specific failure reason so callers can convert
@@ -56,7 +81,7 @@ pub enum PrefixParseError {
 
 impl PrefixParseError {
     /// Convert to UpdateParseErrorReason with section context.
-    pub fn into_reason(self, section: &'static str) -> UpdateParseErrorReason {
+    pub fn into_reason(self, section: NlriSection) -> UpdateParseErrorReason {
         match self {
             Self::MissingLength => {
                 UpdateParseErrorReason::NlriMissingLength { section }
@@ -84,7 +109,7 @@ impl BgpWireFormat<Prefix4> for Prefix4 {
 
     fn to_wire(&self) -> Vec<u8> {
         let mut buf = vec![self.length];
-        let n = (self.length as usize).div_ceil(8);
+        let n = usize::from(self.length).div_ceil(8);
         buf.extend_from_slice(&self.value.octets()[..n]);
         buf
     }
@@ -104,7 +129,7 @@ impl BgpWireFormat<Prefix4> for Prefix4 {
             });
         }
 
-        let byte_count = (len as usize).div_ceil(8);
+        let byte_count = usize::from(len).div_ceil(8);
         if input.len() < 1 + byte_count {
             return Err(PrefixParseError::Truncated {
                 needed: 1 + byte_count,
@@ -148,7 +173,7 @@ impl BgpWireFormat<Prefix6> for Prefix6 {
 
     fn to_wire(&self) -> Vec<u8> {
         let mut buf = vec![self.length];
-        let n = (self.length as usize).div_ceil(8);
+        let n = usize::from(self.length).div_ceil(8);
         buf.extend_from_slice(&self.value.octets()[..n]);
         buf
     }
@@ -168,7 +193,7 @@ impl BgpWireFormat<Prefix6> for Prefix6 {
             });
         }
 
-        let byte_count = (len as usize).div_ceil(8);
+        let byte_count = usize::from(len).div_ceil(8);
         if input.len() < 1 + byte_count {
             return Err(PrefixParseError::Truncated {
                 needed: 1 + byte_count,
@@ -210,7 +235,9 @@ impl BgpWireFormat<Prefix6> for Prefix6 {
 /// BGP Message types.
 ///
 /// Ref: RFC 4271 §4.1
-#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Copy, Clone)]
+#[derive(
+    Clone, Copy, Debug, Eq, IntoPrimitive, PartialEq, TryFromPrimitive,
+)]
 #[repr(u8)]
 pub enum MessageType {
     /// The first message sent by each side once a TCP connection is
@@ -273,7 +300,7 @@ impl Message {
             Self::Update(m) => m.to_wire(),
             Self::Notification(m) => m.to_wire(),
             Self::KeepAlive => Ok(Vec::new()),
-            Self::RouteRefresh(m) => m.to_wire(),
+            Self::RouteRefresh(m) => Ok(m.to_wire()),
         }
     }
 
@@ -483,7 +510,7 @@ impl Header {
     pub fn to_wire(&self) -> Vec<u8> {
         let mut buf = MARKER.to_vec();
         buf.extend_from_slice(&self.length.to_be_bytes());
-        buf.push(self.typ as u8);
+        buf.push(self.typ.into());
         buf
     }
 
@@ -601,7 +628,7 @@ impl OpenMessage {
     }
 
     pub fn asn(&self) -> u32 {
-        let mut remote_asn = self.asn as u32;
+        let mut remote_asn = u32::from(self.asn);
         for p in &self.parameters {
             if let OptionalParameter::Capabilities(caps) = p {
                 for c in caps {
@@ -660,11 +687,20 @@ impl OpenMessage {
         }
 
         let (input, version) = parse_u8(input)?;
+        if version != BGP_VERSION {
+            return Err(Error::BadVersion(version));
+        }
+
         let (input, asn) = be_u16(input)?;
         let (input, hold_time) = be_u16(input)?;
+
         let (input, id) = be_u32(input)?;
+        if id == 0 {
+            return Err(Error::BadBgpIdentifier(Ipv4Addr::from_bits(id)));
+        }
+
         let (input, param_len) = parse_u8(input)?;
-        let param_len = param_len as usize;
+        let param_len = usize::from(param_len);
 
         if input.len() < param_len {
             return Err(Error::TooSmall(
@@ -756,22 +792,25 @@ pub struct UpdateMessage {
     pub path_attributes: Vec<PathAttribute>, // XXX: use map for O(1) lookups?
     pub nlri: Vec<Prefix4>,
 
-    /// True if a TreatAsWithdraw error occurred during from_wire().
-    /// When true, session should process all NLRI (v4 + v6) as withdrawals.
-    /// Not serialized - only used for internal signaling.
-    #[serde(skip)]
-    pub treat_as_withdraw: bool,
-
     /// All attribute parse errors encountered during from_wire().
     /// Includes both TreatAsWithdraw and Discard errors.
     /// SessionReset errors cause early return and are not collected here.
     /// Not serialized - only used for internal signaling.
+    /// Use the treat_as_withdraw() method to check if any TreatAsWithdraw errors occurred.
     #[serde(skip)]
     #[schemars(skip)]
     pub errors: Vec<(UpdateParseErrorReason, AttributeAction)>,
 }
 
 impl UpdateMessage {
+    /// Returns true if a TreatAsWithdraw error occurred during parsing.
+    /// When true, all NLRI (v4 + v6) should be processed as withdrawals.
+    pub fn treat_as_withdraw(&self) -> bool {
+        self.errors.iter().any(|(_, action)| {
+            matches!(action, AttributeAction::TreatAsWithdraw)
+        })
+    }
+
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         let mut buf = Vec::new();
 
@@ -942,7 +981,7 @@ impl UpdateMessage {
                     error_subcode: ErrorSubcode::Update(
                         UpdateErrorSubcode::InvalidNetworkField,
                     ),
-                    reason: e.into_reason("withdrawn"),
+                    reason: e.into_reason(NlriSection::Withdrawn),
                 });
             }
         };
@@ -977,7 +1016,6 @@ impl UpdateMessage {
         let ParsedPathAttrs {
             attrs: path_attributes,
             errors: attr_errors,
-            treat_as_withdraw,
         } = Self::path_attrs_from_wire(attrs_input)?;
 
         // 6. Parse NLRI (remaining bytes)
@@ -991,7 +1029,7 @@ impl UpdateMessage {
                     error_subcode: ErrorSubcode::Update(
                         UpdateErrorSubcode::InvalidNetworkField,
                     ),
-                    reason: e.into_reason("nlri"),
+                    reason: e.into_reason(NlriSection::Nlri),
                 });
             }
         };
@@ -1000,7 +1038,6 @@ impl UpdateMessage {
         //    Only required when UPDATE carries reachability information (NLRI).
         //    Missing mandatory attrs = TreatAsWithdraw per RFC 7606.
         let mut errors = attr_errors;
-        let mut treat_as_withdraw = treat_as_withdraw;
 
         // Check if we have any NLRI (traditional or MP-BGP)
         let has_traditional_nlri = !nlri.is_empty();
@@ -1014,7 +1051,6 @@ impl UpdateMessage {
                 .iter()
                 .any(|a| matches!(a.value, PathAttributeValue::Origin(_)));
             if !has_origin {
-                treat_as_withdraw = true;
                 errors.push((
                     UpdateParseErrorReason::MissingAttribute {
                         type_code: PathAttributeTypeCode::Origin,
@@ -1033,7 +1069,6 @@ impl UpdateMessage {
                 )
             });
             if !has_as_path {
-                treat_as_withdraw = true;
                 errors.push((
                     UpdateParseErrorReason::MissingAttribute {
                         type_code: PathAttributeTypeCode::AsPath,
@@ -1050,7 +1085,6 @@ impl UpdateMessage {
                     .iter()
                     .any(|a| matches!(a.value, PathAttributeValue::NextHop(_)));
                 if !has_next_hop {
-                    treat_as_withdraw = true;
                     errors.push((
                         UpdateParseErrorReason::MissingAttribute {
                             type_code: PathAttributeTypeCode::NextHop,
@@ -1065,7 +1099,6 @@ impl UpdateMessage {
             withdrawn,
             path_attributes,
             nlri,
-            treat_as_withdraw,
             errors,
         })
     }
@@ -1139,9 +1172,24 @@ impl UpdateMessage {
     fn path_attrs_from_wire(
         mut buf: &[u8],
     ) -> Result<ParsedPathAttrs, UpdateParseError> {
+        type NomErr<'a> = nom::error::Error<&'a [u8]>;
+        type ParseRes<'a, T> =
+            std::result::Result<(&'a [u8], T), nom::Err<NomErr<'a>>>;
+
+        fn take_bytes<'a>(buf: &'a [u8], n: usize) -> ParseRes<'a, &'a [u8]> {
+            take(n)(buf)
+        }
+
+        fn parse_u8<'a>(input: &'a [u8]) -> ParseRes<'a, u8> {
+            nom::number::complete::u8(input)
+        }
+
+        fn parse_u16<'a>(input: &'a [u8]) -> ParseRes<'a, u16> {
+            nom::number::complete::be_u16(input)
+        }
+
         let mut result = Vec::new();
         let mut errors = Vec::new();
-        let mut treat_as_withdraw = false;
         let mut seen_types: HashSet<u8> = HashSet::new();
         let mut has_mp_reach = false;
         let mut has_mp_unreach = false;
@@ -1154,33 +1202,10 @@ impl UpdateMessage {
             // ===== FRAMING: Parse attribute header (type + length) =====
 
             // 1. Parse 2-byte type header (flags + type_code)
-            let (remaining, type_bytes) =
-                match take::<_, _, nom::error::Error<&[u8]>>(2usize)(buf) {
-                    Ok((r, t)) => (r, t),
-                    Err(e) => {
-                        // Can't even read type header - fatal framing error
-                        return Err(UpdateParseError {
-                            error_code: ErrorCode::Update,
-                            error_subcode: ErrorSubcode::Update(
-                                UpdateErrorSubcode::MalformedAttributeList,
-                            ),
-                            reason:
-                                UpdateParseErrorReason::AttributeParseError {
-                                    type_code: None,
-                                    detail: format!(
-                                        "failed to read attribute type: {e}"
-                                    ),
-                                },
-                        });
-                    }
-                };
-
-            // 2. Parse PathAttributeType from the 2 bytes
-            let typ = match PathAttributeType::from_wire(type_bytes) {
-                Ok(t) => t,
+            let (remaining, type_bytes) = match take_bytes(buf, 2) {
+                Ok((r, t)) => (r, t),
                 Err(e) => {
-                    // Unknown/invalid type code - fatal framing error
-                    // (we don't know the length encoding without valid flags)
+                    // Can't even read type header - fatal framing error
                     return Err(UpdateParseError {
                         error_code: ErrorCode::Update,
                         error_subcode: ErrorSubcode::Update(
@@ -1188,13 +1213,127 @@ impl UpdateMessage {
                         ),
                         reason: UpdateParseErrorReason::AttributeParseError {
                             type_code: None,
-                            detail: format!("invalid attribute type: {e}"),
+                            detail: format!(
+                                "failed to read attribute type: {e}"
+                            ),
                         },
                     });
                 }
             };
 
-            let type_code_u8 = typ.type_code as u8;
+            // 2. Parse flags and type_code from the 2 bytes separately
+            // We need to handle unknown type codes per RFC 4271 Section 4.3
+            let flags_byte = type_bytes[0];
+            let type_code_u8 = type_bytes[1];
+
+            // Try to parse as a known type code
+            let typ = match PathAttributeTypeCode::try_from(type_code_u8) {
+                Ok(code) => {
+                    // Known type code - construct PathAttributeType
+                    PathAttributeType {
+                        flags: flags_byte,
+                        type_code: code,
+                    }
+                }
+                Err(_) => {
+                    // Unknown type code - check Optional flag per RFC 4271
+                    // Section 4.3. We must parse the length regardless to skip
+                    // the attribute correctly
+                    let optional = (flags_byte & OPTIONAL) != 0;
+
+                    // Parse length based on EXTENDED_LENGTH flag
+                    let (remaining, len) = if flags_byte & EXTENDED_LENGTH != 0
+                    {
+                        match parse_u16(remaining) {
+                            Ok((r, l)) => (r, usize::from(l)),
+                            Err(e) => {
+                                // If we fail to parse the length, we have to
+                                // bail out since we can't skip this attr.
+                                return Err(UpdateParseError {
+                                    error_code: ErrorCode::Update,
+                                    error_subcode: ErrorSubcode::Update(
+                                        UpdateErrorSubcode::MalformedAttributeList,
+                                    ),
+                                    reason: UpdateParseErrorReason::AttributeParseError {
+                                        type_code: Some(type_code_u8),
+                                        detail: format!(
+                                            "failed to read extended length: {e}"
+                                        ),
+                                    },
+                                });
+                            }
+                        }
+                    } else {
+                        match parse_u8(remaining) {
+                            Ok((r, l)) => (r, usize::from(l)),
+                            Err(e) => {
+                                // If we fail to parse the length, we have to
+                                // bail out since we can't skip this attr.
+                                return Err(UpdateParseError {
+                                    error_code: ErrorCode::Update,
+                                    error_subcode: ErrorSubcode::Update(
+                                        UpdateErrorSubcode::MalformedAttributeList,
+                                    ),
+                                    reason: UpdateParseErrorReason::AttributeParseError {
+                                        type_code: Some(type_code_u8),
+                                        detail: format!("failed to read length: {e}"),
+                                    },
+                                });
+                            }
+                        }
+                    };
+
+                    // Skip the attribute value
+                    let (remaining, _) = match take_bytes(remaining, len) {
+                        Ok((r, v)) => (r, v),
+                        Err(e) => {
+                            return Err(UpdateParseError {
+                                error_code: ErrorCode::Update,
+                                error_subcode: ErrorSubcode::Update(
+                                    UpdateErrorSubcode::MalformedAttributeList,
+                                ),
+                                reason: UpdateParseErrorReason::AttributeParseError {
+                                    type_code: Some(type_code_u8),
+                                    detail: format!(
+                                        "attribute truncated: declared {} bytes, {e}",
+                                        len
+                                    ),
+                                },
+                            });
+                        }
+                    };
+
+                    // Update buf to next attribute
+                    buf = remaining;
+
+                    // Handle unknown attribute based on Optional flag
+                    if optional {
+                        // Optional unknown attribute - discard per RFC 4271 Section 4.3
+                        // Record the error and continue to next attribute
+                        errors.push((
+                            UpdateParseErrorReason::AttributeParseError {
+                                type_code: Some(type_code_u8),
+                                detail: format!(
+                                    "unknown optional attribute type code: {type_code_u8}"
+                                ),
+                            },
+                            AttributeAction::Discard,
+                        ));
+                        continue;
+                    } else {
+                        // Mandatory unknown attribute - Session Reset per RFC 4271 Section 4.3
+                        return Err(UpdateParseError {
+                            error_code: ErrorCode::Update,
+                            error_subcode: ErrorSubcode::Update(
+                                UpdateErrorSubcode::MalformedAttributeList,
+                            ),
+                            reason: UpdateParseErrorReason::UnrecognizedMandatoryAttribute {
+                                type_code: type_code_u8,
+                            },
+                        });
+                    }
+                }
+            };
 
             // 3. Validate attribute flags (RFC 7606 Section 3c)
             //    Even if flag validation fails, we need to parse the length to skip
@@ -1204,8 +1343,8 @@ impl UpdateMessage {
             // 4. Parse length (1 or 2 bytes depending on EXTENDED_LENGTH flag)
             let (remaining, len) =
                 if typ.flags & path_attribute_flags::EXTENDED_LENGTH != 0 {
-                    match be_u16::<_, nom::error::Error<&[u8]>>(remaining) {
-                        Ok((r, l)) => (r, l as usize),
+                    match parse_u16(remaining) {
+                        Ok((r, l)) => (r, usize::from(l)),
                         Err(e) => {
                             // Can't read extended length - fatal framing error
                             return Err(UpdateParseError {
@@ -1224,8 +1363,8 @@ impl UpdateMessage {
                         }
                     }
                 } else {
-                    match parse_u8::<_, nom::error::Error<&[u8]>>(remaining) {
-                        Ok((r, l)) => (r, l as usize),
+                    match parse_u8(remaining) {
+                        Ok((r, l)) => (r, usize::from(l)),
                         Err(e) => {
                             // Can't read length - fatal framing error
                             return Err(UpdateParseError {
@@ -1246,15 +1385,13 @@ impl UpdateMessage {
                 };
 
             // 5. Extract `len` bytes for the attribute value
-            let (remaining, value_bytes) = match take::<
-                _,
-                _,
-                nom::error::Error<&[u8]>,
-            >(len)(remaining)
-            {
+            let (remaining, value_bytes) = match take_bytes(remaining, len) {
                 Ok((r, v)) => (r, v),
                 Err(e) => {
                     // Declared length exceeds available bytes - fatal framing error
+                    // RFC 7606 Section 4 says use treat-as-withdraw, but we can't
+                    // reliably locate the next attribute, so this is a structural
+                    // error in the UPDATE message itself (too few bytes overall)
                     return Err(UpdateParseError {
                         error_code: ErrorCode::Update,
                         error_subcode: ErrorSubcode::Update(
@@ -1275,6 +1412,29 @@ impl UpdateMessage {
             // Update buf to point past this attribute for the next iteration
             buf = remaining;
 
+            // ===== RFC 7606 Section 4: Validate zero-length attributes =====
+            // Only AS_PATH and ATOMIC_AGGREGATE may have zero length.
+            // All other attributes with zero length are a syntax error (treat-as-withdraw).
+            if len == 0 {
+                match typ.type_code {
+                    PathAttributeTypeCode::AsPath
+                    | PathAttributeTypeCode::AtomicAggregate => {
+                        // These are allowed to have zero length
+                    }
+                    _ => {
+                        // All other attributes must have non-zero length
+                        let reason =
+                            UpdateParseErrorReason::AttributeLengthError {
+                                type_code: typ.type_code,
+                                expected: 1, // At least 1 byte needed for meaningful data
+                                got: 0,
+                            };
+                        errors.push((reason, AttributeAction::TreatAsWithdraw));
+                        continue;
+                    }
+                }
+            }
+
             // ===== Handle flag validation error =====
             // Now that we've advanced buf, we can handle the flag error
             if let Some((reason, action)) = flag_error {
@@ -1289,7 +1449,6 @@ impl UpdateMessage {
                         });
                     }
                     AttributeAction::TreatAsWithdraw => {
-                        treat_as_withdraw = true;
                         errors.push((reason, action));
                         continue; // Skip value parsing, move to next attribute
                     }
@@ -1345,8 +1504,15 @@ impl UpdateMessage {
                         // non-MP-BGP attributes.
                         seen_types.insert(type_code_u8);
                         result.push(pa);
+                    } else {
+                        // Discard duplicate non-MP-BGP attribute per RFC 7606 3(g)
+                        errors.push((
+                            UpdateParseErrorReason::DuplicateAttribute {
+                                type_code: type_code_u8,
+                            },
+                            AttributeAction::Discard,
+                        ));
                     }
-                    // else: discard duplicate non-MP-BGP attribute per RFC 7606 3(g)
                 }
                 Err(reason) => {
                     // Value parsing failed - determine action based on attribute type
@@ -1365,7 +1531,6 @@ impl UpdateMessage {
                         }
                         AttributeAction::TreatAsWithdraw => {
                             // Record error, skip this attribute, continue parsing
-                            treat_as_withdraw = true;
                             errors.push((reason, action));
                         }
                         AttributeAction::Discard => {
@@ -1380,7 +1545,6 @@ impl UpdateMessage {
         Ok(ParsedPathAttrs {
             attrs: result,
             errors,
-            treat_as_withdraw,
         })
     }
 
@@ -1551,7 +1715,7 @@ impl Display for UpdateMessage {
         write!(
             f,
             "Update[ treat-as-withdraw: ({}) withdrawn({}) path_attributes: ({p_str}) nlri({}) ]",
-            self.treat_as_withdraw,
+            self.treat_as_withdraw(),
             if !w_str.is_empty() { &w_str } else { "empty" },
             if !n_str.is_empty() { &n_str } else { "empty" }
         )
@@ -1640,10 +1804,21 @@ impl PathAttribute {
 fn validate_attribute_flags(
     typ: &PathAttributeType,
 ) -> Result<(), (UpdateParseErrorReason, AttributeAction)> {
-    use path_attribute_flags::*;
-
     let optional = typ.flags & OPTIONAL != 0;
     let transitive = typ.flags & TRANSITIVE != 0;
+    let partial = typ.flags & PARTIAL != 0;
+
+    // RFC 4271 Section 4.3:
+    // The Partial bit (bit 2) is only meaningful when Transitive (bit 1) is
+    // set. i.e. If Transitive=0, Partial MUST be 0.
+    if !transitive && partial {
+        let reason = UpdateParseErrorReason::InvalidAttributeFlags {
+            type_code: typ.type_code.into(),
+            flags: typ.flags,
+        };
+        // RFC 7606 Section 3.c: Attribute flag errors must use treat-as-withdraw
+        return Err((reason, AttributeAction::TreatAsWithdraw));
+    }
 
     // Define expected flags for each known attribute type
     // Format: (expected_optional, expected_transitive)
@@ -1671,11 +1846,11 @@ fn validate_attribute_flags(
 
     if optional != expected_optional || transitive != expected_transitive {
         let reason = UpdateParseErrorReason::InvalidAttributeFlags {
-            type_code: typ.type_code as u8,
+            type_code: typ.type_code.into(),
             flags: typ.flags,
         };
-        let action = typ.error_action();
-        return Err((reason, action));
+        // RFC 7606 Section 3.c: Attribute flag errors must use treat-as-withdraw
+        return Err((reason, AttributeAction::TreatAsWithdraw));
     }
 
     Ok(())
@@ -1693,7 +1868,7 @@ pub struct PathAttributeType {
 
 impl PathAttributeType {
     pub fn to_wire(&self) -> Vec<u8> {
-        vec![self.flags, self.type_code as u8]
+        vec![self.flags, self.type_code.into()]
     }
 
     pub fn from_wire(input: &[u8]) -> Result<PathAttributeType, Error> {
@@ -1771,15 +1946,16 @@ pub mod path_attribute_flags {
 
 /// An enumeration describing available path attribute type codes.
 #[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Copy,
     Clone,
-    TryFromPrimitive,
-    Serialize,
+    Copy,
+    Debug,
     Deserialize,
+    Eq,
+    IntoPrimitive,
     JsonSchema,
+    PartialEq,
+    Serialize,
+    TryFromPrimitive,
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
@@ -1998,11 +2174,11 @@ pub enum PathAttributeValue {
 impl PathAttributeValue {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         match self {
-            Self::Origin(x) => Ok(vec![*x as u8]),
+            Self::Origin(x) => Ok(vec![(*x).into()]),
             Self::AsPath(segments) => {
                 let mut buf = Vec::new();
                 for s in segments {
-                    buf.push(s.typ as u8);
+                    buf.push(s.typ.into());
                     buf.push(s.value.len() as u8);
                     for v in &s.value {
                         buf.extend_from_slice(&v.to_be_bytes());
@@ -2030,7 +2206,7 @@ impl PathAttributeValue {
             Self::Aggregator(agg) => Ok(agg.to_wire()),
             Self::As4Aggregator(agg) => Ok(agg.to_wire()),
             Self::AtomicAggregate => Ok(Vec::new()), // Zero-length attribute
-            Self::MpReachNlri(mp) => mp.to_wire(),
+            Self::MpReachNlri(mp) => Ok(mp.to_wire()),
             Self::MpUnreachNlri(mp) => mp.to_wire(),
         }
     }
@@ -2039,8 +2215,22 @@ impl PathAttributeValue {
         mut input: &[u8],
         type_code: PathAttributeTypeCode,
     ) -> Result<PathAttributeValue, UpdateParseErrorReason> {
-        // Helper for nom type annotation
+        // Helper type aliases and functions for nom parsers
         type NomErr<'a> = nom::error::Error<&'a [u8]>;
+        type ParseRes<'a, T> =
+            std::result::Result<(&'a [u8], T), nom::Err<NomErr<'a>>>;
+
+        fn parse_u8<'a>(input: &'a [u8]) -> ParseRes<'a, u8> {
+            be_u8(input)
+        }
+
+        fn parse_u32<'a>(input: &'a [u8]) -> ParseRes<'a, u32> {
+            be_u32(input)
+        }
+
+        fn take_bytes<'a>(input: &'a [u8], n: usize) -> ParseRes<'a, &'a [u8]> {
+            take(n)(input)
+        }
 
         // RFC 7606 §3: Zero-length attributes only valid for AS_PATH and ATOMIC_AGGREGATE
         if input.is_empty() {
@@ -2069,13 +2259,12 @@ impl PathAttributeValue {
                         got: input.len(),
                     });
                 }
-                let (_input, origin) =
-                    be_u8::<_, NomErr<'_>>(input).map_err(|e| {
-                        UpdateParseErrorReason::AttributeParseError {
-                            type_code: Some(type_code as u8),
-                            detail: format!("{e}"),
-                        }
-                    })?;
+                let (_input, origin) = parse_u8(input).map_err(|e| {
+                    UpdateParseErrorReason::AttributeParseError {
+                        type_code: Some(type_code.into()),
+                        detail: format!("{e}"),
+                    }
+                })?;
                 PathOrigin::try_from(origin)
                     .map(PathAttributeValue::Origin)
                     .map_err(|_| UpdateParseErrorReason::InvalidOriginValue {
@@ -2107,13 +2296,12 @@ impl PathAttributeValue {
                         got: input.len(),
                     });
                 }
-                let (_input, b) = take::<_, _, NomErr<'_>>(4usize)(input)
-                    .map_err(|e| {
-                        UpdateParseErrorReason::AttributeParseError {
-                            type_code: Some(type_code as u8),
-                            detail: format!("{e}"),
-                        }
-                    })?;
+                let (_input, b) = take_bytes(input, 4).map_err(|e| {
+                    UpdateParseErrorReason::AttributeParseError {
+                        type_code: Some(type_code.into()),
+                        detail: format!("{e}"),
+                    }
+                })?;
                 Ok(PathAttributeValue::NextHop(Ipv4Addr::new(
                     b[0], b[1], b[2], b[3],
                 )))
@@ -2127,13 +2315,12 @@ impl PathAttributeValue {
                         got: input.len(),
                     });
                 }
-                let (_input, v) =
-                    be_u32::<_, NomErr<'_>>(input).map_err(|e| {
-                        UpdateParseErrorReason::AttributeParseError {
-                            type_code: Some(type_code as u8),
-                            detail: format!("{e}"),
-                        }
-                    })?;
+                let (_input, v) = parse_u32(input).map_err(|e| {
+                    UpdateParseErrorReason::AttributeParseError {
+                        type_code: Some(type_code.into()),
+                        detail: format!("{e}"),
+                    }
+                })?;
                 Ok(PathAttributeValue::MultiExitDisc(v))
             }
             PathAttributeTypeCode::As4Path => {
@@ -2171,7 +2358,7 @@ impl PathAttributeValue {
                     let (out, v) =
                         be_u32::<_, NomErr<'_>>(input).map_err(|e| {
                             UpdateParseErrorReason::AttributeParseError {
-                                type_code: Some(type_code as u8),
+                                type_code: Some(type_code.into()),
                                 detail: format!("{e}"),
                             }
                         })?;
@@ -2189,13 +2376,12 @@ impl PathAttributeValue {
                         got: input.len(),
                     });
                 }
-                let (_input, v) =
-                    be_u32::<_, NomErr<'_>>(input).map_err(|e| {
-                        UpdateParseErrorReason::AttributeParseError {
-                            type_code: Some(type_code as u8),
-                            detail: format!("{e}"),
-                        }
-                    })?;
+                let (_input, v) = parse_u32(input).map_err(|e| {
+                    UpdateParseErrorReason::AttributeParseError {
+                        type_code: Some(type_code.into()),
+                        detail: format!("{e}"),
+                    }
+                })?;
                 Ok(PathAttributeValue::LocalPref(v))
             }
             PathAttributeTypeCode::MpReachNlri => {
@@ -2230,7 +2416,7 @@ impl PathAttributeValue {
                 }
                 let agg = Aggregator::from_wire(input).map_err(|e| {
                     UpdateParseErrorReason::AttributeParseError {
-                        type_code: Some(type_code as u8),
+                        type_code: Some(type_code.into()),
                         detail: e,
                     }
                 })?;
@@ -2248,7 +2434,7 @@ impl PathAttributeValue {
                 }
                 let agg = As4Aggregator::from_wire(input).map_err(|e| {
                     UpdateParseErrorReason::AttributeParseError {
-                        type_code: Some(type_code as u8),
+                        type_code: Some(type_code.into()),
                         detail: e,
                     }
                 })?;
@@ -2275,18 +2461,6 @@ impl Display for PathAttributeValue {
             PathAttributeValue::LocalPref(pref) => {
                 write!(f, "local-pref: {pref}")
             }
-            /*
-             *    RFC 4271
-             *
-             *    g) AGGREGATOR (Type Code 7)
-             *
-             *       AGGREGATOR is an optional transitive attribute of length 6.
-             *       The attribute contains the last AS number that formed the
-             *       aggregate route (encoded as 2 octets), followed by the IP
-             *       address of the BGP speaker that formed the aggregate route
-             *       (encoded as 4 octets).  This SHOULD be the same address as
-             *       the one used for the BGP Identifier of the speaker.
-             */
             PathAttributeValue::Aggregator(agg) => {
                 write!(f, "aggregator: {}", agg)
             }
@@ -2315,14 +2489,6 @@ impl Display for PathAttributeValue {
                     .join(" ");
                 write!(f, "as4-path: [{path}]")
             }
-            /*
-             *   RFC 6793
-             *
-             *   Similarly, this document defines a new BGP path attribute called
-             *   AS4_AGGREGATOR, which is optional transitive.  The AS4_AGGREGATOR
-             *   attribute has the same semantics and the same encoding as the
-             *   AGGREGATOR attribute, except that it carries a four-octet AS number.
-             */
             PathAttributeValue::As4Aggregator(agg) => {
                 write!(f, "as4-aggregator: {}", agg)
             }
@@ -2376,15 +2542,16 @@ pub enum Community {
 
 /// An enumeration indicating the origin type of a path.
 #[derive(
-    Debug,
-    PartialEq,
-    Eq,
     Clone,
     Copy,
-    TryFromPrimitive,
-    Serialize,
+    Debug,
     Deserialize,
+    Eq,
+    IntoPrimitive,
     JsonSchema,
+    PartialEq,
+    Serialize,
+    TryFromPrimitive,
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
@@ -2430,7 +2597,7 @@ impl As4PathSegment {
         if self.value.len() > u8::MAX as usize {
             return Err(Error::TooLarge("AS4 path segment".into()));
         }
-        let mut buf = vec![self.typ as u8, self.value.len() as u8];
+        let mut buf = vec![self.typ.into(), self.value.len() as u8];
         for v in &self.value {
             buf.extend_from_slice(&v.to_be_bytes());
         }
@@ -2446,7 +2613,7 @@ impl As4PathSegment {
         // RFC 4271 §5.1.3: Check for overflow when calculating byte length from segment count
         // Each AS number is 4 bytes, so byte_len = len_u8 * 4
         // Note: This is technically safe (max 255 * 4 = 1020), but we validate for defense-in-depth
-        let byte_len = (len_u8 as usize).checked_mul(4).ok_or_else(|| {
+        let byte_len = usize::from(len_u8).checked_mul(4).ok_or_else(|| {
             Error::TooLarge(
                 "AS path segment length calculation overflow".into(),
             )
@@ -2502,15 +2669,16 @@ impl Display for As4PathSegment {
 
 /// Enumeration describes possible AS path types
 #[derive(
-    Debug,
-    PartialEq,
-    Eq,
-    Copy,
     Clone,
-    TryFromPrimitive,
-    Serialize,
+    Copy,
+    Debug,
     Deserialize,
+    Eq,
+    IntoPrimitive,
     JsonSchema,
+    PartialEq,
+    Serialize,
+    TryFromPrimitive,
 )]
 #[repr(u8)]
 #[serde(rename_all = "snake_case")]
@@ -2639,7 +2807,7 @@ impl BgpNexthop {
         nh_len: u8,
         afi: Afi,
     ) -> Result<Self, Error> {
-        if nh_bytes.len() != nh_len as usize {
+        if nh_bytes.len() != usize::from(nh_len) {
             return Err(Error::InvalidAddress(format!(
                 "next-hop bytes length {} doesn't match nh_len {}",
                 nh_bytes.len(),
@@ -2696,12 +2864,12 @@ impl BgpNexthop {
         match self {
             BgpNexthop::Ipv4(addr) => addr.octets().to_vec(),
             BgpNexthop::Ipv6Single(addr) => addr.octets().to_vec(),
-            BgpNexthop::Ipv6Double(addrs) => {
-                let mut buf = Vec::new();
-                buf.extend_from_slice(&addrs.global.octets());
-                buf.extend_from_slice(&addrs.link_local.octets());
-                buf
-            }
+            BgpNexthop::Ipv6Double(addrs) => addrs
+                .global
+                .octets()
+                .into_iter()
+                .chain(addrs.link_local.octets())
+                .collect(),
         }
     }
 }
@@ -2727,15 +2895,6 @@ impl From<Ipv4Addr> for BgpNexthop {
 impl From<Ipv6Addr> for BgpNexthop {
     fn from(value: Ipv6Addr) -> Self {
         BgpNexthop::Ipv6Single(value)
-    }
-}
-
-impl From<(Ipv6Addr, Ipv6Addr)> for BgpNexthop {
-    fn from(value: (Ipv6Addr, Ipv6Addr)) -> Self {
-        BgpNexthop::Ipv6Double(Ipv6DoubleNexthop {
-            global: value.0,
-            link_local: value.1,
-        })
     }
 }
 
@@ -2904,19 +3063,19 @@ impl MpReachNlri {
     }
 
     /// Serialize to wire format.
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+    pub fn to_wire(&self) -> Vec<u8> {
         let mut buf = Vec::new();
 
         // AFI (2 bytes)
-        buf.extend_from_slice(&(self.afi() as u16).to_be_bytes());
+        buf.extend_from_slice(&u16::from(self.afi()).to_be_bytes());
 
         // SAFI (1 byte)
-        buf.push(self.safi() as u8);
+        buf.push(self.safi().into());
 
         // Next-hop
-        let nh_bytes = self.nexthop().to_bytes();
-        buf.push(nh_bytes.len() as u8); // Next-hop length
-        buf.extend_from_slice(&nh_bytes);
+        let nh = self.nexthop();
+        buf.push(nh.byte_len()); // Next-hop length
+        buf.extend_from_slice(&nh.to_bytes());
 
         // Reserved (1 byte from RFC 4760 §3, historically "Number of SNPAs")
         let reserved = match self {
@@ -2939,7 +3098,7 @@ impl MpReachNlri {
             }
         }
 
-        Ok(buf)
+        buf
     }
 
     /// Parse from wire format.
@@ -2954,12 +3113,25 @@ impl MpReachNlri {
     pub fn from_wire(
         input: &[u8],
     ) -> Result<(&[u8], Self), UpdateParseErrorReason> {
+        type NomErr<'a> = nom::error::Error<&'a [u8]>;
+        type ParseRes<'a, T> =
+            std::result::Result<(&'a [u8], T), nom::Err<NomErr<'a>>>;
+
+        fn parse_u16<'a>(input: &'a [u8]) -> ParseRes<'a, u16> {
+            be_u16(input)
+        }
+
+        fn parse_u8<'a>(input: &'a [u8]) -> ParseRes<'a, u8> {
+            be_u8(input)
+        }
+
         // Parse AFI (2 bytes)
-        let (input, afi_raw) = be_u16::<_, nom::error::Error<&[u8]>>(input)
-            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpReachNlri as u8),
+        let (input, afi_raw) = parse_u16(input).map_err(|e| {
+            UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
                 detail: format!("failed to parse AFI: {e}"),
-            })?;
+            }
+        })?;
         let afi = Afi::try_from(afi_raw).map_err(|_| {
             UpdateParseErrorReason::UnsupportedAfiSafi {
                 afi: afi_raw,
@@ -2968,27 +3140,29 @@ impl MpReachNlri {
         })?;
 
         // Parse SAFI (1 byte)
-        let (input, safi_raw) = be_u8::<_, nom::error::Error<&[u8]>>(input)
-            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpReachNlri as u8),
+        let (input, safi_raw) = parse_u8(input).map_err(|e| {
+            UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
                 detail: format!("failed to parse SAFI: {e}"),
-            })?;
-        let _safi = Safi::try_from(safi_raw).map_err(|_| {
-            UpdateParseErrorReason::UnsupportedAfiSafi {
+            }
+        })?;
+        if Safi::try_from(safi_raw).is_err() {
+            return Err(UpdateParseErrorReason::UnsupportedAfiSafi {
                 afi: afi_raw,
                 safi: safi_raw,
+            });
+        }
+
+        // Parse Next-hop Length (1 byte)
+        let (input, nh_len) = parse_u8(input).map_err(|e| {
+            UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
+                detail: format!("failed to parse next-hop length: {e}"),
             }
         })?;
 
-        // Parse Next-hop Length (1 byte)
-        let (input, nh_len) = be_u8::<_, nom::error::Error<&[u8]>>(input)
-            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpReachNlri as u8),
-                detail: format!("failed to parse next-hop length: {e}"),
-            })?;
-
         // Extract next-hop bytes
-        if input.len() < nh_len as usize {
+        if input.len() < usize::from(nh_len) {
             let expected = match afi {
                 Afi::Ipv4 => "4",
                 Afi::Ipv6 => "16 or 32",
@@ -2999,8 +3173,8 @@ impl MpReachNlri {
                 got: input.len(),
             });
         }
-        let nh_bytes = &input[..nh_len as usize];
-        let input = &input[nh_len as usize..];
+        let nh_bytes = &input[..usize::from(nh_len)];
+        let input = &input[usize::from(nh_len)..];
 
         // Parse next-hop
         let nexthop =
@@ -3012,7 +3186,7 @@ impl MpReachNlri {
                 UpdateParseErrorReason::InvalidMpNextHopLength {
                     afi: afi_raw,
                     expected,
-                    got: nh_len as usize,
+                    got: usize::from(nh_len),
                 }
             })?;
 
@@ -3021,17 +3195,18 @@ impl MpReachNlri {
         // the sender and MUST be ignored by the receiver."
         // Historical note: In RFC 2858 (obsoleted by RFC 4760), this was "Number of SNPAs".
         // Store the value for session layer validation/logging, but don't error here.
-        let (input, reserved) = be_u8::<_, nom::error::Error<&[u8]>>(input)
-            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpReachNlri as u8),
+        let (input, reserved) = parse_u8(input).map_err(|e| {
+            UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpReachNlri.into()),
                 detail: format!("failed to parse reserved byte: {e}"),
-            })?;
+            }
+        })?;
 
         // Parse NLRI based on AFI
         match afi {
             Afi::Ipv4 => {
                 let nlri = prefixes4_from_wire(input)
-                    .map_err(|e| e.into_reason("mp_reach"))?;
+                    .map_err(|e| e.into_reason(NlriSection::MpReach))?;
                 Ok((
                     &[],
                     Self::Ipv4Unicast(MpReachIpv4Unicast {
@@ -3043,7 +3218,7 @@ impl MpReachNlri {
             }
             Afi::Ipv6 => {
                 let nlri = prefixes6_from_wire(input)
-                    .map_err(|e| e.into_reason("mp_reach"))?;
+                    .map_err(|e| e.into_reason(NlriSection::MpReach))?;
                 Ok((
                     &[],
                     Self::Ipv6Unicast(MpReachIpv6Unicast {
@@ -3159,10 +3334,10 @@ impl MpUnreachNlri {
         let mut buf = Vec::new();
 
         // AFI (2 bytes)
-        buf.extend_from_slice(&(self.afi() as u16).to_be_bytes());
+        buf.extend_from_slice(&u16::from(self.afi()).to_be_bytes());
 
         // SAFI (1 byte)
-        buf.push(self.safi() as u8);
+        buf.push(self.safi().into());
 
         // Withdrawn routes
         match self {
@@ -3192,12 +3367,25 @@ impl MpUnreachNlri {
     pub fn from_wire(
         input: &[u8],
     ) -> Result<(&[u8], Self), UpdateParseErrorReason> {
+        type NomErr<'a> = nom::error::Error<&'a [u8]>;
+        type ParseRes<'a, T> =
+            std::result::Result<(&'a [u8], T), nom::Err<NomErr<'a>>>;
+
+        fn parse_u16<'a>(input: &'a [u8]) -> ParseRes<'a, u16> {
+            be_u16(input)
+        }
+
+        fn parse_u8<'a>(input: &'a [u8]) -> ParseRes<'a, u8> {
+            be_u8(input)
+        }
+
         // Parse AFI (2 bytes)
-        let (input, afi_raw) = be_u16::<_, nom::error::Error<&[u8]>>(input)
-            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpUnreachNlri as u8),
+        let (input, afi_raw) = parse_u16(input).map_err(|e| {
+            UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpUnreachNlri.into()),
                 detail: format!("failed to parse AFI: {e}"),
-            })?;
+            }
+        })?;
         let afi = Afi::try_from(afi_raw).map_err(|_| {
             UpdateParseErrorReason::UnsupportedAfiSafi {
                 afi: afi_raw,
@@ -3206,11 +3394,12 @@ impl MpUnreachNlri {
         })?;
 
         // Parse SAFI (1 byte)
-        let (input, safi_raw) = be_u8::<_, nom::error::Error<&[u8]>>(input)
-            .map_err(|e| UpdateParseErrorReason::AttributeParseError {
-                type_code: Some(PathAttributeTypeCode::MpUnreachNlri as u8),
+        let (input, safi_raw) = parse_u8(input).map_err(|e| {
+            UpdateParseErrorReason::AttributeParseError {
+                type_code: Some(PathAttributeTypeCode::MpUnreachNlri.into()),
                 detail: format!("failed to parse SAFI: {e}"),
-            })?;
+            }
+        })?;
         let _safi = Safi::try_from(safi_raw).map_err(|_| {
             UpdateParseErrorReason::UnsupportedAfiSafi {
                 afi: afi_raw,
@@ -3222,12 +3411,12 @@ impl MpUnreachNlri {
         match afi {
             Afi::Ipv4 => {
                 let withdrawn = prefixes4_from_wire(input)
-                    .map_err(|e| e.into_reason("mp_unreach"))?;
+                    .map_err(|e| e.into_reason(NlriSection::MpUnreach))?;
                 Ok((&[], Self::Ipv4Unicast(MpUnreachIpv4Unicast { withdrawn })))
             }
             Afi::Ipv6 => {
                 let withdrawn = prefixes6_from_wire(input)
-                    .map_err(|e| e.into_reason("mp_unreach"))?;
+                    .map_err(|e| e.into_reason(NlriSection::MpUnreach))?;
                 Ok((&[], Self::Ipv6Unicast(MpUnreachIpv6Unicast { withdrawn })))
             }
         }
@@ -3348,7 +3537,7 @@ pub struct NotificationMessage {
 
 impl NotificationMessage {
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
-        let buf = vec![self.error_code as u8, self.error_subcode.as_u8()];
+        let buf = vec![self.error_code.into(), self.error_subcode.as_u8()];
         //TODO data, see comment above on data field
         Ok(buf)
     }
@@ -3413,12 +3602,12 @@ pub struct RouteRefreshMessage {
 }
 
 impl RouteRefreshMessage {
-    pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
+    pub fn to_wire(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&self.afi.to_be_bytes());
         buf.push(0); // reserved
         buf.push(self.safi);
-        Ok(buf)
+        buf
     }
     pub fn from_wire(input: &[u8]) -> Result<RouteRefreshMessage, Error> {
         let (input, afi) = be_u16(input)?;
@@ -3445,6 +3634,7 @@ impl Display for RouteRefreshMessage {
     Eq,
     Clone,
     Copy,
+    IntoPrimitive,
     TryFromPrimitive,
     Serialize,
     Deserialize,
@@ -3463,7 +3653,7 @@ pub enum ErrorCode {
 
 impl Display for ErrorCode {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let val = *self as u8;
+        let val: u8 = (*self).into();
         match self {
             ErrorCode::Header => write!(f, "{val} (Header)"),
             ErrorCode::Open => write!(f, "{val} (Open)"),
@@ -3518,12 +3708,12 @@ impl From<CeaseErrorSubcode> for ErrorSubcode {
 impl ErrorSubcode {
     fn as_u8(&self) -> u8 {
         match self {
-            Self::Header(h) => *h as u8,
-            Self::Open(o) => *o as u8,
-            Self::Update(u) => *u as u8,
+            Self::Header(h) => (*h).into(),
+            Self::Open(o) => (*o).into(),
+            Self::Update(u) => (*u).into(),
             Self::HoldTime(x) => *x,
             Self::Fsm(x) => *x,
-            Self::Cease(x) => *x as u8,
+            Self::Cease(x) => (*x).into(),
         }
     }
 }
@@ -3556,6 +3746,7 @@ impl Display for ErrorSubcode {
     Eq,
     Clone,
     Copy,
+    IntoPrimitive,
     TryFromPrimitive,
     Serialize,
     Deserialize,
@@ -3572,17 +3763,17 @@ pub enum HeaderErrorSubcode {
 
 impl Display for HeaderErrorSubcode {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let val = *self as u8;
+        let val: u8 = (*self).into();
         match self {
-            HeaderErrorSubcode::Unspecific => write!(f, "{val}(Unspecific)"),
+            HeaderErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
             HeaderErrorSubcode::ConnectionNotSynchronized => {
-                write!(f, "{val}(Connection Not Synchronized)")
+                write!(f, "{val} (Connection Not Synchronized)")
             }
             HeaderErrorSubcode::BadMessageLength => {
-                write!(f, "{val}(Bad Message Length)")
+                write!(f, "{val} (Bad Message Length)")
             }
             HeaderErrorSubcode::BadMessageType => {
-                write!(f, "{val}(Bad Message Type)")
+                write!(f, "{val} (Bad Message Type)")
             }
         }
     }
@@ -3595,6 +3786,7 @@ impl Display for HeaderErrorSubcode {
     Eq,
     Clone,
     Copy,
+    IntoPrimitive,
     TryFromPrimitive,
     Serialize,
     Deserialize,
@@ -3615,7 +3807,7 @@ pub enum OpenErrorSubcode {
 
 impl Display for OpenErrorSubcode {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let val = *self as u8;
+        let val: u8 = (*self).into();
         match self {
             OpenErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
             OpenErrorSubcode::UnsupportedVersionNumber => {
@@ -3646,6 +3838,7 @@ impl Display for OpenErrorSubcode {
     Eq,
     Clone,
     Copy,
+    IntoPrimitive,
     TryFromPrimitive,
     Serialize,
     Deserialize,
@@ -3670,7 +3863,7 @@ pub enum UpdateErrorSubcode {
 
 impl Display for UpdateErrorSubcode {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let val = *self as u8;
+        let val: u8 = (*self).into();
         match self {
             UpdateErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
             UpdateErrorSubcode::MalformedAttributeList => {
@@ -3715,6 +3908,7 @@ impl Display for UpdateErrorSubcode {
     Eq,
     Clone,
     Copy,
+    IntoPrimitive,
     TryFromPrimitive,
     Serialize,
     Deserialize,
@@ -3736,7 +3930,7 @@ pub enum CeaseErrorSubcode {
 
 impl Display for CeaseErrorSubcode {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let val = *self as u8;
+        let val: u8 = (*self).into();
         match self {
             CeaseErrorSubcode::Unspecific => write!(f, "{val} (Unspecific)"),
             CeaseErrorSubcode::MaximumNumberofPrefixesReached => {
@@ -3809,7 +4003,7 @@ impl Display for OptionalParameter {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
+#[derive(Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 pub enum OptionalParameterCode {
     Reserved = 0,
@@ -3824,7 +4018,8 @@ impl OptionalParameter {
             Self::Reserved => Err(Error::ReservedOptionalParameter),
             Self::Unassigned => Err(Error::Unassigned(0)),
             Self::Capabilities(cs) => {
-                let mut buf = vec![OptionalParameterCode::Capabilities as u8];
+                let mut buf =
+                    vec![u8::from(OptionalParameterCode::Capabilities)];
                 let mut csbuf = Vec::new();
                 for c in cs {
                     let cbuf = c.to_wire()?;
@@ -4149,31 +4344,34 @@ impl Capability {
         match self {
             Self::MultiprotocolExtensions { afi, safi } => {
                 let mut buf =
-                    vec![CapabilityCode::MultiprotocolExtensions as u8, 4];
+                    vec![CapabilityCode::MultiprotocolExtensions.into(), 4];
                 buf.extend_from_slice(&afi.to_be_bytes());
                 buf.push(0);
                 buf.push(*safi);
                 Ok(buf)
             }
             Self::RouteRefresh {} => {
-                let buf = vec![CapabilityCode::RouteRefresh as u8, 0];
+                let buf = vec![CapabilityCode::RouteRefresh.into(), 0];
                 Ok(buf)
             }
             Self::GracefulRestart {} => {
                 //TODO audit
-                let buf = vec![CapabilityCode::GracefulRestart as u8, 0];
+                let buf = vec![CapabilityCode::GracefulRestart.into(), 0];
                 Ok(buf)
             }
             Self::FourOctetAs { asn } => {
-                let mut buf = vec![CapabilityCode::FourOctetAs as u8, 4];
+                let mut buf = vec![CapabilityCode::FourOctetAs.into(), 4];
                 buf.extend_from_slice(&asn.to_be_bytes());
                 Ok(buf)
             }
             Self::AddPath { elements } => {
-                let mut buf = vec![
-                    CapabilityCode::AddPath as u8,
-                    (elements.len() * 4) as u8,
-                ];
+                let len = u8::try_from(elements.len() * 4).map_err(|_| {
+                    Error::TooLarge(format!(
+                        "AddPath capability has too many elements: {} elements",
+                        elements.len()
+                    ))
+                })?;
+                let mut buf = vec![CapabilityCode::AddPath.into(), len];
                 for e in elements {
                     buf.extend_from_slice(&e.afi.to_be_bytes());
                     buf.push(e.safi);
@@ -4183,7 +4381,7 @@ impl Capability {
             }
             Self::EnhancedRouteRefresh {} => {
                 //TODO audit
-                let buf = vec![CapabilityCode::EnhancedRouteRefresh as u8, 0];
+                let buf = vec![CapabilityCode::EnhancedRouteRefresh.into(), 0];
                 Ok(buf)
             }
             Self::Experimental { code: _ } => Err(Error::Experimental),
@@ -4201,7 +4399,7 @@ impl Capability {
     pub fn from_wire(input: &[u8]) -> Result<(&[u8], Capability), Error> {
         let (input, code) = parse_u8(input)?;
         let (input, len) = parse_u8(input)?;
-        let len = len as usize;
+        let len = usize::from(len);
         if input.len() < len {
             return Err(Error::Eom);
         }
@@ -4513,22 +4711,24 @@ impl Capability {
     /// Helper function to generate an IPv4 Unicast MP-BGP capability.
     pub fn ipv4_unicast() -> Self {
         Self::MultiprotocolExtensions {
-            afi: Afi::Ipv4 as u16,
-            safi: Safi::Unicast as u8,
+            afi: Afi::Ipv4.into(),
+            safi: Safi::Unicast.into(),
         }
     }
 
     /// Helper function to generate an IPv6 Unicast MP-BGP capability.
     pub fn ipv6_unicast() -> Self {
         Self::MultiprotocolExtensions {
-            afi: Afi::Ipv6 as u16,
-            safi: Safi::Unicast as u8,
+            afi: Afi::Ipv6.into(),
+            safi: Safi::Unicast.into(),
         }
     }
 }
 
 /// The set of capability codes supported by this BGP implementation
-#[derive(Debug, Eq, PartialEq, TryFromPrimitive, Copy, Clone)]
+#[derive(
+    Clone, Copy, Debug, Eq, IntoPrimitive, PartialEq, TryFromPrimitive,
+)]
 #[repr(u8)]
 pub enum CapabilityCode {
     /// RFC 5492
@@ -4784,10 +4984,11 @@ impl From<Capability> for CapabilityCode {
     Clone,
     Deserialize,
     Eq,
+    IntoPrimitive,
+    JsonSchema,
     PartialEq,
     Serialize,
     TryFromPrimitive,
-    JsonSchema,
 )]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[repr(u16)]
@@ -4843,10 +5044,11 @@ impl slog::Value for Afi {
     Clone,
     Deserialize,
     Eq,
+    IntoPrimitive,
+    JsonSchema,
     PartialEq,
     Serialize,
     TryFromPrimitive,
-    JsonSchema,
 )]
 #[repr(u8)]
 pub enum Safi {
@@ -4920,6 +5122,8 @@ pub enum UpdateParseErrorReason {
     DuplicateMpReachNlri,
     /// Duplicate MP_UNREACH_NLRI attribute in UPDATE
     DuplicateMpUnreachNlri,
+    /// Duplicate non-MP-BGP attribute (discarded per RFC 7606 3(g))
+    DuplicateAttribute { type_code: u8 },
     /// AFI/SAFI combination not recognized (raw bytes)
     UnsupportedAfiSafi { afi: u16, safi: u8 },
     /// MP next-hop has invalid length for AFI
@@ -4949,18 +5153,18 @@ pub enum UpdateParseErrorReason {
     // NLRI/prefix parsing errors
     /// NLRI section is empty when prefix length byte expected
     NlriMissingLength {
-        /// Which section: "nlri", "withdrawn", "mp_reach", "mp_unreach"
-        section: &'static str,
+        /// Which section the error occurred in
+        section: NlriSection,
     },
     /// Prefix length exceeds maximum for address family (32 for IPv4, 128 for IPv6)
     InvalidNlriMask {
-        section: &'static str,
+        section: NlriSection,
         length: u8,
         max: u8,
     },
     /// Not enough bytes for declared prefix length
     TruncatedNlri {
-        section: &'static str,
+        section: NlriSection,
         needed: usize,
         available: usize,
     },
@@ -5025,6 +5229,9 @@ impl Display for UpdateParseErrorReason {
             }
             Self::DuplicateMpUnreachNlri => {
                 write!(f, "duplicate MP_UNREACH_NLRI attribute")
+            }
+            Self::DuplicateAttribute { type_code } => {
+                write!(f, "duplicate attribute type {}", type_code)
             }
             Self::UnsupportedAfiSafi { afi, safi } => {
                 write!(f, "unsupported AFI/SAFI: {}/{}", afi, safi)
@@ -5101,10 +5308,18 @@ impl Display for UpdateParseErrorReason {
 pub struct ParsedPathAttrs {
     /// Successfully parsed attributes
     pub attrs: Vec<PathAttribute>,
-    /// All non-fatal errors collected during parsing
+    /// All non-fatal errors collected during parsing.
+    /// Use the treat_as_withdraw() method to check if any TreatAsWithdraw errors occurred.
     pub errors: Vec<(UpdateParseErrorReason, AttributeAction)>,
-    /// True if any TreatAsWithdraw error occurred
-    pub treat_as_withdraw: bool,
+}
+
+impl ParsedPathAttrs {
+    /// Returns true if a TreatAsWithdraw error occurred during parsing.
+    pub fn treat_as_withdraw(&self) -> bool {
+        self.errors.iter().any(|(_, action)| {
+            matches!(action, AttributeAction::TreatAsWithdraw)
+        })
+    }
 }
 
 /// Fatal UPDATE parse error requiring session reset.
@@ -5122,7 +5337,7 @@ impl Display for UpdateParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:?}/{:?}: {}",
+            "{}/{}: {}",
             self.error_code, self.error_subcode, self.reason
         )
     }
@@ -5131,6 +5346,8 @@ impl Display for UpdateParseError {
 /// All possible reasons for OPEN parse errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenParseErrorReason {
+    /// BGP-ID is invalid (must be non-zero)
+    BadBgpIdentifier { id: Ipv4Addr },
     /// Version number not supported
     InvalidVersion { version: u8 },
     /// Hold time is invalid
@@ -5146,19 +5363,22 @@ pub enum OpenParseErrorReason {
 impl Display for OpenParseErrorReason {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::BadBgpIdentifier { id } => {
+                write!(f, "bad bgp identifier: {id}")
+            }
             Self::InvalidVersion { version } => {
-                write!(f, "unsupported version: {}", version)
+                write!(f, "unsupported version: {version}")
             }
             Self::InvalidHoldTime { hold_time } => {
-                write!(f, "invalid hold time: {}", hold_time)
+                write!(f, "invalid hold time: {hold_time}")
             }
             Self::UnsupportedCapability { code } => {
-                write!(f, "unsupported capability: {}", code)
+                write!(f, "unsupported capability: {code}")
             }
             Self::TooSmall { field } => {
-                write!(f, "message too small for {}", field)
+                write!(f, "message too small for {field}")
             }
-            Self::Other { detail } => write!(f, "{}", detail),
+            Self::Other { detail } => write!(f, "{detail}"),
         }
     }
 }
@@ -5175,7 +5395,7 @@ impl Display for OpenParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:?}/{:?}: {}",
+            "{}/{}: {}",
             self.error_code, self.error_subcode, self.reason
         )
     }
@@ -5218,7 +5438,7 @@ impl Display for NotificationParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:?}/{:?}: {}",
+            "{}/{}: {}",
             self.error_code, self.error_subcode, self.reason
         )
     }
@@ -5259,7 +5479,7 @@ impl Display for RouteRefreshParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:?}/{:?}: {}",
+            "{}/{}: {}",
             self.error_code, self.error_subcode, self.reason
         )
     }
@@ -5730,7 +5950,6 @@ mod tests {
                 rdb::Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 13), 32),
                 rdb::Prefix4::new(std::net::Ipv4Addr::new(0, 23, 1, 14), 32),
             ],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -5767,22 +5986,22 @@ mod tests {
     fn route_refresh_round_trip() {
         // IPv4 Unicast route refresh
         let rr0 = RouteRefreshMessage {
-            afi: Afi::Ipv4 as u16,
-            safi: Safi::Unicast as u8,
+            afi: Afi::Ipv4.into(),
+            safi: Safi::Unicast.into(),
         };
 
-        let buf = rr0.to_wire().expect("route refresh to wire");
+        let buf = rr0.to_wire();
         let rr1 = RouteRefreshMessage::from_wire(&buf)
             .expect("route refresh from wire");
         assert_eq!(rr0, rr1);
 
         // IPv6 Unicast route refresh
         let rr2 = RouteRefreshMessage {
-            afi: Afi::Ipv6 as u16,
-            safi: Safi::Unicast as u8,
+            afi: Afi::Ipv6.into(),
+            safi: Safi::Unicast.into(),
         };
 
-        let buf = rr2.to_wire().expect("route refresh to wire");
+        let buf = rr2.to_wire();
         let rr3 = RouteRefreshMessage::from_wire(&buf)
             .expect("route refresh from wire");
         assert_eq!(rr2, rr3);
@@ -6104,7 +6323,7 @@ mod tests {
 
         let msg = result.unwrap();
         assert!(
-            msg.treat_as_withdraw,
+            msg.treat_as_withdraw(),
             "Expected treat_as_withdraw to be true for bad NEXT_HOP length"
         );
 
@@ -6354,7 +6573,7 @@ mod tests {
         )];
 
         let original = MpReachNlri::ipv6_unicast(nh, nlri.clone());
-        let wire = original.to_wire().expect("to_wire should succeed");
+        let wire = original.to_wire();
         let (remaining, parsed) =
             MpReachNlri::from_wire(&wire).expect("from_wire should succeed");
 
@@ -6486,7 +6705,6 @@ mod tests {
                 },
             ],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -6502,7 +6720,7 @@ mod tests {
         let first_attr_type_code = wire[path_attrs_start + 1];
         assert_eq!(
             first_attr_type_code,
-            PathAttributeTypeCode::MpReachNlri as u8,
+            u8::from(PathAttributeTypeCode::MpReachNlri),
             "MP_REACH_NLRI should be encoded as the first path attribute"
         );
     }
@@ -6530,7 +6748,6 @@ mod tests {
                 value: PathAttributeValue::MpReachNlri(mp_reach),
             }],
             nlri: vec![rdb::Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8)],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -6590,7 +6807,6 @@ mod tests {
                 },
             ],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -6656,7 +6872,6 @@ mod tests {
                 },
             ],
             nlri: traditional_nlri.clone(),
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -6723,7 +6938,6 @@ mod tests {
             withdrawn: vec![],
             path_attributes: vec![],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -6750,7 +6964,6 @@ mod tests {
                 value: PathAttributeValue::MpUnreachNlri(mp_eor),
             }],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -6787,7 +7000,6 @@ mod tests {
                 value: PathAttributeValue::MpUnreachNlri(mp_eor_v4),
             }],
             nlri: vec![],
-            treat_as_withdraw: false,
             errors: vec![],
         };
 
@@ -6828,14 +7040,14 @@ mod tests {
         let attrs = vec![
             // First ORIGIN attribute (IGP = 0)
             path_attribute_flags::TRANSITIVE, // flags
-            PathAttributeTypeCode::Origin as u8, // type
+            u8::from(PathAttributeTypeCode::Origin), // type
             1,                                // length
-            PathOrigin::Igp as u8,            // value
+            u8::from(PathOrigin::Igp),        // value
             // Second ORIGIN attribute (EGP = 1) - should be discarded
             path_attribute_flags::TRANSITIVE,
-            PathAttributeTypeCode::Origin as u8,
+            u8::from(PathAttributeTypeCode::Origin),
             1,
-            PathOrigin::Egp as u8,
+            u8::from(PathOrigin::Egp),
         ];
 
         // Path attributes length
@@ -7263,7 +7475,7 @@ mod tests {
                 } => {
                     assert_eq!(
                         type_code,
-                        PathAttributeTypeCode::Origin as u8,
+                        u8::from(PathAttributeTypeCode::Origin),
                         "should include the attribute type code"
                     );
                     assert_eq!(
@@ -7308,7 +7520,7 @@ mod tests {
         fn origin_attr() -> Vec<u8> {
             vec![
                 path_attribute_flags::TRANSITIVE, // flags (0x40)
-                PathAttributeTypeCode::Origin as u8, // type 1
+                u8::from(PathAttributeTypeCode::Origin), // type 1
                 1,                                // length
                 0,                                // IGP
             ]
@@ -7318,7 +7530,7 @@ mod tests {
         fn as_path_attr(asn: u32) -> Vec<u8> {
             let mut attr = vec![
                 path_attribute_flags::TRANSITIVE, // flags (0x40)
-                PathAttributeTypeCode::AsPath as u8, // type 2
+                u8::from(PathAttributeTypeCode::AsPath), // type 2
                 6, // length: 1 (segment type) + 1 (count) + 4 (ASN)
                 2, // AS_SEQUENCE
                 1, // 1 ASN in sequence
@@ -7331,7 +7543,7 @@ mod tests {
         fn next_hop_attr(ip: [u8; 4]) -> Vec<u8> {
             let mut attr = vec![
                 path_attribute_flags::TRANSITIVE, // flags (0x40)
-                PathAttributeTypeCode::NextHop as u8, // type 3
+                u8::from(PathAttributeTypeCode::NextHop), // type 3
                 4,                                // length
             ];
             attr.extend_from_slice(&ip);
@@ -7343,7 +7555,7 @@ mod tests {
         fn bad_next_hop_attr() -> Vec<u8> {
             vec![
                 path_attribute_flags::TRANSITIVE, // flags (0x40)
-                PathAttributeTypeCode::NextHop as u8, // type 3
+                u8::from(PathAttributeTypeCode::NextHop), // type 3
                 16,                               // length - WRONG, should be 4
                 0,
                 0,
@@ -7369,7 +7581,7 @@ mod tests {
         fn bad_med_attr() -> Vec<u8> {
             vec![
                 path_attribute_flags::OPTIONAL, // flags (0x80)
-                PathAttributeTypeCode::MultiExitDisc as u8, // type 4
+                u8::from(PathAttributeTypeCode::MultiExitDisc), // type 4
                 2,                              // length - WRONG, should be 4
                 0,
                 100, // only 2 bytes
@@ -7382,8 +7594,8 @@ mod tests {
             vec![
                 path_attribute_flags::OPTIONAL
                     | path_attribute_flags::TRANSITIVE, // 0xC0
-                PathAttributeTypeCode::Aggregator as u8, // type 7
-                3,                                       // length - WRONG
+                u8::from(PathAttributeTypeCode::Aggregator), // type 7
+                3,                                           // length - WRONG
                 0,
                 100,
                 1, // only 3 bytes
@@ -7394,7 +7606,7 @@ mod tests {
         fn bad_origin_attr() -> Vec<u8> {
             vec![
                 path_attribute_flags::TRANSITIVE, // flags (0x40)
-                PathAttributeTypeCode::Origin as u8, // type 1
+                u8::from(PathAttributeTypeCode::Origin), // type 1
                 1,                                // length
                 99, // INVALID - must be 0, 1, or 2
             ]
@@ -7428,7 +7640,10 @@ mod tests {
             );
             let msg = result.unwrap();
 
-            assert!(msg.treat_as_withdraw, "treat_as_withdraw should be true");
+            assert!(
+                msg.treat_as_withdraw(),
+                "treat_as_withdraw should be true"
+            );
 
             // 3 parse errors + 2 missing attr errors (ORIGIN, NEXT_HOP)
             assert_eq!(
@@ -7503,7 +7718,7 @@ mod tests {
             let msg = result.unwrap();
 
             assert!(
-                !msg.treat_as_withdraw,
+                !msg.treat_as_withdraw(),
                 "treat_as_withdraw should be false (Discard doesn't set it)"
             );
 
@@ -7552,7 +7767,7 @@ mod tests {
             let msg = result.unwrap();
 
             assert!(
-                msg.treat_as_withdraw,
+                msg.treat_as_withdraw(),
                 "treat_as_withdraw should be true (TaW errors present)"
             );
 
@@ -7612,7 +7827,10 @@ mod tests {
             assert!(result.is_ok(), "Parsing should succeed");
             let msg = result.unwrap();
 
-            assert!(msg.treat_as_withdraw, "treat_as_withdraw should be true");
+            assert!(
+                msg.treat_as_withdraw(),
+                "treat_as_withdraw should be true"
+            );
             // 1 parse error (InvalidOriginValue) + 1 MissingAttribute (Origin)
             assert_eq!(
                 msg.errors.len(),
@@ -7644,7 +7862,7 @@ mod tests {
             let msg = result.unwrap();
 
             assert!(
-                !msg.treat_as_withdraw,
+                !msg.treat_as_withdraw(),
                 "treat_as_withdraw should be false"
             );
             assert!(msg.errors.is_empty(), "No errors expected");
@@ -7663,7 +7881,7 @@ mod tests {
             let mut attrs = vec![
                 path_attribute_flags::OPTIONAL
                     | path_attribute_flags::TRANSITIVE, // 0xC0 - wrong!
-                PathAttributeTypeCode::Origin as u8,
+                u8::from(PathAttributeTypeCode::Origin),
                 1, // length
                 0, // IGP value
             ];
@@ -7682,7 +7900,7 @@ mod tests {
             let msg = result.unwrap();
 
             assert!(
-                msg.treat_as_withdraw,
+                msg.treat_as_withdraw(),
                 "Flag errors on ORIGIN cause TreatAsWithdraw"
             );
             // 1 flag error + 1 MissingAttribute for Origin (skipped due to bad flags)
@@ -7746,7 +7964,7 @@ mod tests {
         fn origin_attr() -> Vec<u8> {
             vec![
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::Origin as u8,
+                u8::from(PathAttributeTypeCode::Origin),
                 1,
                 0, // IGP
             ]
@@ -7755,7 +7973,7 @@ mod tests {
         fn as_path_attr(asn: u32) -> Vec<u8> {
             let mut attr = vec![
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::AsPath as u8,
+                u8::from(PathAttributeTypeCode::AsPath),
                 6,
                 2, // AS_SEQUENCE
                 1, // 1 ASN
@@ -7767,7 +7985,7 @@ mod tests {
         fn next_hop_attr(ip: [u8; 4]) -> Vec<u8> {
             let mut attr = vec![
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::NextHop as u8,
+                u8::from(PathAttributeTypeCode::NextHop),
                 4,
             ];
             attr.extend_from_slice(&ip);
@@ -7785,12 +8003,11 @@ mod tests {
                     48,
                 )],
             );
-            let value_bytes =
-                mp_reach.to_wire().expect("MP_REACH_NLRI encoding");
+            let value_bytes = mp_reach.to_wire();
 
             let mut attr = vec![
                 path_attribute_flags::OPTIONAL,
-                PathAttributeTypeCode::MpReachNlri as u8,
+                u8::from(PathAttributeTypeCode::MpReachNlri),
             ];
             // Use extended length if needed
             if value_bytes.len() > 255 {
@@ -7834,7 +8051,10 @@ mod tests {
                 result.err()
             );
             let msg = result.unwrap();
-            assert!(!msg.treat_as_withdraw, "Should not be treat-as-withdraw");
+            assert!(
+                !msg.treat_as_withdraw(),
+                "Should not be treat-as-withdraw"
+            );
             assert!(
                 msg.errors.is_empty(),
                 "Should have no errors, got: {:?}",
@@ -7861,7 +8081,7 @@ mod tests {
             );
             let msg = result.unwrap();
             assert!(
-                msg.treat_as_withdraw,
+                msg.treat_as_withdraw(),
                 "Missing NEXT_HOP with traditional NLRI should treat-as-withdraw"
             );
             assert!(
@@ -7890,7 +8110,7 @@ mod tests {
 
             let mut attrs = vec![
                 path_attribute_flags::OPTIONAL,
-                PathAttributeTypeCode::MpUnreachNlri as u8,
+                u8::from(PathAttributeTypeCode::MpUnreachNlri),
             ];
             if value_bytes.len() > 255 {
                 attrs[0] |= path_attribute_flags::EXTENDED_LENGTH;
@@ -7912,7 +8132,10 @@ mod tests {
                 result.err()
             );
             let msg = result.unwrap();
-            assert!(!msg.treat_as_withdraw, "Should not be treat-as-withdraw");
+            assert!(
+                !msg.treat_as_withdraw(),
+                "Should not be treat-as-withdraw"
+            );
             assert!(
                 msg.errors.is_empty(),
                 "Should have no errors for MP_UNREACH-only UPDATE, got: {:?}",
@@ -7950,7 +8173,7 @@ mod tests {
             );
             let msg = result.unwrap();
             assert!(
-                msg.treat_as_withdraw,
+                msg.treat_as_withdraw(),
                 "Missing NEXT_HOP should trigger treat-as-withdraw"
             );
             assert!(
@@ -7982,7 +8205,7 @@ mod tests {
             );
             let msg = result.unwrap();
             assert!(
-                msg.treat_as_withdraw,
+                msg.treat_as_withdraw(),
                 "Missing ORIGIN should trigger treat-as-withdraw"
             );
             assert!(
@@ -8014,7 +8237,7 @@ mod tests {
             );
             let msg = result.unwrap();
             assert!(
-                msg.treat_as_withdraw,
+                msg.treat_as_withdraw(),
                 "Missing AS_PATH should trigger treat-as-withdraw"
             );
             assert!(
@@ -8045,7 +8268,7 @@ mod tests {
             );
             let msg = result.unwrap();
             assert!(
-                msg.treat_as_withdraw,
+                msg.treat_as_withdraw(),
                 "Missing mandatory attrs should trigger treat-as-withdraw"
             );
             assert!(
@@ -8089,7 +8312,10 @@ mod tests {
                 result.err()
             );
             let msg = result.unwrap();
-            assert!(!msg.treat_as_withdraw, "Should not be treat-as-withdraw");
+            assert!(
+                !msg.treat_as_withdraw(),
+                "Should not be treat-as-withdraw"
+            );
             assert!(
                 msg.errors.is_empty(),
                 "Should have no errors for withdraw-only UPDATE"
@@ -8109,7 +8335,10 @@ mod tests {
                 result.err()
             );
             let msg = result.unwrap();
-            assert!(!msg.treat_as_withdraw, "Should not be treat-as-withdraw");
+            assert!(
+                !msg.treat_as_withdraw(),
+                "Should not be treat-as-withdraw"
+            );
             assert!(
                 msg.errors.is_empty(),
                 "Should have no errors for empty UPDATE"
@@ -8355,7 +8584,7 @@ mod tests {
             // ORIGIN
             attrs.extend([
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::Origin as u8,
+                u8::from(PathAttributeTypeCode::Origin),
                 1,
                 0, // IGP
             ]);
@@ -8363,14 +8592,14 @@ mod tests {
             // AS_PATH (empty)
             attrs.extend([
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::AsPath as u8,
+                u8::from(PathAttributeTypeCode::AsPath),
                 0, // empty
             ]);
 
             // NEXT_HOP
             attrs.extend([
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::NextHop as u8,
+                u8::from(PathAttributeTypeCode::NextHop),
                 4,
                 192,
                 0,
@@ -8382,7 +8611,7 @@ mod tests {
             attrs.extend([
                 path_attribute_flags::OPTIONAL
                     | path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::Aggregator as u8,
+                u8::from(PathAttributeTypeCode::Aggregator),
                 6,
                 0xFDu8,
                 0xE8, // ASN 65000
@@ -8424,7 +8653,7 @@ mod tests {
             // ORIGIN
             attrs.extend([
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::Origin as u8,
+                u8::from(PathAttributeTypeCode::Origin),
                 1,
                 0, // IGP
             ]);
@@ -8432,14 +8661,14 @@ mod tests {
             // AS_PATH
             attrs.extend([
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::AsPath as u8,
+                u8::from(PathAttributeTypeCode::AsPath),
                 0,
             ]);
 
             // NEXT_HOP
             attrs.extend([
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::NextHop as u8,
+                u8::from(PathAttributeTypeCode::NextHop),
                 4,
                 192,
                 0,
@@ -8450,7 +8679,7 @@ mod tests {
             // ATOMIC_AGGREGATE (zero-length)
             attrs.extend([
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::AtomicAggregate as u8,
+                u8::from(PathAttributeTypeCode::AtomicAggregate),
                 0, // zero-length
             ]);
 
@@ -8486,7 +8715,7 @@ mod tests {
             // ORIGIN
             attrs.extend([
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::Origin as u8,
+                u8::from(PathAttributeTypeCode::Origin),
                 1,
                 0,
             ]);
@@ -8494,14 +8723,14 @@ mod tests {
             // AS_PATH
             attrs.extend([
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::AsPath as u8,
+                u8::from(PathAttributeTypeCode::AsPath),
                 0,
             ]);
 
             // NEXT_HOP
             attrs.extend([
                 path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::NextHop as u8,
+                u8::from(PathAttributeTypeCode::NextHop),
                 4,
                 192,
                 0,
@@ -8513,7 +8742,7 @@ mod tests {
             attrs.extend([
                 path_attribute_flags::OPTIONAL
                     | path_attribute_flags::TRANSITIVE,
-                PathAttributeTypeCode::Aggregator as u8,
+                u8::from(PathAttributeTypeCode::Aggregator),
                 5, // WRONG!
                 0xFDu8,
                 0xE8,
