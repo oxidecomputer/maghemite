@@ -871,6 +871,24 @@ async fn do_bgp_apply(
         }
     }
 
+    #[derive(Debug, Eq)]
+    struct Unbr {
+        interface: String,
+        asn: u32,
+    }
+
+    impl Hash for Unbr {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.interface.hash(state);
+        }
+    }
+
+    impl PartialEq for Unbr {
+        fn eq(&self, other: &Unbr) -> bool {
+            self.interface.eq(&other.interface)
+        }
+    }
+
     let groups = ctx
         .db
         .get_bgp_neighbors()
@@ -886,6 +904,120 @@ async fn do_bgp_apply(
     for g in &groups {
         if !peers.contains_key(g) {
             peers.insert(g.clone(), Vec::default());
+        }
+    }
+    let mut upeers = rq.unnumbered_peers.clone();
+    for g in &groups {
+        if !upeers.contains_key(g) {
+            upeers.insert(g.clone(), Vec::default());
+        }
+    }
+
+    helpers::ensure_router(
+        ctx.clone(),
+        bgp::params::Router {
+            asn: rq.asn,
+            id: rq.asn,
+            listen: DEFAULT_BGP_LISTEN.to_string(), //TODO as parameter
+            graceful_shutdown: false,               // TODO as parameter
+        },
+    )
+    .await?;
+
+    for (group, peers) in &upeers {
+        let current: Vec<rdb::BgpUnnumberedNeighborInfo> = ctx
+            .db
+            .get_unnumbered_bgp_neighbors()
+            .map_err(Error::Db)?
+            .into_iter()
+            .filter(|x| &x.group == group)
+            .collect();
+
+        let current_unbr_ifxs: HashSet<Unbr> = current
+            .iter()
+            .map(|x| Unbr {
+                interface: x.interface.clone(),
+                asn: x.asn,
+            })
+            .collect();
+
+        let specified_unbr_ifxs: HashSet<Unbr> = peers
+            .iter()
+            .map(|x| Unbr {
+                interface: x.interface.clone(),
+                asn: rq.asn,
+            })
+            .collect();
+
+        let to_delete = current_unbr_ifxs.difference(&specified_unbr_ifxs);
+        let to_add = specified_unbr_ifxs.difference(&current_unbr_ifxs);
+        let to_modify = current_unbr_ifxs.intersection(&specified_unbr_ifxs);
+
+        bgp_log!(log, info, "unbr: current {current:#?}");
+        bgp_log!(log, info, "unbr: adding {to_add:#?}");
+        bgp_log!(log, info, "unbr: removing {to_delete:#?}");
+
+        let mut nbr_config = Vec::new();
+        for nbr in to_add {
+            let cfg = peers
+                .iter()
+                .find(|x| x.interface == nbr.interface)
+                .ok_or(Error::NotFound(nbr.interface.clone()))?;
+            nbr_config.push((nbr, cfg));
+        }
+
+        for nbr in to_modify {
+            let spec = peers
+                .iter()
+                .find(|x| x.interface == nbr.interface)
+                .ok_or(Error::NotFound(nbr.interface.clone()))?;
+
+            let tgt = UnnumberedNeighbor::from_bgp_peer_config(
+                nbr.asn,
+                group.clone(),
+                spec.clone(),
+            );
+
+            let curr = UnnumberedNeighbor::from_rdb_neighbor_info(
+                nbr.asn,
+                current
+                    .iter()
+                    .find(|x| x.interface == nbr.interface)
+                    .ok_or(Error::NotFound(nbr.interface.clone()))?,
+            );
+
+            if tgt != curr {
+                nbr_config.push((nbr, spec));
+            }
+        }
+
+        for (nbr, cfg) in nbr_config {
+            helpers::add_unnumbered_neighbor(
+                ctx.clone(),
+                UnnumberedNeighbor::from_bgp_peer_config(
+                    nbr.asn,
+                    group.clone(),
+                    cfg.clone(),
+                ),
+            )?;
+        }
+
+        for nbr in to_delete {
+            helpers::remove_unnumbered_neighbor(
+                ctx.clone(),
+                nbr.asn,
+                &nbr.interface,
+            )
+            .await?;
+
+            let mut routers = lock!(ctx.bgp.router);
+            let mut remove = false;
+            if let Some(r) = routers.get(&nbr.asn) {
+                remove = lock!(r.sessions).is_empty();
+            }
+            if remove && let Some(r) = routers.remove(&nbr.asn) {
+                r.shutdown()
+            };
         }
     }
 
@@ -958,17 +1090,6 @@ async fn do_bgp_apply(
 
         // TODO all the db modification that happens below needs to happen in a
         // transaction.
-
-        helpers::ensure_router(
-            ctx.clone(),
-            bgp::params::Router {
-                asn: rq.asn,
-                id: rq.asn,
-                listen: DEFAULT_BGP_LISTEN.to_string(), //TODO as parameter
-                graceful_shutdown: false,               // TODO as parameter
-            },
-        )
-        .await?;
 
         for (nbr, cfg) in nbr_config {
             helpers::add_neighbor(

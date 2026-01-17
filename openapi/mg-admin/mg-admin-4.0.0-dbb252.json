@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "5.0.0"
+    "version": "4.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -102,32 +102,6 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/NeighborResetRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/bgp/clear/unnumbered-neighbor": {
-      "post": {
-        "operationId": "clear_unnumbered_neighbor",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UnnumberedNeighborResetRequest"
               }
             }
           },
@@ -895,211 +869,6 @@
         }
       }
     },
-    "/bgp/config/unnumbered-neighbor": {
-      "get": {
-        "operationId": "read_unnumbered_neighbor",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          {
-            "in": "query",
-            "name": "interface",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnnumberedNeighbor"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "put": {
-        "operationId": "create_unnumbered_neighbor",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UnnumberedNeighbor"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "post": {
-        "operationId": "update_unnumbered_neighbor",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UnnumberedNeighbor"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "delete": {
-        "operationId": "delete_unnumbered_neighbor",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          {
-            "in": "query",
-            "name": "interface",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "successful deletion"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/bgp/config/unnumbered-neighbors": {
-      "get": {
-        "operationId": "read_unnumbered_neighbors",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "description": "ASN of the router to get imported prefixes from.",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Array_of_UnnumberedNeighbor",
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/UnnumberedNeighbor"
-                  }
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/bgp/config/unnumbered-pending": {
-      "get": {
-        "operationId": "read_pending_unnumbered_neighbors",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "description": "ASN of the router to get imported prefixes from.",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Array_of_PendingUnnumberedNeighbor",
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/PendingUnnumberedNeighbor"
-                  }
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/bgp/history/fsm": {
       "get": {
         "operationId": "fsm_history",
@@ -1739,6 +1508,17 @@
                 "$ref": "#/components/schemas/ShaperSource"
               }
             ]
+          },
+          "unnumbered_peers": {
+            "description": "Lists of unnumbered peers indexed by peer group.",
+            "default": {},
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/UnnumberedBgpPeerConfig"
+              }
+            }
           }
         },
         "required": [
@@ -4763,22 +4543,6 @@
           "keepalive"
         ]
       },
-      "PendingUnnumberedNeighbor": {
-        "type": "object",
-        "properties": {
-          "interface": {
-            "type": "string"
-          },
-          "local_addr": {
-            "type": "string",
-            "format": "ipv6"
-          }
-        },
-        "required": [
-          "interface",
-          "local_addr"
-        ]
-      },
       "Prefix": {
         "oneOf": [
           {
@@ -5042,19 +4806,9 @@
           }
         }
       },
-      "UnnumberedNeighbor": {
+      "UnnumberedBgpPeerConfig": {
         "type": "object",
         "properties": {
-          "act_as_a_default_ipv6_router": {
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
-          },
-          "asn": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
           "communities": {
             "type": "array",
             "items": {
@@ -5088,9 +4842,6 @@
           },
           "enforce_first_as": {
             "type": "boolean"
-          },
-          "group": {
-            "type": "string"
           },
           "hold_time": {
             "type": "integer",
@@ -5176,6 +4927,11 @@
             "format": "uint64",
             "minimum": 0
           },
+          "router_lifetime": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
           "vlan_id": {
             "nullable": true,
             "type": "integer",
@@ -5184,42 +4940,19 @@
           }
         },
         "required": [
-          "act_as_a_default_ipv6_router",
-          "asn",
           "communities",
           "connect_retry",
           "delay_open",
           "deterministic_collision_resolution",
           "enforce_first_as",
-          "group",
           "hold_time",
           "idle_hold_time",
           "interface",
           "keepalive",
           "name",
           "passive",
-          "resolution"
-        ]
-      },
-      "UnnumberedNeighborResetRequest": {
-        "type": "object",
-        "properties": {
-          "asn": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "interface": {
-            "type": "string"
-          },
-          "op": {
-            "$ref": "#/components/schemas/NeighborResetOp"
-          }
-        },
-        "required": [
-          "asn",
-          "interface",
-          "op"
+          "resolution",
+          "router_lifetime"
         ]
       },
       "UpdateErrorSubcode": {

@@ -1121,6 +1121,9 @@ pub struct ApplyRequest {
     pub shaper: Option<ShaperSource>,
     /// Lists of peers indexed by peer group.
     pub peers: HashMap<String, Vec<BgpPeerConfig>>,
+    /// Lists of unnumbered peers indexed by peer group.
+    #[serde(default)]
+    pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfig>>,
 }
 
 impl From<ApplyRequestV1> for ApplyRequest {
@@ -1137,6 +1140,7 @@ impl From<ApplyRequestV1> for ApplyRequest {
                     (k, v.into_iter().map(BgpPeerConfig::from).collect())
                 })
                 .collect(),
+            unnumbered_peers: HashMap::default(),
         }
     }
 }
