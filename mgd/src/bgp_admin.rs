@@ -5,17 +5,16 @@
 #![allow(clippy::type_complexity)]
 use crate::validation::{validate_prefixes_v4, validate_prefixes_v6};
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
-use bgp::params::*;
-use bgp::router::LoadPolicyError;
-use bgp::session::FsmStateKind;
 use bgp::{
     BGP_PORT,
     config::RouterConfig,
     connection::BgpConnection,
     connection_tcp::BgpConnectionTcp,
-    router::Router,
+    messages::Afi,
+    params::*,
+    router::{LoadPolicyError, Router},
     session::{
-        AdminEvent, FsmEvent, MessageHistory, MessageHistoryV1,
+        AdminEvent, FsmEvent, FsmStateKind, MessageHistory, MessageHistoryV1,
         SessionEndpoint, SessionInfo,
     },
 };
@@ -27,10 +26,12 @@ use mg_api::{
     AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse, FsmEventBuffer,
     FsmHistoryRequest, FsmHistoryResponse, MessageDirection,
     MessageHistoryRequest, MessageHistoryRequestV1, MessageHistoryResponse,
-    MessageHistoryResponseV1, NeighborResetRequest, NeighborSelector, Rib,
+    MessageHistoryResponseV1, NeighborResetRequest, NeighborResetRequestV1,
+    NeighborSelector, Rib,
 };
 use mg_common::lock;
-use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy, Prefix};
+use rdb::{AddressFamily, Asn, BgpRouterInfo, ImportExportPolicyV1, Prefix};
+use rdb::{ImportExportPolicy4, ImportExportPolicy6};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -168,6 +169,98 @@ pub async fn delete_router(
 pub async fn read_neighbors(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let nbrs = ctx
+        .db
+        .get_bgp_neighbors()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    let result = nbrs
+        .into_iter()
+        .filter(|x| x.asn == rq.asn)
+        .map(|x| NeighborV1::from_rdb_neighbor_info(rq.asn, &x))
+        .collect();
+
+    Ok(HttpResponseOk(result))
+}
+
+pub async fn create_neighbor(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<NeighborV1>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    helpers::add_neighbor_v1(ctx.clone(), rq, false)?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn read_neighbor(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<NeighborSelector>,
+) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
+    let rq = request.into_inner();
+    let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
+        HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
+    })?;
+    let neighbor_info = db_neighbors
+        .iter()
+        .find(|n| n.host.ip() == rq.addr)
+        .ok_or(HttpError::for_not_found(
+            None,
+            format!("neighbor {} not found in db", rq.addr),
+        ))?;
+
+    let result = NeighborV1::from_rdb_neighbor_info(rq.asn, neighbor_info);
+    Ok(HttpResponseOk(result))
+}
+
+pub async fn update_neighbor(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<NeighborV1>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    helpers::add_neighbor_v1(ctx.clone(), rq, true)?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn delete_neighbor(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<NeighborSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
+}
+
+// Legacy API handler - hardcoded to IPv4 for backwards compatibility
+pub async fn clear_neighbor(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<NeighborResetRequestV1>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    Ok(helpers::reset_neighbor(ctx.clone(), rq.into()).await?)
+}
+
+// V2 API handler - supports per-AF operations
+pub async fn clear_neighbor_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<NeighborResetRequest>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    Ok(helpers::reset_neighbor(ctx.clone(), rq).await?)
+}
+
+// V3 API handlers (new Neighbor type with optional per-AF configs)
+pub async fn read_neighbors_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
 ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -186,7 +279,7 @@ pub async fn read_neighbors(
     Ok(HttpResponseOk(result))
 }
 
-pub async fn create_neighbor(
+pub async fn create_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<Neighbor>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -196,7 +289,7 @@ pub async fn create_neighbor(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-pub async fn read_neighbor(
+pub async fn read_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<NeighborSelector>,
 ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
@@ -216,7 +309,7 @@ pub async fn read_neighbor(
     Ok(HttpResponseOk(result))
 }
 
-pub async fn update_neighbor(
+pub async fn update_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<Neighbor>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -226,22 +319,13 @@ pub async fn update_neighbor(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-pub async fn delete_neighbor(
+pub async fn delete_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<NeighborSelector>,
 ) -> Result<HttpResponseDeleted, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
-}
-
-pub async fn clear_neighbor(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<NeighborResetRequest>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq = request.into_inner();
-    let ctx = ctx.context();
-    Ok(helpers::reset_neighbor(ctx.clone(), rq.asn, rq.addr, rq.op).await?)
 }
 
 pub async fn create_origin4(
@@ -417,9 +501,14 @@ pub async fn get_exported(
             .map(|p| rdb::Prefix::from(*p))
             .collect();
 
-        let mut exported_routes: Vec<Prefix> = match n.allow_export {
-            ImportExportPolicy::NoFiltering => orig_routes,
-            ImportExportPolicy::Allow(epol) => {
+        // Combine per-AF export policies into legacy format for filtering
+        let allow_export = ImportExportPolicyV1::from_per_af_policies(
+            &n.allow_export4,
+            &n.allow_export6,
+        );
+        let mut exported_routes: Vec<Prefix> = match allow_export {
+            ImportExportPolicyV1::NoFiltering => orig_routes,
+            ImportExportPolicyV1::Allow(epol) => {
                 orig_routes.retain(|p| epol.contains(p));
                 orig_routes
             }
@@ -471,7 +560,8 @@ pub async fn get_neighbors(
         .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
 
     for s in lock!(r.sessions).values() {
-        let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
+        let dur =
+            s.current_state_duration().as_millis().min(u64::MAX as u128) as u64;
 
         // If the session runner has a primary connection, pull the config and
         // runtime state from it. If not, just use the config owned by the
@@ -495,16 +585,16 @@ pub async fn get_neighbors(
                 )
             };
 
-        let pi = PeerInfo {
+        let pi = PeerInfoV2 {
             state: s.state(),
             asn: s.remote_asn(),
-            duration_millis: dur as u64,
-            timers: PeerTimers {
-                hold: DynamicTimerInfo {
+            duration_millis: dur,
+            timers: PeerTimersV1 {
+                hold: DynamicTimerInfoV1 {
                     configured: conf_holdtime,
                     negotiated: neg_holdtime,
                 },
-                keepalive: DynamicTimerInfo {
+                keepalive: DynamicTimerInfoV1 {
                     configured: conf_keepalive,
                     negotiated: neg_keepalive,
                 },
@@ -520,7 +610,7 @@ pub async fn get_neighbors(
 pub async fn get_neighbors_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -531,7 +621,8 @@ pub async fn get_neighbors_v2(
         .ok_or(HttpError::for_not_found(None, "ASN not found".to_string()))?;
 
     for s in lock!(r.sessions).values() {
-        let dur = s.current_state_duration().as_millis() % u64::MAX as u128;
+        let dur =
+            s.current_state_duration().as_millis().min(u64::MAX as u128) as u64;
 
         let (conf_holdtime, neg_holdtime, conf_keepalive, neg_keepalive) =
             if let Some(primary) = s.primary_connection() {
@@ -554,16 +645,16 @@ pub async fn get_neighbors_v2(
 
         peers.insert(
             s.neighbor.host.ip(),
-            PeerInfo {
+            PeerInfoV2 {
                 state: s.state(),
                 asn: s.remote_asn(),
-                duration_millis: dur as u64,
-                timers: PeerTimers {
-                    hold: DynamicTimerInfo {
+                duration_millis: dur,
+                timers: PeerTimersV1 {
+                    hold: DynamicTimerInfoV1 {
                         configured: conf_holdtime,
                         negotiated: neg_holdtime,
                     },
-                    keepalive: DynamicTimerInfo {
+                    keepalive: DynamicTimerInfoV1 {
                         configured: conf_keepalive,
                         negotiated: neg_keepalive,
                     },
@@ -575,7 +666,42 @@ pub async fn get_neighbors_v2(
     Ok(HttpResponseOk(peers))
 }
 
+pub async fn get_neighbors_v3(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let mut peers = HashMap::new();
+
+    // Clone sessions while holding locks, then release them
+    let sessions: Vec<_> = {
+        let routers = lock!(ctx.bgp.router);
+        let r = routers.get(&rq.asn).ok_or(HttpError::for_not_found(
+            None,
+            "ASN not found".to_string(),
+        ))?;
+        lock!(r.sessions).values().cloned().collect()
+    };
+
+    for s in sessions.iter() {
+        let peer_ip = s.neighbor.host.ip();
+        peers.insert(peer_ip, s.get_peer_info());
+    }
+
+    Ok(HttpResponseOk(peers))
+}
+
 pub async fn bgp_apply(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<ApplyRequestV1>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    // Convert v1 request to current format (hardcodes IPv4-only)
+    do_bgp_apply(ctx.context(), ApplyRequest::from(request.into_inner())).await
+}
+
+pub async fn bgp_apply_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<ApplyRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -1027,9 +1153,9 @@ pub(crate) mod helpers {
         Ok(HttpResponseDeleted())
     }
 
-    pub(crate) fn add_neighbor(
+    pub(crate) fn add_neighbor_v1(
         ctx: Arc<HandlerContext>,
-        rq: Neighbor,
+        rq: NeighborV1,
         ensure: bool,
     ) -> Result<(), Error> {
         let log = &ctx.log;
@@ -1038,6 +1164,10 @@ pub(crate) mod helpers {
         );
 
         let (event_tx, event_rx) = channel();
+
+        // V1 API is IPv4-only; extract only IPv4 policies
+        let allow_import4 = rq.allow_import.as_ipv4_policy();
+        let allow_export4 = rq.allow_export.as_ipv4_policy();
 
         // XXX: Do we really want both rq and info?
         //      SessionInfo and Neighbor types could probably be merged.
@@ -1050,8 +1180,13 @@ pub(crate) mod helpers {
             communities: rq.communities.clone().into_iter().collect(),
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
-            allow_import: rq.allow_import.clone(),
-            allow_export: rq.allow_export.clone(),
+            // V1 API is IPv4-only; IPv6 support didn't exist in legacy API
+            ipv4_unicast: Some(Ipv4UnicastConfig {
+                nexthop: None,
+                import_policy: allow_import4.clone(),
+                export_policy: allow_export4.clone(),
+            }),
+            ipv6_unicast: None,
             vlan_id: rq.vlan_id,
             remote_id: None,
             bind_addr: None,
@@ -1061,8 +1196,12 @@ pub(crate) mod helpers {
             idle_hold_time: Duration::from_secs(rq.idle_hold_time),
             delay_open_time: Duration::from_secs(rq.delay_open),
             resolution: Duration::from_millis(rq.resolution),
-            idle_hold_jitter: Some((0.75, 1.0)),
-            connect_retry_jitter: None,
+            // insert default values for fields not present in the v1 API
+            idle_hold_jitter: None,
+            connect_retry_jitter: Some(JitterRange {
+                min: 0.75,
+                max: 1.0,
+            }),
             deterministic_collision_resolution: false,
         };
 
@@ -1107,8 +1246,149 @@ pub(crate) mod helpers {
             communities: rq.communities,
             local_pref: rq.local_pref,
             enforce_first_as: rq.enforce_first_as,
-            allow_import: rq.allow_import.clone(),
-            allow_export: rq.allow_export.clone(),
+            allow_import4,
+            allow_export4,
+            vlan_id: rq.vlan_id,
+
+            // V1 API is IPv4-only and doesn't support nexthop override
+            ipv4_enabled: true,
+            ipv6_enabled: false,
+            allow_import6: ImportExportPolicy6::NoFiltering,
+            allow_export6: ImportExportPolicy6::NoFiltering,
+            nexthop4: None,
+            nexthop6: None,
+        })?;
+
+        if start_session {
+            start_bgp_session(&event_tx)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn add_neighbor(
+        ctx: Arc<HandlerContext>,
+        rq: Neighbor,
+        ensure: bool,
+    ) -> Result<(), Error> {
+        let log = &ctx.log;
+        bgp_log!(log, info, "add neighbor {}", rq.host.ip();
+            "params" => format!("{rq:#?}")
+        );
+
+        // Validate that at least one AF is enabled
+        rq.validate_address_families()
+            .map_err(Error::InvalidRequest)?;
+
+        // Validate nexthop address families
+        rq.validate_nexthop().map_err(Error::InvalidRequest)?;
+
+        let (event_tx, event_rx) = channel();
+
+        // Build SessionInfo with optional per-AF config directly from the new Neighbor type
+        let info = SessionInfo {
+            passive_tcp_establishment: rq.passive,
+            remote_asn: rq.remote_asn,
+            min_ttl: rq.min_ttl,
+            md5_auth_key: rq.md5_auth_key.clone(),
+            multi_exit_discriminator: rq.multi_exit_discriminator,
+            communities: rq.communities.clone().into_iter().collect(),
+            local_pref: rq.local_pref,
+            enforce_first_as: rq.enforce_first_as,
+            ipv4_unicast: rq.ipv4_unicast.clone(),
+            ipv6_unicast: rq.ipv6_unicast.clone(),
+            vlan_id: rq.vlan_id,
+            remote_id: None,
+            bind_addr: None,
+            connect_retry_time: Duration::from_secs(rq.connect_retry),
+            keepalive_time: Duration::from_secs(rq.keepalive),
+            hold_time: Duration::from_secs(rq.hold_time),
+            idle_hold_time: Duration::from_secs(rq.idle_hold_time),
+            delay_open_time: Duration::from_secs(rq.delay_open),
+            resolution: Duration::from_millis(rq.resolution),
+            idle_hold_jitter: rq.idle_hold_jitter,
+            connect_retry_jitter: rq.connect_retry_jitter,
+            deterministic_collision_resolution: rq
+                .deterministic_collision_resolution,
+        };
+
+        let start_session = if ensure {
+            match get_router!(&ctx, rq.asn)?.ensure_session(
+                rq.clone().into(),
+                None,
+                event_tx.clone(),
+                event_rx,
+                info,
+            )? {
+                EnsureSessionResult::New(_) => true,
+                EnsureSessionResult::Updated(_) => false,
+            }
+        } else {
+            get_router!(&ctx, rq.asn)?.new_session(
+                rq.clone().into(),
+                None,
+                event_tx.clone(),
+                event_rx,
+                info,
+            )?;
+            true
+        };
+
+        // Extract per-AF policies and nexthop for database storage
+        let (allow_import4, allow_export4, nexthop4) = match &rq.ipv4_unicast {
+            Some(cfg) => (
+                cfg.import_policy.clone(),
+                cfg.export_policy.clone(),
+                cfg.nexthop,
+            ),
+            None => (
+                ImportExportPolicy4::NoFiltering,
+                ImportExportPolicy4::NoFiltering,
+                None,
+            ),
+        };
+
+        let (allow_import6, allow_export6, nexthop6) = match &rq.ipv6_unicast {
+            Some(cfg) => (
+                cfg.import_policy.clone(),
+                cfg.export_policy.clone(),
+                cfg.nexthop,
+            ),
+            None => (
+                ImportExportPolicy6::NoFiltering,
+                ImportExportPolicy6::NoFiltering,
+                None,
+            ),
+        };
+
+        ctx.db.add_bgp_neighbor(rdb::BgpNeighborInfo {
+            asn: rq.asn,
+            remote_asn: rq.remote_asn,
+            min_ttl: rq.min_ttl,
+            name: rq.name.clone(),
+            host: rq.host,
+            hold_time: rq.hold_time,
+            idle_hold_time: rq.idle_hold_time,
+            delay_open: rq.delay_open,
+            connect_retry: rq.connect_retry,
+            keepalive: rq.keepalive,
+            resolution: rq.resolution,
+            group: rq.group.clone(),
+            passive: rq.passive,
+            md5_auth_key: rq.md5_auth_key,
+            multi_exit_discriminator: rq.multi_exit_discriminator,
+            communities: rq.communities,
+            local_pref: rq.local_pref,
+            enforce_first_as: rq.enforce_first_as,
+            // Derive enablement from whether the AF config is present
+            ipv4_enabled: rq.ipv4_unicast.is_some(),
+            ipv6_enabled: rq.ipv6_unicast.is_some(),
+            allow_import4,
+            allow_export4,
+            allow_import6,
+            allow_export6,
+            nexthop4,
+            nexthop6,
             vlan_id: rq.vlan_id,
         })?;
 
@@ -1121,46 +1401,87 @@ pub(crate) mod helpers {
 
     pub(crate) async fn reset_neighbor(
         ctx: Arc<HandlerContext>,
-        asn: u32,
-        addr: IpAddr,
-        op: NeighborResetOp,
+        rq: NeighborResetRequest,
     ) -> Result<HttpResponseUpdatedNoContent, Error> {
-        bgp_log!(ctx.log, info, "clear neighbor {addr}, asn {asn}";
-            "op" => format!("{op:?}")
-        );
+        bgp_log!(ctx.log, info, "clear {rq}");
 
-        let session = get_router!(ctx, asn)?
-            .get_session(addr)
+        let session = get_router!(ctx, rq.asn)?
+            .get_session(rq.addr)
             .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
 
-        match op {
-            NeighborResetOp::Hard => session
-                .event_tx
-                .send(FsmEvent::Admin(AdminEvent::Reset))
-                .map_err(|e| {
-                    Error::InternalCommunication(format!(
-                        "failed to reset bgp session {e}",
-                    ))
-                })?,
-            NeighborResetOp::SoftInbound => {
-                // XXX: check if neighbor has negotiated route refresh cap
+        match rq.op {
+            NeighborResetOp::Hard => {
                 session
                     .event_tx
-                    .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh))
+                    .send(FsmEvent::Admin(AdminEvent::Reset))
                     .map_err(|e| {
                         Error::InternalCommunication(format!(
-                            "failed to generate route refresh {e}"
+                            "failed to reset bgp session {e}",
                         ))
-                    })?
+                    })?;
             }
-            NeighborResetOp::SoftOutbound => session
-                .event_tx
-                .send(FsmEvent::Admin(AdminEvent::ReAdvertiseRoutes))
-                .map_err(|e| {
-                    Error::InternalCommunication(format!(
-                        "failed to trigger outbound update {e}"
-                    ))
-                })?,
+            NeighborResetOp::SoftInbound(afi) => {
+                // Send the request to the FSM; it will handle checking capabilities
+                // and which AFs are negotiated. None means all negotiated AFs.
+                match afi {
+                    Some(af) => {
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(AdminEvent::SendRouteRefresh(af)))
+                            .map_err(|e| {
+                                Error::InternalCommunication(format!(
+                                    "failed to generate route refresh for {af}: {e}"
+                                ))
+                            })?;
+                    }
+                    None => {
+                        // Send for both AFs; FSM will handle which are actually negotiated
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(
+                                AdminEvent::SendRouteRefresh(Afi::Ipv4),
+                            ))
+                            .ok();
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(
+                                AdminEvent::SendRouteRefresh(Afi::Ipv6),
+                            ))
+                            .ok();
+                    }
+                }
+            }
+            NeighborResetOp::SoftOutbound(afi) => {
+                // Send the request to the FSM; it will handle which AFs are negotiated.
+                // None means all negotiated AFs.
+                match afi {
+                    Some(af) => {
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(AdminEvent::ReAdvertiseRoutes(af)))
+                            .map_err(|e| {
+                                Error::InternalCommunication(format!(
+                                    "failed to trigger outbound update for {af}: {e}"
+                                ))
+                            })?;
+                    }
+                    None => {
+                        // Send for both AFs; FSM will handle which are actually negotiated
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(
+                                AdminEvent::ReAdvertiseRoutes(Afi::Ipv4),
+                            ))
+                            .ok();
+                        session
+                            .event_tx
+                            .send(FsmEvent::Admin(
+                                AdminEvent::ReAdvertiseRoutes(Afi::Ipv6),
+                            ))
+                            .ok();
+                    }
+                }
+            }
         }
 
         Ok(HttpResponseUpdatedNoContent())
@@ -1324,9 +1645,9 @@ mod tests {
     use crate::{
         admin::HandlerContext, bfd_admin::BfdContext, bgp_admin::BgpContext,
     };
-    use bgp::params::{ApplyRequest, BgpPeerConfig};
+    use bgp::params::{ApplyRequestV1, BgpPeerConfigV1};
     use mg_common::stats::MgLowerStats;
-    use rdb::{Db, ImportExportPolicy};
+    use rdb::Db;
     use std::{
         collections::{BTreeMap, HashMap},
         env::temp_dir,
@@ -1365,7 +1686,7 @@ mod tests {
         let mut peers = HashMap::new();
         peers.insert(
             String::from("qsfp0"),
-            vec![BgpPeerConfig {
+            vec![BgpPeerConfigV1 {
                 host: SocketAddr::new("203.0.113.1".parse().unwrap(), 179),
                 name: String::from("bob"),
                 hold_time: 3,
@@ -1382,14 +1703,14 @@ mod tests {
                 communities: Vec::default(),
                 local_pref: None,
                 enforce_first_as: false,
-                allow_import: ImportExportPolicy::NoFiltering,
-                allow_export: ImportExportPolicy::NoFiltering,
+                allow_import: rdb::ImportExportPolicyV1::NoFiltering,
+                allow_export: rdb::ImportExportPolicyV1::NoFiltering,
                 vlan_id: None,
             }],
         );
         peers.insert(
             String::from("qsfp1"),
-            vec![BgpPeerConfig {
+            vec![BgpPeerConfigV1 {
                 host: SocketAddr::new("203.0.113.2".parse().unwrap(), 179),
                 name: String::from("alice"),
                 hold_time: 3,
@@ -1406,13 +1727,13 @@ mod tests {
                 communities: Vec::default(),
                 local_pref: None,
                 enforce_first_as: false,
-                allow_import: ImportExportPolicy::NoFiltering,
-                allow_export: ImportExportPolicy::NoFiltering,
+                allow_import: rdb::ImportExportPolicyV1::NoFiltering,
+                allow_export: rdb::ImportExportPolicyV1::NoFiltering,
                 vlan_id: None,
             }],
         );
 
-        let mut req = ApplyRequest {
+        let mut req = ApplyRequestV1 {
             asn: 47,
             originate: Vec::default(),
             checker: None,
@@ -1420,7 +1741,7 @@ mod tests {
             peers,
         };
 
-        do_bgp_apply(&ctx, req.clone())
+        do_bgp_apply(&ctx, req.clone().into())
             .await
             .expect("bgp apply request");
 
@@ -1431,7 +1752,7 @@ mod tests {
 
         req.peers.remove("qsfp0");
 
-        do_bgp_apply(&ctx, req.clone())
+        do_bgp_apply(&ctx, req.clone().into())
             .await
             .expect("bgp apply request");
 

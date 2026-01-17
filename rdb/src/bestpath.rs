@@ -37,7 +37,7 @@ pub fn bestpaths(paths: &BTreeSet<Path>, max: usize) -> Option<BTreeSet<Path>> {
 
     // Partition the choice space on whether routes are shutdown or not. If we
     // only have shutdown routes then use those. Otherwise use active routes
-    let (active, shutdown): (BTreeSet<&Path>, BTreeSet<&Path>) =
+    let (shutdown, active): (BTreeSet<&Path>, BTreeSet<&Path>) =
         paths.iter().partition(|x| x.shutdown);
     let candidates = if active.is_empty() { shutdown } else { active };
 
@@ -133,6 +133,7 @@ mod test {
     use crate::{
         BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
         DEFAULT_RIB_PRIORITY_STATIC, Path,
+        types::test_helpers::path_sets_equal,
     };
 
     // Bestpaths is purely a function of the path info itself, so we don't
@@ -168,7 +169,7 @@ mod test {
 
         let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result, BTreeSet::from([path1.clone()]));
+        assert!(path_sets_equal(&result, &BTreeSet::from([path1.clone()])));
 
         // Add path2:
         let mut path2 = Path {
@@ -195,7 +196,10 @@ mod test {
         // - matching as-path-len
         // - matching med
         assert_eq!(result.len(), 2);
-        assert_eq!(result, BTreeSet::from([path1.clone(), path2.clone()]));
+        assert!(path_sets_equal(
+            &result,
+            &BTreeSet::from([path1.clone(), path2.clone()])
+        ));
 
         // Add path3 with:
         // - matching local-pref
@@ -221,7 +225,10 @@ mod test {
         let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 2);
         // paths 1 and 2 should always be selected since they have the lowest MED
-        assert_eq!(result, BTreeSet::from([path1.clone(), path2.clone()]));
+        assert!(path_sets_equal(
+            &result,
+            &BTreeSet::from([path1.clone(), path2.clone()])
+        ));
 
         // increase max paths to 3
         max = 3;
@@ -234,10 +241,10 @@ mod test {
         candidates.insert(path3.clone());
         let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 3);
-        assert_eq!(
-            result,
-            BTreeSet::from([path1.clone(), path2.clone(), path3.clone()])
-        );
+        assert!(path_sets_equal(
+            &result,
+            &BTreeSet::from([path1.clone(), path2.clone(), path3.clone()])
+        ));
 
         // bump the local_pref on path2, this should make it the singular
         // best path regardless of max paths
@@ -247,7 +254,7 @@ mod test {
         candidates.insert(path2.clone());
         let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result, BTreeSet::from([path2.clone()]));
+        assert!(path_sets_equal(&result, &BTreeSet::from([path2.clone()])));
 
         // Add a fourth path (which is static) and make sure that:
         // - path 4 loses to BGP paths with higher RIB priority
@@ -267,7 +274,7 @@ mod test {
         assert_eq!(result.len(), 1);
         // path4 (static) has worse rib priority, path2 should win because it
         // has the best (highest) local-pref among bgp paths (paths 1-3)
-        assert_eq!(result, BTreeSet::from([path2.clone()]));
+        assert!(path_sets_equal(&result, &BTreeSet::from([path2.clone()])));
 
         // Lower the RIB Priority (better)
         let mut candidates = result.clone();
@@ -277,7 +284,7 @@ mod test {
         let result = bestpaths(&candidates, max).unwrap();
         assert_eq!(result.len(), 1);
         // path4 (static) has the best (lower) rib priority
-        assert_eq!(result, BTreeSet::from([path4.clone()]));
+        assert!(path_sets_equal(&result, &BTreeSet::from([path4.clone()])));
 
         // Raise the RIB Priority equal to BGP (paths 1-3)
         let mut candidates = result.clone();
@@ -288,6 +295,104 @@ mod test {
         assert_eq!(result.len(), 1);
         // path4 (static) wins due to protocol preference
         // i.e. static > bgp when rib priority matches
-        assert_eq!(result, BTreeSet::from([path4.clone()]));
+        assert!(path_sets_equal(&result, &BTreeSet::from([path4.clone()])));
+    }
+
+    /// Test that active (non-shutdown) paths are preferred over shutdown paths.
+    /// Even when max allows multiple paths, shutdown paths should not be
+    /// included when active paths exist.
+    #[test]
+    fn test_bestpath_shutdown_preference() {
+        let remote_ip1 = IpAddr::from_str("203.0.113.1").unwrap();
+        let remote_ip2 = IpAddr::from_str("203.0.113.2").unwrap();
+
+        // Create two equivalent BGP paths, but one is shutdown
+        let active_path = Path {
+            nexthop: remote_ip1,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 470,
+                peer: remote_ip1,
+                id: 47,
+                med: Some(75),
+                local_pref: Some(100),
+                as_path: vec![470, 64501, 64502],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        let shutdown_path = Path {
+            nexthop: remote_ip2,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: true, // This path is shutdown
+            bgp: Some(BgpPathProperties {
+                origin_as: 480,
+                peer: remote_ip2,
+                id: 48,
+                med: Some(75),
+                local_pref: Some(100),
+                as_path: vec![480, 64501, 64502],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        // Both paths are equivalent except for shutdown status.
+        // With max=2, we could return both if they were truly equivalent,
+        // but the active path should win and the shutdown path should be excluded.
+        let mut candidates = BTreeSet::new();
+        candidates.insert(active_path.clone());
+        candidates.insert(shutdown_path.clone());
+
+        let result = bestpaths(&candidates, 2).unwrap();
+
+        // Only the active path should be returned, not the shutdown path
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(
+            &result,
+            &BTreeSet::from([active_path.clone()])
+        ));
+
+        // Verify that if ONLY shutdown paths exist, we still get a result
+        let mut shutdown_only = BTreeSet::new();
+        shutdown_only.insert(shutdown_path.clone());
+
+        let result = bestpaths(&shutdown_only, 2).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(
+            &result,
+            &BTreeSet::from([shutdown_path.clone()])
+        ));
+
+        // Test with two shutdown paths - both should be returned when max=2
+        let shutdown_path2 = Path {
+            nexthop: remote_ip1,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: true,
+            bgp: Some(BgpPathProperties {
+                origin_as: 470,
+                peer: remote_ip1,
+                id: 47,
+                med: Some(75),
+                local_pref: Some(100),
+                as_path: vec![470, 64501, 64502],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        let mut two_shutdown = BTreeSet::new();
+        two_shutdown.insert(shutdown_path.clone());
+        two_shutdown.insert(shutdown_path2.clone());
+
+        let result = bestpaths(&two_shutdown, 2).unwrap();
+        // Both shutdown paths should be returned since no active paths exist
+        assert_eq!(result.len(), 2);
+        assert!(path_sets_equal(
+            &result,
+            &BTreeSet::from([shutdown_path.clone(), shutdown_path2.clone()])
+        ));
     }
 }

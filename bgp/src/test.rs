@@ -8,6 +8,7 @@ use crate::{
     connection_channel::{BgpConnectionChannel, BgpListenerChannel},
     connection_tcp::{BgpConnectionTcp, BgpListenerTcp},
     dispatcher::Dispatcher,
+    params::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange},
     router::Router,
     session::{
         AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, SessionEndpoint,
@@ -18,11 +19,12 @@ use lazy_static::lazy_static;
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
-use rdb::{Asn, Prefix};
+use rdb::{Asn, ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex, mpsc::channel},
+    time::Duration,
 };
 
 // Use non-standard port outside the privileged range to avoid needing privs
@@ -48,7 +50,17 @@ lazy_static! {
             panic!("unsupported platform");
         };
 
-        let log = init_file_logger("loopback-manager.log");
+        // Extract test name from thread name for per-test log files.
+        // With cargo nextest, each test runs in its own process, so this
+        // will be unique per test process.
+        let thread_name = std::thread::current();
+        let test_name = thread_name
+            .name()
+            .and_then(|name| name.split("::").last())
+            .unwrap_or("unknown");
+        let log_filename = format!("loopback-manager.{}.log", test_name);
+
+        let log = init_file_logger(&log_filename);
 
         Arc::new(Mutex::new(LoopbackIpManager::new(ifname, log)))
     };
@@ -96,18 +108,141 @@ impl<Cnx: BgpConnection + 'static> TestRouter<Cnx> {
     }
 }
 
+/// Test-specific enum describing which route address families are exchanged
+/// in a BGP session. This is independent of the TCP/IP connection address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RouteExchange {
+    Ipv4 {
+        nexthop: Option<IpAddr>,
+    },
+    Ipv6 {
+        nexthop: Option<IpAddr>,
+    },
+    DualStack {
+        ipv4_nexthop: Option<IpAddr>,
+        ipv6_nexthop: Option<IpAddr>,
+    },
+}
+
 struct LogicalRouter {
     name: String,
     asn: Asn,
     id: u32,
     listen_addr: SocketAddr,
     bind_addr: Option<SocketAddr>,
-    neighbors: Vec<Neighbor>,
+    neighbors: Vec<NeighborConfig>,
 }
 
-struct Neighbor {
-    peer_config: PeerConfig,
-    session_info: Option<SessionInfo>,
+struct NeighborConfig {
+    peer_name: String,
+    remote_host: SocketAddr,
+    session_info: SessionInfo,
+}
+
+/// Create SessionInfo for tests with fixed timer values and route exchange configuration.
+/// This constructs SessionInfo directly without using PeerConfig.
+///
+/// # Arguments
+/// * `route_exchange` - Which route address families to exchange
+/// * `local_addr` - Local bind address for this session
+/// * `remote_addr` - Remote peer address (for nexthop defaults)
+/// * `passive` - Whether to use passive TCP establishment
+fn create_test_session_info(
+    route_exchange: RouteExchange,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+    passive: bool,
+) -> SessionInfo {
+    // Derive AF configuration from route_exchange
+    // Use remote_addr for nexthop defaults (what this router advertises)
+    let (ipv4_unicast, ipv6_unicast) = match route_exchange {
+        RouteExchange::Ipv4 { nexthop } => {
+            let ipv4_cfg = Ipv4UnicastConfig {
+                nexthop: nexthop.or_else(|| {
+                    if remote_addr.is_ipv4() {
+                        Some(remote_addr.ip())
+                    } else {
+                        None
+                    }
+                }),
+                import_policy: ImportExportPolicy4::default(),
+                export_policy: ImportExportPolicy4::default(),
+            };
+            (Some(ipv4_cfg), None)
+        }
+        RouteExchange::Ipv6 { nexthop } => {
+            let ipv6_cfg = Ipv6UnicastConfig {
+                nexthop: nexthop.or_else(|| {
+                    if remote_addr.is_ipv6() {
+                        Some(remote_addr.ip())
+                    } else {
+                        None
+                    }
+                }),
+                import_policy: ImportExportPolicy6::NoFiltering,
+                export_policy: ImportExportPolicy6::NoFiltering,
+            };
+            (None, Some(ipv6_cfg))
+        }
+        RouteExchange::DualStack {
+            ipv4_nexthop,
+            ipv6_nexthop,
+        } => {
+            let ipv4_cfg = Ipv4UnicastConfig {
+                nexthop: ipv4_nexthop.or_else(|| {
+                    if remote_addr.is_ipv4() {
+                        Some(remote_addr.ip())
+                    } else {
+                        None
+                    }
+                }),
+                import_policy: ImportExportPolicy4::default(),
+                export_policy: ImportExportPolicy4::default(),
+            };
+            let ipv6_cfg = Ipv6UnicastConfig {
+                nexthop: ipv6_nexthop.or_else(|| {
+                    if remote_addr.is_ipv6() {
+                        Some(remote_addr.ip())
+                    } else {
+                        None
+                    }
+                }),
+                import_policy: ImportExportPolicy6::NoFiltering,
+                export_policy: ImportExportPolicy6::NoFiltering,
+            };
+            (Some(ipv4_cfg), Some(ipv6_cfg))
+        }
+    };
+
+    // Construct SessionInfo directly with fixed test values
+    SessionInfo {
+        passive_tcp_establishment: passive,
+        remote_asn: None,
+        remote_id: None,
+        bind_addr: Some(local_addr),
+        min_ttl: None,
+        md5_auth_key: None,
+        multi_exit_discriminator: None,
+        communities: BTreeSet::new(),
+        local_pref: None,
+        enforce_first_as: false,
+        ipv4_unicast,
+        ipv6_unicast,
+        vlan_id: None,
+        // Fixed test timer values
+        connect_retry_time: Duration::from_secs(1),
+        keepalive_time: Duration::from_secs(3),
+        hold_time: Duration::from_secs(6),
+        idle_hold_time: Duration::from_secs(0),
+        delay_open_time: Duration::from_secs(0),
+        resolution: Duration::from_millis(100),
+        connect_retry_jitter: None,
+        idle_hold_jitter: Some(JitterRange {
+            min: 0.75,
+            max: 1.0,
+        }),
+        deterministic_collision_resolution: false,
+    }
 }
 
 fn test_setup<Cnx, Listener>(
@@ -134,15 +269,27 @@ where
         None
     };
 
+    // Extract the actual test function name from the thread name.
+    // The Rust test harness names threads like "test::test_function_name".
+    // This ensures each test function gets its own database, even if helpers
+    // are called with identical parameters by different tests.
+    let thread_name = std::thread::current();
+    let actual_test_name = thread_name
+        .name()
+        .and_then(|name| name.split("::").last())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| test_name.to_string());
+
     // Create all routers first
     for logical_router in routers.iter() {
         let log = init_file_logger(&format!(
-            "{}.{test_name}.log",
+            "{}.{actual_test_name}.log",
             logical_router.name
         ));
 
-        // Create database
-        let db_path = format!("/tmp/{}.{test_name}.db", logical_router.name);
+        // Create database with unique path per test function
+        let db_path =
+            format!("/tmp/{}.{actual_test_name}.db", logical_router.name);
         let _ = std::fs::remove_dir_all(&db_path);
         let db = rdb::Db::new(&db_path, log.clone()).expect("create db");
 
@@ -188,17 +335,26 @@ where
         for neighbor in &logical_router.neighbors {
             // Each session gets its own channel pair for FsmEvents
             let (event_tx, event_rx) = channel();
-            let peer_config = neighbor.peer_config.clone();
+
+            // Create PeerConfig from neighbor's configuration for compatibility with new_session
+            let peer_config = PeerConfig {
+                name: neighbor.peer_name.clone(),
+                group: String::new(),
+                host: neighbor.remote_host,
+                hold_time: 6,
+                idle_hold_time: 0,
+                delay_open: 0,
+                connect_retry: 1,
+                keepalive: 3,
+                resolution: 100,
+            };
 
             // Use bind_addr from LogicalRouter if specified, otherwise use listen_addr
             let bind_addr = logical_router
                 .bind_addr
                 .unwrap_or(logical_router.listen_addr);
 
-            let session_info = neighbor
-                .session_info
-                .clone()
-                .unwrap_or_else(|| SessionInfo::from_peer_config(&peer_config));
+            let session_info = neighbor.session_info.clone();
 
             let session_runner = router
                 .new_session(
@@ -256,26 +412,21 @@ fn basic_peering_helper<
     Listener: BgpListener<Cnx> + 'static,
 >(
     passive: bool,
+    route_exchange: RouteExchange,
     r1_addr: SocketAddr,
     r2_addr: SocketAddr,
 ) {
     let is_tcp = std::any::type_name::<Cnx>().contains("Tcp");
-    let test_str = match (passive, is_tcp) {
-        (true, true) => "basic_peering_passive_tcp",
-        (false, true) => "basic_peering_active_tcp",
-        (true, false) => "basic_peering_passive",
-        (false, false) => "basic_peering_active",
-    };
-
-    let peer_config_r1 = PeerConfig {
-        name: "r2".into(),
-        host: r2_addr,
-        hold_time: 6,
-        idle_hold_time: 0,
-        delay_open: 0,
-        connect_retry: 1,
-        keepalive: 3,
-        resolution: 100,
+    let is_ipv6 = r1_addr.ip().is_ipv6();
+    let test_str = match (passive, is_tcp, is_ipv6) {
+        (true, true, true) => "basic_peering_passive_tcp_ipv6",
+        (false, true, true) => "basic_peering_active_tcp_ipv6",
+        (true, false, true) => "basic_peering_passive_ipv6",
+        (false, false, true) => "basic_peering_active_ipv6",
+        (true, true, false) => "basic_peering_passive_tcp",
+        (false, true, false) => "basic_peering_active_tcp",
+        (true, false, false) => "basic_peering_passive",
+        (false, false, false) => "basic_peering_active",
     };
 
     let routers = vec![
@@ -285,14 +436,15 @@ fn basic_peering_helper<
             id: 1,
             listen_addr: r1_addr,
             bind_addr: Some(r1_addr),
-            neighbors: vec![Neighbor {
-                peer_config: peer_config_r1.clone(),
-                session_info: Some({
-                    let mut info =
-                        SessionInfo::from_peer_config(&peer_config_r1);
-                    info.passive_tcp_establishment = passive;
-                    info
-                }),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: create_test_session_info(
+                    route_exchange,
+                    r1_addr,
+                    r2_addr,
+                    passive,
+                ),
             }],
         },
         LogicalRouter {
@@ -301,18 +453,15 @@ fn basic_peering_helper<
             id: 2,
             listen_addr: r2_addr,
             bind_addr: Some(r2_addr),
-            neighbors: vec![Neighbor {
-                peer_config: PeerConfig {
-                    name: "r1".into(),
-                    host: r1_addr,
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                },
-                session_info: None,
+            neighbors: vec![NeighborConfig {
+                peer_name: "r1".to_string(),
+                remote_host: r1_addr,
+                session_info: create_test_session_info(
+                    route_exchange,
+                    r2_addr,
+                    r1_addr,
+                    !passive,
+                ),
             }],
         },
     ];
@@ -436,25 +585,28 @@ fn basic_peering_helper<
 
 // This test does the following:
 // 1. Sets up a basic pair of routers
-// 2. Configures r1 to originate an IPv4 Unicast prefix
+// 2. Configures r1 to originate prefix(es) based on route_exchange
 // 3. Brings up a BGP session between r1 and r2
 // 4. Ensures the BGP FSM moves into Established on both r1 and r2
-// 5. Ensures r2 has succesfully received and installed the prefix
+// 5. Ensures r2 has succesfully received and installed the prefix(es)
 // 6. Shuts down r1
 // 7. Ensures the BGP FSM moves out of Established on both r1 and r2
-// 8. Ensures r2 has successfully uninstalled the implicitly withdrawn prefix
+// 8. Ensures r2 has successfully uninstalled the implicitly withdrawn prefix(es)
 fn basic_update_helper<
     Cnx: BgpConnection + 'static,
     Listener: BgpListener<Cnx> + 'static,
 >(
+    route_exchange: RouteExchange,
     r1_addr: SocketAddr,
     r2_addr: SocketAddr,
 ) {
     let is_tcp = std::any::type_name::<Cnx>().contains("Tcp");
-    let test_name = if is_tcp {
-        "basic_update_tcp"
-    } else {
-        "basic_update"
+    let is_ipv6 = r1_addr.ip().is_ipv6();
+    let test_name = match (is_tcp, is_ipv6) {
+        (true, true) => "basic_update_ipv6_tcp",
+        (true, false) => "basic_update_tcp",
+        (false, true) => "basic_update_ipv6",
+        (false, false) => "basic_update",
     };
 
     let routers = vec![
@@ -464,18 +616,15 @@ fn basic_update_helper<
             id: 1,
             listen_addr: r1_addr,
             bind_addr: Some(r1_addr),
-            neighbors: vec![Neighbor {
-                peer_config: PeerConfig {
-                    name: "r2".into(),
-                    host: r2_addr,
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                },
-                session_info: None,
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: create_test_session_info(
+                    route_exchange,
+                    r1_addr,
+                    r2_addr,
+                    false,
+                ),
             }],
         },
         LogicalRouter {
@@ -484,18 +633,15 @@ fn basic_update_helper<
             id: 2,
             listen_addr: r2_addr,
             bind_addr: Some(r2_addr),
-            neighbors: vec![Neighbor {
-                peer_config: PeerConfig {
-                    name: "r1".into(),
-                    host: r1_addr,
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                },
-                session_info: None,
+            neighbors: vec![NeighborConfig {
+                peer_name: "r1".to_string(),
+                remote_host: r1_addr,
+                session_info: create_test_session_info(
+                    route_exchange,
+                    r2_addr,
+                    r1_addr,
+                    false,
+                ),
             }],
         },
     ];
@@ -518,34 +664,381 @@ fn basic_update_helper<
     wait_for_eq!(r1_session.state(), FsmStateKind::Established);
     wait_for_eq!(r2_session.state(), FsmStateKind::Established);
 
-    // originate a prefix
-    r1.router
-        .create_origin4(vec![ip!("1.2.3.0/24")])
-        .expect("originate");
+    // Originate and verify routes based on route_exchange variant
+    match route_exchange {
+        RouteExchange::Ipv4 {
+            nexthop: initial_nexthop,
+        } => {
+            // IPv4-only: originate and verify IPv4 prefix
+            r1.router
+                .create_origin4(vec![cidr!("1.2.3.0/24")])
+                .expect("originate IPv4");
 
-    // create handle to rdb::Prefix -- create_origin4 takes messages::Prefix,
-    // so we can't pass this same handle to the earlier method call.
-    let prefix = Prefix::V4(cidr!("1.2.3.0/24"));
+            let prefix_rdb = Prefix::V4(cidr!("1.2.3.0/24"));
+            wait_for!(!r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
 
-    wait_for!(!r2.router.db.get_prefix_paths(&prefix).is_empty());
+            // Verify initial nexthop if one was configured and test override change
+            let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
+            assert_eq!(paths.len(), 1);
+            if let Some(initial_nh) = initial_nexthop {
+                assert_eq!(paths[0].nexthop, initial_nh);
 
-    // shut down r1 and ensure that the prefixes are withdrawn from r2 on
-    // session timeout.
-    r1.shutdown();
-    wait_for_neq!(
-        r1_session.state(),
-        FsmStateKind::Established,
-        "r1 state should NOT be established after being shutdown"
-    );
-    wait_for_neq!(
-        r2_session.state(),
-        FsmStateKind::Established,
-        "r2 state should NOT be established after shutdown of r1"
-    );
-    wait_for!(r2.router.db.get_prefix_paths(&prefix).is_empty());
+                // Test nexthop override change
+                let new_nexthop = match initial_nh {
+                    IpAddr::V4(_) => ip!("10.255.255.254"),
+                    IpAddr::V6(_) => unreachable!(),
+                };
+
+                let peer_config = PeerConfig {
+                    name: "r2".into(),
+                    group: String::new(),
+                    host: r2_addr,
+                    hold_time: 6,
+                    idle_hold_time: 0,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                };
+                let mut session_info = create_test_session_info(
+                    route_exchange,
+                    r1_addr,
+                    r2_addr,
+                    false,
+                );
+                session_info.ipv4_unicast.as_mut().unwrap().nexthop =
+                    Some(new_nexthop);
+
+                r1.router
+                    .update_session(peer_config, session_info)
+                    .expect("update nexthop");
+
+                // Verify nexthop change is reflected in re-advertised route
+                wait_for!(
+                    {
+                        let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
+                        !paths.is_empty() && paths[0].nexthop == new_nexthop
+                    },
+                    "nexthop should be updated"
+                );
+            }
+
+            // Shut down r1 and verify withdrawal
+            r1.shutdown();
+            wait_for_neq!(r1_session.state(), FsmStateKind::Established);
+            wait_for_neq!(r2_session.state(), FsmStateKind::Established);
+            wait_for!(r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
+        }
+        RouteExchange::Ipv6 {
+            nexthop: initial_nexthop,
+        } => {
+            // IPv6-only: originate and verify IPv6 prefix
+            r1.router
+                .create_origin6(vec![cidr!("3fff:db8::/32")])
+                .expect("originate IPv6");
+
+            let prefix_rdb = Prefix::V6(cidr!("3fff:db8::/32"));
+            wait_for!(!r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
+
+            // Verify initial nexthop if one was configured and test override change
+            let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
+            assert_eq!(paths.len(), 1);
+            if let Some(initial_nh) = initial_nexthop {
+                assert_eq!(paths[0].nexthop, initial_nh);
+
+                // Test nexthop override change
+                let new_nexthop = match initial_nh {
+                    IpAddr::V6(_) => ip!("3fff:ffff:ffff:ffff::ffff:fffe"),
+                    IpAddr::V4(_) => unreachable!(),
+                };
+
+                let peer_config = PeerConfig {
+                    name: "r2".into(),
+                    group: String::new(),
+                    host: r2_addr,
+                    hold_time: 6,
+                    idle_hold_time: 0,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                };
+                let mut session_info = create_test_session_info(
+                    route_exchange,
+                    r1_addr,
+                    r2_addr,
+                    false,
+                );
+                session_info.ipv6_unicast.as_mut().unwrap().nexthop =
+                    Some(new_nexthop);
+
+                r1.router
+                    .update_session(peer_config, session_info)
+                    .expect("update nexthop");
+
+                // Verify nexthop change is reflected in re-advertised route
+                wait_for!(
+                    {
+                        let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
+                        !paths.is_empty() && paths[0].nexthop == new_nexthop
+                    },
+                    "nexthop should be updated"
+                );
+            }
+
+            // Shut down r1 and verify withdrawal
+            r1.shutdown();
+            wait_for_neq!(r1_session.state(), FsmStateKind::Established);
+            wait_for_neq!(r2_session.state(), FsmStateKind::Established);
+            wait_for!(r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
+        }
+        RouteExchange::DualStack {
+            ipv4_nexthop,
+            ipv6_nexthop,
+        } => {
+            // Dual-stack: originate and verify both IPv4 and IPv6 prefixes
+            r1.router
+                .create_origin4(vec![cidr!("1.2.3.0/24")])
+                .expect("originate IPv4");
+            r1.router
+                .create_origin6(vec![cidr!("3fff:db8::/32")])
+                .expect("originate IPv6");
+
+            let prefix4_rdb = Prefix::V4(cidr!("1.2.3.0/24"));
+            let prefix6_rdb = Prefix::V6(cidr!("3fff:db8::/32"));
+
+            wait_for!(!r2.router.db.get_prefix_paths(&prefix4_rdb).is_empty());
+            wait_for!(!r2.router.db.get_prefix_paths(&prefix6_rdb).is_empty());
+
+            // Verify initial nexthops if configured
+            let paths4 = r2.router.db.get_prefix_paths(&prefix4_rdb);
+            assert_eq!(paths4.len(), 1);
+            if let Some(expected_nexthop) = ipv4_nexthop {
+                assert_eq!(paths4[0].nexthop, expected_nexthop);
+            }
+
+            let paths6 = r2.router.db.get_prefix_paths(&prefix6_rdb);
+            assert_eq!(paths6.len(), 1);
+            if let Some(expected_nexthop) = ipv6_nexthop {
+                assert_eq!(paths6[0].nexthop, expected_nexthop);
+            }
+
+            // Test nexthop override changes if any were configured
+            if ipv4_nexthop.is_some() || ipv6_nexthop.is_some() {
+                let new_ipv4_nexthop =
+                    ipv4_nexthop.map(|_| ip!("10.255.255.254"));
+                let new_ipv6_nexthop =
+                    ipv6_nexthop.map(|_| ip!("3fff:ffff:ffff:ffff::ffff:fffe"));
+
+                let peer_config = PeerConfig {
+                    name: "r2".into(),
+                    group: String::new(),
+                    host: r2_addr,
+                    hold_time: 6,
+                    idle_hold_time: 0,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                };
+                let mut session_info = create_test_session_info(
+                    route_exchange,
+                    r1_addr,
+                    r2_addr,
+                    false,
+                );
+                if let Some(nexthop) = new_ipv4_nexthop {
+                    session_info.ipv4_unicast.as_mut().unwrap().nexthop =
+                        Some(nexthop);
+                }
+                if let Some(nexthop) = new_ipv6_nexthop {
+                    session_info.ipv6_unicast.as_mut().unwrap().nexthop =
+                        Some(nexthop);
+                }
+
+                r1.router
+                    .update_session(peer_config, session_info)
+                    .expect("update nexthop");
+
+                // Verify IPv4 nexthop change if applicable
+                if let Some(new_nh) = new_ipv4_nexthop {
+                    wait_for!(
+                        {
+                            let paths =
+                                r2.router.db.get_prefix_paths(&prefix4_rdb);
+                            !paths.is_empty() && paths[0].nexthop == new_nh
+                        },
+                        "IPv4 nexthop should be updated"
+                    );
+                }
+
+                // Verify IPv6 nexthop change if applicable
+                if let Some(new_nh) = new_ipv6_nexthop {
+                    wait_for!(
+                        {
+                            let paths =
+                                r2.router.db.get_prefix_paths(&prefix6_rdb);
+                            !paths.is_empty() && paths[0].nexthop == new_nh
+                        },
+                        "IPv6 nexthop should be updated"
+                    );
+                }
+            }
+
+            // Shut down r1 and verify withdrawal of both
+            r1.shutdown();
+            wait_for_neq!(r1_session.state(), FsmStateKind::Established);
+            wait_for_neq!(r2_session.state(), FsmStateKind::Established);
+            wait_for!(r2.router.db.get_prefix_paths(&prefix4_rdb).is_empty());
+            wait_for!(r2.router.db.get_prefix_paths(&prefix6_rdb).is_empty());
+        }
+    }
 
     // Clean up properly
     r2.shutdown();
+}
+
+/// Helper for testing 3-router chain topology: r1 <-> r2 <-> r3
+/// This validates that the BgpListener can handle multiple connections.
+fn three_router_chain_helper<
+    Cnx: BgpConnection + 'static,
+    Listener: BgpListener<Cnx> + 'static,
+>(
+    r1_addr: SocketAddr,
+    r2_addr: SocketAddr,
+    r3_addr: SocketAddr,
+) {
+    let is_tcp = std::any::type_name::<Cnx>().contains("Tcp");
+    let is_ipv6 = r1_addr.ip().is_ipv6();
+    let test_str = match (is_tcp, is_ipv6) {
+        (true, true) => "three_router_chain_tcp_ipv6",
+        (true, false) => "three_router_chain_tcp",
+        (false, true) => "three_router_chain_ipv6",
+        (false, false) => "three_router_chain",
+    };
+
+    // Set up 3 routers in a chain topology: r1 <-> r2 <-> r3
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: SessionInfo::from_peer_config(&PeerConfig {
+                    name: "r2".into(),
+                    group: String::new(),
+                    host: r2_addr,
+                    hold_time: 6,
+                    idle_hold_time: 0,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                }),
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
+            neighbors: vec![
+                NeighborConfig {
+                    peer_name: "r1".to_string(),
+                    remote_host: r1_addr,
+                    session_info: SessionInfo::from_peer_config(&PeerConfig {
+                        name: "r1".into(),
+                        group: String::new(),
+                        host: r1_addr,
+                        hold_time: 6,
+                        idle_hold_time: 0,
+                        delay_open: 0,
+                        connect_retry: 1,
+                        keepalive: 3,
+                        resolution: 100,
+                    }),
+                },
+                NeighborConfig {
+                    peer_name: "r3".to_string(),
+                    remote_host: r3_addr,
+                    session_info: SessionInfo::from_peer_config(&PeerConfig {
+                        name: "r3".into(),
+                        group: String::new(),
+                        host: r3_addr,
+                        hold_time: 6,
+                        idle_hold_time: 0,
+                        delay_open: 0,
+                        connect_retry: 1,
+                        keepalive: 3,
+                        resolution: 100,
+                    }),
+                },
+            ],
+        },
+        LogicalRouter {
+            name: "r3".to_string(),
+            asn: Asn::FourOctet(4200000003),
+            id: 3,
+            listen_addr: r3_addr,
+            bind_addr: Some(r3_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: SessionInfo::from_peer_config(&PeerConfig {
+                    name: "r2".into(),
+                    group: String::new(),
+                    host: r2_addr,
+                    hold_time: 6,
+                    idle_hold_time: 0,
+                    delay_open: 0,
+                    connect_retry: 1,
+                    keepalive: 3,
+                    resolution: 100,
+                }),
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard) =
+        test_setup::<Cnx, Listener>(test_str, &routers);
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
+    let r3 = &test_routers[2];
+
+    // Get sessions from each router
+    let r1_r2_session = r1
+        .router
+        .get_session(r2_addr.ip())
+        .expect("get r1->r2 session");
+    let r2_r1_session = r2
+        .router
+        .get_session(r1_addr.ip())
+        .expect("get r2->r1 session");
+    let r2_r3_session = r2
+        .router
+        .get_session(r3_addr.ip())
+        .expect("get r2->r3 session");
+    let r3_r2_session = r3
+        .router
+        .get_session(r2_addr.ip())
+        .expect("get r3->r2 session");
+
+    // Verify all sessions reach Established state
+    wait_for_eq!(r1_r2_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_r3_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r3_r2_session.state(), FsmStateKind::Established);
+
+    // Clean up
+    for router in test_routers.iter() {
+        router.shutdown();
+    }
 }
 
 // Channels vs TCP:
@@ -584,6 +1077,7 @@ fn basic_update_helper<
 #[test]
 fn test_basic_update() {
     basic_update_helper::<BgpConnectionChannel, BgpListenerChannel>(
+        RouteExchange::Ipv4 { nexthop: None },
         sockaddr!(&format!("10.0.0.1:{TEST_BGP_PORT}")),
         sockaddr!(&format!("10.0.0.2:{TEST_BGP_PORT}")),
     )
@@ -593,6 +1087,7 @@ fn test_basic_update() {
 fn test_basic_peering_passive() {
     basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         true,
+        RouteExchange::Ipv4 { nexthop: None },
         sockaddr!(&format!("11.0.0.1:{TEST_BGP_PORT}")),
         sockaddr!(&format!("11.0.0.2:{TEST_BGP_PORT}")),
     )
@@ -602,6 +1097,7 @@ fn test_basic_peering_passive() {
 fn test_basic_peering_active() {
     basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         false,
+        RouteExchange::Ipv4 { nexthop: None },
         sockaddr!(&format!("12.0.0.1:{TEST_BGP_PORT}")),
         sockaddr!(&format!("12.0.0.2:{TEST_BGP_PORT}")),
     )
@@ -614,6 +1110,7 @@ fn test_basic_peering_active() {
 fn test_basic_peering_passive_tcp() {
     basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
         true,
+        RouteExchange::Ipv4 { nexthop: None },
         sockaddr!(&format!("127.0.0.1:{TEST_BGP_PORT}")),
         sockaddr!(&format!("127.0.0.2:{TEST_BGP_PORT}")),
     )
@@ -623,6 +1120,7 @@ fn test_basic_peering_passive_tcp() {
 fn test_basic_peering_active_tcp() {
     basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
         false,
+        RouteExchange::Ipv4 { nexthop: None },
         sockaddr!(&format!("127.0.0.3:{TEST_BGP_PORT}")),
         sockaddr!(&format!("127.0.0.4:{TEST_BGP_PORT}")),
     )
@@ -631,6 +1129,7 @@ fn test_basic_peering_active_tcp() {
 #[test]
 fn test_basic_update_tcp() {
     basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        RouteExchange::Ipv4 { nexthop: None },
         sockaddr!(&format!("127.0.0.5:{TEST_BGP_PORT}")),
         sockaddr!(&format!("127.0.0.6:{TEST_BGP_PORT}")),
     )
@@ -638,129 +1137,28 @@ fn test_basic_update_tcp() {
 
 #[test]
 fn test_three_router_chain_tcp() {
-    let r1_addr = "127.0.0.7";
-    let r2_addr = "127.0.0.8";
-    let r3_addr = "127.0.0.9";
+    let r1_addr: SocketAddr = sockaddr!(&format!("127.0.0.7:{TEST_BGP_PORT}"));
+    let r2_addr: SocketAddr = sockaddr!(&format!("127.0.0.8:{TEST_BGP_PORT}"));
+    let r3_addr: SocketAddr = sockaddr!(&format!("127.0.0.9:{TEST_BGP_PORT}"));
 
-    // Ensure additional loopback IPs are available for this test
+    // Ensure loopback IPs are available for this test
     let _ip_guard =
-        ensure_loop_ips(&[ip!(r1_addr), ip!(r2_addr), ip!(r3_addr)]);
+        ensure_loop_ips(&[r1_addr.ip(), r2_addr.ip(), r3_addr.ip()]);
 
-    // Set up 3 routers in a chain topology: r1 <-> r2 <-> r3
-    // This validates that the BgpListener can handle multiple connections
-    let routers = vec![
-        LogicalRouter {
-            name: "r1".to_string(),
-            asn: Asn::FourOctet(4200000001),
-            id: 1,
-            listen_addr: sockaddr!(&format!("{r1_addr}:{TEST_BGP_PORT}")),
-            bind_addr: Some(sockaddr!(&format!("{r1_addr}:{TEST_BGP_PORT}"))),
-            neighbors: vec![Neighbor {
-                peer_config: PeerConfig {
-                    name: "r2".into(),
-                    host: sockaddr!(&format!("{r2_addr}:{TEST_BGP_PORT}")),
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                },
-                session_info: None,
-            }],
-        },
-        LogicalRouter {
-            name: "r2".to_string(),
-            asn: Asn::FourOctet(4200000002),
-            id: 2,
-            listen_addr: sockaddr!(&format!("{r2_addr}:{TEST_BGP_PORT}")),
-            bind_addr: Some(sockaddr!(&format!("{r2_addr}:{TEST_BGP_PORT}"))),
-            neighbors: vec![
-                Neighbor {
-                    peer_config: PeerConfig {
-                        name: "r1".into(),
-                        host: sockaddr!(&format!("{r1_addr}:{TEST_BGP_PORT}")),
-                        hold_time: 6,
-                        idle_hold_time: 0,
-                        delay_open: 0,
-                        connect_retry: 1,
-                        keepalive: 3,
-                        resolution: 100,
-                    },
-                    session_info: None,
-                },
-                Neighbor {
-                    peer_config: PeerConfig {
-                        name: "r3".into(),
-                        host: sockaddr!(&format!("{r3_addr}:{TEST_BGP_PORT}")),
-                        hold_time: 6,
-                        idle_hold_time: 0,
-                        delay_open: 0,
-                        connect_retry: 1,
-                        keepalive: 3,
-                        resolution: 100,
-                    },
-                    session_info: None,
-                },
-            ],
-        },
-        LogicalRouter {
-            name: "r3".to_string(),
-            asn: Asn::FourOctet(4200000003),
-            id: 3,
-            listen_addr: sockaddr!(&format!("{r3_addr}:{TEST_BGP_PORT}")),
-            bind_addr: Some(sockaddr!(&format!("{r3_addr}:{TEST_BGP_PORT}"))),
-            neighbors: vec![Neighbor {
-                peer_config: PeerConfig {
-                    name: "r2".into(),
-                    host: sockaddr!(&format!("{r2_addr}:{TEST_BGP_PORT}")),
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                },
-                session_info: None,
-            }],
-        },
-    ];
+    three_router_chain_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        r1_addr, r2_addr, r3_addr,
+    )
+}
 
-    let (test_routers, _ip_guard2) = test_setup::<
-        BgpConnectionTcp,
-        BgpListenerTcp,
-    >("three_router_chain_tcp", &routers);
+#[test]
+fn test_three_router_chain_tcp_ipv6() {
+    let r1_addr: SocketAddr = sockaddr!(&format!("[3fff::c]:{TEST_BGP_PORT}"));
+    let r2_addr: SocketAddr = sockaddr!(&format!("[3fff::d]:{TEST_BGP_PORT}"));
+    let r3_addr: SocketAddr = sockaddr!(&format!("[3fff::e]:{TEST_BGP_PORT}"));
 
-    // Verify BGP sessions reach Established state
-    // This test validates that the BgpListener can handle multiple connections
-
-    // Get sessions from each router
-    let r1_r2_session = test_routers[0]
-        .router
-        .get_session(ip!(r2_addr))
-        .expect("get r1->r2 session");
-    let r2_r1_session = test_routers[1]
-        .router
-        .get_session(ip!(r1_addr))
-        .expect("get r2->r1 session");
-    let r2_r3_session = test_routers[1]
-        .router
-        .get_session(ip!(r3_addr))
-        .expect("get r2->r3 session");
-    let r3_r2_session = test_routers[2]
-        .router
-        .get_session(ip!(r2_addr))
-        .expect("get r3->r2 session");
-
-    wait_for_eq!(r1_r2_session.state(), FsmStateKind::Established);
-    wait_for_eq!(r2_r1_session.state(), FsmStateKind::Established);
-    wait_for_eq!(r2_r3_session.state(), FsmStateKind::Established);
-    wait_for_eq!(r3_r2_session.state(), FsmStateKind::Established);
-
-    // Clean up
-    for router in test_routers.iter() {
-        router.shutdown();
-    }
+    three_router_chain_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        r1_addr, r2_addr, r3_addr,
+    )
 }
 
 /// Test that threads are properly cleaned up throughout the neighbor lifecycle.
@@ -794,6 +1192,30 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
     let baseline = 0;
     eprintln!("=== Baseline BGP thread count: {baseline} ===");
 
+    let r1_peer_config = PeerConfig {
+        name: "r2".into(),
+        group: String::new(),
+        host: r2_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+
+    let r2_peer_config = PeerConfig {
+        name: "r1".into(),
+        group: String::new(),
+        host: r1_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+
     let routers = vec![
         LogicalRouter {
             name: "r1".to_string(),
@@ -801,18 +1223,10 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
             id: 1,
             listen_addr: r1_addr,
             bind_addr: Some(r1_addr),
-            neighbors: vec![Neighbor {
-                peer_config: PeerConfig {
-                    name: "r2".into(),
-                    host: r2_addr,
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                },
-                session_info: None,
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: SessionInfo::from_peer_config(&r1_peer_config),
             }],
         },
         LogicalRouter {
@@ -821,18 +1235,10 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
             id: 2,
             listen_addr: r2_addr,
             bind_addr: Some(r2_addr),
-            neighbors: vec![Neighbor {
-                peer_config: PeerConfig {
-                    name: "r1".into(),
-                    host: r1_addr,
-                    hold_time: 6,
-                    idle_hold_time: 0,
-                    delay_open: 0,
-                    connect_retry: 1,
-                    keepalive: 3,
-                    resolution: 100,
-                },
-                session_info: None,
+            neighbors: vec![NeighborConfig {
+                peer_name: "r1".to_string(),
+                remote_host: r1_addr,
+                session_info: SessionInfo::from_peer_config(&r2_peer_config),
             }],
         },
     ];
@@ -924,4 +1330,399 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
         },
         "BGP thread count should return to baseline after delete"
     );
+}
+
+/// Test import/export policy filtering.
+///
+/// This test verifies that:
+/// 1. Export policy on the sender filters prefixes before transmission
+/// 2. Import policy on the receiver filters prefixes after reception
+/// 3. Removing export policy allows filtered prefixes through
+/// 4. Removing import policy allows filtered prefixes through
+/// 5. Path attributes are correctly preserved through filtering
+#[test]
+fn test_import_export_policy_filtering() {
+    use rdb::ImportExportPolicy4;
+    use std::collections::BTreeSet;
+
+    let r1_addr: SocketAddr = sockaddr!(&format!("127.0.0.12:{TEST_BGP_PORT}"));
+    let r2_addr: SocketAddr = sockaddr!(&format!("127.0.0.13:{TEST_BGP_PORT}"));
+
+    // Ensure loopback IPs are available for this test
+    let _ip_guard = ensure_loop_ips(&[r1_addr.ip(), r2_addr.ip()]);
+
+    // Define our test prefixes
+    let prefix_a = ip!("10.1.0.0/24"); // Will pass both export and import
+    let prefix_b = ip!("10.2.0.0/24"); // Will be filtered by export, passes import
+    let prefix_c = ip!("10.3.0.0/24"); // Will pass export but filtered by import
+
+    // Build export policy for r1: allow prefix_a and prefix_c, deny prefix_b
+    let export_allow: BTreeSet<Prefix4> =
+        [cidr!("10.1.0.0/24"), cidr!("10.3.0.0/24")]
+            .into_iter()
+            .collect();
+
+    // Build import policy for r2: allow prefix_a and prefix_b, deny prefix_c
+    let import_allow: BTreeSet<Prefix4> =
+        [cidr!("10.1.0.0/24"), cidr!("10.2.0.0/24")]
+            .into_iter()
+            .collect();
+
+    // Configure r1 with export policy
+    let r1_peer_config = PeerConfig {
+        name: "r2".into(),
+        group: String::new(),
+        host: r2_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+    let r1_session_info = {
+        let mut info = SessionInfo::from_peer_config(&r1_peer_config);
+        if let Some(ref mut cfg) = info.ipv4_unicast {
+            cfg.export_policy =
+                ImportExportPolicy4::Allow(export_allow.clone());
+        }
+        info
+    };
+
+    // Configure r2 with import policy
+    let r2_peer_config = PeerConfig {
+        name: "r1".into(),
+        group: String::new(),
+        host: r1_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+    let r2_session_info = {
+        let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+        if let Some(ref mut cfg) = info.ipv4_unicast {
+            cfg.import_policy =
+                ImportExportPolicy4::Allow(import_allow.clone());
+        }
+        info
+    };
+
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: r1_session_info,
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r1".to_string(),
+                remote_host: r1_addr,
+                session_info: r2_session_info,
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard2) = test_setup::<
+        BgpConnectionTcp,
+        BgpListenerTcp,
+    >("import_export_policy", &routers);
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
+
+    // Wait for session establishment
+    let r1_session = r1
+        .router
+        .get_session(r2_addr.ip())
+        .expect("get r1->r2 session");
+    let r2_session = r2
+        .router
+        .get_session(r1_addr.ip())
+        .expect("get r2->r1 session");
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    // Originate all 3 prefixes from r1
+    r1.router
+        .create_origin4(vec![prefix_a, prefix_b, prefix_c])
+        .expect("originate prefixes");
+
+    // Wait for routes to propagate - r2 should only see prefix_a
+    // (prefix_b filtered by export, prefix_c filtered by import)
+    let prefix_a_rdb = Prefix::V4(cidr!("10.1.0.0/24"));
+    let prefix_b_rdb = Prefix::V4(cidr!("10.2.0.0/24"));
+    let prefix_c_rdb = Prefix::V4(cidr!("10.3.0.0/24"));
+
+    wait_for!(
+        !r2.router.db.get_prefix_paths(&prefix_a_rdb).is_empty(),
+        "r2 should receive prefix_a"
+    );
+
+    // Verify r2's RIB state with policies active
+    // prefix_a: should be present (passes both export and import)
+    let paths_a = r2.router.db.get_prefix_paths(&prefix_a_rdb);
+    assert_eq!(paths_a.len(), 1, "prefix_a should have exactly one path");
+    let path_a = &paths_a[0];
+    assert_eq!(path_a.nexthop, r1_addr.ip(), "nexthop should be r1");
+    let bgp_props_a = path_a.bgp.as_ref().expect("should have BGP properties");
+    assert_eq!(
+        bgp_props_a.origin_as, 4200000001,
+        "origin AS should be r1's ASN"
+    );
+    assert_eq!(
+        bgp_props_a.as_path,
+        vec![4200000001],
+        "AS path should contain r1's ASN"
+    );
+
+    // prefix_b: should NOT be present (filtered by r1's export policy)
+    let paths_b = r2.router.db.get_prefix_paths(&prefix_b_rdb);
+    assert!(
+        paths_b.is_empty(),
+        "prefix_b should be filtered by export policy"
+    );
+
+    // prefix_c: should NOT be present (filtered by r2's import policy)
+    let paths_c = r2.router.db.get_prefix_paths(&prefix_c_rdb);
+    assert!(
+        paths_c.is_empty(),
+        "prefix_c should be filtered by import policy"
+    );
+
+    // Remove r1's export policy - prefix_b should now be sent to r2
+    // The ExportPolicy4Changed handler will automatically send the newly-allowed
+    // prefix without requiring manual re-origination.
+    assert_eq!(
+        r1_session.state(),
+        FsmStateKind::Established,
+        "r1 session should be in Established state before policy update"
+    );
+    let r1_session_info_no_export = {
+        let mut info = SessionInfo::from_peer_config(&r1_peer_config);
+        if let Some(ref mut cfg) = info.ipv4_unicast {
+            cfg.export_policy = ImportExportPolicy4::NoFiltering;
+        }
+        info
+    };
+    r1.router
+        .update_session(r1_peer_config.clone(), r1_session_info_no_export)
+        .expect("update r1 session to remove export policy");
+
+    // prefix_b should now appear (was filtered by export, now allowed)
+    // but prefix_c is still filtered by r2's import policy
+    wait_for!(
+        !r2.router.db.get_prefix_paths(&prefix_b_rdb).is_empty(),
+        "r2 should receive prefix_b after removing export policy"
+    );
+
+    // Verify prefix_b arrived with correct attributes
+    let paths_b = r2.router.db.get_prefix_paths(&prefix_b_rdb);
+    assert_eq!(
+        paths_b.len(),
+        1,
+        "prefix_b should have exactly one path after export policy removal"
+    );
+    let path_b = &paths_b[0];
+    assert_eq!(
+        path_b.nexthop,
+        r1_addr.ip(),
+        "prefix_b nexthop should be r1"
+    );
+    let bgp_props_b = path_b.bgp.as_ref().expect("should have BGP properties");
+    assert_eq!(
+        bgp_props_b.origin_as, 4200000001,
+        "prefix_b origin AS should be r1's ASN"
+    );
+
+    // prefix_c should still be filtered by r2's import policy
+    let paths_c = r2.router.db.get_prefix_paths(&prefix_c_rdb);
+    assert!(
+        paths_c.is_empty(),
+        "prefix_c should still be filtered by import policy"
+    );
+
+    // Now remove r2's import policy - prefix_c should appear via route-refresh
+    let r2_session_info_no_import = {
+        let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+        if let Some(ref mut cfg) = info.ipv4_unicast {
+            cfg.import_policy = ImportExportPolicy4::NoFiltering;
+        }
+        info
+    };
+    r2.router
+        .update_session(r2_peer_config.clone(), r2_session_info_no_import)
+        .expect("update r2 session to remove import policy");
+
+    // Wait for prefix_c to appear after import policy removal
+    // The import policy change triggers a route-refresh request to r1
+    wait_for!(
+        !r2.router.db.get_prefix_paths(&prefix_c_rdb).is_empty(),
+        "r2 should receive prefix_c after removing import policy"
+    );
+
+    // Final verification: all 3 prefixes present with correct attributes
+    for (prefix_name, prefix_rdb) in [
+        ("prefix_a", &prefix_a_rdb),
+        ("prefix_b", &prefix_b_rdb),
+        ("prefix_c", &prefix_c_rdb),
+    ] {
+        let paths = r2.router.db.get_prefix_paths(prefix_rdb);
+        assert_eq!(
+            paths.len(),
+            1,
+            "{prefix_name} should have exactly one path after policy removal"
+        );
+        let path = &paths[0];
+        assert_eq!(
+            path.nexthop,
+            r1_addr.ip(),
+            "{prefix_name} nexthop should be r1"
+        );
+        let bgp_props = path.bgp.as_ref().expect("should have BGP properties");
+        assert_eq!(
+            bgp_props.origin_as, 4200000001,
+            "{prefix_name} origin AS should be r1's ASN"
+        );
+        assert_eq!(
+            bgp_props.as_path,
+            vec![4200000001],
+            "{prefix_name} AS path should contain r1's ASN"
+        );
+    }
+
+    // Clean up
+    r1.shutdown();
+    r2.shutdown();
+}
+
+// IPv6-only tests added via basic_update and basic_peering helpers
+// Tests with IPv6 addresses will have IPv6-only config automatically applied
+
+#[test]
+fn test_basic_update_ipv6() {
+    basic_update_helper::<BgpConnectionChannel, BgpListenerChannel>(
+        RouteExchange::Ipv6 { nexthop: None },
+        sockaddr!(&format!("[3fff::]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::1]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_basic_update_ipv6_tcp() {
+    basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        RouteExchange::Ipv6 { nexthop: None },
+        sockaddr!(&format!("[3fff::a]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::b]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_ipv6_basic_peering_passive() {
+    basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
+        true,
+        RouteExchange::Ipv6 { nexthop: None },
+        sockaddr!(&format!("[3fff::2]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::3]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_ipv6_basic_peering_active() {
+    basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
+        false,
+        RouteExchange::Ipv6 { nexthop: None },
+        sockaddr!(&format!("[3fff::4]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::5]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_ipv6_basic_peering_passive_tcp() {
+    basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        true,
+        RouteExchange::Ipv6 { nexthop: None },
+        sockaddr!(&format!("[3fff::6]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::7]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_ipv6_basic_peering_active_tcp() {
+    basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        false,
+        RouteExchange::Ipv6 { nexthop: None },
+        sockaddr!(&format!("[3fff::8]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::9]:{TEST_BGP_PORT}")),
+    )
+}
+
+// =========================================================================
+// Cross-Address-Family Nexthop Tests
+// =========================================================================
+// These tests verify that derive_nexthop() correctly handles configured
+// nexthops for cross-AF scenarios (e.g., IPv4 routes over IPv6 connections).
+
+#[test]
+fn test_dual_stack_routes_ipv4_peer_success() {
+    // IPv4 connection with dual-stack routes
+    basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        RouteExchange::DualStack {
+            ipv4_nexthop: Some(ip!("10.0.1.1")),
+            ipv6_nexthop: Some(ip!("3fff:db8:1::1")),
+        },
+        sockaddr!(&format!("10.0.1.1:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("10.0.1.2:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_dual_stack_routes_ipv6_peer_success() {
+    // IPv6 connection with dual-stack routes
+    basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        RouteExchange::DualStack {
+            ipv4_nexthop: Some(ip!("10.0.2.1")),
+            ipv6_nexthop: Some(ip!("3fff:db8:2::1")),
+        },
+        sockaddr!(&format!("[3fff::f]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::10]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_ipv4_routes_ipv6_peer_success() {
+    // IPv6 connection with IPv4-only routes
+    basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        RouteExchange::Ipv4 {
+            nexthop: Some(ip!("10.0.3.1")),
+        },
+        sockaddr!(&format!("[3fff::11]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::12]:{TEST_BGP_PORT}")),
+    )
+}
+
+#[test]
+fn test_ipv6_routes_ipv4_peer_success() {
+    // IPv4 connection with IPv6-only routes
+    basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
+        RouteExchange::Ipv6 {
+            nexthop: Some(ip!("3fff:db8:4::1")),
+        },
+        sockaddr!(&format!("10.0.4.1:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("10.0.4.2:{TEST_BGP_PORT}")),
+    )
 }
