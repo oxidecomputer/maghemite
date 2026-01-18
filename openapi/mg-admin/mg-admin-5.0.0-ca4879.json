@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "4.0.0"
+    "version": "5.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -102,6 +102,32 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/NeighborResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/clear/unnumbered-neighbor": {
+      "post": {
+        "operationId": "clear_unnumbered_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnnumberedNeighborResetRequest"
               }
             }
           },
@@ -869,6 +895,211 @@
         }
       }
     },
+    "/bgp/config/unnumbered-neighbor": {
+      "get": {
+        "operationId": "read_unnumbered_neighbor",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          {
+            "in": "query",
+            "name": "interface",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnnumberedNeighbor"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "create_unnumbered_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnnumberedNeighbor"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "update_unnumbered_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnnumberedNeighbor"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_unnumbered_neighbor",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          {
+            "in": "query",
+            "name": "interface",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/config/unnumbered-neighbors": {
+      "get": {
+        "operationId": "read_unnumbered_neighbors",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_UnnumberedNeighbor",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UnnumberedNeighbor"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/config/unnumbered-pending": {
+      "get": {
+        "operationId": "read_pending_unnumbered_neighbors",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_PendingUnnumberedNeighbor",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PendingUnnumberedNeighbor"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/history/fsm": {
       "get": {
         "operationId": "fsm_history",
@@ -1508,6 +1739,17 @@
                 "$ref": "#/components/schemas/ShaperSource"
               }
             ]
+          },
+          "unnumbered_peers": {
+            "description": "Lists of unnumbered peers indexed by peer group.",
+            "default": {},
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/UnnumberedBgpPeerConfig"
+              }
+            }
           }
         },
         "required": [
@@ -1875,7 +2117,6 @@
         ]
       },
       "BgpPeerConfig": {
-        "description": "BGP peer configuration (current version with per-address-family policies).",
         "type": "object",
         "properties": {
           "communities": {
@@ -2090,7 +2331,7 @@
             "additionalProperties": false
           },
           {
-            "description": "Multiple nexthop encoding capability as defined in RFC 8950. Note this capability is not yet implemented.",
+            "description": "Multiple nexthop encoding capability as defined in RFC 8950.",
             "type": "object",
             "properties": {
               "extended_next_hop_encoding": {
@@ -3398,6 +3639,7 @@
           },
           "connect_retry_jitter": {
             "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -3410,6 +3652,7 @@
             "minimum": 0
           },
           "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
             "type": "boolean"
           },
           "enforce_first_as": {
@@ -3428,6 +3671,7 @@
           },
           "idle_hold_jitter": {
             "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/JitterRange"
@@ -4530,6 +4774,22 @@
           "keepalive"
         ]
       },
+      "PendingUnnumberedNeighbor": {
+        "type": "object",
+        "properties": {
+          "interface": {
+            "type": "string"
+          },
+          "local_addr": {
+            "type": "string",
+            "format": "ipv6"
+          }
+        },
+        "required": [
+          "interface",
+          "local_addr"
+        ]
+      },
       "Prefix": {
         "oneOf": [
           {
@@ -4792,6 +5052,335 @@
             "minimum": 0
           }
         }
+      },
+      "UnnumberedBgpPeerConfig": {
+        "type": "object",
+        "properties": {
+          "communities": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "connect_retry": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "connect_retry_jitter": {
+            "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
+          "delay_open": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
+            "type": "boolean"
+          },
+          "enforce_first_as": {
+            "type": "boolean"
+          },
+          "hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "idle_hold_jitter": {
+            "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
+          "idle_hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "interface": {
+            "type": "string"
+          },
+          "ipv4_unicast": {
+            "nullable": true,
+            "description": "IPv4 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv4UnicastConfig"
+              }
+            ]
+          },
+          "ipv6_unicast": {
+            "nullable": true,
+            "description": "IPv6 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv6UnicastConfig"
+              }
+            ]
+          },
+          "keepalive": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "local_pref": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "md5_auth_key": {
+            "nullable": true,
+            "type": "string"
+          },
+          "min_ttl": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "multi_exit_discriminator": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "passive": {
+            "type": "boolean"
+          },
+          "remote_asn": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "resolution": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "router_lifetime": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "communities",
+          "connect_retry",
+          "delay_open",
+          "deterministic_collision_resolution",
+          "enforce_first_as",
+          "hold_time",
+          "idle_hold_time",
+          "interface",
+          "keepalive",
+          "name",
+          "passive",
+          "resolution",
+          "router_lifetime"
+        ]
+      },
+      "UnnumberedNeighbor": {
+        "type": "object",
+        "properties": {
+          "act_as_a_default_ipv6_router": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "communities": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "connect_retry": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "connect_retry_jitter": {
+            "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
+          "delay_open": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
+            "type": "boolean"
+          },
+          "enforce_first_as": {
+            "type": "boolean"
+          },
+          "group": {
+            "type": "string"
+          },
+          "hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "idle_hold_jitter": {
+            "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
+          "idle_hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "interface": {
+            "type": "string"
+          },
+          "ipv4_unicast": {
+            "nullable": true,
+            "description": "IPv4 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv4UnicastConfig"
+              }
+            ]
+          },
+          "ipv6_unicast": {
+            "nullable": true,
+            "description": "IPv6 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv6UnicastConfig"
+              }
+            ]
+          },
+          "keepalive": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "local_pref": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "md5_auth_key": {
+            "nullable": true,
+            "type": "string"
+          },
+          "min_ttl": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "multi_exit_discriminator": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "passive": {
+            "type": "boolean"
+          },
+          "remote_asn": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "resolution": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "act_as_a_default_ipv6_router",
+          "asn",
+          "communities",
+          "connect_retry",
+          "delay_open",
+          "deterministic_collision_resolution",
+          "enforce_first_as",
+          "group",
+          "hold_time",
+          "idle_hold_time",
+          "interface",
+          "keepalive",
+          "name",
+          "passive",
+          "resolution"
+        ]
+      },
+      "UnnumberedNeighborResetRequest": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "interface": {
+            "type": "string"
+          },
+          "op": {
+            "$ref": "#/components/schemas/NeighborResetOp"
+          }
+        },
+        "required": [
+          "asn",
+          "interface",
+          "op"
+        ]
       },
       "UpdateErrorSubcode": {
         "description": "Update message error subcode types",
