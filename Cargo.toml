@@ -98,7 +98,7 @@ backoff = "0.4"
 mg-api = { path = "mg-api" }
 mg-common = { path = "mg-common" }
 rdb-types = { path = "rdb-types" }
-chrono = { version = "0.4.42", features = ["serde"] }
+chrono = { version = "0.4.43", features = ["serde"] }
 oxide-tokio-rt = "0.1.2"
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
