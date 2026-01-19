@@ -2,9 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use ddm_types::db::PeerInfo;
-use ddm_types::db::TunnelRoute;
-use ddm_types::exchange::PathVector;
+use ddm_types_versions::latest;
 use dropshot::HttpError;
 use dropshot::HttpResponseOk;
 use dropshot::HttpResponseUpdatedNoContent;
@@ -14,13 +12,7 @@ use dropshot::TypedBody;
 use dropshot_api_manager_types::api_versions;
 use mg_common::net::TunnelOrigin;
 use oxnet::Ipv6Net;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::net::Ipv6Addr;
-use uuid::Uuid;
-
-pub type PrefixMap = BTreeMap<Ipv6Addr, HashSet<PathVector>>;
+use std::collections::{HashMap, HashSet};
 
 api_versions!([
     // WHEN CHANGING THE API (part 1 of 2):
@@ -56,12 +48,12 @@ pub trait DdmAdminApi {
     #[endpoint { method = GET, path = "/peers" }]
     async fn get_peers(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashMap<u32, PeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<u32, latest::db::PeerInfo>>, HttpError>;
 
     #[endpoint { method = DELETE, path = "/peers/{addr}" }]
     async fn expire_peer(
         ctx: RequestContext<Self::Context>,
-        params: Path<ExpirePathParams>,
+        params: Path<latest::admin::ExpirePathParams>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = GET, path = "/originated" }]
@@ -77,12 +69,12 @@ pub trait DdmAdminApi {
     #[endpoint { method = GET, path = "/prefixes" }]
     async fn get_prefixes(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<PrefixMap>, HttpError>;
+    ) -> Result<HttpResponseOk<latest::admin::PrefixMap>, HttpError>;
 
     #[endpoint { method = GET, path = "/tunnel_endpoints" }]
     async fn get_tunnel_endpoints(
         ctx: RequestContext<Self::Context>,
-    ) -> Result<HttpResponseOk<HashSet<TunnelRoute>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashSet<latest::db::TunnelRoute>>, HttpError>;
 
     #[endpoint { method = PUT, path = "/prefix" }]
     async fn advertise_prefixes(
@@ -116,22 +108,11 @@ pub trait DdmAdminApi {
     #[endpoint { method = POST, path = "/enable-stats" }]
     async fn enable_stats(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<EnableStatsRequest>,
+        request: TypedBody<latest::admin::EnableStatsRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = POST, path = "/disable-stats" }]
     async fn disable_stats(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-pub struct ExpirePathParams {
-    pub addr: Ipv6Addr,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
-pub struct EnableStatsRequest {
-    pub sled_id: Uuid,
-    pub rack_id: Uuid,
 }
