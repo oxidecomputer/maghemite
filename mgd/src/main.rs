@@ -117,6 +117,7 @@ async fn run(args: RunArgs) {
     let bfd = BfdContext::new(log.clone());
 
     let context = Arc::new(HandlerContext {
+        #[cfg(feature = "mg-lower")]
         tep: tep_ula,
         log: log.clone(),
         bgp,

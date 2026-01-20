@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::types::Path;
 use itertools::Itertools;
@@ -105,17 +105,17 @@ pub fn bgp_bestpaths(
                 None => 0,
             });
 
-    // Group candidates by AS for MED selection
-    let as_groups = candidates.into_iter().chunk_by(|path| match path.bgp {
-        Some(ref bgp) => bgp.origin_as,
-        None => 0,
-    });
+    // Group candidates by AS for MED selection.
+    let mut as_groups: BTreeMap<u32, Vec<&Path>> = BTreeMap::new();
+    for path in candidates {
+        let origin_as = path.bgp.as_ref().map(|bgp| bgp.origin_as).unwrap_or(0);
+        as_groups.entry(origin_as).or_default().push(path);
+    }
 
-    // Filter AS groups to paths with lowest MED
-    let candidates = as_groups.into_iter().flat_map(|(_asn, paths)| {
-        paths.min_set_by_key(|path| match path.bgp {
-            Some(ref bgp) => bgp.med.unwrap_or(0),
-            None => 0,
+    // Filter each AS group to paths with lowest MED
+    let candidates = as_groups.into_values().flat_map(|paths| {
+        paths.into_iter().min_set_by_key(|path| {
+            path.bgp.as_ref().and_then(|bgp| bgp.med).unwrap_or(0)
         })
     });
 

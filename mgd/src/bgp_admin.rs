@@ -1673,6 +1673,7 @@ mod tests {
             mg_common::log::init_file_logger("apply_remove_entire_group.log");
 
         let ctx = Arc::new(HandlerContext {
+            #[cfg(feature = "mg-lower")]
             tep: Ipv6Addr::UNSPECIFIED,
             bgp: BgpContext::new(Arc::new(Mutex::new(BTreeMap::new()))),
             bfd: BfdContext::new(log.clone()),

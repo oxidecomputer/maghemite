@@ -16,13 +16,16 @@ use mg_common::stats::MgLowerStats;
 use rdb::{BfdPeerConfig, Db, Prefix};
 use slog::{Logger, error, info, o};
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+#[cfg(feature = "mg-lower")]
+use std::net::Ipv6Addr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 
 const UNIT_API_SERVER: &str = "api_server";
 
 pub struct HandlerContext {
+    #[cfg(feature = "mg-lower")]
     pub tep: Ipv6Addr, // tunnel endpoint address
     pub bgp: BgpContext,
     pub bfd: BfdContext,
