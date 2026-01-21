@@ -16,13 +16,16 @@ use mg_common::stats::MgLowerStats;
 use rdb::{BfdPeerConfig, Db, Prefix};
 use slog::{Logger, error, info, o};
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+#[cfg(feature = "mg-lower")]
+use std::net::Ipv6Addr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 
 const UNIT_API_SERVER: &str = "api_server";
 
 pub struct HandlerContext {
+    #[cfg(feature = "mg-lower")]
     pub tep: Ipv6Addr, // tunnel endpoint address
     pub bgp: BgpContext,
     pub bfd: BfdContext,
@@ -145,13 +148,13 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn read_neighbors(
         ctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+    ) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError> {
         bgp_admin::read_neighbors(ctx, request).await
     }
 
     async fn create_neighbor(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<Neighbor>,
+        request: TypedBody<NeighborV1>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::create_neighbor(ctx, request).await
     }
@@ -159,13 +162,13 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn read_neighbor(
         ctx: RequestContext<Self::Context>,
         request: Query<NeighborSelector>,
-    ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
+    ) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
         bgp_admin::read_neighbor(ctx, request).await
     }
 
     async fn update_neighbor(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<Neighbor>,
+        request: TypedBody<NeighborV1>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::update_neighbor(ctx, request).await
     }
@@ -177,11 +180,53 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::delete_neighbor(ctx, request).await
     }
 
+    async fn read_neighbors_v2(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+        bgp_admin::read_neighbors_v2(ctx, request).await
+    }
+
+    async fn create_neighbor_v2(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::create_neighbor_v2(ctx, request).await
+    }
+
+    async fn read_neighbor_v2(
+        ctx: RequestContext<Self::Context>,
+        request: Query<NeighborSelector>,
+    ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
+        bgp_admin::read_neighbor_v2(ctx, request).await
+    }
+
+    async fn update_neighbor_v2(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::update_neighbor_v2(ctx, request).await
+    }
+
+    async fn delete_neighbor_v2(
+        ctx: RequestContext<Self::Context>,
+        request: Query<NeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        bgp_admin::delete_neighbor_v2(ctx, request).await
+    }
+
     async fn clear_neighbor(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborResetRequestV1>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::clear_neighbor(ctx, request).await
+    }
+
+    async fn clear_neighbor_v2(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<NeighborResetRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-        bgp_admin::clear_neighbor(ctx, request).await
+        bgp_admin::clear_neighbor_v2(ctx, request).await
     }
 
     async fn create_origin4(
@@ -285,15 +330,29 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn get_neighbors_v2(
         ctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError> {
         bgp_admin::get_neighbors_v2(ctx, request).await
+    }
+
+    async fn get_neighbors_v3(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+        bgp_admin::get_neighbors_v3(ctx, request).await
     }
 
     async fn bgp_apply(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<ApplyRequest>,
+        request: TypedBody<ApplyRequestV1>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         bgp_admin::bgp_apply(ctx, request).await
+    }
+
+    async fn bgp_apply_v2(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<ApplyRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::bgp_apply_v2(ctx, request).await
     }
 
     async fn message_history(

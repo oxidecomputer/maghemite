@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::connection::{BgpConnection, ConnectionId};
+use crate::params::{DynamicTimerInfo, JitterRange};
 use crate::session::{ConnectionEvent, FsmEvent, SessionEvent};
 use mg_common::lock;
 use mg_common::thread::ManagedThread;
@@ -68,9 +69,8 @@ pub struct Timer {
     pub interval: Duration,
 
     /// Optional jitter range applied on restart. None = no jitter.
-    /// Some((min, max)) applies a random factor in [min, max] to the interval.
-    /// RFC 4271 recommends (0.75, 1.0) for ConnectRetryTimer and related timers.
-    jitter_range: Option<(f64, f64)>,
+    /// RFC 4271 recommends min: 0.75, max: 1.0 for ConnectRetryTimer and related timers.
+    jitter_range: Option<JitterRange>,
 
     /// Timer state. The first value indicates if the timer is enabled. The
     /// second value indicates how much time is left.
@@ -91,12 +91,11 @@ impl Timer {
     }
 
     /// Create a new timer with the specified interval and jitter range.
-    /// The jitter_range parameter expects (min, max) where both values are
-    /// factors to multiply the interval by. RFC 4271 recommends (0.75, 1.0) for
-    /// ConnectRetryTimer and related timers.
+    /// The jitter_range parameter specifies factors to multiply the interval by.
+    /// RFC 4271 recommends min: 0.75, max: 1.0 for ConnectRetryTimer and related timers.
     pub fn new_with_jitter(
         interval: Duration,
-        jitter_range: (f64, f64),
+        jitter_range: JitterRange,
     ) -> Self {
         Self {
             interval,
@@ -151,10 +150,10 @@ impl Timer {
     /// The jitter is recalculated on every reset.
     pub fn reset(&self) {
         let interval = match self.jitter_range {
-            Some((min, max)) => {
+            Some(jitter) => {
                 use rand::Rng;
                 let mut rng = rand::thread_rng();
-                let factor = rng.gen_range(min..=max);
+                let factor = rng.gen_range(jitter.min..=jitter.max);
                 self.interval.mul_f64(factor)
             }
             None => self.interval,
@@ -176,8 +175,13 @@ impl Timer {
 
     /// Update the jitter range for this timer. The new jitter will be applied
     /// on the next restart() call.
-    pub fn set_jitter_range(&mut self, jitter_range: Option<(f64, f64)>) {
+    pub fn set_jitter_range(&mut self, jitter_range: Option<JitterRange>) {
         self.jitter_range = jitter_range;
+    }
+
+    /// Get the jitter range for this timer.
+    pub fn jitter_range(&self) -> Option<JitterRange> {
+        self.jitter_range
     }
 }
 
@@ -210,8 +214,8 @@ impl SessionClock {
         resolution: Duration,
         connect_retry_interval: Duration,
         idle_hold_interval: Duration,
-        connect_retry_jitter: Option<(f64, f64)>,
-        idle_hold_jitter: Option<(f64, f64)>,
+        connect_retry_jitter: Option<JitterRange>,
+        idle_hold_jitter: Option<JitterRange>,
         event_tx: Sender<FsmEvent<Cnx>>,
         log: Logger,
     ) -> Self {
@@ -304,6 +308,27 @@ impl SessionClock {
         lock!(timers.connect_retry).stop();
         lock!(timers.idle_hold).stop();
     }
+
+    /// Get a snapshot of session-level timer state
+    pub fn get_timer_snapshot(&self) -> SessionTimerSnapshot {
+        let connect_retry = lock!(self.timers.connect_retry);
+        let idle_hold = lock!(self.timers.idle_hold);
+        SessionTimerSnapshot {
+            connect_retry_remaining: connect_retry.remaining(),
+            connect_retry_jitter: connect_retry.jitter_range(),
+            idle_hold_remaining: idle_hold.remaining(),
+            idle_hold_jitter: idle_hold.jitter_range(),
+        }
+    }
+}
+
+/// Snapshot of session-level timer state
+#[derive(Debug, Clone)]
+pub struct SessionTimerSnapshot {
+    pub connect_retry_remaining: Duration,
+    pub connect_retry_jitter: Option<JitterRange>,
+    pub idle_hold_remaining: Duration,
+    pub idle_hold_jitter: Option<JitterRange>,
 }
 
 impl Display for SessionClock {
@@ -446,6 +471,34 @@ impl ConnectionClock {
         lock!(timers.hold).disable();
         lock!(timers.delay_open).disable();
     }
+
+    /// Get a snapshot of connection-level timer state
+    pub fn get_timer_snapshot(&self) -> ConnectionTimerSnapshot {
+        let hold = lock!(self.timers.hold);
+        let keepalive = lock!(self.timers.keepalive);
+        let delay_open = lock!(self.timers.delay_open);
+        ConnectionTimerSnapshot {
+            hold: DynamicTimerInfo {
+                configured: self.timers.config_hold_time,
+                negotiated: hold.interval,
+                remaining: hold.remaining(),
+            },
+            keepalive: DynamicTimerInfo {
+                configured: self.timers.config_keepalive_time,
+                negotiated: keepalive.interval,
+                remaining: keepalive.remaining(),
+            },
+            delay_open_remaining: delay_open.remaining(),
+        }
+    }
+}
+
+/// Snapshot of connection-level timer state
+#[derive(Debug, Clone)]
+pub struct ConnectionTimerSnapshot {
+    pub hold: DynamicTimerInfo,
+    pub keepalive: DynamicTimerInfo,
+    pub delay_open_remaining: Duration,
 }
 
 impl Display for ConnectionClock {
