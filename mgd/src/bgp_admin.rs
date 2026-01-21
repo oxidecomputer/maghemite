@@ -1648,11 +1648,13 @@ mod tests {
     use bgp::params::{ApplyRequestV1, BgpPeerConfigV1};
     use mg_common::stats::MgLowerStats;
     use rdb::Db;
+    #[cfg(feature = "mg-lower")]
+    use std::net::Ipv6Addr;
     use std::{
         collections::{BTreeMap, HashMap},
         env::temp_dir,
         fs::{create_dir_all, remove_dir_all},
-        net::{Ipv6Addr, SocketAddr},
+        net::SocketAddr,
         sync::{Arc, Mutex},
     };
 
