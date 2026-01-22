@@ -254,13 +254,18 @@ fn detect_switch_slot(
 }
 
 fn init_bgp(args: &RunArgs, db: rdb::Db, log: &Logger) -> BgpContext {
-    let addr_to_session = Arc::new(Mutex::new(BTreeMap::new()));
+    let peer_to_session = Arc::new(Mutex::new(BTreeMap::new()));
+
+    // Create BgpContext first to get access to unnumbered_manager
+    let bgp_context = BgpContext::new(peer_to_session.clone(), db, log.clone());
+
     if !args.no_bgp_dispatcher {
         let bgp_dispatcher =
             bgp::dispatcher::Dispatcher::<BgpConnectionTcp>::new(
-                addr_to_session.clone(),
+                peer_to_session.clone(),
                 "[::]:179".into(),
                 log.clone(),
+                Some(bgp_context.unnumbered_manager.clone()), // Enable link-local connection routing
             );
 
         let listener_str =
@@ -271,7 +276,8 @@ fn init_bgp(args: &RunArgs, db: rdb::Db, log: &Logger) -> BgpContext {
             .spawn(move || bgp_dispatcher.run::<BgpListenerTcp>())
             .expect("failed to start {listener_str}");
     }
-    BgpContext::new(addr_to_session, db, log.clone())
+
+    bgp_context
 }
 
 fn start_bgp_routers(

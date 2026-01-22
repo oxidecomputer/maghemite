@@ -163,7 +163,7 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn read_neighbor(
         ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelector>,
+        request: Query<NeighborSelectorV4>,
     ) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
         bgp_admin::read_neighbor(ctx, request).await
     }
@@ -177,7 +177,7 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn delete_neighbor(
         ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelector>,
+        request: Query<NeighborSelectorV4>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         bgp_admin::delete_neighbor(ctx, request).await
     }
@@ -198,7 +198,7 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn read_neighbor_v2(
         ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelector>,
+        request: Query<NeighborSelectorV4>,
     ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
         bgp_admin::read_neighbor_v2(ctx, request).await
     }
@@ -212,9 +212,23 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn delete_neighbor_v2(
         ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelector>,
+        request: Query<NeighborSelectorV4>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         bgp_admin::delete_neighbor_v2(ctx, request).await
+    }
+
+    async fn read_neighbor_unified(
+        ctx: RequestContext<Self::Context>,
+        request: Query<NeighborSelector>,
+    ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
+        bgp_admin::read_neighbor_unified(ctx, request).await
+    }
+
+    async fn delete_neighbor_unified(
+        ctx: RequestContext<Self::Context>,
+        request: Query<NeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        bgp_admin::delete_neighbor_unified(ctx, request).await
     }
 
     async fn clear_neighbor(
@@ -232,13 +246,6 @@ impl MgAdminApi for MgAdminApiImpl {
     }
 
     // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    async fn read_pending_unnumbered_neighbors(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<PendingUnnumberedNeighbor>>, HttpError> {
-        bgp_admin::read_pending_unnumbered_neighbors(rqctx, request).await
-    }
 
     async fn read_unnumbered_neighbors(
         rqctx: RequestContext<Self::Context>,
@@ -394,6 +401,13 @@ impl MgAdminApi for MgAdminApiImpl {
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
         bgp_admin::get_neighbors_v3(ctx, request).await
+    }
+
+    async fn get_neighbors_unified(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
+        bgp_admin::get_neighbors_unified(ctx, request).await
     }
 
     async fn bgp_apply(

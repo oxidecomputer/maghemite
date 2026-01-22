@@ -19,7 +19,8 @@ use crate::{
         RouteRefreshParseError, RouteRefreshParseErrorReason, UpdateMessage,
     },
     session::{
-        ConnectionEvent, FsmEvent, SessionEndpoint, SessionEvent, SessionInfo,
+        ConnectionEvent, FsmEvent, PeerId, SessionEndpoint, SessionEvent,
+        SessionInfo,
     },
 };
 use mg_common::lock;
@@ -28,7 +29,7 @@ use std::{
     collections::BTreeMap,
     io::Read,
     io::Write,
-    net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::atomic::AtomicBool,
     sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
     thread::{JoinHandle, sleep},
@@ -95,8 +96,8 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn accept(
         &self,
         log: Logger,
-        addr_to_session: Arc<
-            Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionTcp>>>,
+        peer_to_session: Arc<
+            Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionTcp>>>,
         >,
         timeout: Duration,
     ) -> Result<BgpConnectionTcp, Error> {
@@ -116,7 +117,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                     local.set_ip(local.ip().to_canonical());
 
                     // Check if we have a session for this peer
-                    match lock!(addr_to_session).get(&ip) {
+                    match lock!(peer_to_session).get(&PeerId::Ip(ip)) {
                         Some(session_endpoint) => {
                             let config = lock!(session_endpoint.config);
                             return BgpConnectionTcp::with_conn(
