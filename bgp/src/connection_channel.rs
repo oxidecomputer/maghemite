@@ -17,20 +17,22 @@ use crate::{
     error::Error,
     log::{connection_log, connection_log_lite},
     messages::Message,
-    session::{ConnectionEvent, FsmEvent, SessionEndpoint, SessionInfo},
+    session::{
+        ConnectionEvent, FsmEvent, PeerId, SessionEndpoint, SessionInfo,
+    },
 };
 use mg_common::lock;
 use slog::Logger;
 use std::{
     collections::{BTreeMap, HashMap},
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    net::{SocketAddr, ToSocketAddrs},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{Receiver, RecvTimeoutError, Sender, channel as mpsc_channel},
     },
     thread::{JoinHandle, spawn},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const UNIT_CONNECTION: &str = "connection_channel";
@@ -38,8 +40,24 @@ const UNIT_CONNECTION: &str = "connection_channel";
 /// Global counter for assigning unique IDs to channel pairs
 static CHANNEL_PAIR_ID: AtomicU64 = AtomicU64::new(0);
 
+/// Connection attempt record for testing.
+/// Tracks all outbound connection attempts made via BgpConnectorChannel.
+#[derive(Debug, Clone)]
+pub struct ConnectionAttempt {
+    pub timestamp: Instant,
+    pub local: SocketAddr,
+    pub peer: SocketAddr,
+    pub success: bool,
+}
+
 lazy_static! {
     static ref NET: Network = Network::new();
+
+    /// Global tracker for connection attempts (for testing).
+    /// Records all outbound connection attempts so tests can verify
+    /// connection behavior (e.g., that unnumbered sessions only connect
+    /// when neighbors are discovered).
+    static ref CONNECTION_ATTEMPTS: Mutex<Vec<ConnectionAttempt>> = Mutex::new(Vec::new());
 }
 
 /// A simulated network that maps socket addresses to channels that can send
@@ -118,6 +136,46 @@ impl Network {
     }
 }
 
+// =========================================================================
+// Connection Attempt Tracking (for testing)
+// =========================================================================
+
+/// Get all recorded connection attempts.
+pub fn get_connection_attempts() -> Vec<ConnectionAttempt> {
+    lock!(CONNECTION_ATTEMPTS).clone()
+}
+
+/// Clear all recorded connection attempts.
+/// Useful for test setup/cleanup.
+pub fn clear_connection_attempts() {
+    lock!(CONNECTION_ATTEMPTS).clear();
+}
+
+/// Get connection attempts to a specific peer address.
+pub fn get_connection_attempts_to(peer: SocketAddr) -> Vec<ConnectionAttempt> {
+    lock!(CONNECTION_ATTEMPTS)
+        .iter()
+        .filter(|attempt| attempt.peer == peer)
+        .cloned()
+        .collect()
+}
+
+/// Get the number of successful connection attempts to a specific peer.
+pub fn count_successful_connections_to(peer: SocketAddr) -> usize {
+    lock!(CONNECTION_ATTEMPTS)
+        .iter()
+        .filter(|attempt| attempt.peer == peer && attempt.success)
+        .count()
+}
+
+/// Get the number of failed connection attempts to a specific peer.
+pub fn count_failed_connections_to(peer: SocketAddr) -> usize {
+    lock!(CONNECTION_ATTEMPTS)
+        .iter()
+        .filter(|attempt| attempt.peer == peer && !attempt.success)
+        .count()
+}
+
 /// A struct to implement BgpListener for our simulated test network.
 pub struct BgpListenerChannel {
     listener: Listener,
@@ -146,8 +204,8 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     fn accept(
         &self,
         log: Logger,
-        addr_to_session: Arc<
-            Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionChannel>>>,
+        peer_to_session: Arc<
+            Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
         >,
         timeout: Duration,
     ) -> Result<BgpConnectionChannel, Error> {
@@ -159,7 +217,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         // testing purposes with channels, the bind address is the connection address.
         let local = self.bind_addr;
 
-        match lock!(addr_to_session).get(&peer.ip()) {
+        match lock!(peer_to_session).get(&PeerId::Ip(peer.ip())) {
             Some(session_endpoint) => {
                 let config = lock!(session_endpoint.config);
                 Ok(BgpConnectionChannel::with_conn(
@@ -488,7 +546,17 @@ impl BgpConnector<BgpConnectionChannel> for BgpConnectorChannel {
         // is synchronous. This allows SessionRunner to track the connector thread.
         let handle = spawn(move || {
             let (local, remote) = channel();
-            match NET.connect(addr, peer, remote) {
+
+            // Record connection attempt for testing
+            let attempt_result = NET.connect(addr, peer, remote);
+            lock!(CONNECTION_ATTEMPTS).push(ConnectionAttempt {
+                timestamp: Instant::now(),
+                local: addr,
+                peer,
+                success: attempt_result.is_ok(),
+            });
+
+            match attempt_result {
                 Ok(()) => {
                     let conn = BgpConnectionChannel::with_conn(
                         addr,

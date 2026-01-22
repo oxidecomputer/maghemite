@@ -26,6 +26,7 @@ use crate::{
     policy::{CheckerResult, ShaperResult},
     recv_event_loop, recv_event_return,
     router::Router,
+    unnumbered::UnnumberedManager,
 };
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{
@@ -49,6 +50,89 @@ use std::{
 };
 
 const UNIT_SESSION_RUNNER: &str = "session_runner";
+
+/// Session indexing key that unifies numbered and unnumbered sessions.
+///
+/// This enum allows Router to index sessions by either:
+/// - IP address (numbered peers with known static IP)
+/// - Interface name (unnumbered peers discovered via NDP)
+///
+/// This unified key enables a single session map in Router that handles
+/// both numbered and unnumbered sessions transparently.
+///
+/// JSON serialization format:
+/// - Numbered: `{"ip": "192.0.2.1"}`
+/// - Unnumbered: `{"interface": "eth0"}`
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerId {
+    /// Numbered peer identified by IP address
+    Ip(IpAddr),
+    /// Unnumbered peer identified by interface name
+    Interface(String),
+}
+
+impl Display for PeerId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ip(ip) => write!(f, "{}", ip),
+            Self::Interface(iface) => write!(f, "{}", iface),
+        }
+    }
+}
+
+impl PeerId {
+    /// Check if this represents an unnumbered peer
+    pub fn is_unnumbered(&self) -> bool {
+        matches!(self, Self::Interface(_))
+    }
+
+    /// Check if this represents a numbered peer
+    pub fn is_numbered(&self) -> bool {
+        matches!(self, Self::Ip(_))
+    }
+}
+
+impl From<IpAddr> for PeerId {
+    fn from(ip: IpAddr) -> Self {
+        Self::Ip(ip)
+    }
+}
+
+impl From<std::net::Ipv4Addr> for PeerId {
+    fn from(ip: std::net::Ipv4Addr) -> Self {
+        Self::Ip(IpAddr::V4(ip))
+    }
+}
+
+impl From<std::net::Ipv6Addr> for PeerId {
+    fn from(ip: std::net::Ipv6Addr) -> Self {
+        Self::Ip(IpAddr::V6(ip))
+    }
+}
+
+impl From<String> for PeerId {
+    fn from(interface: String) -> Self {
+        Self::Interface(interface)
+    }
+}
+
+impl From<&str> for PeerId {
+    fn from(interface: &str) -> Self {
+        Self::Interface(interface.to_string())
+    }
+}
 
 /// The runtime state of an address-family for a given peer.
 /// This is instantiated after capability negotiation has completed.
@@ -874,7 +958,7 @@ pub struct SessionInfo {
 impl SessionInfo {
     /// Create a SessionInfo from a PeerConfig with minimal defaults for policy fields.
     /// This is used when only timer configuration is available (e.g., in tests).
-    pub fn from_peer_config(peer_config: &crate::config::PeerConfig) -> Self {
+    pub fn from_peer_config(peer_config: &PeerConfig) -> Self {
         Self {
             passive_tcp_establishment: false,
             remote_asn: None,
@@ -980,11 +1064,12 @@ impl From<&BgpPeerParametersV1> for SessionInfo {
 pub struct NeighborInfo {
     pub name: Arc<Mutex<String>>,
     pub peer_group: String,
-    pub host: SocketAddr,
+    pub peer: PeerId,
+    pub port: u16,
 }
 
 /// Session endpoint that combines the event sender with session configuration.
-/// This is used in addr_to_session map to provide both communication channel
+/// This is used in peer_to_session map to provide both communication channel
 /// and policy information for each peer.
 pub struct SessionEndpoint<Cnx: BgpConnection> {
     /// Event sender for FSM events to this session
@@ -1552,6 +1637,9 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     /// Information about the neighbor this session is to peer with.
     pub neighbor: NeighborInfo,
 
+    /// Unnumbered neighbor manager for actively querying NDP state.
+    pub unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+
     /// A log of the last `MAX_MESSAGE_HISTORY` messages. Keepalives are not
     /// included in message history.
     pub message_history: Arc<Mutex<MessageHistory>>,
@@ -1610,12 +1698,12 @@ pub enum CollisionResolution {
 
 impl<Cnx: BgpConnection + 'static> Drop for SessionRunner<Cnx> {
     fn drop(&mut self) {
-        let peer_ip = self.neighbor.host.ip();
+        let peer = &self.neighbor.peer;
         let final_state = *lock!(self.state);
         session_log_lite!(
             self,
             debug,
-            "dropping session runner for peer {peer_ip} (final state: {final_state})"
+            "dropping session runner for peer {peer} (final state: {final_state})"
         );
     }
 }
@@ -1629,6 +1717,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         event_tx: Sender<FsmEvent<Cnx>>,
         neighbor: NeighborInfo,
         router: Arc<Router<Cnx>>,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> SessionRunner<Cnx> {
         let session_info = lock!(session);
         let runner = SessionRunner {
@@ -1638,6 +1727,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             asn: router.config.asn,
             id: router.config.id,
             neighbor,
+            unnumbered_manager,
             state: Arc::new(Mutex::new(FsmStateKind::Idle)),
             last_state_change: Mutex::new(Instant::now()),
             clock: Arc::new(SessionClock::new(
@@ -1669,6 +1759,39 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         runner
     }
 
+    /// Get the current peer address for this session.
+    pub fn get_peer_addr(&self) -> Option<SocketAddr> {
+        match &self.neighbor.peer {
+            PeerId::Interface(iface) => {
+                // Unnumbered: query UnnumberedManager
+                if let Some(ref mgr) = self.unnumbered_manager {
+                    mgr.get_neighbor_for_interface(iface).ok().flatten()
+                } else {
+                    None
+                }
+            }
+            PeerId::Ip(ip) => {
+                // Numbered: construct from NeighborInfo
+                Some(SocketAddr::new(*ip, self.neighbor.port))
+            }
+        }
+    }
+
+    /// Check if this is an unnumbered session.
+    pub fn is_unnumbered(&self) -> bool {
+        matches!(self.neighbor.peer, PeerId::Interface(_))
+    }
+
+    /// Check if a neighbor is currently available for connection attempts.
+    pub fn has_neighbor(&self) -> bool {
+        self.get_peer_addr().is_some()
+    }
+
+    /// Get the PeerId for this session.
+    pub fn get_peer_id(&self) -> PeerId {
+        self.neighbor.peer.clone()
+    }
+
     /// Request a peer session shutdown. Does not shut down the session right
     /// away. Simply sets a flag that the session is to be shut down which will
     /// be acted upon in the state machine loop.
@@ -1677,7 +1800,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self,
             info,
             "session runner (peer {}) received shutdown request, setting shutdown flag",
-            self.neighbor.host.ip();
+            self.neighbor.peer;
         );
         self.shutdown.store(true, Ordering::Release);
     }
@@ -1757,8 +1880,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // release lock before calling connect
         }
 
+        let peer_addr = match self.get_peer_addr() {
+            Some(addr) => addr,
+            None => {
+                session_log_lite!(
+                    self,
+                    debug,
+                    "no peer address available, skipping connection attempt"
+                );
+                return;
+            }
+        };
+
         let handle = match Cnx::Connector::connect(
-            self.neighbor.host,
+            peer_addr,
             timeout,
             self.log.clone(),
             self.event_tx.clone(),
@@ -2038,7 +2173,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self,
                     info,
                     "session runner (peer: {}) caught shutdown flag",
-                    self.neighbor.host.ip();
+                    self.neighbor.peer;
                 );
                 self.on_shutdown();
                 return;
@@ -5924,9 +6059,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         // Ensure the router has a fanout entry for this peer.
+        let peer_id = self.get_peer_id();
         if pc.ipv4_unicast.negotiated() {
             write_lock!(self.fanout4).add_egress(
-                self.neighbor.host.ip(),
+                peer_id.clone(),
                 crate::fanout::Egress {
                     event_tx: Some(self.event_tx.clone()),
                     log: self.log.clone(),
@@ -5935,7 +6071,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
         if pc.ipv6_unicast.negotiated() {
             write_lock!(self.fanout6).add_egress(
-                self.neighbor.host.ip(),
+                peer_id,
                 crate::fanout::Egress {
                     event_tx: Some(self.event_tx.clone()),
                     log: self.log.clone(),
@@ -6954,7 +7090,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self,
             info,
             "session runner (peer {}): shutdown start",
-            self.neighbor.host.ip()
+            self.neighbor.peer
         );
 
         self.cleanup_connections();
@@ -6992,7 +7128,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self,
             info,
             "session runner (peer {}): shutdown complete",
-            self.neighbor.host.ip()
+            self.neighbor.peer
         );
     }
 
@@ -7021,11 +7157,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }));
         }
         if let Some(checker) = read_lock!(self.router.policy.checker).as_ref() {
+            let peer_ip = match self.neighbor.peer {
+                PeerId::Ip(ip) => ip,
+                PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+            };
             match crate::policy::check_incoming_open(
                 om.clone(),
                 checker,
                 remote_asn,
-                self.neighbor.host.ip(),
+                peer_ip,
                 self.log.clone(),
             ) {
                 Ok(result) => match result {
@@ -7258,11 +7398,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let mut out = Message::from(msg.clone());
         if let Some(shaper) = read_lock!(self.router.policy.shaper).as_ref() {
             let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
+            let peer_ip = match self.neighbor.peer {
+                PeerId::Ip(ip) => ip,
+                PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+            };
             match crate::policy::shape_outgoing_open(
                 msg.clone(),
                 shaper,
                 peer_as,
-                self.neighbor.host.ip(),
+                peer_ip,
                 self.log.clone(),
             ) {
                 Ok(result) => match result {
@@ -7358,11 +7502,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     ) -> Result<ShaperResult, Error> {
         if let Some(shaper) = read_lock!(self.router.policy.shaper).as_ref() {
             let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
+            let peer_ip = match self.neighbor.peer {
+                PeerId::Ip(ip) => ip,
+                PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+            };
             Ok(crate::policy::shape_outgoing_update(
                 update.clone(),
                 shaper,
                 peer_as,
-                self.neighbor.host.ip(),
+                peer_ip,
                 self.log.clone(),
             )?)
         } else {
@@ -7376,13 +7524,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         previous: Option<rhai::AST>,
     ) -> Result<ShaperResult, Error> {
         let peer_as = lock!(self.session).remote_asn.unwrap_or(0);
+        let peer_ip = match self.neighbor.peer {
+            PeerId::Ip(ip) => ip,
+            PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        };
 
         let former = match previous {
             Some(shaper) => crate::policy::shape_outgoing_update(
                 update.clone(),
                 &shaper,
                 peer_as,
-                self.neighbor.host.ip(),
+                peer_ip,
                 self.log.clone(),
             )?,
             None => ShaperResult::Emit(update.clone().into()),
@@ -7711,11 +7863,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         conn_timer!(pc.conn, keepalive).disable();
         session_timer!(self, connect_retry).stop();
 
+        let peer_id = self.get_peer_id();
         if pc.ipv4_unicast.negotiated() {
-            write_lock!(self.fanout4).remove_egress(self.neighbor.host.ip());
+            write_lock!(self.fanout4).remove_egress(&peer_id);
         }
         if pc.ipv6_unicast.negotiated() {
-            write_lock!(self.fanout6).remove_egress(self.neighbor.host.ip());
+            write_lock!(self.fanout6).remove_egress(&peer_id);
         }
 
         // remove peer prefixes from db
@@ -7940,11 +8093,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.apply_static_update_policy(&mut update);
 
         if let Some(checker) = read_lock!(self.router.policy.checker).as_ref() {
+            let peer_ip = match self.neighbor.peer {
+                PeerId::Ip(ip) => ip,
+                PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+            };
             match crate::policy::check_incoming_update(
                 update.clone(),
                 checker,
                 pc.asn,
-                self.neighbor.host.ip(),
+                peer_ip,
                 self.log.clone(),
             ) {
                 Ok(result) => match result {
@@ -8643,7 +8800,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         *lock!(self.neighbor.name) = cfg.name;
         let mut reset_needed = false;
 
-        if self.neighbor.host != cfg.host {
+        if self.neighbor.peer != PeerId::Ip(cfg.host.ip())
+            || self.neighbor.port != cfg.host.port()
+        {
             return Err(Error::PeerAddressUpdate);
         }
 
@@ -8993,7 +9152,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             },
             None => {
-                let remote_ip = self.neighbor.host.ip();
+                let remote_ip = match self.neighbor.peer {
+                    PeerId::Ip(ip) => ip,
+                    PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+                };
                 // We don't have an active connection, so just display the
                 // configured next-hop if it's set or use the unspec addr if not
                 let local_ip = match remote_ip {
@@ -9015,7 +9177,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     local_ip,
                     remote_ip,
                     local_tcp_port: 0u16,
-                    remote_tcp_port: self.neighbor.host.port(),
+                    remote_tcp_port: self.neighbor.port,
                     received_capabilities: vec![],
                     timers,
                     counters,

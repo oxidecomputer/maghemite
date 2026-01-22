@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #![allow(clippy::type_complexity)]
-use crate::unnumbered_manager::UnnumberedNeighborManager;
+use crate::unnumbered_manager::UnnumberedManagerNdp;
 use crate::validation::{validate_prefixes_v4, validate_prefixes_v6};
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::{
@@ -16,7 +16,7 @@ use bgp::{
     router::{LoadPolicyError, Router},
     session::{
         AdminEvent, FsmEvent, FsmStateKind, MessageHistory, MessageHistoryV1,
-        SessionEndpoint, SessionInfo,
+        PeerId, SessionEndpoint, SessionInfo,
     },
 };
 use dropshot::{
@@ -28,7 +28,7 @@ use mg_api::{
     FsmHistoryRequest, FsmHistoryResponse, MessageDirection,
     MessageHistoryRequest, MessageHistoryRequestV1, MessageHistoryResponse,
     MessageHistoryResponseV1, NeighborResetRequest, NeighborResetRequestV1,
-    NeighborSelector, Rib, UnnumberedNeighborResetRequest,
+    NeighborSelector, NeighborSelectorV4, Rib, UnnumberedNeighborResetRequest,
     UnnumberedNeighborSelector,
 };
 use mg_common::lock;
@@ -52,25 +52,25 @@ const DEFAULT_BGP_LISTEN: SocketAddr =
 #[derive(Clone)]
 pub struct BgpContext {
     pub(crate) router: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
-    addr_to_session:
-        Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionTcp>>>>,
-    pub(crate) unnumbered_manager: Arc<UnnumberedNeighborManager>,
+    peer_to_session:
+        Arc<Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionTcp>>>>,
+    pub(crate) unnumbered_manager: Arc<UnnumberedManagerNdp>,
 }
 
 impl BgpContext {
     pub fn new(
-        addr_to_session: Arc<
-            Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionTcp>>>,
+        peer_to_session: Arc<
+            Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionTcp>>>,
         >,
         db: rdb::Db,
         log: Logger,
     ) -> Self {
         let router = Arc::new(Mutex::new(BTreeMap::new()));
         let unnumbered_manager =
-            UnnumberedNeighborManager::new(router.clone(), db, log);
+            UnnumberedManagerNdp::new(router.clone(), db, log);
         Self {
             router,
-            addr_to_session,
+            peer_to_session,
             unnumbered_manager,
         }
     }
@@ -233,7 +233,7 @@ pub async fn create_neighbor(
 
 pub async fn read_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelector>,
+    request: Query<NeighborSelectorV4>,
 ) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
     let rq = request.into_inner();
     let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
@@ -263,7 +263,7 @@ pub async fn update_neighbor(
 
 pub async fn delete_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelector>,
+    request: Query<NeighborSelectorV4>,
 ) -> Result<HttpResponseDeleted, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -303,7 +303,7 @@ pub async fn create_neighbor_v2(
 
 pub async fn read_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelector>,
+    request: Query<NeighborSelectorV4>,
 ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
     let rq = request.into_inner();
     let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
@@ -333,37 +333,98 @@ pub async fn update_neighbor_v2(
 
 pub async fn delete_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelector>,
+    request: Query<NeighborSelectorV4>,
 ) -> Result<HttpResponseDeleted, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
 }
 
-// Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Unified neighbor operations (VERSION_UNNUMBERED and later)
 
-pub async fn read_pending_unnumbered_neighbors(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<PendingUnnumberedNeighbor>>, HttpError> {
+pub async fn read_neighbor_unified(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<NeighborSelector>,
+) -> Result<HttpResponseOk<Neighbor>, HttpError> {
     let rq = request.into_inner();
-    let ctx = rqctx.context();
+    let peer_id = rq.to_peer_id();
 
-    let pending = ctx.bgp.unnumbered_manager.get_pending();
-    let mut result = Vec::default();
-
-    for k in pending.keys() {
-        if k.asn != rq.asn {
-            continue;
-        }
-        result.push(PendingUnnumberedNeighbor {
-            interface: k.interface.name.clone(),
-            local_addr: k.interface.ip,
-        });
+    // For numbered peers, look up in numbered neighbors DB
+    if let PeerId::Ip(ip) = peer_id {
+        let db_neighbors =
+            ctx.context().db.get_bgp_neighbors().map_err(|e| {
+                HttpError::for_internal_error(format!(
+                    "get neighbors kv tree: {e}"
+                ))
+            })?;
+        let neighbor_info = db_neighbors
+            .iter()
+            .find(|n| n.host.ip() == ip)
+            .ok_or(HttpError::for_not_found(
+                None,
+                format!("neighbor {} not found in db", ip),
+            ))?;
+        let result = Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+        Ok(HttpResponseOk(result))
+    } else if let PeerId::Interface(ref iface) = peer_id {
+        // For unnumbered peers, look up in unnumbered neighbors DB
+        let db_neighbors = ctx
+            .context()
+            .db
+            .get_unnumbered_bgp_neighbors()
+            .map_err(|e| {
+                HttpError::for_internal_error(format!(
+                    "get unnumbered neighbors kv tree: {e}"
+                ))
+            })?;
+        let neighbor_info = db_neighbors
+            .iter()
+            .find(|n| &n.interface == iface)
+            .ok_or(HttpError::for_not_found(
+                None,
+                format!("neighbor {} not found in db", iface),
+            ))?;
+        let result =
+            UnnumberedNeighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+        // Convert UnnumberedNeighbor to Neighbor
+        Ok(HttpResponseOk(Neighbor {
+            asn: result.asn,
+            name: result.name,
+            group: result.group,
+            host: std::net::SocketAddr::new(
+                std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
+                179,
+            ),
+            parameters: result.parameters,
+        }))
+    } else {
+        Err(HttpError::for_not_found(
+            None,
+            format!("neighbor {} not found", rq.peer),
+        ))
     }
-
-    Ok(HttpResponseOk(result))
 }
+
+pub async fn delete_neighbor_unified(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<NeighborSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    let rq = request.into_inner();
+    let peer_id = rq.to_peer_id();
+    let ctx = ctx.context();
+
+    match peer_id {
+        PeerId::Ip(ip) => {
+            Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, ip).await?)
+        }
+        PeerId::Interface(ref iface) => Ok(
+            helpers::remove_unnumbered_neighbor(ctx.clone(), rq.asn, iface)
+                .await?,
+        ),
+    }
+}
+
+// Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 pub async fn read_unnumbered_neighbors(
     rqctx: RequestContext<Arc<HandlerContext>>,
@@ -733,7 +794,11 @@ pub async fn get_neighbors(
             },
         };
 
-        peers.insert(s.neighbor.host.ip(), PeerInfoV1::from(pi));
+        let peer_ip = match s.neighbor.peer {
+            PeerId::Ip(ip) => ip,
+            PeerId::Interface(_) => continue, // Skip unnumbered sessions for V1 API
+        };
+        peers.insert(peer_ip, PeerInfoV1::from(pi));
     }
 
     Ok(HttpResponseOk(peers))
@@ -775,8 +840,12 @@ pub async fn get_neighbors_v2(
                 )
             };
 
+        let peer_ip = match s.neighbor.peer {
+            PeerId::Ip(ip) => ip,
+            PeerId::Interface(_) => continue, // Skip unnumbered sessions for V2 API
+        };
         peers.insert(
-            s.neighbor.host.ip(),
+            peer_ip,
             PeerInfoV2 {
                 state: s.state(),
                 asn: s.remote_asn(),
@@ -818,8 +887,39 @@ pub async fn get_neighbors_v3(
     };
 
     for s in sessions.iter() {
-        let peer_ip = s.neighbor.host.ip();
+        let peer_ip = match s.neighbor.peer {
+            PeerId::Ip(ip) => ip,
+            PeerId::Interface(_) => continue, // Skip unnumbered sessions
+        };
         peers.insert(peer_ip, s.get_peer_info());
+    }
+
+    Ok(HttpResponseOk(peers))
+}
+
+pub async fn get_neighbors_unified(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let mut peers = HashMap::new();
+
+    // Clone sessions while holding locks, then release them
+    let sessions: Vec<_> = {
+        let routers = lock!(ctx.bgp.router);
+        let r = routers.get(&rq.asn).ok_or(HttpError::for_not_found(
+            None,
+            "ASN not found".to_string(),
+        ))?;
+        lock!(r.sessions).values().cloned().collect()
+    };
+
+    for s in sessions.iter() {
+        // Use PeerId Display impl as HashMap key
+        let peer_key = s.neighbor.peer.to_string();
+        peers.insert(peer_key, s.get_peer_info());
     }
 
     Ok(HttpResponseOk(peers))
@@ -1125,31 +1225,33 @@ async fn do_bgp_apply(
 }
 
 // Common helper for fetching message history with optional filtering
+// Returns HashMap with string keys using PeerId Display format
 fn get_message_history_filtered(
     ctx: &Arc<HandlerContext>,
     asn: u32,
-    peer: Option<IpAddr>,
+    peer: Option<PeerId>,
     direction: Option<MessageDirection>,
-) -> Result<HashMap<IpAddr, MessageHistory>, HttpError> {
+) -> Result<HashMap<String, MessageHistory>, HttpError> {
     let mut result = HashMap::new();
 
     // Determine which peers to fetch history for
-    let peers_to_query: Vec<IpAddr> = if let Some(peer_addr) = peer {
-        if lock!(get_router!(ctx, asn)?.sessions).contains_key(&peer_addr) {
-            vec![peer_addr]
+    let peers_to_query: Vec<PeerId> = if let Some(peer_id) = peer {
+        if lock!(get_router!(ctx, asn)?.sessions).contains_key(&peer_id) {
+            vec![peer_id]
         } else {
             vec![]
         }
     } else {
         lock!(get_router!(ctx, asn)?.sessions)
             .keys()
-            .copied()
+            .cloned()
             .collect()
     };
 
     // Fetch history for each peer
-    for addr in peers_to_query {
-        if let Some(session) = lock!(get_router!(ctx, asn)?.sessions).get(&addr)
+    for peer_id in peers_to_query {
+        if let Some(session) =
+            lock!(get_router!(ctx, asn)?.sessions).get(&peer_id)
         {
             let mut history = lock!(session.message_history).clone();
 
@@ -1165,7 +1267,8 @@ fn get_message_history_filtered(
                 }
             }
 
-            result.insert(addr, history);
+            // Use PeerId Display impl as HashMap key
+            result.insert(peer_id.to_string(), history);
         }
     }
 
@@ -1181,9 +1284,12 @@ pub async fn message_history(
 
     let mut result = HashMap::new();
 
-    for (addr, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
-        let mh = lock!(session.message_history).clone();
-        result.insert(*addr, MessageHistoryV1::from(mh));
+    for (key, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter() {
+        // Only include IP-based sessions in the history
+        if let PeerId::Ip(addr) = key {
+            let mh = lock!(session.message_history).clone();
+            result.insert(*addr, MessageHistoryV1::from(mh));
+        }
     }
 
     Ok(HttpResponseOk(MessageHistoryResponseV1 { by_peer: result }))
@@ -1214,9 +1320,9 @@ pub async fn fsm_history(
     let use_all_buffer = matches!(rq.buffer, Some(FsmEventBuffer::All));
 
     // Filter by specific peer if requested
-    if let Some(peer_addr) = rq.peer {
+    if let Some(peer_id) = rq.peer {
         if let Some(session) =
-            lock!(get_router!(ctx, rq.asn)?.sessions).get(&peer_addr)
+            lock!(get_router!(ctx, rq.asn)?.sessions).get(&peer_id)
         {
             let full_history = lock!(session.fsm_event_history).clone();
             let events = if use_all_buffer {
@@ -1224,11 +1330,13 @@ pub async fn fsm_history(
             } else {
                 full_history.major.into_iter().collect()
             };
-            result.insert(peer_addr, events);
+            // Use PeerId Display impl as HashMap key
+            result.insert(peer_id.to_string(), events);
         }
     } else {
-        // Return history for all peers
-        for (addr, session) in lock!(get_router!(ctx, rq.asn)?.sessions).iter()
+        // Return history for all peers (both numbered and unnumbered)
+        for (peer_id, session) in
+            lock!(get_router!(ctx, rq.asn)?.sessions).iter()
         {
             let full_history = lock!(session.fsm_event_history).clone();
             let events = if use_all_buffer {
@@ -1236,7 +1344,8 @@ pub async fn fsm_history(
             } else {
                 full_history.major.into_iter().collect()
             };
-            result.insert(*addr, events);
+            // Use PeerId Display impl as HashMap key
+            result.insert(peer_id.to_string(), events);
         }
     }
 
@@ -1820,7 +1929,13 @@ pub(crate) mod helpers {
                 ctx,
                 NeighborResetRequest {
                     asn,
-                    addr: session.neighbor.host.ip(),
+                    addr: match session.neighbor.peer {
+                        PeerId::Ip(ip) => ip,
+                        PeerId::Interface(_) => {
+                            // For unnumbered sessions, use unspecified address
+                            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+                        }
+                    },
                     op,
                 },
             )
@@ -1846,7 +1961,7 @@ pub(crate) mod helpers {
             cfg,
             ctx.log.clone(),
             db.clone(),
-            ctx.bgp.addr_to_session.clone(),
+            ctx.bgp.peer_to_session.clone(),
         ));
 
         router.run();

@@ -15,6 +15,7 @@ pub mod params;
 pub mod policy;
 pub mod router;
 pub mod session;
+pub mod unnumbered;
 
 mod rhai_integration;
 
@@ -30,6 +31,9 @@ mod test;
 
 #[cfg(test)]
 pub mod connection_channel;
+
+#[cfg(test)]
+pub mod unnumbered_mock;
 
 pub const BGP_PORT: u16 = 179;
 pub const BGP_VERSION: u8 = 4;
