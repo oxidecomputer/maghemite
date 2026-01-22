@@ -14,9 +14,10 @@ use crate::{
     },
     policy::{load_checker, load_shaper},
     session::{
-        AdminEvent, FsmEvent, NeighborInfo, SessionEndpoint, SessionInfo,
-        SessionRunner,
+        AdminEvent, FsmEvent, NeighborInfo, PeerId, SessionEndpoint,
+        SessionInfo, SessionRunner,
     },
+    unnumbered::UnnumberedManager,
 };
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{Asn, Db, Prefix4, Prefix6};
@@ -44,8 +45,8 @@ pub struct Router<Cnx: BgpConnection + 'static> {
     /// The static configuration associated with this router.
     pub config: RouterConfig,
 
-    /// A set of BGP session runners indexed by peer IP address.
-    pub sessions: Mutex<BTreeMap<IpAddr, Arc<SessionRunner<Cnx>>>>,
+    /// A set of BGP session runners indexed by PeerId (IP or interface).
+    pub sessions: Mutex<BTreeMap<PeerId, Arc<SessionRunner<Cnx>>>>,
 
     /// Compiled policy programs.
     pub policy: Policy,
@@ -60,9 +61,9 @@ pub struct Router<Cnx: BgpConnection + 'static> {
     /// graceful shutdown (RFC 8326) with its peers.
     graceful_shutdown: AtomicBool,
 
-    /// A set of event channels indexed by peer IP address. These channels
+    /// A set of event channels indexed by PeerId. These channels
     /// are used for cross-peer session communications.
-    addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
+    peer_to_session: Arc<Mutex<BTreeMap<PeerId, SessionEndpoint<Cnx>>>>,
 
     /// A fanout is used to distribute originated prefixes to all peer
     /// sessions. In the event that redistribution becomes supported this
@@ -85,11 +86,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         config: RouterConfig,
         log: Logger,
         db: Db,
-        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
+        peer_to_session: Arc<Mutex<BTreeMap<PeerId, SessionEndpoint<Cnx>>>>,
     ) -> Router<Cnx> {
         Self {
             config,
-            addr_to_session,
+            peer_to_session,
             log,
             shutdown: AtomicBool::new(false),
             graceful_shutdown: AtomicBool::new(false),
@@ -101,15 +102,20 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
     }
 
-    pub fn get_session(&self, addr: IpAddr) -> Option<Arc<SessionRunner<Cnx>>> {
-        lock!(self.sessions).get(&addr).cloned()
+    // Get the session runner mapped to the peer id
+    pub fn get_session(
+        &self,
+        peer: impl Into<PeerId>,
+    ) -> Option<Arc<SessionRunner<Cnx>>> {
+        let key: PeerId = peer.into();
+        lock!(self.sessions).get(&key).cloned()
     }
 
     /// Spawn an FSM thread for the given session.
     /// This is used both when initially creating sessions and when restarting
     /// the router.
     fn spawn_session_thread(&self, session: Arc<SessionRunner<Cnx>>) {
-        let peer_ip = session.neighbor.host.ip();
+        let peer_id = &session.neighbor.peer;
         slog::info!(
             self.log,
             "spawning session for {}",
@@ -121,7 +127,7 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             )
         );
         std::thread::Builder::new()
-            .name(format!("bgp-fsm-{}", peer_ip))
+            .name(format!("bgp-fsm-{}", peer_id))
             .spawn(move || {
                 session.fsm_start();
             })
@@ -133,8 +139,8 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     /// Also cleans up fanout entries for all stopped sessions.
     fn stop_all_sessions(&self) {
         let sessions = lock!(self.sessions);
-        for (addr, s) in sessions.iter() {
-            self.remove_fanout(*addr);
+        for (key, s) in sessions.iter() {
+            self.remove_fanout(key.clone());
             s.shutdown();
         }
     }
@@ -144,9 +150,9 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     /// references, allowing BgpConnections to drop and their threads to clean up.
     fn delete_all_sessions(&self) {
         let sessions = std::mem::take(&mut *lock!(self.sessions));
-        for (addr, s) in sessions {
-            lock!(self.addr_to_session).remove(&addr);
-            self.remove_fanout(addr);
+        for (key, s) in sessions {
+            lock!(self.peer_to_session).remove(&key);
+            self.remove_fanout(key.clone());
             s.shutdown();
         }
         // When `sessions` drops here, Arc<SessionRunner> references are released
@@ -178,10 +184,14 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         }
     }
 
-    pub fn add_fanout4(&self, peer: IpAddr, event_tx: Sender<FsmEvent<Cnx>>) {
+    pub fn add_fanout4(
+        &self,
+        peer: impl Into<PeerId>,
+        event_tx: Sender<FsmEvent<Cnx>>,
+    ) {
         let mut fanout = write_lock!(self.fanout4);
         fanout.add_egress(
-            peer,
+            peer.into(),
             Egress {
                 event_tx: Some(event_tx),
                 log: self.log.clone(),
@@ -189,10 +199,14 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         )
     }
 
-    pub fn add_fanout6(&self, peer: IpAddr, event_tx: Sender<FsmEvent<Cnx>>) {
+    pub fn add_fanout6(
+        &self,
+        peer: impl Into<PeerId>,
+        event_tx: Sender<FsmEvent<Cnx>>,
+    ) {
         let mut fanout = write_lock!(self.fanout6);
         fanout.add_egress(
-            peer,
+            peer.into(),
             Egress {
                 event_tx: Some(event_tx),
                 log: self.log.clone(),
@@ -201,7 +215,8 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     /// Remove a peer from any fanouts they're a member of.
-    pub fn remove_fanout(&self, peer: IpAddr) {
+    pub fn remove_fanout(&self, peer: impl Into<PeerId>) {
+        let peer_id = peer.into();
         // Note: We intentionally use separate locks for fanout4 and fanout6 to allow
         // independent operation of IPv4 and IPv6 route distribution. There is a brief
         // window between releasing the fanout4 lock and acquiring the fanout6 lock
@@ -216,11 +231,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         // 4. FsmState::Established transitions properly handle route announcements
         {
             let mut fanout = write_lock!(self.fanout4);
-            fanout.remove_egress(peer);
+            fanout.remove_egress(&peer_id);
         }
         {
             let mut fanout = write_lock!(self.fanout6);
-            fanout.remove_egress(peer);
+            fanout.remove_egress(&peer_id);
         }
     }
 
@@ -232,14 +247,49 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
     ) -> Result<EnsureSessionResult<Cnx>, Error> {
-        let a2s = lock!(self.addr_to_session);
-        if a2s.contains_key(&peer.host.ip()) {
+        let p2s = lock!(self.peer_to_session);
+        // Use PeerId::Ip for numbered sessions
+        let key = PeerId::Ip(peer.host.ip());
+        if p2s.contains_key(&key) {
             Ok(EnsureSessionResult::Updated(
                 self.update_session(peer, info)?,
             ))
         } else {
             Ok(EnsureSessionResult::New(self.new_session_locked(
-                a2s, peer, bind_addr, event_tx, event_rx, info,
+                p2s, key, peer, bind_addr, event_tx, event_rx, info, None,
+            )?))
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ensure_unnumbered_session(
+        self: &Arc<Self>,
+        interface: String,
+        peer: PeerConfig,
+        bind_addr: Option<SocketAddr>,
+        event_tx: Sender<FsmEvent<Cnx>>,
+        event_rx: Receiver<FsmEvent<Cnx>>,
+        info: SessionInfo,
+        unnumbered_manager: Arc<dyn UnnumberedManager>,
+    ) -> Result<EnsureSessionResult<Cnx>, Error> {
+        let p2s = lock!(self.peer_to_session);
+        let key = PeerId::Interface(interface);
+        if p2s.contains_key(&key) {
+            // Session exists, just update config
+            Ok(EnsureSessionResult::Updated(
+                self.update_session(peer, info)?,
+            ))
+        } else {
+            // Create new unnumbered session
+            Ok(EnsureSessionResult::New(self.new_session_locked(
+                p2s,
+                key,
+                peer,
+                bind_addr,
+                event_tx,
+                event_rx,
+                info,
+                Some(unnumbered_manager),
             )?))
         }
     }
@@ -252,24 +302,30 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        let a2s = lock!(self.addr_to_session);
-        if a2s.contains_key(&peer.host.ip()) {
+        let p2s = lock!(self.peer_to_session);
+        // Use PeerId::Ip for numbered sessions
+        let key = PeerId::Ip(peer.host.ip());
+        if p2s.contains_key(&key) {
             Err(Error::PeerExists)
         } else {
             self.new_session_locked(
-                a2s, peer, bind_addr, event_tx, event_rx, info,
+                p2s, key, peer, bind_addr, event_tx, event_rx, info,
+                None, // No unnumbered_manager for numbered sessions
             )
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_session_locked(
         self: &Arc<Self>,
-        mut a2s: MutexGuard<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>,
+        mut p2s: MutexGuard<BTreeMap<PeerId, SessionEndpoint<Cnx>>>,
+        peer_id: PeerId,
         peer: PeerConfig,
         bind_addr: Option<SocketAddr>,
         event_tx: Sender<FsmEvent<Cnx>>,
         event_rx: Receiver<FsmEvent<Cnx>>,
         info: SessionInfo,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
         // Update the SessionInfo with timer values from peer config
         let mut session_info = info.clone();
@@ -284,19 +340,20 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         let session = Arc::new(Mutex::new(session_info));
 
-        a2s.insert(
-            peer.host.ip(),
+        p2s.insert(
+            peer_id.clone(),
             SessionEndpoint {
                 event_tx: event_tx.clone(),
                 config: session.clone(),
             },
         );
-        drop(a2s);
+        drop(p2s);
 
         let neighbor = NeighborInfo {
             name: Arc::new(Mutex::new(peer.name.clone())),
             peer_group: peer.group.clone(),
-            host: peer.host,
+            peer: peer_id.clone(),
+            port: peer.host.port(),
         };
 
         let runner = Arc::new(SessionRunner::new(
@@ -305,10 +362,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             event_tx.clone(),
             neighbor.clone(),
             self.clone(),
+            unnumbered_manager,
         ));
 
         self.spawn_session_thread(runner.clone());
-        lock!(self.sessions).insert(neighbor.host.ip(), runner.clone());
+        lock!(self.sessions).insert(peer_id, runner.clone());
 
         Ok(runner)
     }
@@ -318,7 +376,9 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         peer: PeerConfig,
         info: SessionInfo,
     ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
-        let session = match lock!(self.sessions).get(&peer.host.ip()) {
+        // Use PeerId::Ip for numbered sessions
+        let key = PeerId::Ip(peer.host.ip());
+        let session = match lock!(self.sessions).get(&key) {
             None => return Err(Error::UnknownPeer(peer.host.ip())),
             Some(s) => s.clone(),
         };
@@ -329,9 +389,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn delete_session(&self, addr: IpAddr) {
-        lock!(self.addr_to_session).remove(&addr);
-        self.remove_fanout(addr);
-        if let Some(s) = lock!(self.sessions).remove(&addr) {
+        // Use PeerId::Ip for numbered sessions
+        let key = PeerId::Ip(addr);
+        lock!(self.peer_to_session).remove(&key);
+        self.remove_fanout(addr); // addr converts to PeerId::Ip
+        if let Some(s) = lock!(self.sessions).remove(&key) {
             s.shutdown();
         }
     }
