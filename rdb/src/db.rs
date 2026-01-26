@@ -15,11 +15,10 @@ use crate::log::rdb_log;
 use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
-use ndp::Ipv6NetworkInterface;
 use sled::Tree;
 use slog::{Logger, error};
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU8;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -113,9 +112,6 @@ pub struct Db {
     /// Information is not available until first successful communication with MGS.
     slot: Arc<RwLock<Option<u16>>>,
 
-    /// A map from peer addresses to the corresponding local interface.
-    unnumbered_nexthop: Arc<Mutex<HashMap<Ipv6Addr, Ipv6NetworkInterface>>>,
-
     log: Logger,
 }
 unsafe impl Sync for Db {}
@@ -142,7 +138,6 @@ impl Db {
             watchers: Arc::new(RwLock::new(Vec::new())),
             reaper: Reaper::new(rib_loc),
             slot: Arc::new(RwLock::new(None)),
-            unnumbered_nexthop: Arc::new(Mutex::new(HashMap::new())),
             log,
         })
     }
@@ -1363,38 +1358,6 @@ impl Db {
             AddressFamily::Ipv6 => self.mark_bgp_peer_stale6(peer),
         }
     }
-
-    pub fn add_unnumbered_nexthop(
-        &self,
-        nexthop: Ipv6Addr,
-        interface: Ipv6NetworkInterface,
-    ) {
-        self.unnumbered_nexthop
-            .lock()
-            .unwrap()
-            .insert(nexthop, interface);
-    }
-
-    pub fn remove_unnumbered_nexthop_for_interface(
-        &self,
-        interface: &Ipv6NetworkInterface,
-    ) {
-        self.unnumbered_nexthop
-            .lock()
-            .unwrap()
-            .retain(|_k, v| v != interface);
-    }
-
-    pub fn get_interface_for_unnumbered_nexthop(
-        &self,
-        nexthop: Ipv6Addr,
-    ) -> Option<Ipv6NetworkInterface> {
-        self.unnumbered_nexthop
-            .lock()
-            .unwrap()
-            .get(&nexthop)
-            .cloned()
-    }
 }
 
 struct Reaper {
@@ -1502,6 +1465,7 @@ mod test {
 
         let bgp_path0 = Path {
             nexthop: remote_ip0,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -1517,6 +1481,7 @@ mod test {
         };
         let bgp_path1 = Path {
             nexthop: remote_ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -1537,6 +1502,7 @@ mod test {
         // BESTPATH_FANOUT is increased to test ECMP.
         let bgp_path2 = Path {
             nexthop: remote_ip2,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {

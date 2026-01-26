@@ -9,7 +9,7 @@ use crate::{
 };
 use dpd_client::{Client as DpdClient, types, types::LinkState};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
-use rdb::{Db, Path, Prefix};
+use rdb::{Path, Prefix};
 use slog::Logger;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -57,9 +57,8 @@ impl RouteHash {
         sw: &impl SwitchZone,
         prefix: Prefix,
         path: Path,
-        db: &Db,
     ) -> Result<RouteHash, Error> {
-        let (port_id, link_id) = get_port_and_link(sw, path.nexthop, db)?;
+        let (port_id, link_id) = get_port_and_link(sw, &path)?;
 
         let rh = RouteHash {
             cidr: match prefix {
@@ -381,28 +380,29 @@ fn test_tfport_parser() {
 
 fn get_port_and_link(
     sw: &impl SwitchZone,
-    nexthop: IpAddr,
-    db: &Db,
+    path: &Path,
 ) -> Result<(types::PortId, types::LinkId), Error> {
-    if let IpAddr::V6(nh6) = nexthop
+    // If path has interface binding (unnumbered peer), use it directly
+    if let IpAddr::V6(nh6) = path.nexthop
         && nh6.is_unicast_link_local()
-        && let Some(ifx) = db.get_interface_for_unnumbered_nexthop(nh6)
+        && let Some(ref iface) = path.nexthop_interface
     {
-        let (port, link, _vlan) = parse_tfport_name(&ifx.name)?;
+        let (port, link, _vlan) = parse_tfport_name(iface)?;
         let port_name = format!("qsfp{port}");
         let port_id = types::Qsfp::try_from(&port_name)
             .map(types::PortId::Qsfp)
             .map_err(|e| {
                 Error::Tfport(format!(
-                    "bad port name ifname: {}  port name: {port_name}: {e}",
-                    ifx.name
+                    "bad port name ifname: {iface}  port name: {port_name}: {e}",
                 ))
             })?;
         // TODO breakout considerations
         let link_id = types::LinkId(link);
         return Ok((port_id, link_id));
     }
-    resolve_port_and_link(sw, nexthop)
+
+    // Standard nexthop resolution for numbered peers
+    resolve_port_and_link(sw, path.nexthop)
 }
 
 fn resolve_port_and_link(

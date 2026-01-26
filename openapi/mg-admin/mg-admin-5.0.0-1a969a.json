@@ -258,50 +258,8 @@
       }
     },
     "/bgp/config/neighbor": {
-      "get": {
-        "operationId": "read_neighbor_v2",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "addr",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "ip"
-            }
-          },
-          {
-            "in": "query",
-            "name": "asn",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Neighbor"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
       "put": {
-        "operationId": "create_neighbor_v2",
+        "operationId": "create_neighbor_v3",
         "requestBody": {
           "content": {
             "application/json": {
@@ -325,7 +283,7 @@
         }
       },
       "post": {
-        "operationId": "update_neighbor_v2",
+        "operationId": "update_neighbor_v3",
         "requestBody": {
           "content": {
             "application/json": {
@@ -347,27 +305,71 @@
             "$ref": "#/components/responses/Error"
           }
         }
-      },
-      "delete": {
-        "operationId": "delete_neighbor_v2",
+      }
+    },
+    "/bgp/config/neighbor/{asn}/{peer}": {
+      "get": {
+        "operationId": "read_neighbor_v3",
         "parameters": [
           {
-            "in": "query",
-            "name": "addr",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "ip"
-            }
-          },
-          {
-            "in": "query",
+            "in": "path",
             "name": "asn",
             "required": true,
             "schema": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
+            }
+          },
+          {
+            "in": "path",
+            "name": "peer",
+            "description": "Peer identifier as a string.\n\n- For numbered peers: IP address (e.g., \"192.0.2.1\" or \"2001:db8::1\") - For unnumbered peers: Interface name (e.g., \"eth0\" or \"cxgbe0\")\n\nServer parses as IP address first; if parsing fails, treats as interface name. Uses PeerId::from_str() for type-safe conversion.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Neighbor"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_neighbor_v3",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asn",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          {
+            "in": "path",
+            "name": "peer",
+            "description": "Peer identifier as a string.\n\n- For numbered peers: IP address (e.g., \"192.0.2.1\" or \"2001:db8::1\") - For unnumbered peers: Interface name (e.g., \"eth0\" or \"cxgbe0\")\n\nServer parses as IP address first; if parsing fails, treats as interface name. Uses PeerId::from_str() for type-safe conversion.",
+            "required": true,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -384,12 +386,12 @@
         }
       }
     },
-    "/bgp/config/neighbors": {
+    "/bgp/config/neighbors/{asn}": {
       "get": {
-        "operationId": "read_neighbors_v2",
+        "operationId": "read_neighbors_v3",
         "parameters": [
           {
-            "in": "query",
+            "in": "path",
             "name": "asn",
             "description": "ASN of the router to get imported prefixes from.",
             "required": true,
@@ -1060,49 +1062,9 @@
         }
       }
     },
-    "/bgp/config/unnumbered-pending": {
-      "get": {
-        "operationId": "read_pending_unnumbered_neighbors",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "description": "ASN of the router to get imported prefixes from.",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Array_of_PendingUnnumberedNeighbor",
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/PendingUnnumberedNeighbor"
-                  }
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/bgp/history/fsm": {
       "get": {
-        "operationId": "fsm_history",
+        "operationId": "fsm_history_v2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1135,7 +1097,7 @@
     },
     "/bgp/history/message": {
       "get": {
-        "operationId": "message_history_v2",
+        "operationId": "message_history_v3",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1234,7 +1196,7 @@
     },
     "/bgp/status/neighbors": {
       "get": {
-        "operationId": "get_neighbors_v3",
+        "operationId": "get_neighbors_unified",
         "parameters": [
           {
             "in": "query",
@@ -3046,6 +3008,7 @@
         ]
       },
       "FsmHistoryRequest": {
+        "description": "Unified FSM history request supporting both numbered and unnumbered peers",
         "type": "object",
         "properties": {
           "asn": {
@@ -3065,9 +3028,12 @@
           },
           "peer": {
             "nullable": true,
-            "description": "Optional peer filter - if None, returns history for all peers",
-            "type": "string",
-            "format": "ip"
+            "description": "Optional peer filter using PeerId enum JSON format: {\"ip\": \"192.0.2.1\"} or {\"interface\": \"eth0\"}",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PeerId"
+              }
+            ]
           }
         },
         "required": [
@@ -3075,10 +3041,11 @@
         ]
       },
       "FsmHistoryResponse": {
+        "description": "Unified FSM history response with string keys from PeerId Display Keys will be \"192.0.2.1\" or \"eth0\" format",
         "type": "object",
         "properties": {
           "by_peer": {
-            "description": "Events organized by peer address Each peer's value contains only the events from the requested buffer",
+            "description": "Events organized by peer identifier Each peer's value contains only the events from the requested buffer",
             "type": "object",
             "additionalProperties": {
               "type": "array",
@@ -3441,6 +3408,7 @@
         ]
       },
       "MessageHistoryRequest": {
+        "description": "Unified message history request supporting both numbered and unnumbered peers",
         "type": "object",
         "properties": {
           "asn": {
@@ -3460,9 +3428,12 @@
           },
           "peer": {
             "nullable": true,
-            "description": "Optional peer filter - if None, returns history for all peers",
-            "type": "string",
-            "format": "ip"
+            "description": "Optional peer filter using PeerId enum JSON format: {\"ip\": \"192.0.2.1\"} or {\"interface\": \"eth0\"}",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PeerId"
+              }
+            ]
           }
         },
         "required": [
@@ -3470,6 +3441,7 @@
         ]
       },
       "MessageHistoryResponse": {
+        "description": "Unified message history response with string keys from PeerId Display Keys will be \"192.0.2.1\" or \"eth0\" format",
         "type": "object",
         "properties": {
           "by_peer": {
@@ -4651,6 +4623,38 @@
           "updates_sent"
         ]
       },
+      "PeerId": {
+        "description": "Session indexing key that unifies numbered and unnumbered sessions.\n\nThis enum allows Router to index sessions by either: - IP address (numbered peers with known static IP) - Interface name (unnumbered peers discovered via NDP)\n\nThis unified key enables a single session map in Router that handles both numbered and unnumbered sessions transparently.\n\nJSON serialization format: - Numbered: `{\"ip\": \"192.0.2.1\"}` - Unnumbered: `{\"interface\": \"eth0\"}`",
+        "oneOf": [
+          {
+            "description": "Numbered peer identified by IP address",
+            "type": "object",
+            "properties": {
+              "ip": {
+                "type": "string",
+                "format": "ip"
+              }
+            },
+            "required": [
+              "ip"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Unnumbered peer identified by interface name",
+            "type": "object",
+            "properties": {
+              "interface": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "interface"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
       "PeerInfo": {
         "type": "object",
         "properties": {
@@ -4772,22 +4776,6 @@
           "hold",
           "idle_hold",
           "keepalive"
-        ]
-      },
-      "PendingUnnumberedNeighbor": {
-        "type": "object",
-        "properties": {
-          "interface": {
-            "type": "string"
-          },
-          "local_addr": {
-            "type": "string",
-            "format": "ipv6"
-          }
-        },
-        "required": [
-          "interface",
-          "local_addr"
         ]
       },
       "Prefix": {

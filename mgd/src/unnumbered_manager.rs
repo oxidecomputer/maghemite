@@ -11,7 +11,6 @@ use bgp::{
 use mg_common::lock;
 use ndp::{Ipv6NetworkInterface, NdpManager, NewInterfaceNdpManagerError};
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
-use rdb::Db;
 use slog::{Logger, error, o, warn};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -26,7 +25,6 @@ pub struct UnnumberedManagerNdp {
     ndp_mgr: Arc<NdpManager>,
     /// Maps scope_id (interface index) to interface name for Dispatcher routing
     interface_scope_map: Mutex<HashMap<u32, String>>,
-    db: Db,
     log: Logger,
 }
 
@@ -52,7 +50,6 @@ pub enum AddNeighborError {
 impl UnnumberedManagerNdp {
     pub fn new(
         routers: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
-        db: Db,
         log: Logger,
     ) -> Arc<Self> {
         let log = log.new(o!(
@@ -65,7 +62,6 @@ impl UnnumberedManagerNdp {
             routers,
             interface_scope_map: Mutex::new(HashMap::default()),
             ndp_mgr: NdpManager::new(log.clone()),
-            db,
             log,
         })
     }
@@ -134,8 +130,7 @@ impl UnnumberedManagerNdp {
         // Remove interface from NDP manager
         self.ndp_mgr.remove_interface(ifx.clone());
 
-        // Remove nexthop from database
-        self.db.remove_unnumbered_nexthop_for_interface(&ifx);
+        // Nexthop cleanup happens automatically via path removal
 
         // Remove scope mapping
         lock!(self.interface_scope_map).remove(&ifx.index);

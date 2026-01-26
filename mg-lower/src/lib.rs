@@ -171,7 +171,7 @@ fn full_sync(
     // Compute the bestpath for each prefix and synchronize the ASIC routing
     // tables with the chosen paths.
     for (prefix, _paths) in rib_in.iter() {
-        sync_prefix(tep, &rib_loc, prefix, dpd, ddm, sw, db, log, &rt)?;
+        sync_prefix(tep, &rib_loc, prefix, dpd, ddm, sw, log, &rt)?;
     }
 
     Ok(())
@@ -192,7 +192,7 @@ fn handle_change(
     let rib_loc = db.loc_rib(None);
 
     for prefix in notification.changed.iter() {
-        sync_prefix(tep, &rib_loc, prefix, dpd, ddm, sw, db, log, &rt)?
+        sync_prefix(tep, &rib_loc, prefix, dpd, ddm, sw, log, &rt)?
     }
 
     Ok(())
@@ -206,7 +206,6 @@ pub(crate) fn sync_prefix(
     dpd: &impl Dpd,
     ddm: &impl Ddm,
     sw: &impl SwitchZone,
-    db: &Db,
     log: &Logger,
     rt: &Arc<tokio::runtime::Handle>,
 ) -> Result<(), Error> {
@@ -226,12 +225,7 @@ pub(crate) fn sync_prefix(
     let mut best: HashSet<RouteHash> = HashSet::new();
     if let Some(paths) = rib_loc.get(prefix) {
         for path in paths {
-            best.insert(RouteHash::for_prefix_path(
-                sw,
-                *prefix,
-                path.clone(),
-                db,
-            )?);
+            best.insert(RouteHash::for_prefix_path(sw, *prefix, path.clone())?);
         }
     }
 
