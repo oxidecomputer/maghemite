@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
     sync::atomic::Ordering,
     time::Duration,
 };
@@ -158,81 +158,20 @@ pub struct Ipv6UnicastConfig {
 pub struct Neighbor {
     pub asn: u32,
     pub name: String,
-    pub host: SocketAddr,
-    pub hold_time: u64,
-    pub idle_hold_time: u64,
-    pub delay_open: u64,
-    pub connect_retry: u64,
-    pub keepalive: u64,
-    pub resolution: u64,
     pub group: String,
-    pub passive: bool,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
-    pub md5_auth_key: Option<String>,
-    pub multi_exit_discriminator: Option<u32>,
-    pub communities: Vec<u32>,
-    pub local_pref: Option<u32>,
-    pub enforce_first_as: bool,
-    /// IPv4 Unicast address family configuration (None = disabled)
-    pub ipv4_unicast: Option<Ipv4UnicastConfig>,
-    /// IPv6 Unicast address family configuration (None = disabled)
-    pub ipv6_unicast: Option<Ipv6UnicastConfig>,
-    pub vlan_id: Option<u16>,
-    pub connect_retry_jitter: Option<JitterRange>,
-    pub idle_hold_jitter: Option<JitterRange>,
-    pub deterministic_collision_resolution: bool,
+    pub host: SocketAddr,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParameters,
 }
 
 impl Neighbor {
     /// Validate that at least one address family is enabled
     pub fn validate_address_families(&self) -> Result<(), String> {
-        if self.ipv4_unicast.is_none() && self.ipv6_unicast.is_none() {
+        if self.parameters.ipv4_unicast.is_none()
+            && self.parameters.ipv6_unicast.is_none()
+        {
             return Err("at least one address family must be enabled".into());
         }
-        Ok(())
-    }
-
-    /// Validate nexthop address family matches configured address families.
-    /// Initially strict: IPv4 nexthop requires IPv4, IPv6 requires IPv6.
-    /// Can be relaxed in future for Extended Next-Hop (RFC 5549).
-    ///
-    /// Additionally validates cross-AF scenarios:
-    /// - IPv4 Unicast enabled for IPv6 peer requires configured IPv4 nexthop
-    /// - IPv6 Unicast enabled for IPv4 peer requires configured IPv6 nexthop
-    pub fn validate_nexthop(&self) -> Result<(), String> {
-        if let Some(cfg) = &self.ipv4_unicast {
-            if let Some(nh) = cfg.nexthop {
-                if !nh.is_ipv4() {
-                    return Err(format!(
-                        "IPv4 unicast nexthop must be IPv4 address, got {}",
-                        nh
-                    ));
-                }
-            } else if self.host.is_ipv6() {
-                return Err(
-                    "IPv4 Unicast enabled for IPv6 peer requires configured IPv4 nexthop"
-                        .into(),
-                );
-            }
-        }
-
-        if let Some(cfg) = &self.ipv6_unicast {
-            if let Some(nh) = cfg.nexthop {
-                if !nh.is_ipv6() {
-                    return Err(format!(
-                        "IPv6 unicast nexthop must be IPv6 address, got {}",
-                        nh
-                    ));
-                }
-            } else if !self.host.is_ipv6() {
-                return Err(
-                    "IPv6 Unicast enabled for IPv4 peer requires configured IPv6 nexthop"
-                        .into(),
-                );
-            }
-        }
-
         Ok(())
     }
 }
@@ -242,25 +181,27 @@ impl Neighbor {
 pub struct NeighborV1 {
     pub asn: u32,
     pub name: String,
-    pub host: SocketAddr,
-    pub hold_time: u64,
-    pub idle_hold_time: u64,
-    pub delay_open: u64,
-    pub connect_retry: u64,
-    pub keepalive: u64,
-    pub resolution: u64,
     pub group: String,
-    pub passive: bool,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
-    pub md5_auth_key: Option<String>,
-    pub multi_exit_discriminator: Option<u32>,
-    pub communities: Vec<u32>,
-    pub local_pref: Option<u32>,
-    pub enforce_first_as: bool,
-    pub allow_import: ImportExportPolicyV1,
-    pub allow_export: ImportExportPolicyV1,
-    pub vlan_id: Option<u16>,
+    pub host: SocketAddr,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV1,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+pub struct UnnumberedNeighbor {
+    pub asn: u32,
+    pub name: String,
+    pub group: String,
+    pub interface: String,
+    pub act_as_a_default_ipv6_router: u16,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParameters,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+pub struct PendingUnnumberedNeighbor {
+    pub interface: String,
+    pub local_addr: Ipv6Addr,
 }
 
 impl From<Neighbor> for PeerConfig {
@@ -269,12 +210,12 @@ impl From<Neighbor> for PeerConfig {
             name: rq.name.clone(),
             group: rq.group.clone(),
             host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
+            hold_time: rq.parameters.hold_time,
+            idle_hold_time: rq.parameters.idle_hold_time,
+            delay_open: rq.parameters.delay_open,
+            connect_retry: rq.parameters.connect_retry,
+            keepalive: rq.parameters.keepalive,
+            resolution: rq.parameters.resolution,
         }
     }
 }
@@ -285,12 +226,12 @@ impl From<NeighborV1> for PeerConfig {
             name: rq.name.clone(),
             group: rq.group.clone(),
             host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
+            hold_time: rq.parameters.hold_time,
+            idle_hold_time: rq.parameters.idle_hold_time,
+            delay_open: rq.parameters.delay_open,
+            connect_retry: rq.parameters.connect_retry,
+            keepalive: rq.parameters.keepalive,
+            resolution: rq.parameters.resolution,
         }
     }
 }
@@ -303,59 +244,117 @@ impl NeighborV1 {
     ) -> Self {
         Self {
             asn,
-            remote_asn: rq.remote_asn,
-            min_ttl: rq.min_ttl,
-            name: rq.name.clone(),
-            host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
-            passive: rq.passive,
             group: group.clone(),
-            md5_auth_key: rq.md5_auth_key,
-            multi_exit_discriminator: rq.multi_exit_discriminator,
-            communities: rq.communities,
-            local_pref: rq.local_pref,
-            enforce_first_as: rq.enforce_first_as,
-            allow_import: rq.allow_import,
-            allow_export: rq.allow_export,
-            vlan_id: rq.vlan_id,
+            host: rq.host,
+            name: rq.name.clone(),
+            parameters: rq.parameters.clone(),
         }
     }
 
     pub fn from_rdb_neighbor_info(asn: u32, rq: &rdb::BgpNeighborInfo) -> Self {
         Self {
             asn,
-            remote_asn: rq.remote_asn,
-            min_ttl: rq.min_ttl,
+            group: rq.group.clone(),
             name: rq.name.clone(),
             host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
-            passive: rq.passive,
+            parameters: BgpPeerParametersV1 {
+                remote_asn: rq.parameters.remote_asn,
+                min_ttl: rq.parameters.min_ttl,
+                hold_time: rq.parameters.hold_time,
+                idle_hold_time: rq.parameters.idle_hold_time,
+                delay_open: rq.parameters.delay_open,
+                connect_retry: rq.parameters.connect_retry,
+                keepalive: rq.parameters.keepalive,
+                resolution: rq.parameters.resolution,
+                passive: rq.parameters.passive,
+                md5_auth_key: rq.parameters.md5_auth_key.clone(),
+                multi_exit_discriminator: rq
+                    .parameters
+                    .multi_exit_discriminator,
+                communities: rq.parameters.communities.clone(),
+                local_pref: rq.parameters.local_pref,
+                enforce_first_as: rq.parameters.enforce_first_as,
+                allow_import: ImportExportPolicyV1::from_per_af_policies(
+                    &rq.parameters.allow_import4,
+                    &rq.parameters.allow_import6,
+                ),
+                allow_export: ImportExportPolicyV1::from_per_af_policies(
+                    &rq.parameters.allow_export4,
+                    &rq.parameters.allow_export6,
+                ),
+                vlan_id: rq.parameters.vlan_id,
+            },
+        }
+    }
+}
+
+impl UnnumberedNeighbor {
+    pub fn from_bgp_peer_config(
+        asn: u32,
+        group: String,
+        rq: UnnumberedBgpPeerConfig,
+    ) -> Self {
+        Self {
+            asn,
+            group: group.clone(),
+            interface: rq.interface.clone(),
+            name: rq.name.clone(),
+            act_as_a_default_ipv6_router: rq.router_lifetime,
+            parameters: rq.parameters.clone(),
+        }
+    }
+
+    pub fn to_peer_config(&self, addr: SocketAddrV6) -> PeerConfig {
+        PeerConfig {
+            name: self.name.clone(),
+            host: addr.into(),
+            group: self.group.clone(),
+            hold_time: self.parameters.hold_time,
+            idle_hold_time: self.parameters.idle_hold_time,
+            delay_open: self.parameters.delay_open,
+            connect_retry: self.parameters.connect_retry,
+            keepalive: self.parameters.keepalive,
+            resolution: self.parameters.resolution,
+        }
+    }
+
+    pub fn from_rdb_neighbor_info(
+        asn: u32,
+        rq: &rdb::BgpUnnumberedNeighborInfo,
+    ) -> Self {
+        Self {
+            asn,
             group: rq.group.clone(),
-            md5_auth_key: rq.md5_auth_key.clone(),
-            multi_exit_discriminator: rq.multi_exit_discriminator,
-            communities: rq.communities.clone(),
-            local_pref: rq.local_pref,
-            enforce_first_as: rq.enforce_first_as,
-            // Combine per-AF policies into legacy format for API compatibility
-            allow_import: ImportExportPolicyV1::from_per_af_policies(
-                &rq.allow_import4,
-                &rq.allow_import6,
-            ),
-            allow_export: ImportExportPolicyV1::from_per_af_policies(
-                &rq.allow_export4,
-                &rq.allow_export6,
-            ),
-            vlan_id: rq.vlan_id,
+            name: rq.name.clone(),
+            interface: rq.interface.clone(),
+            act_as_a_default_ipv6_router: rq.router_lifetime,
+            parameters: BgpPeerParameters {
+                remote_asn: rq.parameters.remote_asn,
+                min_ttl: rq.parameters.min_ttl,
+                hold_time: rq.parameters.hold_time,
+                idle_hold_time: rq.parameters.idle_hold_time,
+                delay_open: rq.parameters.delay_open,
+                connect_retry: rq.parameters.connect_retry,
+                keepalive: rq.parameters.keepalive,
+                resolution: rq.parameters.resolution,
+                passive: rq.parameters.passive,
+                md5_auth_key: rq.parameters.md5_auth_key.clone(),
+                multi_exit_discriminator: rq
+                    .parameters
+                    .multi_exit_discriminator,
+                communities: rq.parameters.communities.clone(),
+                local_pref: rq.parameters.local_pref,
+                enforce_first_as: rq.parameters.enforce_first_as,
+                vlan_id: rq.parameters.vlan_id,
+                ipv4_unicast: None,
+                ipv6_unicast: None,
+                deterministic_collision_resolution: false,
+                idle_hold_jitter: None,
+                connect_retry_jitter: Some(JitterRange {
+                    min: 0.75,
+                    max: 1.0,
+                }),
+            },
         }
     }
 }
@@ -372,50 +371,30 @@ impl Neighbor {
     ) -> Self {
         Self {
             asn,
-            remote_asn: rq.remote_asn,
-            min_ttl: rq.min_ttl,
             name: rq.name.clone(),
             host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
-            passive: rq.passive,
             group: group.clone(),
-            md5_auth_key: rq.md5_auth_key,
-            multi_exit_discriminator: rq.multi_exit_discriminator,
-            communities: rq.communities,
-            local_pref: rq.local_pref,
-            enforce_first_as: rq.enforce_first_as,
-            ipv4_unicast: rq.ipv4_unicast,
-            ipv6_unicast: rq.ipv6_unicast,
-            vlan_id: rq.vlan_id,
-            connect_retry_jitter: rq.connect_retry_jitter,
-            idle_hold_jitter: rq.idle_hold_jitter,
-            deterministic_collision_resolution: rq
-                .deterministic_collision_resolution,
+            parameters: rq.parameters.clone(),
         }
     }
 
     pub fn from_rdb_neighbor_info(asn: u32, rq: &rdb::BgpNeighborInfo) -> Self {
         // Use explicit enablement flags from the database
-        let ipv4_unicast = if rq.ipv4_enabled {
+        let ipv4_unicast = if rq.parameters.ipv4_enabled {
             Some(Ipv4UnicastConfig {
-                nexthop: rq.nexthop4,
-                import_policy: rq.allow_import4.clone(),
-                export_policy: rq.allow_export4.clone(),
+                nexthop: rq.parameters.nexthop4,
+                import_policy: rq.parameters.allow_import4.clone(),
+                export_policy: rq.parameters.allow_export4.clone(),
             })
         } else {
             None
         };
 
-        let ipv6_unicast = if rq.ipv6_enabled {
+        let ipv6_unicast = if rq.parameters.ipv6_enabled {
             Some(Ipv6UnicastConfig {
-                nexthop: rq.nexthop6,
-                import_policy: rq.allow_import6.clone(),
-                export_policy: rq.allow_export6.clone(),
+                nexthop: rq.parameters.nexthop6,
+                import_policy: rq.parameters.allow_import6.clone(),
+                export_policy: rq.parameters.allow_export6.clone(),
             })
         } else {
             None
@@ -423,32 +402,36 @@ impl Neighbor {
 
         Self {
             asn,
-            remote_asn: rq.remote_asn,
-            min_ttl: rq.min_ttl,
             name: rq.name.clone(),
             host: rq.host,
-            hold_time: rq.hold_time,
-            idle_hold_time: rq.idle_hold_time,
-            delay_open: rq.delay_open,
-            connect_retry: rq.connect_retry,
-            keepalive: rq.keepalive,
-            resolution: rq.resolution,
-            passive: rq.passive,
             group: rq.group.clone(),
-            md5_auth_key: rq.md5_auth_key.clone(),
-            multi_exit_discriminator: rq.multi_exit_discriminator,
-            communities: rq.communities.clone(),
-            local_pref: rq.local_pref,
-            enforce_first_as: rq.enforce_first_as,
-            ipv4_unicast,
-            ipv6_unicast,
-            vlan_id: rq.vlan_id,
-            connect_retry_jitter: Some(JitterRange {
-                min: 0.75,
-                max: 1.0,
-            }),
-            idle_hold_jitter: None,
-            deterministic_collision_resolution: false,
+            parameters: BgpPeerParameters {
+                remote_asn: rq.parameters.remote_asn,
+                min_ttl: rq.parameters.min_ttl,
+                hold_time: rq.parameters.hold_time,
+                idle_hold_time: rq.parameters.idle_hold_time,
+                delay_open: rq.parameters.delay_open,
+                connect_retry: rq.parameters.connect_retry,
+                keepalive: rq.parameters.keepalive,
+                resolution: rq.parameters.resolution,
+                passive: rq.parameters.passive,
+                md5_auth_key: rq.parameters.md5_auth_key.clone(),
+                multi_exit_discriminator: rq
+                    .parameters
+                    .multi_exit_discriminator,
+                communities: rq.parameters.communities.clone(),
+                local_pref: rq.parameters.local_pref,
+                enforce_first_as: rq.parameters.enforce_first_as,
+                ipv4_unicast,
+                ipv6_unicast,
+                vlan_id: rq.parameters.vlan_id,
+                connect_retry_jitter: Some(JitterRange {
+                    min: 0.75,
+                    max: 1.0,
+                }),
+                idle_hold_jitter: None,
+                deterministic_collision_resolution: false,
+            },
         }
     }
 }
@@ -848,6 +831,67 @@ pub struct ApplyRequestV1 {
 pub struct BgpPeerConfigV1 {
     pub host: SocketAddr,
     pub name: String,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV1,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+pub struct BgpPeerConfig {
+    pub host: SocketAddr,
+    pub name: String,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParameters,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+pub struct UnnumberedBgpPeerConfig {
+    pub interface: String,
+    pub name: String,
+    pub router_lifetime: u16,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParameters,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+pub struct BgpPeerParameters {
+    pub hold_time: u64,
+    pub idle_hold_time: u64,
+    pub delay_open: u64,
+    pub connect_retry: u64,
+    pub keepalive: u64,
+    pub resolution: u64,
+    pub passive: bool,
+    pub remote_asn: Option<u32>,
+    pub min_ttl: Option<u8>,
+    pub md5_auth_key: Option<String>,
+    pub multi_exit_discriminator: Option<u32>,
+    pub communities: Vec<u32>,
+    pub local_pref: Option<u32>,
+    pub enforce_first_as: bool,
+    pub vlan_id: Option<u16>,
+
+    // new stuff after v1
+    /// IPv4 Unicast address family configuration (None = disabled)
+    pub ipv4_unicast: Option<Ipv4UnicastConfig>,
+    /// IPv6 Unicast address family configuration (None = disabled)
+    pub ipv6_unicast: Option<Ipv6UnicastConfig>,
+    /// Enable deterministic collision resolution in Established state.
+    /// When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision
+    /// resolution even when one connection is already in Established state.
+    /// When false, Established connection always wins (timing-based resolution).
+    pub deterministic_collision_resolution: bool,
+    /// Jitter range for idle hold timer. When used, the idle hold timer is
+    /// multiplied by a random value within the (min, max) range supplied.
+    /// Useful to help break repeated synchronization of connection collisions.
+    pub idle_hold_jitter: Option<JitterRange>,
+    /// Jitter range for connect_retry timer. When used, the connect_retry timer
+    /// is multiplied by a random value within the (min, max) range supplied.
+    /// Useful to help break repeated synchronization of connection collisions.
+    pub connect_retry_jitter: Option<JitterRange>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+pub struct BgpPeerParametersV1 {
     pub hold_time: u64,
     pub idle_hold_time: u64,
     pub delay_open: u64,
@@ -867,78 +911,43 @@ pub struct BgpPeerConfigV1 {
     pub vlan_id: Option<u16>,
 }
 
-/// BGP peer configuration (current version with per-address-family policies).
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct BgpPeerConfig {
-    pub host: SocketAddr,
-    pub name: String,
-    pub hold_time: u64,
-    pub idle_hold_time: u64,
-    pub delay_open: u64,
-    pub connect_retry: u64,
-    pub keepalive: u64,
-    pub resolution: u64,
-    pub passive: bool,
-    pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
-    pub md5_auth_key: Option<String>,
-    pub multi_exit_discriminator: Option<u32>,
-    pub communities: Vec<u32>,
-    pub local_pref: Option<u32>,
-    pub enforce_first_as: bool,
-    /// IPv4 Unicast address family configuration (None = disabled)
-    pub ipv4_unicast: Option<Ipv4UnicastConfig>,
-    /// IPv6 Unicast address family configuration (None = disabled)
-    pub ipv6_unicast: Option<Ipv6UnicastConfig>,
-    pub vlan_id: Option<u16>,
-    /// Jitter range for connect_retry timer. When used, the connect_retry timer
-    /// is multiplied by a random value within the (min, max) range supplied.
-    /// Useful to help break repeated synchronization of connection collisions.
-    pub connect_retry_jitter: Option<JitterRange>,
-    /// Jitter range for idle hold timer. When used, the idle hold timer is
-    /// multiplied by a random value within the (min, max) range supplied.
-    /// Useful to help break repeated synchronization of connection collisions.
-    pub idle_hold_jitter: Option<JitterRange>,
-    /// Enable deterministic collision resolution in Established state.
-    /// When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision
-    /// resolution even when one connection is already in Established state.
-    /// When false, Established connection always wins (timing-based resolution).
-    pub deterministic_collision_resolution: bool,
-}
-
 impl From<BgpPeerConfigV1> for BgpPeerConfig {
     fn from(cfg: BgpPeerConfigV1) -> Self {
         // Legacy BgpPeerConfigV1 is IPv4-only
         Self {
             host: cfg.host,
             name: cfg.name,
-            hold_time: cfg.hold_time,
-            idle_hold_time: cfg.idle_hold_time,
-            delay_open: cfg.delay_open,
-            connect_retry: cfg.connect_retry,
-            keepalive: cfg.keepalive,
-            resolution: cfg.resolution,
-            passive: cfg.passive,
-            remote_asn: cfg.remote_asn,
-            min_ttl: cfg.min_ttl,
-            md5_auth_key: cfg.md5_auth_key,
-            multi_exit_discriminator: cfg.multi_exit_discriminator,
-            communities: cfg.communities,
-            local_pref: cfg.local_pref,
-            enforce_first_as: cfg.enforce_first_as,
-            ipv4_unicast: Some(Ipv4UnicastConfig {
-                nexthop: None,
-                import_policy: cfg.allow_import.as_ipv4_policy(),
-                export_policy: cfg.allow_export.as_ipv4_policy(),
-            }),
-            ipv6_unicast: None,
-            vlan_id: cfg.vlan_id,
-            connect_retry_jitter: Some(JitterRange {
-                min: 0.75,
-                max: 1.0,
-            }),
-            idle_hold_jitter: None,
-            deterministic_collision_resolution: false,
+            parameters: BgpPeerParameters {
+                hold_time: cfg.parameters.hold_time,
+                idle_hold_time: cfg.parameters.idle_hold_time,
+                delay_open: cfg.parameters.delay_open,
+                connect_retry: cfg.parameters.connect_retry,
+                keepalive: cfg.parameters.keepalive,
+                resolution: cfg.parameters.resolution,
+                passive: cfg.parameters.passive,
+                remote_asn: cfg.parameters.remote_asn,
+                min_ttl: cfg.parameters.min_ttl,
+                md5_auth_key: cfg.parameters.md5_auth_key,
+                multi_exit_discriminator: cfg
+                    .parameters
+                    .multi_exit_discriminator,
+                communities: cfg.parameters.communities,
+                local_pref: cfg.parameters.local_pref,
+                enforce_first_as: cfg.parameters.enforce_first_as,
+                ipv4_unicast: Some(Ipv4UnicastConfig {
+                    nexthop: None,
+                    import_policy: cfg.parameters.allow_import.as_ipv4_policy(),
+                    export_policy: cfg.parameters.allow_export.as_ipv4_policy(),
+                }),
+                ipv6_unicast: None,
+                vlan_id: cfg.parameters.vlan_id,
+                connect_retry_jitter: Some(JitterRange {
+                    min: 0.75,
+                    max: 1.0,
+                }),
+                idle_hold_jitter: None,
+                deterministic_collision_resolution: false,
+            },
         }
     }
 }
@@ -1069,6 +1078,9 @@ pub struct ApplyRequest {
     pub shaper: Option<ShaperSource>,
     /// Lists of peers indexed by peer group.
     pub peers: HashMap<String, Vec<BgpPeerConfig>>,
+    /// Lists of unnumbered peers indexed by peer group.
+    #[serde(default)]
+    pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfig>>,
 }
 
 impl From<ApplyRequestV1> for ApplyRequest {
@@ -1085,6 +1097,7 @@ impl From<ApplyRequestV1> for ApplyRequest {
                     (k, v.into_iter().map(BgpPeerConfig::from).collect())
                 })
                 .collect(),
+            unnumbered_peers: HashMap::default(),
         }
     }
 }

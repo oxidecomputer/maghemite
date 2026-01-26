@@ -7,6 +7,7 @@ use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use crate::log::dlog;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
+use bgp::params::BgpPeerParametersV1;
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
 use mg_common::lock;
@@ -36,6 +37,7 @@ mod rib_admin;
 mod signal;
 mod smf;
 mod static_admin;
+mod unnumbered_manager;
 mod validation;
 
 #[derive(Parser, Debug)]
@@ -109,9 +111,9 @@ async fn run(args: RunArgs) {
         .await
         .expect("set up refresh signal handler");
 
-    let bgp = init_bgp(&args, &log);
     let db = rdb::Db::new(&format!("{}/rdb", args.data_dir), log.clone())
         .expect("open datastore file");
+    let bgp = init_bgp(&args, db.clone(), &log);
 
     let tep_ula = get_tunnel_endpoint_ula(&db);
     let bfd = BfdContext::new(log.clone());
@@ -251,7 +253,7 @@ fn detect_switch_slot(
     rt.spawn(task());
 }
 
-fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
+fn init_bgp(args: &RunArgs, db: rdb::Db, log: &Logger) -> BgpContext {
     let addr_to_session = Arc::new(Mutex::new(BTreeMap::new()));
     if !args.no_bgp_dispatcher {
         let bgp_dispatcher =
@@ -269,7 +271,7 @@ fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
             .spawn(move || bgp_dispatcher.run::<BgpListenerTcp>())
             .expect("failed to start {listener_str}");
     }
-    BgpContext::new(addr_to_session)
+    BgpContext::new(addr_to_session, db, log.clone())
 }
 
 fn start_bgp_routers(
@@ -299,33 +301,38 @@ fn start_bgp_routers(
             context.clone(),
             bgp::params::NeighborV1 {
                 asn: nbr.asn,
-                remote_asn: nbr.remote_asn,
-                min_ttl: nbr.min_ttl,
+                group: nbr.group.clone(),
                 name: nbr.name.clone(),
                 host: nbr.host,
-                hold_time: nbr.hold_time,
-                idle_hold_time: nbr.idle_hold_time,
-                delay_open: nbr.delay_open,
-                connect_retry: nbr.connect_retry,
-                keepalive: nbr.keepalive,
-                resolution: nbr.resolution,
-                group: nbr.group.clone(),
-                passive: nbr.passive,
-                md5_auth_key: nbr.md5_auth_key.clone(),
-                multi_exit_discriminator: nbr.multi_exit_discriminator,
-                communities: nbr.communities.clone(),
-                local_pref: nbr.local_pref,
-                enforce_first_as: nbr.enforce_first_as,
-                // Combine per-AF policies into legacy format for API compatibility
-                allow_import: rdb::ImportExportPolicyV1::from_per_af_policies(
-                    &nbr.allow_import4,
-                    &nbr.allow_import6,
-                ),
-                allow_export: rdb::ImportExportPolicyV1::from_per_af_policies(
-                    &nbr.allow_export4,
-                    &nbr.allow_export6,
-                ),
-                vlan_id: nbr.vlan_id,
+                parameters: BgpPeerParametersV1 {
+                    remote_asn: nbr.parameters.remote_asn,
+                    min_ttl: nbr.parameters.min_ttl,
+                    hold_time: nbr.parameters.hold_time,
+                    idle_hold_time: nbr.parameters.idle_hold_time,
+                    delay_open: nbr.parameters.delay_open,
+                    connect_retry: nbr.parameters.connect_retry,
+                    keepalive: nbr.parameters.keepalive,
+                    resolution: nbr.parameters.resolution,
+                    passive: nbr.parameters.passive,
+                    md5_auth_key: nbr.parameters.md5_auth_key.clone(),
+                    multi_exit_discriminator: nbr
+                        .parameters
+                        .multi_exit_discriminator,
+                    communities: nbr.parameters.communities.clone(),
+                    local_pref: nbr.parameters.local_pref,
+                    enforce_first_as: nbr.parameters.enforce_first_as,
+                    allow_import:
+                        rdb::ImportExportPolicyV1::from_per_af_policies(
+                            &nbr.parameters.allow_import4,
+                            &nbr.parameters.allow_import6,
+                        ),
+                    allow_export:
+                        rdb::ImportExportPolicyV1::from_per_af_policies(
+                            &nbr.parameters.allow_export4,
+                            &nbr.parameters.allow_export6,
+                        ),
+                    vlan_id: nbr.parameters.vlan_id,
+                },
             },
             true,
         )

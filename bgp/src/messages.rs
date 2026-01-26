@@ -575,26 +575,56 @@ pub struct OpenMessage {
 
 impl OpenMessage {
     /// Create a new open message for a sender with a 2-byte ASN
-    pub fn new2(asn: u16, hold_time: u16, id: u32) -> OpenMessage {
+    pub fn new2(
+        asn: u16,
+        hold_time: u16,
+        id: u32,
+        extended_nexthop: bool,
+    ) -> OpenMessage {
+        let parameters = if extended_nexthop {
+            let caps = BTreeSet::from([Capability::ExtendedNextHopEncoding {
+                elements: vec![ExtendedNexthopElement {
+                    afi: Afi::Ipv4.into(),
+                    safi: u8::from(Safi::Unicast).into(),
+                    nh_afi: Afi::Ipv6.into(),
+                }],
+            }]);
+            vec![OptionalParameter::Capabilities(caps)]
+        } else {
+            Vec::default()
+        };
         OpenMessage {
             version: BGP4,
             asn,
             hold_time,
             id,
-            parameters: Vec::new(),
+            parameters,
         }
     }
 
     /// Create a new open message for a sender with a 4-byte ASN
-    pub fn new4(asn: u32, hold_time: u16, id: u32) -> OpenMessage {
+    pub fn new4(
+        asn: u32,
+        hold_time: u16,
+        id: u32,
+        extended_nexthop: bool,
+    ) -> OpenMessage {
+        let mut params = BTreeSet::from([Capability::FourOctetAs { asn }]);
+        if extended_nexthop {
+            params.insert(Capability::ExtendedNextHopEncoding {
+                elements: vec![ExtendedNexthopElement {
+                    afi: Afi::Ipv4.into(),
+                    safi: u8::from(Safi::Unicast).into(),
+                    nh_afi: Afi::Ipv6.into(),
+                }],
+            });
+        }
         OpenMessage {
             version: BGP4,
             asn: u16::try_from(asn).unwrap_or(AS_TRANS),
             hold_time,
             id,
-            parameters: vec![OptionalParameter::Capabilities(BTreeSet::from(
-                [Capability::FourOctetAs { asn }],
-            ))],
+            parameters: vec![OptionalParameter::Capabilities(params)],
         }
     }
 
@@ -613,12 +643,13 @@ impl OpenMessage {
     }
 
     pub fn get_capabilities(&self) -> BTreeSet<Capability> {
+        let mut result = BTreeSet::new();
         for p in self.parameters.iter() {
             if let OptionalParameter::Capabilities(caps) = p {
-                return caps.clone();
+                result.extend(caps.clone().into_iter());
             }
         }
-        BTreeSet::new()
+        result
     }
 
     pub fn has_capability(&self, code: CapabilityCode) -> bool {
@@ -2818,19 +2849,18 @@ impl BgpNexthop {
         // SAFETY: The length check above guarantees nh_bytes.len() == nh_len.
         // Each match arm below only matches when nh_len equals the exact size
         // needed for copy_from_slice, so all slice operations are bounds-safe.
-        // XXX: extended nexthop support
         match (afi, nh_len) {
             (Afi::Ipv4, 4) => {
                 let mut bytes = [0u8; 4];
                 bytes.copy_from_slice(nh_bytes);
                 Ok(BgpNexthop::Ipv4(Ipv4Addr::from(bytes)))
             }
-            (Afi::Ipv6, 16) => {
+            (Afi::Ipv4 | Afi::Ipv6, 16) => {
                 let mut bytes = [0u8; 16];
                 bytes.copy_from_slice(nh_bytes);
                 Ok(BgpNexthop::Ipv6Single(Ipv6Addr::from(bytes)))
             }
-            (Afi::Ipv6, 32) => {
+            (Afi::Ipv4 | Afi::Ipv6, 32) => {
                 let mut bytes1 = [0u8; 16];
                 let mut bytes2 = [0u8; 16];
                 bytes1.copy_from_slice(&nh_bytes[..16]);
@@ -4090,7 +4120,60 @@ impl Display for AddPathElement {
         write!(
             f,
             "AddPathElement {{ afi: {}, safi: {}, send_receive: {} }}",
-            self.afi, self.safi, self.send_receive
+            match Afi::try_from_primitive(self.afi) {
+                Ok(x) => x.to_string(),
+                _ => self.afi.to_string(),
+            },
+            match Safi::try_from_primitive(self.safi) {
+                Ok(x) => x.to_string(),
+                _ => self.safi.to_string(),
+            },
+            self.send_receive
+        )
+    }
+}
+
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    PartialOrd,
+    Ord,
+)]
+pub struct ExtendedNexthopElement {
+    pub afi: u16,
+    pub safi: u16,
+    pub nh_afi: u16,
+}
+
+impl ExtendedNexthopElement {
+    fn is_v4_over_v6(&self) -> bool {
+        self == &ExtendedNexthopElement {
+            afi: Afi::Ipv4.into(),
+            safi: u8::from(Safi::Unicast).into(),
+            nh_afi: Afi::Ipv6.into(),
+        }
+    }
+    fn is_v6_over_v4(&self) -> bool {
+        self == &ExtendedNexthopElement {
+            afi: Afi::Ipv6.into(),
+            safi: u8::from(Safi::Unicast).into(),
+            nh_afi: Afi::Ipv4.into(),
+        }
+    }
+}
+
+impl Display for ExtendedNexthopElement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "safi={}/afi={}/nh_afi={}",
+            self.afi, self.safi, self.nh_afi
         )
     }
 }
@@ -4131,10 +4214,13 @@ pub enum Capability {
     /// (deprecated). Note this capability is not yet implemented.
     MultipleRoutesToDestination {},
 
-    //TODO
-    /// Multiple nexthop encoding capability as defined in RFC 8950. Note this
-    /// capability is not yet implemented.
-    ExtendedNextHopEncoding {},
+    /// Multiple nexthop encoding capability as defined in RFC 8950.
+    ExtendedNextHopEncoding {
+        //XXX trying to avoid a version bump on 86 billion data structures
+        // right now.
+        #[schemars(skip)]
+        elements: Vec<ExtendedNexthopElement>,
+    },
 
     //TODO
     /// Extended message capability as defined in RFC 8654. Note this
@@ -4262,8 +4348,13 @@ impl Display for Capability {
             Capability::MultipleRoutesToDestination {} => {
                 write!(f, "Multiple Routes to Destination")
             }
-            Capability::ExtendedNextHopEncoding {} => {
-                write!(f, "Extended Next Hop Encoding")
+            Capability::ExtendedNextHopEncoding { elements } => {
+                let elements = elements
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "Extended Next Hop Encoding {elements}")
             }
             Capability::BGPExtendedMessage {} => {
                 write!(f, "BGP Extended Message")
@@ -4384,6 +4475,18 @@ impl Capability {
                 let buf = vec![CapabilityCode::EnhancedRouteRefresh.into(), 0];
                 Ok(buf)
             }
+            Self::ExtendedNextHopEncoding { elements } => {
+                let mut buf = vec![
+                    CapabilityCode::ExtendedNextHopEncoding as u8,
+                    (elements.len() * 6) as u8,
+                ];
+                for e in elements {
+                    buf.extend_from_slice(&e.afi.to_be_bytes());
+                    buf.extend_from_slice(&e.safi.to_be_bytes());
+                    buf.extend_from_slice(&e.nh_afi.to_be_bytes());
+                }
+                Ok(buf)
+            }
             Self::Experimental { code: _ } => Err(Error::Experimental),
             Self::Unassigned { code } => Err(Error::Unassigned(*code)),
             Self::Reserved { code: _ } => Err(Error::ReservedCapability),
@@ -4409,303 +4512,282 @@ impl Capability {
                 return Ok((&input[len..], Capability::Unassigned { code }));
             }
         };
-        let mut input = input;
+        let (cap_data, remaining) = input.split_at(len);
+        let mut input = cap_data;
 
-        match code {
+        let cap = match code {
             CapabilityCode::MultiprotocolExtensions => {
                 let (input, afi) = be_u16(input)?;
                 let (input, _) = be_u8(input)?;
-                let (input, safi) = be_u8(input)?;
-                Ok((input, Capability::MultiprotocolExtensions { afi, safi }))
+                let (_, safi) = be_u8(input)?;
+                Capability::MultiprotocolExtensions { afi, safi }
             }
-            CapabilityCode::RouteRefresh => {
-                Ok((&input[len..], Capability::RouteRefresh {}))
-            }
-
+            CapabilityCode::RouteRefresh => Capability::RouteRefresh {},
             CapabilityCode::GracefulRestart => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::GracefulRestart {}))
+                Capability::GracefulRestart {}
             }
             CapabilityCode::FourOctetAs => {
-                let (input, asn) = be_u32(input)?;
-                Ok((input, Capability::FourOctetAs { asn }))
+                let (_, asn) = be_u32(input)?;
+                Capability::FourOctetAs { asn }
             }
             CapabilityCode::AddPath => {
                 let mut elements = BTreeSet::new();
                 while !input.is_empty() {
-                    let (remaining, afi) = be_u16(input)?;
-                    let (remaining, safi) = be_u8(remaining)?;
-                    let (remaining, send_receive) = be_u8(remaining)?;
+                    let (rem, afi) = be_u16(input)?;
+                    let (rem, safi) = be_u8(rem)?;
+                    let (rem, send_receive) = be_u8(rem)?;
                     elements.insert(AddPathElement {
                         afi,
                         safi,
                         send_receive,
                     });
-                    input = remaining;
+                    input = rem;
                 }
-                Ok((input, Capability::AddPath { elements }))
+                Capability::AddPath { elements }
             }
             CapabilityCode::EnhancedRouteRefresh => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::EnhancedRouteRefresh {}))
+                Capability::EnhancedRouteRefresh {}
             }
-
             CapabilityCode::Fqdn => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::Fqdn {}))
+                Capability::Fqdn {}
             }
-
             CapabilityCode::PrestandardRouteRefresh => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::PrestandardRouteRefresh {}))
+                Capability::PrestandardRouteRefresh {}
             }
-
             CapabilityCode::BGPExtendedMessage => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::BGPExtendedMessage {}))
+                Capability::BGPExtendedMessage {}
             }
-
             CapabilityCode::LongLivedGracefulRestart => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::LongLivedGracefulRestart {}))
+                Capability::LongLivedGracefulRestart {}
             }
-
             CapabilityCode::MultipleRoutesToDestination => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::MultipleRoutesToDestination {}))
+                Capability::MultipleRoutesToDestination {}
             }
-
             CapabilityCode::ExtendedNextHopEncoding => {
-                //TODO handle for real
-                Ok((&input[len..], Capability::ExtendedNextHopEncoding {}))
+                let mut elements = Vec::new();
+                while !input.is_empty() {
+                    let (rem, afi) = be_u16(input)?;
+                    let (rem, safi) = be_u16(rem)?;
+                    let (rem, nh_afi) = be_u16(rem)?;
+                    elements.push(ExtendedNexthopElement { afi, safi, nh_afi });
+                    input = rem;
+                }
+                Capability::ExtendedNextHopEncoding { elements }
             }
-
             CapabilityCode::OutboundRouteFiltering => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::OutboundRouteFiltering {}))
+                Capability::OutboundRouteFiltering {}
             }
-
             CapabilityCode::BgpSec => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::BgpSec {}))
+                Capability::BgpSec {}
             }
-
             CapabilityCode::MultipleLabels => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::MultipleLabels {}))
+                Capability::MultipleLabels {}
             }
-
             CapabilityCode::BgpRole => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::BgpRole {}))
+                Capability::BgpRole {}
             }
-
             CapabilityCode::DynamicCapability => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::DynamicCapability {}))
+                Capability::DynamicCapability {}
             }
-
             CapabilityCode::MultisessionBgp => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::MultisessionBgp {}))
+                Capability::MultisessionBgp {}
             }
-
             CapabilityCode::RoutingPolicyDistribution => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::RoutingPolicyDistribution {}))
+                Capability::RoutingPolicyDistribution {}
             }
-
             CapabilityCode::PrestandardOrfAndPd => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::PrestandardOrfAndPd {}))
+                Capability::PrestandardOrfAndPd {}
             }
-
             CapabilityCode::PrestandardOutboundRouteFiltering => {
                 //TODO handle for real
-                Ok((
-                    &input[len..],
-                    Capability::PrestandardOutboundRouteFiltering {},
-                ))
+                Capability::PrestandardOutboundRouteFiltering {}
             }
-
             CapabilityCode::PrestandardMultisession => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::PrestandardMultisession {}))
+                Capability::PrestandardMultisession {}
             }
-
             CapabilityCode::PrestandardFqdn => {
                 //TODO handle for real
-                Ok((&input[len..], Capability::PrestandardFqdn {}))
+                Capability::PrestandardFqdn {}
             }
-
             CapabilityCode::PrestandardOperationalMessage => {
                 //TODO handle for real
-                Ok((
-                    &input[len..],
-                    Capability::PrestandardOperationalMessage {},
-                ))
+                Capability::PrestandardOperationalMessage {}
             }
-
             CapabilityCode::Experimental0 => {
-                Ok((&input[len..], Capability::Experimental { code: 0 }))
+                Capability::Experimental { code: 0 }
             }
             CapabilityCode::Experimental1 => {
-                Ok((&input[len..], Capability::Experimental { code: 1 }))
+                Capability::Experimental { code: 1 }
             }
             CapabilityCode::Experimental2 => {
-                Ok((&input[len..], Capability::Experimental { code: 2 }))
+                Capability::Experimental { code: 2 }
             }
             CapabilityCode::Experimental3 => {
-                Ok((&input[len..], Capability::Experimental { code: 3 }))
+                Capability::Experimental { code: 3 }
             }
             CapabilityCode::Experimental4 => {
-                Ok((&input[len..], Capability::Experimental { code: 4 }))
+                Capability::Experimental { code: 4 }
             }
             CapabilityCode::Experimental5 => {
-                Ok((&input[len..], Capability::Experimental { code: 5 }))
+                Capability::Experimental { code: 5 }
             }
             CapabilityCode::Experimental6 => {
-                Ok((&input[len..], Capability::Experimental { code: 6 }))
+                Capability::Experimental { code: 6 }
             }
             CapabilityCode::Experimental7 => {
-                Ok((&input[len..], Capability::Experimental { code: 7 }))
+                Capability::Experimental { code: 7 }
             }
             CapabilityCode::Experimental8 => {
-                Ok((&input[len..], Capability::Experimental { code: 8 }))
+                Capability::Experimental { code: 8 }
             }
             CapabilityCode::Experimental9 => {
-                Ok((&input[len..], Capability::Experimental { code: 9 }))
+                Capability::Experimental { code: 9 }
             }
             CapabilityCode::Experimental10 => {
-                Ok((&input[len..], Capability::Experimental { code: 10 }))
+                Capability::Experimental { code: 10 }
             }
             CapabilityCode::Experimental11 => {
-                Ok((&input[len..], Capability::Experimental { code: 11 }))
+                Capability::Experimental { code: 11 }
             }
             CapabilityCode::Experimental12 => {
-                Ok((&input[len..], Capability::Experimental { code: 12 }))
+                Capability::Experimental { code: 12 }
             }
             CapabilityCode::Experimental13 => {
-                Ok((&input[len..], Capability::Experimental { code: 13 }))
+                Capability::Experimental { code: 13 }
             }
             CapabilityCode::Experimental14 => {
-                Ok((&input[len..], Capability::Experimental { code: 14 }))
+                Capability::Experimental { code: 14 }
             }
             CapabilityCode::Experimental15 => {
-                Ok((&input[len..], Capability::Experimental { code: 15 }))
+                Capability::Experimental { code: 15 }
             }
             CapabilityCode::Experimental16 => {
-                Ok((&input[len..], Capability::Experimental { code: 16 }))
+                Capability::Experimental { code: 16 }
             }
             CapabilityCode::Experimental17 => {
-                Ok((&input[len..], Capability::Experimental { code: 17 }))
+                Capability::Experimental { code: 17 }
             }
             CapabilityCode::Experimental18 => {
-                Ok((&input[len..], Capability::Experimental { code: 18 }))
+                Capability::Experimental { code: 18 }
             }
             CapabilityCode::Experimental19 => {
-                Ok((&input[len..], Capability::Experimental { code: 19 }))
+                Capability::Experimental { code: 19 }
             }
             CapabilityCode::Experimental20 => {
-                Ok((&input[len..], Capability::Experimental { code: 20 }))
+                Capability::Experimental { code: 20 }
             }
             CapabilityCode::Experimental21 => {
-                Ok((&input[len..], Capability::Experimental { code: 21 }))
+                Capability::Experimental { code: 21 }
             }
             CapabilityCode::Experimental22 => {
-                Ok((&input[len..], Capability::Experimental { code: 22 }))
+                Capability::Experimental { code: 22 }
             }
             CapabilityCode::Experimental23 => {
-                Ok((&input[len..], Capability::Experimental { code: 23 }))
+                Capability::Experimental { code: 23 }
             }
             CapabilityCode::Experimental24 => {
-                Ok((&input[len..], Capability::Experimental { code: 24 }))
+                Capability::Experimental { code: 24 }
             }
             CapabilityCode::Experimental25 => {
-                Ok((&input[len..], Capability::Experimental { code: 25 }))
+                Capability::Experimental { code: 25 }
             }
             CapabilityCode::Experimental26 => {
-                Ok((&input[len..], Capability::Experimental { code: 26 }))
+                Capability::Experimental { code: 26 }
             }
             CapabilityCode::Experimental27 => {
-                Ok((&input[len..], Capability::Experimental { code: 27 }))
+                Capability::Experimental { code: 27 }
             }
             CapabilityCode::Experimental28 => {
-                Ok((&input[len..], Capability::Experimental { code: 28 }))
+                Capability::Experimental { code: 28 }
             }
             CapabilityCode::Experimental29 => {
-                Ok((&input[len..], Capability::Experimental { code: 29 }))
+                Capability::Experimental { code: 29 }
             }
             CapabilityCode::Experimental30 => {
-                Ok((&input[len..], Capability::Experimental { code: 30 }))
+                Capability::Experimental { code: 30 }
             }
             CapabilityCode::Experimental31 => {
-                Ok((&input[len..], Capability::Experimental { code: 31 }))
+                Capability::Experimental { code: 31 }
             }
             CapabilityCode::Experimental32 => {
-                Ok((&input[len..], Capability::Experimental { code: 32 }))
+                Capability::Experimental { code: 32 }
             }
             CapabilityCode::Experimental33 => {
-                Ok((&input[len..], Capability::Experimental { code: 33 }))
+                Capability::Experimental { code: 33 }
             }
             CapabilityCode::Experimental34 => {
-                Ok((&input[len..], Capability::Experimental { code: 34 }))
+                Capability::Experimental { code: 34 }
             }
             CapabilityCode::Experimental35 => {
-                Ok((&input[len..], Capability::Experimental { code: 35 }))
+                Capability::Experimental { code: 35 }
             }
             CapabilityCode::Experimental36 => {
-                Ok((&input[len..], Capability::Experimental { code: 36 }))
+                Capability::Experimental { code: 36 }
             }
             CapabilityCode::Experimental37 => {
-                Ok((&input[len..], Capability::Experimental { code: 37 }))
+                Capability::Experimental { code: 37 }
             }
             CapabilityCode::Experimental38 => {
-                Ok((&input[len..], Capability::Experimental { code: 38 }))
+                Capability::Experimental { code: 38 }
             }
             CapabilityCode::Experimental39 => {
-                Ok((&input[len..], Capability::Experimental { code: 39 }))
+                Capability::Experimental { code: 39 }
             }
             CapabilityCode::Experimental40 => {
-                Ok((&input[len..], Capability::Experimental { code: 40 }))
+                Capability::Experimental { code: 40 }
             }
             CapabilityCode::Experimental41 => {
-                Ok((&input[len..], Capability::Experimental { code: 41 }))
+                Capability::Experimental { code: 41 }
             }
             CapabilityCode::Experimental42 => {
-                Ok((&input[len..], Capability::Experimental { code: 42 }))
+                Capability::Experimental { code: 42 }
             }
             CapabilityCode::Experimental43 => {
-                Ok((&input[len..], Capability::Experimental { code: 43 }))
+                Capability::Experimental { code: 43 }
             }
             CapabilityCode::Experimental44 => {
-                Ok((&input[len..], Capability::Experimental { code: 44 }))
+                Capability::Experimental { code: 44 }
             }
             CapabilityCode::Experimental45 => {
-                Ok((&input[len..], Capability::Experimental { code: 45 }))
+                Capability::Experimental { code: 45 }
             }
             CapabilityCode::Experimental46 => {
-                Ok((&input[len..], Capability::Experimental { code: 46 }))
+                Capability::Experimental { code: 46 }
             }
             CapabilityCode::Experimental47 => {
-                Ok((&input[len..], Capability::Experimental { code: 47 }))
+                Capability::Experimental { code: 47 }
             }
             CapabilityCode::Experimental48 => {
-                Ok((&input[len..], Capability::Experimental { code: 48 }))
+                Capability::Experimental { code: 48 }
             }
             CapabilityCode::Experimental49 => {
-                Ok((&input[len..], Capability::Experimental { code: 49 }))
+                Capability::Experimental { code: 49 }
             }
             CapabilityCode::Experimental50 => {
-                Ok((&input[len..], Capability::Experimental { code: 50 }))
+                Capability::Experimental { code: 50 }
             }
             CapabilityCode::Experimental51 => {
-                Ok((&input[len..], Capability::Experimental { code: 51 }))
+                Capability::Experimental { code: 51 }
             }
-            CapabilityCode::Reserved => {
-                Ok((&input[len..], Capability::Reserved { code: 0 }))
-            }
-        }
+            CapabilityCode::Reserved => Capability::Reserved { code: 0 },
+        };
+        Ok((remaining, cap))
     }
 
     /// Helper function to generate an IPv4 Unicast MP-BGP capability.
@@ -4721,6 +4803,22 @@ impl Capability {
         Self::MultiprotocolExtensions {
             afi: Afi::Ipv6.into(),
             safi: Safi::Unicast.into(),
+        }
+    }
+
+    pub fn extended_nh_v4_over_v6(&self) -> bool {
+        if let Self::ExtendedNextHopEncoding { elements } = self {
+            elements.iter().any(|x| x.is_v4_over_v6())
+        } else {
+            false
+        }
+    }
+
+    pub fn extended_nh_v6_over_v4(&self) -> bool {
+        if let Self::ExtendedNextHopEncoding { elements } = self {
+            elements.iter().any(|x| x.is_v6_over_v4())
+        } else {
+            false
         }
     }
 }
@@ -4874,7 +4972,7 @@ impl From<Capability> for CapabilityCode {
             Capability::MultipleRoutesToDestination {} => {
                 CapabilityCode::MultipleRoutesToDestination
             }
-            Capability::ExtendedNextHopEncoding {} => {
+            Capability::ExtendedNextHopEncoding { elements: _ } => {
                 CapabilityCode::ExtendedNextHopEncoding
             }
             Capability::BGPExtendedMessage {} => {
@@ -5902,7 +6000,18 @@ mod tests {
 
     #[test]
     fn open_round_trip() {
-        let om0 = OpenMessage::new4(395849, 0x1234, 0xaabbccdd);
+        let om0 = OpenMessage::new4(395849, 0x1234, 0xaabbccdd, false);
+
+        let buf = om0.to_wire().expect("open message to wire");
+        println!("buf: {}", buf.hex_dump());
+
+        let om1 = OpenMessage::from_wire(&buf).expect("open message from wire");
+        assert_eq!(om0, om1);
+    }
+
+    #[test]
+    fn open_round_trip_extended_nexthop() {
+        let om0 = OpenMessage::new4(395849, 0x1234, 0xaabbccdd, true);
 
         let buf = om0.to_wire().expect("open message to wire");
         println!("buf: {}", buf.hex_dump());
