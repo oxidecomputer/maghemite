@@ -7,6 +7,7 @@ use crate::{
     error::Error,
     messages::Message,
     session::{FsmEvent, PeerId, SessionEndpoint, SessionInfo},
+    unnumbered::UnnumberedManager,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -118,7 +119,14 @@ impl ConnectionId {
 /// Implementors of this trait listen to and accept inbound BGP connections.
 pub trait BgpListener<Cnx: BgpConnection> {
     /// Bind to an address and listen for connections.
-    fn bind<A: ToSocketAddrs>(addr: A) -> Result<Self, Error>
+    ///
+    /// # Arguments
+    /// * `addr` - The address to bind to
+    /// * `unnumbered_manager` - Optional unnumbered manager for resolving scope_id -> interface
+    fn bind<A: ToSocketAddrs>(
+        addr: A,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    ) -> Result<Self, Error>
     where
         Self: Sized;
 

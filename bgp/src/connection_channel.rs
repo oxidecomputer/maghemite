@@ -20,6 +20,7 @@ use crate::{
     session::{
         ConnectionEvent, FsmEvent, PeerId, SessionEndpoint, SessionInfo,
     },
+    unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
 use slog::Logger;
@@ -180,10 +181,33 @@ pub fn count_failed_connections_to(peer: SocketAddr) -> usize {
 pub struct BgpListenerChannel {
     listener: Listener,
     bind_addr: SocketAddr,
+    unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+}
+
+impl BgpListenerChannel {
+    /// Resolve incoming peer address to appropriate PeerId.
+    fn resolve_session_key(&self, peer_addr: SocketAddr) -> PeerId {
+        // Try interface-based routing for IPv6 link-local addresses
+        if let Some(ref mgr) = self.unnumbered_manager
+            && let SocketAddr::V6(v6_addr) = peer_addr
+            && v6_addr.ip().is_unicast_link_local()
+        {
+            let scope_id = v6_addr.scope_id();
+            if let Some(interface) = mgr.get_interface_for_scope(scope_id) {
+                return PeerId::Interface(interface);
+            }
+        }
+
+        // Default to IP-based routing
+        PeerId::Ip(peer_addr.ip())
+    }
 }
 
 impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
-    fn bind<A: ToSocketAddrs>(addr: A) -> Result<Self, Error>
+    fn bind<A: ToSocketAddrs>(
+        addr: A,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    ) -> Result<Self, Error>
     where
         Self: Sized,
     {
@@ -198,6 +222,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         Ok(Self {
             listener,
             bind_addr: addr,
+            unnumbered_manager,
         })
     }
 
@@ -217,7 +242,10 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         // testing purposes with channels, the bind address is the connection address.
         let local = self.bind_addr;
 
-        match lock!(peer_to_session).get(&PeerId::Ip(peer.ip())) {
+        // Resolve peer address to appropriate PeerId (IP or Interface)
+        let key = self.resolve_session_key(peer);
+
+        match lock!(peer_to_session).get(&key) {
             Some(session_endpoint) => {
                 let config = lock!(session_endpoint.config);
                 Ok(BgpConnectionChannel::with_conn(
