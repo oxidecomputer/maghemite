@@ -112,7 +112,10 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                 "listener bind: {}", &self.listen;
                 "listen_address" => &self.listen
             );
-            let listener = match Listener::bind(&self.listen) {
+            let listener = match Listener::bind(
+                &self.listen,
+                self.unnumbered_manager.clone(),
+            ) {
                 Ok(l) => l,
                 Err(e) => {
                     dispatcher_log!(self,
