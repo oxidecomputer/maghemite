@@ -16,7 +16,7 @@ use std::mem::MaybeUninit;
 use std::net::Ipv6Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread::{JoinHandle, sleep, spawn};
+use std::thread::{Builder, JoinHandle, sleep};
 use std::time::{Duration, Instant};
 
 /// The `NdpManager` performs router discovery for a provided set of interfaces.
@@ -111,6 +111,9 @@ pub enum NewInterfaceNdpManagerError {
 
     #[error("socket clone: {0}")]
     SocketClone(std::io::Error),
+
+    #[error("thread spawn error: {0}")]
+    ThreadSpawn(std::io::Error),
 }
 
 impl InterfaceNdpManager {
@@ -122,6 +125,8 @@ impl InterfaceNdpManager {
     ) -> Result<Arc<Self>, NewInterfaceNdpManagerError> {
         let sk = create_socket(ifx.index)
             .map_err(NewInterfaceNdpManagerError::SocketCreate)?;
+
+        let ifname = ifx.name.clone();
 
         let inner = InterfaceNdpManagerInner {
             ifx,
@@ -136,7 +141,10 @@ impl InterfaceNdpManager {
                 .try_clone()
                 .map_err(NewInterfaceNdpManagerError::SocketClone)?;
             let s = inner.clone();
-            spawn(move || s.tx_loop(sk))
+            Builder::new()
+                .name(format!("ndp_tx_{ifname}"))
+                .spawn(move || s.tx_loop(sk))
+                .map_err(NewInterfaceNdpManagerError::ThreadSpawn)?
         });
 
         let rx_thread = Some({
@@ -144,7 +152,10 @@ impl InterfaceNdpManager {
                 .try_clone()
                 .map_err(NewInterfaceNdpManagerError::SocketClone)?;
             let s = inner.clone();
-            spawn(move || s.rx_loop(sk))
+            Builder::new()
+                .name(format!("ndp_rx_{ifname}"))
+                .spawn(move || s.rx_loop(sk))
+                .map_err(NewInterfaceNdpManagerError::ThreadSpawn)?
         });
 
         Ok(Arc::new(Self {
