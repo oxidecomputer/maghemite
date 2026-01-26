@@ -139,7 +139,7 @@ pub async fn run_trio_unnumbered_test(
     .context("announce v6 prefix")?;
 
     wait_for_eq!(
-        mgd.get_neighbors_v3(local_asn)
+        mgd.get_neighbors_unified(local_asn)
             .await
             .map(|x| x.len())
             .unwrap_or(0),
@@ -148,7 +148,7 @@ pub async fn run_trio_unnumbered_test(
     );
 
     wait_for_eq!(
-        mgd.get_neighbors_v3(local_asn)
+        mgd.get_neighbors_unified(local_asn)
             .await
             .map(|x| x.values().nth(0).map(|y| y.fsm_state))
             .unwrap_or(None),

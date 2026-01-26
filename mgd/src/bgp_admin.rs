@@ -15,21 +15,22 @@ use bgp::{
     params::*,
     router::{LoadPolicyError, Router},
     session::{
-        AdminEvent, FsmEvent, FsmStateKind, MessageHistory, MessageHistoryV1,
-        PeerId, SessionEndpoint, SessionInfo,
+        AdminEvent, FsmEvent, FsmEventRecord, FsmStateKind, MessageHistory,
+        MessageHistoryV1, PeerId, SessionEndpoint, SessionInfo,
     },
 };
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseDeleted, HttpResponseOk,
-    HttpResponseUpdatedNoContent, Query, RequestContext, TypedBody,
+    HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use mg_api::{
     AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse, FsmEventBuffer,
-    FsmHistoryRequest, FsmHistoryResponse, MessageDirection,
-    MessageHistoryRequest, MessageHistoryRequestV1, MessageHistoryResponse,
-    MessageHistoryResponseV1, NeighborResetRequest, NeighborResetRequestV1,
-    NeighborSelector, NeighborSelectorV4, Rib, UnnumberedNeighborResetRequest,
-    UnnumberedNeighborSelector,
+    FsmHistoryRequest, FsmHistoryRequestV4, FsmHistoryResponse,
+    FsmHistoryResponseV4, MessageDirection, MessageHistoryRequest,
+    MessageHistoryRequestV1, MessageHistoryRequestV4, MessageHistoryResponse,
+    MessageHistoryResponseV1, MessageHistoryResponseV4, NeighborResetRequest,
+    NeighborResetRequestV1, NeighborSelector, NeighborSelectorV1, Rib,
+    UnnumberedNeighborResetRequest, UnnumberedNeighborSelector,
 };
 use mg_common::lock;
 use rdb::{
@@ -62,12 +63,10 @@ impl BgpContext {
         peer_to_session: Arc<
             Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionTcp>>>,
         >,
-        db: rdb::Db,
         log: Logger,
     ) -> Self {
         let router = Arc::new(Mutex::new(BTreeMap::new()));
-        let unnumbered_manager =
-            UnnumberedManagerNdp::new(router.clone(), db, log);
+        let unnumbered_manager = UnnumberedManagerNdp::new(router.clone(), log);
         Self {
             router,
             peer_to_session,
@@ -233,7 +232,7 @@ pub async fn create_neighbor(
 
 pub async fn read_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelectorV4>,
+    request: Query<NeighborSelectorV1>,
 ) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
     let rq = request.into_inner();
     let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
@@ -263,7 +262,7 @@ pub async fn update_neighbor(
 
 pub async fn delete_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelectorV4>,
+    request: Query<NeighborSelectorV1>,
 ) -> Result<HttpResponseDeleted, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
@@ -303,7 +302,7 @@ pub async fn create_neighbor_v2(
 
 pub async fn read_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelectorV4>,
+    request: Query<NeighborSelectorV1>,
 ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
     let rq = request.into_inner();
     let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
@@ -333,89 +332,125 @@ pub async fn update_neighbor_v2(
 
 pub async fn delete_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelectorV4>,
+    request: Query<NeighborSelectorV1>,
 ) -> Result<HttpResponseDeleted, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
 }
 
-// Unified neighbor operations (VERSION_UNNUMBERED and later)
-
-pub async fn read_neighbor_unified(
+// V3 API - Unified neighbor operations supporting both numbered and unnumbered
+pub async fn create_neighbor_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelector>,
+    request: TypedBody<Neighbor>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    // Delegate to v2 - create operation doesn't depend on selector type
+    create_neighbor_v2(ctx, request).await
+}
+
+pub async fn read_neighbor_v3(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    path: Path<NeighborSelector>,
 ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
-    let rq = request.into_inner();
+    let rq = path.into_inner();
     let peer_id = rq.to_peer_id();
 
-    // For numbered peers, look up in numbered neighbors DB
-    if let PeerId::Ip(ip) = peer_id {
-        let db_neighbors =
-            ctx.context().db.get_bgp_neighbors().map_err(|e| {
-                HttpError::for_internal_error(format!(
-                    "get neighbors kv tree: {e}"
-                ))
-            })?;
-        let neighbor_info = db_neighbors
-            .iter()
-            .find(|n| n.host.ip() == ip)
-            .ok_or(HttpError::for_not_found(
-                None,
-                format!("neighbor {} not found in db", ip),
-            ))?;
-        let result = Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
-        Ok(HttpResponseOk(result))
-    } else if let PeerId::Interface(ref iface) = peer_id {
-        // For unnumbered peers, look up in unnumbered neighbors DB
-        let db_neighbors = ctx
-            .context()
-            .db
-            .get_unnumbered_bgp_neighbors()
-            .map_err(|e| {
-                HttpError::for_internal_error(format!(
-                    "get unnumbered neighbors kv tree: {e}"
-                ))
-            })?;
-        let neighbor_info = db_neighbors
-            .iter()
-            .find(|n| &n.interface == iface)
-            .ok_or(HttpError::for_not_found(
-                None,
-                format!("neighbor {} not found in db", iface),
-            ))?;
-        let result =
-            UnnumberedNeighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
-        // Convert UnnumberedNeighbor to Neighbor
-        Ok(HttpResponseOk(Neighbor {
-            asn: result.asn,
-            name: result.name,
-            group: result.group,
-            host: std::net::SocketAddr::new(
-                std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
-                179,
-            ),
-            parameters: result.parameters,
-        }))
-    } else {
-        Err(HttpError::for_not_found(
-            None,
-            format!("neighbor {} not found", rq.peer),
-        ))
+    match peer_id {
+        PeerId::Ip(addr) => {
+            // Numbered peer - query numbered neighbors DB
+            let db_neighbors =
+                ctx.context().db.get_bgp_neighbors().map_err(|e| {
+                    HttpError::for_internal_error(format!(
+                        "get neighbors kv tree: {e}"
+                    ))
+                })?;
+            let neighbor_info = db_neighbors
+                .iter()
+                .find(|n| n.host.ip() == addr)
+                .ok_or(HttpError::for_not_found(
+                    None,
+                    format!("neighbor {} not found in db", addr),
+                ))?;
+            let result =
+                Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+            Ok(HttpResponseOk(result))
+        }
+        PeerId::Interface(ref iface) => {
+            // Unnumbered peer - query unnumbered neighbors DB
+            let db_neighbors =
+                ctx.context().db.get_unnumbered_bgp_neighbors().map_err(
+                    |e| {
+                        HttpError::for_internal_error(format!(
+                            "get unnumbered neighbors kv tree: {e}"
+                        ))
+                    },
+                )?;
+            let neighbor_info = db_neighbors
+                .iter()
+                .find(|n| &n.interface == iface)
+                .ok_or(HttpError::for_not_found(
+                    None,
+                    format!("neighbor {} not found in db", iface),
+                ))?;
+            let result = UnnumberedNeighbor::from_rdb_neighbor_info(
+                rq.asn,
+                neighbor_info,
+            );
+            // Convert UnnumberedNeighbor to Neighbor
+            Ok(HttpResponseOk(Neighbor {
+                asn: result.asn,
+                name: result.name,
+                group: result.group,
+                host: std::net::SocketAddr::new(
+                    std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
+                    179,
+                ),
+                parameters: result.parameters,
+            }))
+        }
     }
 }
 
-pub async fn delete_neighbor_unified(
+pub async fn read_neighbors_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: Query<NeighborSelector>,
+    path: Path<AsnSelector>,
+) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+    let rq = path.into_inner();
+    let ctx = ctx.context();
+
+    let nbrs = ctx
+        .db
+        .get_bgp_neighbors()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    let result = nbrs
+        .into_iter()
+        .filter(|x| x.asn == rq.asn)
+        .map(|x| Neighbor::from_rdb_neighbor_info(rq.asn, &x))
+        .collect();
+
+    Ok(HttpResponseOk(result))
+}
+
+pub async fn update_neighbor_v3(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<Neighbor>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    // Delegate to v2 - update operation doesn't depend on selector type
+    update_neighbor_v2(ctx, request).await
+}
+
+pub async fn delete_neighbor_v3(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    path: Path<NeighborSelector>,
 ) -> Result<HttpResponseDeleted, HttpError> {
-    let rq = request.into_inner();
+    let rq = path.into_inner();
     let peer_id = rq.to_peer_id();
     let ctx = ctx.context();
 
     match peer_id {
-        PeerId::Ip(ip) => {
-            Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, ip).await?)
+        PeerId::Ip(addr) => {
+            Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, addr).await?)
         }
         PeerId::Interface(ref iface) => Ok(
             helpers::remove_unnumbered_neighbor(ctx.clone(), rq.asn, iface)
@@ -1224,7 +1259,7 @@ async fn do_bgp_apply(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-// Common helper for fetching message history with optional filtering
+// Helper for fetching message history with PeerId filtering
 // Returns HashMap with string keys using PeerId Display format
 fn get_message_history_filtered(
     ctx: &Arc<HandlerContext>,
@@ -1295,7 +1330,34 @@ pub async fn message_history(
     Ok(HttpResponseOk(MessageHistoryResponseV1 { by_peer: result }))
 }
 
+// Pre-UNNUMBERED API endpoint (VERSION_IPV6_BASIC..VERSION_UNNUMBERED)
+// Uses IpAddr for numbered peers only
 pub async fn message_history_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<MessageHistoryRequestV4>,
+) -> Result<HttpResponseOk<MessageHistoryResponseV4>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    // Convert IpAddr filter to PeerId and call unified helper
+    let peer_id = rq.peer.map(PeerId::Ip);
+    let by_peer_string =
+        get_message_history_filtered(ctx, rq.asn, peer_id, rq.direction)?;
+
+    // Convert String keys back to IpAddr (filters out unnumbered peers)
+    let by_peer = by_peer_string
+        .into_iter()
+        .filter_map(|(key, history)| {
+            key.parse::<IpAddr>().ok().map(|addr| (addr, history))
+        })
+        .collect();
+
+    Ok(HttpResponseOk(MessageHistoryResponseV4 { by_peer }))
+}
+
+// UNNUMBERED+ API endpoint (VERSION_UNNUMBERED..)
+// Uses PeerId enum for both numbered and unnumbered peers
+pub async fn message_history_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MessageHistoryRequest>,
 ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
@@ -1307,49 +1369,81 @@ pub async fn message_history_v2(
     Ok(HttpResponseOk(MessageHistoryResponse { by_peer }))
 }
 
-// FSM event history handler
+/// Unified helper for FSM history retrieval.
+/// Returns HashMap with String keys (PeerId Display representation).
+fn get_fsm_history_filtered(
+    ctx: &Arc<HandlerContext>,
+    asn: u32,
+    peer: Option<PeerId>,
+    buffer: Option<FsmEventBuffer>,
+) -> Result<HashMap<String, Vec<FsmEventRecord>>, HttpError> {
+    let mut result = HashMap::new();
+    let use_all_buffer = matches!(buffer, Some(FsmEventBuffer::All));
+
+    if let Some(peer_id) = peer {
+        if let Some(session) =
+            lock!(get_router!(ctx, asn)?.sessions).get(&peer_id)
+        {
+            let full_history = lock!(session.fsm_event_history).clone();
+            let events = if use_all_buffer {
+                full_history.all.into_iter().collect()
+            } else {
+                full_history.major.into_iter().collect()
+            };
+            result.insert(peer_id.to_string(), events);
+        }
+    } else {
+        for (peer_id, session) in lock!(get_router!(ctx, asn)?.sessions).iter()
+        {
+            let full_history = lock!(session.fsm_event_history).clone();
+            let events = if use_all_buffer {
+                full_history.all.into_iter().collect()
+            } else {
+                full_history.major.into_iter().collect()
+            };
+            result.insert(peer_id.to_string(), events);
+        }
+    }
+
+    Ok(result)
+}
+
+// Original API endpoint (VERSION_IPV6_BASIC..VERSION_UNNUMBERED)
+// FSM event history for numbered peers only
 pub async fn fsm_history(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<FsmHistoryRequestV4>,
+) -> Result<HttpResponseOk<FsmHistoryResponseV4>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    // Convert IpAddr filter to PeerId and call unified helper
+    let peer_id = rq.peer.map(PeerId::Ip);
+    let by_peer_string =
+        get_fsm_history_filtered(ctx, rq.asn, peer_id, rq.buffer)?;
+
+    // Convert String keys back to IpAddr (filters out unnumbered peers)
+    let by_peer = by_peer_string
+        .into_iter()
+        .filter_map(|(key, history): (String, Vec<FsmEventRecord>)| {
+            key.parse::<IpAddr>().ok().map(|addr| (addr, history))
+        })
+        .collect();
+
+    Ok(HttpResponseOk(FsmHistoryResponseV4 { by_peer }))
+}
+
+// V2 API endpoint (VERSION_UNNUMBERED..)
+// FSM event history for all peers (numbered and unnumbered)
+pub async fn fsm_history_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<FsmHistoryRequest>,
 ) -> Result<HttpResponseOk<FsmHistoryResponse>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let mut result = HashMap::new();
 
-    // Determine which buffer to use (default to major)
-    let use_all_buffer = matches!(rq.buffer, Some(FsmEventBuffer::All));
-
-    // Filter by specific peer if requested
-    if let Some(peer_id) = rq.peer {
-        if let Some(session) =
-            lock!(get_router!(ctx, rq.asn)?.sessions).get(&peer_id)
-        {
-            let full_history = lock!(session.fsm_event_history).clone();
-            let events = if use_all_buffer {
-                full_history.all.into_iter().collect()
-            } else {
-                full_history.major.into_iter().collect()
-            };
-            // Use PeerId Display impl as HashMap key
-            result.insert(peer_id.to_string(), events);
-        }
-    } else {
-        // Return history for all peers (both numbered and unnumbered)
-        for (peer_id, session) in
-            lock!(get_router!(ctx, rq.asn)?.sessions).iter()
-        {
-            let full_history = lock!(session.fsm_event_history).clone();
-            let events = if use_all_buffer {
-                full_history.all.into_iter().collect()
-            } else {
-                full_history.major.into_iter().collect()
-            };
-            // Use PeerId Display impl as HashMap key
-            result.insert(peer_id.to_string(), events);
-        }
-    }
-
-    Ok(HttpResponseOk(FsmHistoryResponse { by_peer: result }))
+    let by_peer = get_fsm_history_filtered(ctx, rq.asn, rq.peer, rq.buffer)?;
+    Ok(HttpResponseOk(FsmHistoryResponse { by_peer }))
 }
 
 pub async fn create_checker(
@@ -2137,7 +2231,6 @@ mod tests {
             tep: Ipv6Addr::UNSPECIFIED,
             bgp: BgpContext::new(
                 Arc::new(Mutex::new(BTreeMap::new())),
-                (*db).clone(),
                 log.clone(),
             ),
             bfd: BfdContext::new(log.clone()),

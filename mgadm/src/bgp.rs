@@ -1075,9 +1075,9 @@ async fn get_neighbors(
     asn: u32,
     mode: NeighborDisplayMode,
 ) -> Result<()> {
-    let result = c.get_neighbors_v3(asn).await?;
+    let result = c.get_neighbors_unified(asn).await?;
     let mut sorted: Vec<_> = result.iter().collect();
-    sorted.sort_by_key(|(ip, _)| ip.parse::<IpAddr>().ok());
+    sorted.sort_by_key(|(peer_str, _)| peer_str.parse::<IpAddr>().ok());
 
     match mode {
         NeighborDisplayMode::summary => {
@@ -1322,34 +1322,37 @@ async fn get_exported(c: Client, asn: u32) -> Result<()> {
 }
 
 async fn list_nbr(asn: u32, c: Client) -> Result<()> {
-    let nbrs = c.read_neighbors_v2(asn).await?;
+    let nbrs = c.read_neighbors_v3(asn).await?;
     println!("{nbrs:#?}");
     Ok(())
 }
 
 async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
-    c.create_neighbor_v2(&nbr.into()).await?;
+    c.create_neighbor_v3(&nbr.into()).await?;
     Ok(())
 }
 
 async fn read_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
-    let nbr = c.read_neighbor_v2(&addr, asn).await?.into_inner();
+    let nbr = c
+        .read_neighbor_v3(asn, &addr.to_string())
+        .await?
+        .into_inner();
     println!("{nbr:#?}");
     Ok(())
 }
 
 async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
-    c.update_neighbor_v2(&nbr.into()).await?;
+    c.update_neighbor_v3(&nbr.into()).await?;
     Ok(())
 }
 
 async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
-    c.delete_neighbor_v2(&addr, asn).await?;
+    c.delete_neighbor_v3(asn, &addr.to_string()).await?;
     Ok(())
 }
 
 async fn list_unnumbered_pending(asn: u32, c: Client) -> Result<()> {
-    let pending = c.read_pending_unnumbered_neighbors(asn).await?;
+    let pending = c.read_unnumbered_neighbors(asn).await?;
     println!("{pending:#?}");
     Ok(())
 }
@@ -1582,9 +1585,9 @@ async fn get_fsm_history(
     };
 
     let result = c
-        .fsm_history(&types::FsmHistoryRequest {
+        .fsm_history_v2(&types::FsmHistoryRequest {
             asn,
-            peer,
+            peer: peer.map(types::PeerId::Ip),
             buffer: buffer_type,
         })
         .await?
@@ -1719,9 +1722,9 @@ async fn get_message_history(
     };
 
     let result = c
-        .message_history_v2(&types::MessageHistoryRequest {
+        .message_history_v3(&types::MessageHistoryRequest {
             asn,
-            peer: Some(peer),
+            peer: Some(types::PeerId::Ip(peer)),
             direction: dir,
         })
         .await?

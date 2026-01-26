@@ -163,7 +163,7 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn read_neighbor(
         ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelectorV4>,
+        request: Query<NeighborSelectorV1>,
     ) -> Result<HttpResponseOk<NeighborV1>, HttpError> {
         bgp_admin::read_neighbor(ctx, request).await
     }
@@ -177,7 +177,7 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn delete_neighbor(
         ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelectorV4>,
+        request: Query<NeighborSelectorV1>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         bgp_admin::delete_neighbor(ctx, request).await
     }
@@ -198,7 +198,7 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn read_neighbor_v2(
         ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelectorV4>,
+        request: Query<NeighborSelectorV1>,
     ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
         bgp_admin::read_neighbor_v2(ctx, request).await
     }
@@ -212,23 +212,44 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn delete_neighbor_v2(
         ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelectorV4>,
+        request: Query<NeighborSelectorV1>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         bgp_admin::delete_neighbor_v2(ctx, request).await
     }
 
-    async fn read_neighbor_unified(
+    async fn create_neighbor_v3(
         ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelector>,
-    ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
-        bgp_admin::read_neighbor_unified(ctx, request).await
+        request: TypedBody<Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::create_neighbor_v3(ctx, request).await
     }
 
-    async fn delete_neighbor_unified(
+    async fn read_neighbor_v3(
         ctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelector>,
+        path: Path<NeighborSelector>,
+    ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
+        bgp_admin::read_neighbor_v3(ctx, path).await
+    }
+
+    async fn read_neighbors_v3(
+        ctx: RequestContext<Self::Context>,
+        path: Path<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+        bgp_admin::read_neighbors_v3(ctx, path).await
+    }
+
+    async fn update_neighbor_v3(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        bgp_admin::update_neighbor_v3(ctx, request).await
+    }
+
+    async fn delete_neighbor_v3(
+        ctx: RequestContext<Self::Context>,
+        path: Path<NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError> {
-        bgp_admin::delete_neighbor_unified(ctx, request).await
+        bgp_admin::delete_neighbor_v3(ctx, path).await
     }
 
     async fn clear_neighbor(
@@ -433,16 +454,30 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn message_history_v2(
         ctx: RequestContext<Self::Context>,
+        request: TypedBody<MessageHistoryRequestV4>,
+    ) -> Result<HttpResponseOk<MessageHistoryResponseV4>, HttpError> {
+        bgp_admin::message_history_v2(ctx, request).await
+    }
+
+    async fn message_history_v3(
+        ctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError> {
-        bgp_admin::message_history_v2(ctx, request).await
+        bgp_admin::message_history_v3(ctx, request).await
     }
 
     async fn fsm_history(
         ctx: RequestContext<Self::Context>,
+        request: TypedBody<FsmHistoryRequestV4>,
+    ) -> Result<HttpResponseOk<FsmHistoryResponseV4>, HttpError> {
+        bgp_admin::fsm_history(ctx, request).await
+    }
+
+    async fn fsm_history_v2(
+        ctx: RequestContext<Self::Context>,
         request: TypedBody<FsmHistoryRequest>,
     ) -> Result<HttpResponseOk<FsmHistoryResponse>, HttpError> {
-        bgp_admin::fsm_history(ctx, request).await
+        bgp_admin::fsm_history_v2(ctx, request).await
     }
 
     async fn create_checker(

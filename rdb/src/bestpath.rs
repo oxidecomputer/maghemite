@@ -150,6 +150,7 @@ mod test {
         // Add one path and make sure we get it back
         let path1 = Path {
             nexthop: remote_ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -174,6 +175,7 @@ mod test {
         // Add path2:
         let mut path2 = Path {
             nexthop: remote_ip2,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -208,6 +210,7 @@ mod test {
         // filter. The max=2 limit determines which paths are returned.
         let path3 = Path {
             nexthop: remote_ip3,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -261,6 +264,7 @@ mod test {
         //   > static is preferred over bgp when RIB priority matches
         let mut path4 = Path {
             nexthop: remote_ip4,
+            nexthop_interface: None,
             rib_priority: u8::MAX,
             shutdown: false,
             bgp: None,
@@ -307,6 +311,7 @@ mod test {
         // Create two equivalent BGP paths, but one is shutdown
         let active_path = Path {
             nexthop: remote_ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -323,6 +328,7 @@ mod test {
 
         let shutdown_path = Path {
             nexthop: remote_ip2,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: true, // This path is shutdown
             bgp: Some(BgpPathProperties {
@@ -367,6 +373,7 @@ mod test {
         // Test with two shutdown paths - both should be returned when max=2
         let shutdown_path2 = Path {
             nexthop: remote_ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: true,
             bgp: Some(BgpPathProperties {
@@ -413,6 +420,7 @@ mod test {
         // Path from ip3 has MED 100 (worse)
         let as100_path_good = Path {
             nexthop: ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -429,6 +437,7 @@ mod test {
 
         let as100_path_bad = Path {
             nexthop: ip3,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -447,6 +456,7 @@ mod test {
         // This should NOT be excluded just because AS 100 has a lower MED
         let as200_path = Path {
             nexthop: ip2,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -464,6 +474,7 @@ mod test {
         // AS 300: one path with low MED
         let as300_path = Path {
             nexthop: ip4,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -530,6 +541,7 @@ mod test {
         // Three paths from AS 100, all with same MED
         let path1 = Path {
             nexthop: ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -546,6 +558,7 @@ mod test {
 
         let path2 = Path {
             nexthop: ip2,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
@@ -562,6 +575,7 @@ mod test {
 
         let path3 = Path {
             nexthop: ip3,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
