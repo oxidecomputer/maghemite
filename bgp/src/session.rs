@@ -92,6 +92,20 @@ impl Display for PeerId {
     }
 }
 
+impl std::str::FromStr for PeerId {
+    type Err = std::convert::Infallible;
+
+    /// Parse a PeerId from a string representation.
+    /// Attempts to parse as an IP address first; if that fails, treats it as an interface name.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(ip) = s.parse::<IpAddr>() {
+            Ok(Self::Ip(ip))
+        } else {
+            Ok(Self::Interface(s.to_string()))
+        }
+    }
+}
+
 impl PeerId {
     /// Check if this represents an unnumbered peer
     pub fn is_unnumbered(&self) -> bool {
@@ -324,6 +338,27 @@ fn select_nexthop(
         (Afi::Ipv6, IpAddr::V6(ipv6)) => Ok(BgpNexthop::Ipv6Single(ipv6)),
         (Afi::Ipv4, IpAddr::V6(ipv6)) => v4_over_v6_nexthop(caps, ipv6),
         (Afi::Ipv6, IpAddr::V4(ipv4)) => v6_over_v4_nexthop(caps, ipv4),
+    }
+}
+
+/// Derive the nexthop interface binding for unnumbered sessions.
+///
+/// For unnumbered sessions (PeerId::Interface) with link-local nexthops,
+/// returns the interface name. This binds the nexthop to the specific
+/// interface for mg-lower resolution.
+///
+/// For numbered sessions or non-link-local nexthops, returns None.
+fn derive_nexthop_interface(
+    peer_id: &PeerId,
+    nexthop: IpAddr,
+) -> Option<String> {
+    match (peer_id, nexthop) {
+        (PeerId::Interface(iface), IpAddr::V6(nh6))
+            if nh6.is_unicast_link_local() =>
+        {
+            Some(iface.clone())
+        }
+        _ => None,
     }
 }
 
@@ -8457,8 +8492,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     as_path.extend(segments.value.iter());
                 }
             }
+            let nexthop_interface =
+                derive_nexthop_interface(&self.neighbor.peer, nexthop);
             let path = rdb::Path {
                 nexthop,
+                nexthop_interface,
                 shutdown: update.graceful_shutdown(),
                 rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                 bgp: Some(BgpPathProperties {
@@ -8510,8 +8548,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 as_path.extend(segments.value.iter());
                             }
                         }
+                        let nexthop_interface = derive_nexthop_interface(
+                            &self.neighbor.peer,
+                            mp_nexthop,
+                        );
                         let path4 = rdb::Path {
                             nexthop: mp_nexthop,
+                            nexthop_interface,
                             shutdown: update.graceful_shutdown(),
                             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                             bgp: Some(BgpPathProperties {
@@ -8583,8 +8626,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 as_path.extend(segments.value.iter());
                             }
                         }
+                        let nexthop_interface = derive_nexthop_interface(
+                            &self.neighbor.peer,
+                            nexthop6,
+                        );
                         let path6 = rdb::Path {
                             nexthop: nexthop6,
+                            nexthop_interface,
                             shutdown: update.graceful_shutdown(),
                             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                             bgp: Some(BgpPathProperties {

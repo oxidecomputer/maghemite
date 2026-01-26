@@ -47,6 +47,18 @@ pub struct Ipv6Marker;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct Path {
     pub nexthop: IpAddr,
+
+    /// Interface binding for nexthop resolution.
+    ///
+    /// This field is only populated for BGP unnumbered sessions where the nexthop
+    /// is a link-local IPv6 address. For numbered peers, this is always None.
+    ///
+    /// Added in API version 5.0.0 (UNNUMBERED).
+    /// Hidden from OpenAPI schema to maintain backwards compatibility.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(skip)]
+    pub nexthop_interface: Option<String>,
+
     pub shutdown: bool,
     pub rib_priority: u8,
     pub bgp: Option<BgpPathProperties>,
@@ -71,10 +83,11 @@ impl Ord for Path {
             return Ordering::Equal;
         }
 
-        // Static paths: identified by (nexthop, vlan_id)
+        // Static paths: identified by (nexthop, nexthop_interface, vlan_id)
         if self.bgp.is_none()
             && other.bgp.is_none()
             && self.nexthop == other.nexthop
+            && self.nexthop_interface == other.nexthop_interface
             && self.vlan_id == other.vlan_id
         {
             return Ordering::Equal;
@@ -97,6 +110,7 @@ impl From<StaticRouteKey> for Path {
     fn from(value: StaticRouteKey) -> Self {
         Self {
             nexthop: value.nexthop,
+            nexthop_interface: None, // Static routes don't use interface binding
             vlan_id: value.vlan_id,
             rib_priority: value.rib_priority,
             shutdown: false,

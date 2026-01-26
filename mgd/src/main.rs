@@ -113,7 +113,7 @@ async fn run(args: RunArgs) {
 
     let db = rdb::Db::new(&format!("{}/rdb", args.data_dir), log.clone())
         .expect("open datastore file");
-    let bgp = init_bgp(&args, db.clone(), &log);
+    let bgp = init_bgp(&args, &log);
 
     let tep_ula = get_tunnel_endpoint_ula(&db);
     let bfd = BfdContext::new(log.clone());
@@ -253,11 +253,11 @@ fn detect_switch_slot(
     rt.spawn(task());
 }
 
-fn init_bgp(args: &RunArgs, db: rdb::Db, log: &Logger) -> BgpContext {
+fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
     let peer_to_session = Arc::new(Mutex::new(BTreeMap::new()));
 
     // Create BgpContext first to get access to unnumbered_manager
-    let bgp_context = BgpContext::new(peer_to_session.clone(), db, log.clone());
+    let bgp_context = BgpContext::new(peer_to_session.clone(), log.clone());
 
     if !args.no_bgp_dispatcher {
         let bgp_dispatcher =
