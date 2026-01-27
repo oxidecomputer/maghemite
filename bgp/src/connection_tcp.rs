@@ -51,7 +51,7 @@ use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;
 #[cfg(target_os = "illumos")]
-use std::collections::HashSet;
+use std::{collections::HashSet, net::IpAddr};
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
