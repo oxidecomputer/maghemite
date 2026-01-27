@@ -27,6 +27,9 @@ const ICMP6_RS_ULP_LEN: u32 = 8;
 
 #[derive(Debug, Clone)]
 pub struct ReceivedAdvertisement {
+    /// When the peer was first discovered
+    pub first_seen: Instant,
+    /// When the most recent Router Advertisement was received
     pub when: Instant,
     pub adv: Icmp6RouterAdvertisement,
     pub sender: Ipv6Addr,
