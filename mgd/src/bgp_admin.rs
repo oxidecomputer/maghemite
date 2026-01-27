@@ -15,8 +15,9 @@ use bgp::{
     params::*,
     router::{LoadPolicyError, Router},
     session::{
-        AdminEvent, FsmEvent, FsmEventRecord, FsmStateKind, MessageHistory,
-        MessageHistoryV1, PeerId, SessionEndpoint, SessionInfo,
+        AdminEvent, ConnectionKind, FsmEvent, FsmEventRecord, FsmStateKind,
+        MessageHistory, MessageHistoryV1, PeerId, SessionEndpoint, SessionInfo,
+        SessionRunner,
     },
 };
 use dropshot::{
@@ -24,18 +25,19 @@ use dropshot::{
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
 };
 use mg_api::{
-    AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse, FsmEventBuffer,
-    FsmHistoryRequest, FsmHistoryRequestV4, FsmHistoryResponse,
-    FsmHistoryResponseV4, MessageDirection, MessageHistoryRequest,
-    MessageHistoryRequestV1, MessageHistoryRequestV4, MessageHistoryResponse,
-    MessageHistoryResponseV1, MessageHistoryResponseV4, NeighborResetRequest,
-    NeighborResetRequestV1, NeighborSelector, NeighborSelectorV1, Rib,
-    UnnumberedNeighborResetRequest, UnnumberedNeighborSelector,
+    AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse,
+    ExportedSelector, FsmEventBuffer, FsmHistoryRequest, FsmHistoryRequestV4,
+    FsmHistoryResponse, FsmHistoryResponseV4, MessageDirection,
+    MessageHistoryRequest, MessageHistoryRequestV1, MessageHistoryRequestV4,
+    MessageHistoryResponse, MessageHistoryResponseV1, MessageHistoryResponseV4,
+    NeighborResetRequest, NeighborResetRequestV1, NeighborSelector,
+    NeighborSelectorV1, Rib, UnnumberedNeighborResetRequest,
+    UnnumberedNeighborSelector,
 };
 use mg_common::lock;
 use rdb::{
     AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy4,
-    ImportExportPolicy6, ImportExportPolicyV1, Prefix,
+    ImportExportPolicy6, ImportExportPolicyV1, Prefix, Prefix4, Prefix6,
 };
 use slog::Logger;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -700,6 +702,7 @@ pub async fn delete_origin6(
     Ok(HttpResponseDeleted())
 }
 
+// Legacy endpoint (pre MP-BGP/unnumbered): IPv4 only, no filtering
 pub async fn get_exported(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AsnSelector>,
@@ -716,18 +719,21 @@ pub async fn get_exported(
     let mut exported = HashMap::new();
 
     for n in neighs {
-        if r.get_session(n.host.ip())
+        let ip = n.host.ip();
+
+        if !ip.is_ipv4() {
+            continue;
+        }
+
+        if r.get_session(ip)
             .filter(|s| s.state() == FsmStateKind::Established)
             .is_none()
         {
             continue;
         }
 
-        let mut orig_routes: Vec<Prefix> = orig4
-            .clone()
-            .iter()
-            .map(|p| rdb::Prefix::from(*p))
-            .collect();
+        let mut orig_routes: Vec<Prefix> =
+            orig4.clone().iter().map(|p| Prefix::from(*p)).collect();
 
         // Combine per-AF export policies into legacy format for filtering
         let allow_export = ImportExportPolicyV1::from_per_af_policies(
@@ -745,6 +751,60 @@ pub async fn get_exported(
         // stable output order for clients
         exported_routes.sort();
         exported.insert(n.host.ip(), exported_routes);
+    }
+
+    Ok(HttpResponseOk(exported))
+}
+
+// MP-BGP + BGP unnumbered
+pub async fn get_exported_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<ExportedSelector>,
+) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    let r = get_router!(ctx, rq.asn)?.clone();
+
+    // Get originated prefixes for both address families
+    let orig4 = r.db.get_origin4().map_err(|e| {
+        HttpError::for_internal_error(format!("error getting origin4: {e}"))
+    })?;
+    let orig6 = r.db.get_origin6().map_err(|e| {
+        HttpError::for_internal_error(format!("error getting origin6: {e}"))
+    })?;
+
+    // Determine which address families to process
+    let process_ipv4 = rq.afi.is_none() || rq.afi == Some(Afi::Ipv4);
+    let process_ipv6 = rq.afi.is_none() || rq.afi == Some(Afi::Ipv6);
+
+    let mut exported = HashMap::new();
+
+    if let Some(ref peer_filter) = rq.peer {
+        // Specific peer requested - look it up directly
+        if let Some(session) = r.get_session(peer_filter.clone())
+            && let Some((peer_key, routes)) = helpers::get_exported(
+                &session,
+                &orig4,
+                &orig6,
+                process_ipv4,
+                process_ipv6,
+            )
+        {
+            exported.insert(peer_key, routes);
+        }
+    } else {
+        // No peer filter - iterate all sessions
+        for session in lock!(r.sessions).values() {
+            if let Some((peer_key, routes)) = helpers::get_exported(
+                session,
+                &orig4,
+                &orig6,
+                process_ipv4,
+                process_ipv6,
+            ) {
+                exported.insert(peer_key, routes);
+            }
+        }
     }
 
     Ok(HttpResponseOk(exported))
@@ -2188,6 +2248,101 @@ pub(crate) mod helpers {
             }
         }
         Ok(HttpResponseDeleted())
+    }
+
+    /// Calculate exported routes for a single session.
+    /// Returns None if the peer is not Established or has no routes to export.
+    pub(crate) fn get_exported<Cnx: BgpConnection>(
+        session: &SessionRunner<Cnx>,
+        orig4: &[Prefix4],
+        orig6: &[Prefix6],
+        process_ipv4: bool,
+        process_ipv6: bool,
+    ) -> Option<(PeerId, Vec<Prefix>)> {
+        // Only process Established peers
+        if session.state() != FsmStateKind::Established {
+            return None;
+        }
+
+        // Use PeerId as the key (supports both numbered and unnumbered peers)
+        let peer_key = session.neighbor.peer.clone();
+
+        // Get the primary connection to check negotiated capabilities
+        let primary = session.primary_connection()?;
+
+        // Extract negotiated AFI/SAFI states from the connection
+        let (ipv4_negotiated, ipv6_negotiated) = match primary {
+            ConnectionKind::Full(ref peer_conn) => (
+                peer_conn.ipv4_unicast.negotiated(),
+                peer_conn.ipv6_unicast.negotiated(),
+            ),
+            ConnectionKind::Partial(_) => return None,
+        };
+
+        // Get session configuration for export policies
+        let session_info = lock!(session.session);
+        let mut peer_exported_routes: Vec<Prefix> = Vec::new();
+
+        // Process IPv4 routes if requested and negotiated
+        if process_ipv4
+            && ipv4_negotiated
+            && let Some(ref ipv4_config) = session_info.ipv4_unicast
+        {
+            let mut v4_routes: Vec<Prefix> =
+                orig4.iter().map(|p| rdb::Prefix::from(*p)).collect();
+
+            // Apply export policy
+            match &ipv4_config.export_policy {
+                ImportExportPolicy4::NoFiltering => {
+                    peer_exported_routes.extend(v4_routes);
+                }
+                ImportExportPolicy4::Allow(allowed) => {
+                    v4_routes.retain(|p| {
+                        if let Prefix::V4(p4) = p {
+                            allowed.contains(p4)
+                        } else {
+                            false
+                        }
+                    });
+                    peer_exported_routes.extend(v4_routes);
+                }
+            }
+        }
+
+        // Process IPv6 routes if requested and negotiated
+        if process_ipv6
+            && ipv6_negotiated
+            && let Some(ref ipv6_config) = session_info.ipv6_unicast
+        {
+            let mut v6_routes: Vec<Prefix> =
+                orig6.iter().map(|p| rdb::Prefix::from(*p)).collect();
+
+            // Apply export policy
+            match &ipv6_config.export_policy {
+                ImportExportPolicy6::NoFiltering => {
+                    peer_exported_routes.extend(v6_routes);
+                }
+                ImportExportPolicy6::Allow(allowed) => {
+                    v6_routes.retain(|p| {
+                        if let Prefix::V6(p6) = p {
+                            allowed.contains(p6)
+                        } else {
+                            false
+                        }
+                    });
+                    peer_exported_routes.extend(v6_routes);
+                }
+            }
+        }
+
+        // Only return if we have exported routes
+        if peer_exported_routes.is_empty() {
+            return None;
+        }
+
+        // Stable output order for clients
+        peer_exported_routes.sort();
+        Some((peer_key, peer_exported_routes))
     }
 }
 

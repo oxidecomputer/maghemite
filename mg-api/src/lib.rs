@@ -10,12 +10,13 @@ use std::{
 
 use bfd::BfdPeerState;
 use bgp::{
+    messages::Afi,
     params::{
         ApplyRequest, ApplyRequestV1, CheckerSource, Neighbor, NeighborResetOp,
         NeighborResetOpV1, NeighborV1, Origin4, Origin6, PeerInfo, PeerInfoV1,
         PeerInfoV2, Router, ShaperSource, UnnumberedNeighbor,
     },
-    session::{FsmEventRecord, MessageHistory, MessageHistoryV1},
+    session::{FsmEventRecord, MessageHistory, MessageHistoryV1, PeerId},
 };
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
@@ -339,11 +340,19 @@ pub trait MgAdminApi {
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/exported" }]
+    // Old exported endpoint - IPv4 only, no filtering
+    #[endpoint { method = GET, path = "/bgp/status/exported", versions = ..VERSION_UNNUMBERED }]
     async fn get_exported(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError>;
+
+    // Supports IPv4/IPv6, filtering by peer/AFI, and unnumbered peers
+    #[endpoint { method = GET, path = "/bgp/status/exported", versions = VERSION_UNNUMBERED.. }]
+    async fn get_exported_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<ExportedSelector>,
+    ) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError>;
 
     // imported moved under /rib/status in VERSION_IPV6_BASIC
     #[endpoint { method = GET, path = "/bgp/status/imported", versions = ..VERSION_IPV6_BASIC }]
@@ -579,6 +588,16 @@ pub struct DeleteBfdPeerPathParams {
 pub struct AsnSelector {
     /// ASN of the router to get imported prefixes from.
     pub asn: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ExportedSelector {
+    /// ASN of the router to get exported prefixes from.
+    pub asn: u32,
+    /// Optional peer filter using PeerId enum
+    pub peer: Option<PeerId>,
+    /// Optional address family filter (None = all negotiated families)
+    pub afi: Option<Afi>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
