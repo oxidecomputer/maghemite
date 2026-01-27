@@ -139,18 +139,18 @@ pub async fn run_trio_unnumbered_test(
     .context("announce v6 prefix")?;
 
     wait_for_eq!(
-        mgd.get_neighbors_unified(local_asn)
+        mgd.get_neighbors_v4(local_asn)
             .await
-            .map(|x| x.len())
+            .map(|x| x.into_inner().len())
             .unwrap_or(0),
         2,
         "neighbors"
     );
 
     wait_for_eq!(
-        mgd.get_neighbors_unified(local_asn)
+        mgd.get_neighbors_v4(local_asn)
             .await
-            .map(|x| x.values().nth(0).map(|y| y.fsm_state))
+            .map(|x| x.into_inner().values().nth(0).map(|y| y.fsm_state))
             .unwrap_or(None),
         Some(FsmStateKind::Established),
         "first neighbor established"
