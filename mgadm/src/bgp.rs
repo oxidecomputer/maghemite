@@ -5,20 +5,6 @@
 use anyhow::Result;
 use bgp::{messages::Afi, params::JitterRange};
 use clap::{Args, Subcommand, ValueEnum};
-
-fn jitter_range_to_api(j: JitterRange) -> types::JitterRange {
-    types::JitterRange {
-        min: j.min,
-        max: j.max,
-    }
-}
-
-fn afi_to_api(afi: Afi) -> types::Afi {
-    match afi {
-        Afi::Ipv4 => types::Afi::Ipv4,
-        Afi::Ipv6 => types::Afi::Ipv6,
-    }
-}
 use colored::*;
 use mg_admin_client::{
     Client,
@@ -35,6 +21,29 @@ use std::{
     time::Duration,
 };
 use tabwriter::TabWriter;
+
+fn jitter_range_to_api(j: JitterRange) -> types::JitterRange {
+    types::JitterRange {
+        min: j.min,
+        max: j.max,
+    }
+}
+
+fn afi_to_api(afi: Afi) -> types::Afi {
+    match afi {
+        Afi::Ipv4 => types::Afi::Ipv4,
+        Afi::Ipv6 => types::Afi::Ipv6,
+    }
+}
+
+fn peer_id_to_api(peer_id: bgp::session::PeerId) -> types::PeerId {
+    match peer_id {
+        bgp::session::PeerId::Ip(ip) => types::PeerId::Ip(ip),
+        bgp::session::PeerId::Interface(interface) => {
+            types::PeerId::Interface(interface)
+        }
+    }
+}
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -111,6 +120,14 @@ pub enum StatusCmd {
     Exported {
         #[clap(env)]
         asn: u32,
+
+        /// Optional peer filter (IP address or interface name)
+        #[clap(long)]
+        peer: Option<String>,
+
+        /// Optional address family filter (ipv4 or ipv6). If not specified, shows both.
+        #[clap(long, value_enum)]
+        afi: Option<Afi>,
     },
 }
 
@@ -968,7 +985,9 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             StatusCmd::PendingNeighbors { asn } => {
                 list_unnumbered_pending(asn, c).await?
             }
-            StatusCmd::Exported { asn } => get_exported(c, asn).await?,
+            StatusCmd::Exported { asn, peer, afi } => {
+                get_exported(c, asn, peer, afi).await?
+            }
         },
 
         Commands::History(cmd) => match cmd.command {
@@ -1294,9 +1313,25 @@ fn display_neighbors_detail(
     Ok(())
 }
 
-async fn get_exported(c: Client, asn: u32) -> Result<()> {
+async fn get_exported(
+    c: Client,
+    asn: u32,
+    peer: Option<String>,
+    afi: Option<Afi>,
+) -> Result<()> {
+    // Parse peer filter if provided and convert to API type
+    let peer_id = peer.map(|p| {
+        let bgp_peer_id: bgp::session::PeerId =
+            p.parse().expect("PeerId::from_str should always succeed");
+        peer_id_to_api(bgp_peer_id)
+    });
+
     let exported = c
-        .get_exported(&types::AsnSelector { asn })
+        .get_exported_v2(&types::ExportedSelector {
+            asn,
+            peer: peer_id,
+            afi: afi.map(afi_to_api),
+        })
         .await?
         .into_inner();
 

@@ -1156,12 +1156,12 @@
     },
     "/bgp/status/exported": {
       "get": {
-        "operationId": "get_exported",
+        "operationId": "get_exported_v2",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AsnSelector"
+                "$ref": "#/components/schemas/ExportedSelector"
               }
             }
           },
@@ -1778,20 +1778,6 @@
               "as_sequence"
             ]
           }
-        ]
-      },
-      "AsnSelector": {
-        "type": "object",
-        "properties": {
-          "asn": {
-            "description": "ASN of the router to get imported prefixes from.",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "asn"
         ]
       },
       "BestpathFanoutRequest": {
@@ -2917,6 +2903,38 @@
             ],
             "additionalProperties": false
           }
+        ]
+      },
+      "ExportedSelector": {
+        "type": "object",
+        "properties": {
+          "afi": {
+            "nullable": true,
+            "description": "Optional address family filter (None = all negotiated families)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Afi"
+              }
+            ]
+          },
+          "asn": {
+            "description": "ASN of the router to get exported prefixes from.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "peer": {
+            "nullable": true,
+            "description": "Optional peer filter using PeerId enum",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PeerId"
+              }
+            ]
+          }
+        },
+        "required": [
+          "asn"
         ]
       },
       "FsmEventBuffer": {
