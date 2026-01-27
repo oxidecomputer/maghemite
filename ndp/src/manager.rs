@@ -9,6 +9,7 @@ use crate::util::{
     DropSleep, ListeningSocketError, ReceivedAdvertisement, create_socket,
     send_ra, send_rs,
 };
+use mg_common::thread::ManagedThread;
 use mg_common::{lock, read_lock, write_lock};
 use slog::{Logger, error};
 use socket2::Socket;
@@ -16,7 +17,7 @@ use std::mem::MaybeUninit;
 use std::net::Ipv6Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread::{Builder, JoinHandle, sleep};
+use std::thread::{Builder, sleep};
 use std::time::{Duration, Instant};
 
 /// The `NdpManager` performs router discovery for a provided set of interfaces.
@@ -84,14 +85,14 @@ impl NdpManager {
 
 /// The `InterfaceNdpManager` runs router discovery for an individual interface.
 ///
-/// Discovery is started on construction and stopped when the interface manager
-/// object is dropped.
+/// Discovery is started on construction and stopped automatically when the
+/// interface manager is dropped via the `ManagedThread` Drop implementation.
 #[derive(Debug)]
 pub struct InterfaceNdpManager {
-    // TODO(609) considermanaged threading appraoch
-    // https://github.com/oxidecomputer/maghemite/issues/609
-    tx_thread: Option<JoinHandle<()>>,
-    rx_thread: Option<JoinHandle<()>>,
+    /// Handle to the transmit loop thread
+    _tx_thread: Arc<ManagedThread>,
+    /// Handle to the receive loop thread
+    _rx_thread: Arc<ManagedThread>,
     inner: InterfaceNdpManagerInner,
 }
 
@@ -99,7 +100,6 @@ pub struct InterfaceNdpManager {
 struct InterfaceNdpManagerInner {
     ifx: Ipv6NetworkInterface,
     neighbor_router: Arc<Mutex<Option<ReceivedAdvertisement>>>,
-    stop: Arc<AtomicBool>,
     router_lifetime: u16,
     log: Logger,
 }
@@ -131,36 +131,39 @@ impl InterfaceNdpManager {
         let inner = InterfaceNdpManagerInner {
             ifx,
             neighbor_router: Arc::new(Mutex::new(None)),
-            stop: Arc::new(AtomicBool::new(false)),
             router_lifetime,
             log,
         };
 
-        let tx_thread = Some({
+        let tx_thread = Arc::new(ManagedThread::new());
+        let tx_dropped = tx_thread.dropped_flag();
+        tx_thread.start({
             let sk = sk
                 .try_clone()
                 .map_err(NewInterfaceNdpManagerError::SocketClone)?;
             let s = inner.clone();
             Builder::new()
                 .name(format!("ndp_tx_{ifname}"))
-                .spawn(move || s.tx_loop(sk))
+                .spawn(move || s.tx_loop(sk, tx_dropped))
                 .map_err(NewInterfaceNdpManagerError::ThreadSpawn)?
         });
 
-        let rx_thread = Some({
+        let rx_thread = Arc::new(ManagedThread::new());
+        let rx_dropped = rx_thread.dropped_flag();
+        rx_thread.start({
             let sk = sk
                 .try_clone()
                 .map_err(NewInterfaceNdpManagerError::SocketClone)?;
             let s = inner.clone();
             Builder::new()
                 .name(format!("ndp_rx_{ifname}"))
-                .spawn(move || s.rx_loop(sk))
+                .spawn(move || s.rx_loop(sk, rx_dropped))
                 .map_err(NewInterfaceNdpManagerError::ThreadSpawn)?
         });
 
         Ok(Arc::new(Self {
-            rx_thread,
-            tx_thread,
+            _tx_thread: tx_thread,
+            _rx_thread: rx_thread,
             inner,
         }))
     }
@@ -174,10 +177,10 @@ impl InterfaceNdpManagerInner {
     /// A read timeout of 1 second is used. When the time out hits instead of
     /// receiving a advertisement or solicitation packet, the current neighbor
     /// (if any) is checked for expiration.
-    pub fn rx_loop(&self, s: Socket) {
+    pub fn rx_loop(&self, s: Socket, dropped: Arc<AtomicBool>) {
         const INTERVAL: Duration = Duration::from_secs(1);
         loop {
-            if self.stop.load(Ordering::SeqCst) {
+            if dropped.load(Ordering::SeqCst) {
                 break;
             }
             let _ds = DropSleep(INTERVAL);
@@ -213,10 +216,10 @@ impl InterfaceNdpManagerInner {
     }
 
     /// Start the transmit loop, periodically sending out announcements.
-    pub fn tx_loop(&self, sk: Socket) {
+    pub fn tx_loop(&self, sk: Socket, dropped: Arc<AtomicBool>) {
         const INTERVAL: Duration = Duration::from_secs(5);
         loop {
-            if self.stop.load(Ordering::SeqCst) {
+            if dropped.load(Ordering::SeqCst) {
                 break;
             }
             send_ra(
@@ -274,31 +277,6 @@ impl InterfaceNdpManagerInner {
         };
         if expired {
             *guard = None;
-        }
-    }
-}
-
-/// When an `InterfaceNdpManager` is dropped, the tx and rx loops are stopped.
-impl Drop for InterfaceNdpManager {
-    fn drop(&mut self) {
-        self.inner.stop.store(true, Ordering::SeqCst);
-        if let Some(t) = self.rx_thread.take()
-            && let Err(_) = t.join()
-        {
-            error!(
-                self.inner.log,
-                "interface ndp mgr join on drop: rx thread panicked";
-                "interface" => &self.inner.ifx.name,
-            );
-        }
-        if let Some(t) = self.tx_thread.take()
-            && let Err(_) = t.join()
-        {
-            error!(
-                self.inner.log,
-                "interface ndp mgr join on drop: tx thread panicked";
-                "interface" => &self.inner.ifx.name,
-            );
         }
     }
 }
