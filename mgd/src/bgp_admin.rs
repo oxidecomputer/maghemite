@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #![allow(clippy::type_complexity)]
-use crate::unnumbered_manager::UnnumberedManagerNdp;
+use crate::unnumbered_manager::{NdpPeerState, UnnumberedManagerNdp};
 use crate::validation::{validate_prefixes_v4, validate_prefixes_v6};
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::{
@@ -20,6 +20,7 @@ use bgp::{
         SessionRunner,
     },
 };
+use chrono::{DateTime, SecondsFormat, Utc};
 use dropshot::{
     ClientErrorStatusCode, HttpError, HttpResponseDeleted, HttpResponseOk,
     HttpResponseUpdatedNoContent, Path, Query, RequestContext, TypedBody,
@@ -30,9 +31,9 @@ use mg_api::{
     FsmHistoryResponse, FsmHistoryResponseV4, MessageDirection,
     MessageHistoryRequest, MessageHistoryRequestV1, MessageHistoryRequestV4,
     MessageHistoryResponse, MessageHistoryResponseV1, MessageHistoryResponseV4,
-    NeighborResetRequest, NeighborResetRequestV1, NeighborSelector,
-    NeighborSelectorV1, Rib, UnnumberedNeighborResetRequest,
-    UnnumberedNeighborSelector,
+    NdpInterface, NdpInterfaceSelector, NdpPeer, NeighborResetRequest,
+    NeighborResetRequestV1, NeighborSelector, NeighborSelectorV1, Rib,
+    UnnumberedNeighborResetRequest, UnnumberedNeighborSelector,
 };
 use mg_common::lock;
 use rdb::{
@@ -47,6 +48,7 @@ use std::sync::{
     Arc, Mutex,
     mpsc::{Sender, channel},
 };
+use std::time::{Duration, Instant, SystemTime};
 
 const UNIT_BGP: &str = "bgp";
 const DEFAULT_BGP_LISTEN: SocketAddr =
@@ -554,6 +556,158 @@ pub async fn clear_unnumbered_neighbor(
         rq.op,
     )
     .await?)
+}
+
+/// Convert an Instant to an ISO 8601 timestamp string
+fn instant_to_iso8601(when: Instant) -> String {
+    let now_instant = Instant::now();
+    let now_system = SystemTime::now();
+    let elapsed = now_instant.duration_since(when);
+    let system_time = now_system - elapsed;
+    DateTime::<Utc>::from(system_time)
+        .to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+/// Convert NdpPeerState to API type with timestamp formatting
+fn convert_ndp_peer_to_api(state: &NdpPeerState) -> NdpPeer {
+    let elapsed_since_when = Instant::now().duration_since(state.when);
+
+    // Format timestamps: first_seen for when peer was discovered,
+    // when for when the most recent RA was received
+    let discovered_at = instant_to_iso8601(state.first_seen);
+    let last_advertisement = instant_to_iso8601(state.when);
+
+    // Calculate time until expiry
+    let effective_lifetime =
+        Duration::from_secs(u64::from(state.router_lifetime));
+    let time_until_expiry = if state.expired {
+        // Calculate time since expiry
+        let time_since_expiry = elapsed_since_when
+            .checked_sub(effective_lifetime)
+            .unwrap_or(Duration::ZERO);
+        Some(format!("{}", humantime::format_duration(time_since_expiry)))
+    } else {
+        // Calculate time until expiry
+        let time_until = effective_lifetime
+            .checked_sub(elapsed_since_when)
+            .unwrap_or(Duration::ZERO);
+        Some(format!("{}", humantime::format_duration(time_until)))
+    };
+
+    NdpPeer {
+        address: state.address,
+        discovered_at,
+        last_advertisement,
+        router_lifetime: state.router_lifetime,
+        reachable_time: state.reachable_time,
+        retrans_timer: state.retrans_timer,
+        expired: state.expired,
+        time_until_expiry,
+    }
+}
+
+pub async fn get_ndp_interfaces(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<Vec<NdpInterface>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = rqctx.context();
+
+    // Get all unnumbered neighbors for this ASN
+    let unnumbered_neighbors = ctx
+        .db
+        .get_unnumbered_bgp_neighbors()
+        .map_err(|e| {
+            HttpError::for_internal_error(format!(
+                "failed to get unnumbered neighbors: {e}"
+            ))
+        })?
+        .into_iter()
+        .filter(|n| n.asn == rq.asn)
+        .collect::<Vec<_>>();
+
+    // Get NDP state for managed interfaces
+    let ndp_state = ctx.bgp.unnumbered_manager.list_ndp_interfaces();
+
+    // Build response by matching neighbors to NDP state
+    let mut result = Vec::new();
+    for neighbor in unnumbered_neighbors {
+        // Find NDP state for this interface
+        if let Some(ndp) = ndp_state
+            .iter()
+            .find(|info| info.interface == neighbor.interface)
+        {
+            let discovered_peer =
+                ndp.peer_state.as_ref().map(convert_ndp_peer_to_api);
+
+            result.push(NdpInterface {
+                interface: neighbor.interface.clone(),
+                local_address: ndp.local_address,
+                scope_id: ndp.scope_id,
+                router_lifetime: neighbor.router_lifetime,
+                discovered_peer,
+            });
+        }
+    }
+
+    Ok(HttpResponseOk(result))
+}
+
+pub async fn get_ndp_interface_detail(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<NdpInterfaceSelector>,
+) -> Result<HttpResponseOk<NdpInterface>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = rqctx.context();
+
+    // Verify this interface has an unnumbered neighbor configured for this ASN
+    let neighbor = ctx
+        .db
+        .get_unnumbered_bgp_neighbors()
+        .map_err(|e| {
+            HttpError::for_internal_error(format!(
+                "failed to get unnumbered neighbors: {e}"
+            ))
+        })?
+        .into_iter()
+        .find(|n| n.asn == rq.asn && n.interface == rq.interface)
+        .ok_or_else(|| {
+            HttpError::for_not_found(
+                None,
+                format!(
+                    "no unnumbered neighbor for ASN {} on interface {}",
+                    rq.asn, rq.interface
+                ),
+            )
+        })?;
+
+    // Get detailed NDP state
+    let unnumbered_manager = &ctx.bgp.unnumbered_manager;
+
+    let ndp_detail = unnumbered_manager
+        .get_ndp_interface_detail(&rq.interface)
+        .map_err(|e| {
+            HttpError::for_internal_error(format!(
+                "failed to get NDP state: {e}"
+            ))
+        })?
+        .ok_or_else(|| {
+            HttpError::for_not_found(
+                None,
+                format!("interface {} not managed by NDP", rq.interface),
+            )
+        })?;
+
+    let discovered_peer =
+        ndp_detail.peer_state.as_ref().map(convert_ndp_peer_to_api);
+
+    Ok(HttpResponseOk(NdpInterface {
+        interface: rq.interface,
+        local_address: ndp_detail.local_address,
+        scope_id: ndp_detail.scope_id,
+        router_lifetime: neighbor.router_lifetime,
+        discovered_peer,
+    }))
 }
 
 // IPv4 origin ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

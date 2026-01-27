@@ -81,6 +81,60 @@ impl NdpManager {
             Some(neighbor_router.sender)
         }
     }
+
+    /// Get detailed information about a discovered peer for a specific interface.
+    ///
+    /// Returns full advertisement details including timestamps and RA parameters,
+    /// even if the peer has expired. Returns None only if no peer was ever discovered.
+    pub fn get_peer_detail(
+        &self,
+        ifx: &Ipv6NetworkInterface,
+    ) -> Option<PeerAdvertisementInfo> {
+        let ifxs_guard = read_lock!(self.interfaces);
+        let interface = ifxs_guard.iter().find(|x| &x.inner.ifx == ifx)?;
+        let nbr_guard = lock!(interface.inner.neighbor_router);
+        let neighbor_router = nbr_guard.as_ref()?;
+
+        Some(PeerAdvertisementInfo {
+            address: neighbor_router.sender,
+            first_seen: neighbor_router.first_seen,
+            when: neighbor_router.when,
+            router_lifetime: neighbor_router.adv.lifetime,
+            reachable_time: neighbor_router.adv.reachable_time,
+            retrans_timer: neighbor_router.adv.retrans_timer,
+            expired: neighbor_router.expired(),
+        })
+    }
+
+    /// List all interfaces managed by NDP with their detailed state.
+    ///
+    /// Returns information about each interface including local address,
+    /// advertised router lifetime, and discovered peer details (if any).
+    pub fn list_interfaces_detailed(&self) -> Vec<InterfaceAdvertisementInfo> {
+        let ifxs_guard = read_lock!(self.interfaces);
+        ifxs_guard
+            .iter()
+            .map(|iface_mgr| {
+                let nbr_guard = lock!(iface_mgr.inner.neighbor_router);
+                let discovered_peer =
+                    nbr_guard.as_ref().map(|adv| PeerAdvertisementInfo {
+                        address: adv.sender,
+                        first_seen: adv.first_seen,
+                        when: adv.when,
+                        router_lifetime: adv.adv.lifetime,
+                        reachable_time: adv.adv.reachable_time,
+                        retrans_timer: adv.adv.retrans_timer,
+                        expired: adv.expired(),
+                    });
+
+                InterfaceAdvertisementInfo {
+                    interface: iface_mgr.inner.ifx.clone(),
+                    router_lifetime: iface_mgr.inner.router_lifetime,
+                    discovered_peer,
+                }
+            })
+            .collect()
+    }
 }
 
 /// The `InterfaceNdpManager` runs router discovery for an individual interface.
@@ -240,9 +294,15 @@ impl InterfaceNdpManagerInner {
     /// containing the reachable time.
     fn handle_ra(&self, ra: Icmp6RouterAdvertisement, src: Ipv6Addr) {
         let mut guard = lock!(self.neighbor_router);
-        let nbr = &mut *guard;
-        *nbr = Some(ReceivedAdvertisement {
-            when: Instant::now(),
+        let now = Instant::now();
+
+        // Preserve first_seen from previous advertisement, or use now if this is the first
+        let first_seen =
+            guard.as_ref().map(|prev| prev.first_seen).unwrap_or(now);
+
+        *guard = Some(ReceivedAdvertisement {
+            first_seen,
+            when: now,
             adv: ra,
             sender: src,
         });
@@ -290,4 +350,34 @@ pub struct Ipv6NetworkInterface {
     pub ip: Ipv6Addr,
     /// Interface's index
     pub index: u32,
+}
+
+/// Detailed information about a discovered peer on an interface.
+#[derive(Debug, Clone)]
+pub struct PeerAdvertisementInfo {
+    /// The peer's IPv6 address
+    pub address: Ipv6Addr,
+    /// When the peer was first discovered
+    pub first_seen: Instant,
+    /// When the most recent Router Advertisement was received
+    pub when: Instant,
+    /// Router lifetime from the RA
+    pub router_lifetime: u16,
+    /// Reachable time from the RA
+    pub reachable_time: u32,
+    /// Retransmit timer from the RA
+    pub retrans_timer: u32,
+    /// Whether the peer has expired
+    pub expired: bool,
+}
+
+/// Detailed information about an interface managed by NDP.
+#[derive(Debug, Clone)]
+pub struct InterfaceAdvertisementInfo {
+    /// The interface details
+    pub interface: Ipv6NetworkInterface,
+    /// The router lifetime we advertise
+    pub router_lifetime: u16,
+    /// Discovered peer information (if any)
+    pub discovered_peer: Option<PeerAdvertisementInfo>,
 }

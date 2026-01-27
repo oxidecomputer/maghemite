@@ -434,7 +434,7 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::get_neighbors_v3(ctx, request).await
     }
 
-    async fn get_neighbors_unified(
+    async fn get_neighbors_v4(
         ctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
@@ -616,6 +616,20 @@ impl MgAdminApi for MgAdminApiImpl {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<SwitchIdentifiers>, HttpError> {
         static_admin::switch_identifiers(ctx).await
+    }
+
+    async fn get_ndp_interfaces(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<NdpInterface>>, HttpError> {
+        bgp_admin::get_ndp_interfaces(ctx, request).await
+    }
+
+    async fn get_ndp_interface_detail(
+        ctx: RequestContext<Self::Context>,
+        request: Query<NdpInterfaceSelector>,
+    ) -> Result<HttpResponseOk<NdpInterface>, HttpError> {
+        bgp_admin::get_ndp_interface_detail(ctx, request).await
     }
 }
 

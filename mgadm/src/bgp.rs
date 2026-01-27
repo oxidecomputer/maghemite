@@ -111,11 +111,6 @@ pub enum StatusCmd {
         mode: NeighborDisplayMode,
     },
 
-    PendingNeighbors {
-        #[clap(env)]
-        asn: u32,
-    },
-
     /// Get the prefixes exported by a BGP router.
     Exported {
         #[clap(env)]
@@ -313,25 +308,14 @@ pub enum NeighborCmd {
         #[clap(env)]
         asn: u32,
     },
-    /// List the unnumbered neighbors of a given router.
-    ListUnnumbered {
-        #[clap(env)]
-        asn: u32,
-    },
 
     /// Create a neighbor configuration.
     Create(Neighbor),
 
-    /// Read a neighbor configuration.
+    /// Read a neighbor configuration (supports both IP and interface).
     Read {
-        addr: IpAddr,
-        #[clap(env)]
-        asn: u32,
-    },
-
-    /// Read an unnumbered neighbor configuration.
-    ReadUnnumbered {
-        interface: String,
+        /// Peer identifier (IP address for numbered, interface name for unnumbered)
+        peer: String,
         #[clap(env)]
         asn: u32,
     },
@@ -339,16 +323,10 @@ pub enum NeighborCmd {
     /// Update a neighbor's configuration.
     Update(Neighbor),
 
-    /// Delete a neighbor configuration
+    /// Delete a neighbor configuration (supports both IP and interface)
     Delete {
-        addr: IpAddr,
-        #[clap(env)]
-        asn: u32,
-    },
-
-    /// Delete an unnumbered neighbor configuration
-    DeleteUnnumbered {
-        interface: String,
+        /// Peer identifier (IP address for numbered, interface name for unnumbered)
+        peer: String,
         #[clap(env)]
         asn: u32,
     },
@@ -909,21 +887,12 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             ConfigCmd::Neighbor(cmd) => match cmd.command {
                 NeighborCmd::List { asn } => list_nbr(asn, c).await?,
                 NeighborCmd::Create(nbr) => create_nbr(nbr, c).await?,
-                NeighborCmd::Read { asn, addr } => {
-                    read_nbr(asn, addr, c).await?
+                NeighborCmd::Read { asn, peer } => {
+                    read_nbr(asn, peer, c).await?
                 }
                 NeighborCmd::Update(nbr) => update_nbr(nbr, c).await?,
-                NeighborCmd::Delete { asn, addr } => {
-                    delete_nbr(asn, addr, c).await?
-                }
-                NeighborCmd::ListUnnumbered { asn } => {
-                    list_unnumbered_nbr(asn, c).await?
-                }
-                NeighborCmd::ReadUnnumbered { asn, interface } => {
-                    read_unnumbered_nbr(asn, interface, c).await?
-                }
-                NeighborCmd::DeleteUnnumbered { asn, interface } => {
-                    delete_unnumbered_nbr(asn, interface, c).await?
+                NeighborCmd::Delete { asn, peer } => {
+                    delete_nbr(asn, peer, c).await?
                 }
             },
 
@@ -981,9 +950,6 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         Commands::Status(cmd) => match cmd.command {
             StatusCmd::Neighbors { asn, mode } => {
                 get_neighbors(c, asn, mode).await?
-            }
-            StatusCmd::PendingNeighbors { asn } => {
-                list_unnumbered_pending(asn, c).await?
             }
             StatusCmd::Exported { asn, peer, afi } => {
                 get_exported(c, asn, peer, afi).await?
@@ -1077,7 +1043,7 @@ async fn get_neighbors(
     asn: u32,
     mode: NeighborDisplayMode,
 ) -> Result<()> {
-    let result = c.get_neighbors_unified(asn).await?;
+    let result = c.get_neighbors_v4(asn).await?.into_inner();
     let mut sorted: Vec<_> = result.iter().collect();
     sorted.sort_by_key(|(peer_str, _)| peer_str.parse::<IpAddr>().ok());
 
@@ -1340,8 +1306,45 @@ async fn get_exported(
 }
 
 async fn list_nbr(asn: u32, c: Client) -> Result<()> {
-    let nbrs = c.read_neighbors_v3(asn).await?;
-    println!("{nbrs:#?}");
+    // Get both numbered and unnumbered neighbors
+    let numbered = c.read_neighbors_v3(asn).await?.into_inner();
+    let unnumbered = c.read_unnumbered_neighbors(asn).await?.into_inner();
+
+    if numbered.is_empty() && unnumbered.is_empty() {
+        println!("No neighbors configured for ASN {}", asn);
+        return Ok(());
+    }
+
+    // Use TabWriter for formatted output
+    let mut tw = TabWriter::new(stdout());
+    writeln!(
+        &mut tw,
+        "{}\t{}\t{}\t{}",
+        "Peer".dimmed(),
+        "ASN".dimmed(),
+        "Group".dimmed(),
+        "Name".dimmed(),
+    )?;
+
+    // Display numbered neighbors
+    for nbr in &numbered {
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}\t{}",
+            nbr.host, nbr.asn, nbr.group, nbr.name,
+        )?;
+    }
+
+    // Display unnumbered neighbors
+    for nbr in &unnumbered {
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}\t{}",
+            nbr.interface, nbr.asn, nbr.group, nbr.name,
+        )?;
+    }
+
+    tw.flush()?;
     Ok(())
 }
 
@@ -1357,12 +1360,23 @@ async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
     Ok(())
 }
 
-async fn read_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
-    let nbr = c
-        .read_neighbor_v3(asn, &addr.to_string())
-        .await?
-        .into_inner();
-    println!("{nbr:#?}");
+async fn read_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
+    match parse_peer_type(&peer) {
+        PeerType::Numbered(addr) => {
+            let nbr = c
+                .read_neighbor_v3(asn, &addr.to_string())
+                .await?
+                .into_inner();
+            println!("{nbr:#?}");
+        }
+        PeerType::Unnumbered(interface) => {
+            let nbr = c
+                .read_unnumbered_neighbor(asn, &interface)
+                .await?
+                .into_inner();
+            println!("{nbr:#?}");
+        }
+    }
     Ok(())
 }
 
@@ -1378,42 +1392,15 @@ async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
     Ok(())
 }
 
-async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
-    c.delete_neighbor_v3(asn, &addr.to_string()).await?;
-    Ok(())
-}
-
-async fn list_unnumbered_pending(asn: u32, c: Client) -> Result<()> {
-    let pending = c.read_unnumbered_neighbors(asn).await?;
-    println!("{pending:#?}");
-    Ok(())
-}
-
-async fn list_unnumbered_nbr(asn: u32, c: Client) -> Result<()> {
-    let nbrs = c.read_unnumbered_neighbors(asn).await?;
-    println!("{nbrs:#?}");
-    Ok(())
-}
-
-async fn read_unnumbered_nbr(
-    asn: u32,
-    interface: String,
-    c: Client,
-) -> Result<()> {
-    let nbr = c
-        .read_unnumbered_neighbor(asn, &interface)
-        .await?
-        .into_inner();
-    println!("{nbr:#?}");
-    Ok(())
-}
-
-async fn delete_unnumbered_nbr(
-    asn: u32,
-    interface: String,
-    c: Client,
-) -> Result<()> {
-    c.delete_unnumbered_neighbor(asn, &interface).await?;
+async fn delete_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
+    match parse_peer_type(&peer) {
+        PeerType::Numbered(addr) => {
+            c.delete_neighbor_v3(asn, &addr.to_string()).await?;
+        }
+        PeerType::Unnumbered(interface) => {
+            c.delete_unnumbered_neighbor(asn, &interface).await?;
+        }
+    }
     Ok(())
 }
 

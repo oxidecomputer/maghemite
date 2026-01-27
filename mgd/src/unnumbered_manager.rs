@@ -320,3 +320,115 @@ impl bgp::unnumbered::UnnumberedManager for UnnumberedManagerNdp {
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 }
+
+impl UnnumberedManagerNdp {
+    /// List all NDP-managed interfaces with detailed discovery state.
+    ///
+    /// Returns a list of interfaces managed by this unnumbered manager,
+    /// including full peer advertisement information with timestamps.
+    ///
+    /// The caller should filter by ASN based on which neighbors are configured
+    /// for unnumbered BGP sessions.
+    pub fn list_ndp_interfaces(&self) -> Vec<ManagedInterfaceInfo> {
+        // Get detailed interface information from NDP manager
+        let detailed_interfaces = self.ndp_mgr.list_interfaces_detailed();
+
+        // Filter to only interfaces we're managing for BGP unnumbered
+        let scope_map = lock!(self.interface_scope_map);
+
+        detailed_interfaces
+            .into_iter()
+            .filter_map(|info| {
+                // Only include interfaces in our scope map
+                if !scope_map.contains_key(&info.interface.index) {
+                    return None;
+                }
+
+                let peer_state =
+                    info.discovered_peer.as_ref().map(|detail| NdpPeerState {
+                        address: detail.address,
+                        first_seen: detail.first_seen,
+                        when: detail.when,
+                        router_lifetime: detail.router_lifetime,
+                        reachable_time: detail.reachable_time,
+                        retrans_timer: detail.retrans_timer,
+                        expired: detail.expired,
+                    });
+
+                Some(ManagedInterfaceInfo {
+                    interface: info.interface.name,
+                    local_address: info.interface.ip,
+                    scope_id: info.interface.index,
+                    peer_state,
+                })
+            })
+            .collect()
+    }
+
+    /// Get detailed NDP state for a specific interface.
+    ///
+    /// Returns detailed information about peer discovery including timestamps,
+    /// RA parameters, and expiry status.
+    ///
+    /// Returns None if the interface is not managed by NDP.
+    pub fn get_ndp_interface_detail(
+        &self,
+        interface_name: &str,
+    ) -> Result<Option<InterfaceDetail>, ResolveNeighborError> {
+        let ifx = Self::get_interface(interface_name, &self.log)?;
+
+        // Check if we're managing this interface
+        if !lock!(self.interface_scope_map).contains_key(&ifx.index) {
+            return Ok(None);
+        }
+
+        // Get detailed peer information from NDP manager
+        let peer_state =
+            self.ndp_mgr
+                .get_peer_detail(&ifx)
+                .map(|detail| NdpPeerState {
+                    address: detail.address,
+                    first_seen: detail.first_seen,
+                    when: detail.when,
+                    router_lifetime: detail.router_lifetime,
+                    reachable_time: detail.reachable_time,
+                    retrans_timer: detail.retrans_timer,
+                    expired: detail.expired,
+                });
+
+        Ok(Some(InterfaceDetail {
+            local_address: ifx.ip,
+            scope_id: ifx.index,
+            peer_state,
+        }))
+    }
+}
+
+/// Information about a managed interface with NDP state
+#[derive(Debug, Clone)]
+pub struct ManagedInterfaceInfo {
+    pub interface: String,
+    pub local_address: Ipv6Addr,
+    pub scope_id: u32,
+    pub peer_state: Option<NdpPeerState>,
+}
+
+/// Detailed NDP state for a specific interface
+#[derive(Debug, Clone)]
+pub struct InterfaceDetail {
+    pub local_address: Ipv6Addr,
+    pub scope_id: u32,
+    pub peer_state: Option<NdpPeerState>,
+}
+
+/// Detailed NDP peer state with full RA information
+#[derive(Debug, Clone)]
+pub struct NdpPeerState {
+    pub address: Ipv6Addr,
+    pub first_seen: std::time::Instant,
+    pub when: std::time::Instant,
+    pub router_lifetime: u16,
+    pub reachable_time: u32,
+    pub retrans_timer: u32,
+    pub expired: bool,
+}

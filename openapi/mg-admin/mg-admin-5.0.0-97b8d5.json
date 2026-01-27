@@ -1196,7 +1196,7 @@
     },
     "/bgp/status/neighbors": {
       "get": {
-        "operationId": "get_neighbors_unified",
+        "operationId": "get_neighbors_v4",
         "parameters": [
           {
             "in": "query",
@@ -1220,6 +1220,91 @@
                   "type": "object",
                   "additionalProperties": {
                     "$ref": "#/components/schemas/PeerInfo"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/ndp/interface": {
+      "get": {
+        "operationId": "get_ndp_interface_detail",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          {
+            "in": "query",
+            "name": "interface",
+            "description": "Interface name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NdpInterface"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/ndp/interfaces": {
+      "get": {
+        "operationId": "get_ndp_interfaces",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_NdpInterface",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NdpInterface"
                   }
                 }
               }
@@ -3603,6 +3688,103 @@
               "withdrawn"
             ]
           }
+        ]
+      },
+      "NdpInterface": {
+        "description": "NDP state for an interface",
+        "type": "object",
+        "properties": {
+          "discovered_peer": {
+            "nullable": true,
+            "description": "Information about discovered peer (if any, including expired)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NdpPeer"
+              }
+            ]
+          },
+          "interface": {
+            "description": "Interface name (e.g., \"qsfp0\")",
+            "type": "string"
+          },
+          "local_address": {
+            "description": "Local IPv6 link-local address",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "router_lifetime": {
+            "description": "Router lifetime advertised by this router (seconds)",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "scope_id": {
+            "description": "IPv6 scope ID (interface index)",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "interface",
+          "local_address",
+          "router_lifetime",
+          "scope_id"
+        ]
+      },
+      "NdpPeer": {
+        "description": "Information about a discovered NDP peer",
+        "type": "object",
+        "properties": {
+          "address": {
+            "description": "Peer IPv6 address",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "discovered_at": {
+            "description": "When the peer was first discovered (ISO 8601 timestamp)",
+            "type": "string"
+          },
+          "expired": {
+            "description": "Whether the peer entry has expired",
+            "type": "boolean"
+          },
+          "last_advertisement": {
+            "description": "When the most recent Router Advertisement was received (ISO 8601 timestamp)",
+            "type": "string"
+          },
+          "reachable_time": {
+            "description": "Reachable time from RA (milliseconds)",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "retrans_timer": {
+            "description": "Retransmit timer from RA (milliseconds)",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "router_lifetime": {
+            "description": "Router lifetime from RA (seconds)",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "time_until_expiry": {
+            "nullable": true,
+            "description": "Time until expiry (human-readable), or None if already expired",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address",
+          "discovered_at",
+          "expired",
+          "last_advertisement",
+          "reachable_time",
+          "retrans_timer",
+          "router_lifetime"
         ]
       },
       "Neighbor": {
