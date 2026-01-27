@@ -32,7 +32,6 @@ use std::{
     fs::read_to_string,
     io::{Write, stdout},
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    ops::{Deref, DerefMut},
     time::Duration,
 };
 use tabwriter::TabWriter;
@@ -306,9 +305,6 @@ pub enum NeighborCmd {
     /// Create a neighbor configuration.
     Create(Neighbor),
 
-    /// Create an unnumbered neighbor configuration.
-    CreateUnnumbered(UnnumberedNeighbor),
-
     /// Read a neighbor configuration.
     Read {
         addr: IpAddr,
@@ -325,9 +321,6 @@ pub enum NeighborCmd {
 
     /// Update a neighbor's configuration.
     Update(Neighbor),
-
-    /// Update an unnumbered neighbor's configuration.
-    UpdateUnnumbered(UnnumberedNeighbor),
 
     /// Delete a neighbor configuration
     Delete {
@@ -563,59 +556,23 @@ pub struct Withdraw4 {
 
 #[derive(Args, Debug)]
 pub struct Neighbor {
-    /// Neighbor address
-    addr: IpAddr,
-
-    #[command(flatten)]
-    common: NeighborCommon,
-}
-
-impl Deref for Neighbor {
-    type Target = NeighborCommon;
-    fn deref(&self) -> &Self::Target {
-        &self.common
-    }
-}
-
-impl DerefMut for Neighbor {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.common
-    }
-}
-
-#[derive(Args, Debug)]
-pub struct UnnumberedNeighbor {
-    /// Neighbor address
-    interface: String,
-
-    /// Some routers such as those from Arista require that we act as a default
-    /// router in order to peer over BGP unnumbered.
-    act_as_a_default_ipv6_router: u16,
-
-    #[command(flatten)]
-    common: NeighborCommon,
-}
-
-impl Deref for UnnumberedNeighbor {
-    type Target = NeighborCommon;
-    fn deref(&self) -> &Self::Target {
-        &self.common
-    }
-}
-
-impl DerefMut for UnnumberedNeighbor {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.common
-    }
-}
-
-#[derive(Args, Debug)]
-pub struct NeighborCommon {
     /// Name for this neighbor
     name: String,
 
+    /// Peer identifier: either an IP address (numbered) or interface name (unnumbered)
+    peer: String,
+
     /// Peer group to add the neighbor to.
     group: String,
+
+    /// Autonomous system number for the router to add the neighbor to.
+    #[clap(env)]
+    asn: u32,
+
+    /// Act as a default IPv6 router for unnumbered peering (some routers like Arista require this).
+    /// Ignored for numbered peers. Maps to router lifetime of 1800s if true, 0s if false.
+    #[arg(long, default_value_t = false)]
+    act_as_default_router: bool,
 
     /// Neighbor BGP TCP port.
     #[arg(long, default_value_t = 179)]
@@ -724,30 +681,58 @@ pub struct NeighborCommon {
     /// IPv6 nexthop override for this neighbor (requires --enable-ipv6).
     #[arg(long, requires = "enable_ipv6")]
     pub nexthop6: Option<IpAddr>,
-
-    /// Autonomous system number for the router to add the neighbor to.
-    #[clap(env)]
-    pub asn: u32,
 }
 
-impl From<Neighbor> for types::Neighbor {
-    fn from(n: Neighbor) -> types::Neighbor {
+/// Peer type determined by parsing the peer string
+enum PeerType {
+    Numbered(IpAddr),
+    Unnumbered(String),
+}
+
+/// API neighbor type wrapper for conversion
+enum ApiNeighborType {
+    Numbered(types::Neighbor),
+    Unnumbered(types::UnnumberedNeighbor),
+}
+
+/// Determine if a peer string is an IP address or interface name
+fn parse_peer_type(peer: &str) -> PeerType {
+    match peer.parse::<IpAddr>() {
+        Ok(addr) => PeerType::Numbered(addr),
+        Err(_) => PeerType::Unnumbered(peer.to_string()),
+    }
+}
+
+impl Neighbor {
+    /// Convert to either numbered or unnumbered neighbor type based on peer detection
+    fn into_api_types(self) -> Result<ApiNeighborType> {
+        match parse_peer_type(&self.peer) {
+            PeerType::Numbered(addr) => {
+                Ok(ApiNeighborType::Numbered(self.into_numbered(addr)))
+            }
+            PeerType::Unnumbered(interface) => {
+                Ok(ApiNeighborType::Unnumbered(self.into_unnumbered(interface)))
+            }
+        }
+    }
+
+    fn into_numbered(self, addr: IpAddr) -> types::Neighbor {
         // Build IPv4 unicast config if enabled
-        let ipv4_unicast = if n.enable_ipv4 {
-            let import_policy = match n.allow_import4.clone() {
+        let ipv4_unicast = if self.enable_ipv4 {
+            let import_policy = match self.allow_import4.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy4::NoFiltering,
             };
-            let export_policy = match n.allow_export4.clone() {
+            let export_policy = match self.allow_export4.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy4::NoFiltering,
             };
             Some(Ipv4UnicastConfig {
-                nexthop: n.nexthop4,
+                nexthop: self.nexthop4,
                 import_policy,
                 export_policy,
             })
@@ -756,21 +741,21 @@ impl From<Neighbor> for types::Neighbor {
         };
 
         // Build IPv6 unicast config if enabled
-        let ipv6_unicast = if n.enable_ipv6 {
-            let import_policy = match n.allow_import6.clone() {
+        let ipv6_unicast = if self.enable_ipv6 {
+            let import_policy = match self.allow_import6.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy6::NoFiltering,
             };
-            let export_policy = match n.allow_export6.clone() {
+            let export_policy = match self.allow_export6.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy6::NoFiltering,
             };
             Some(Ipv6UnicastConfig {
-                nexthop: n.nexthop6,
+                nexthop: self.nexthop6,
                 import_policy,
                 export_policy,
             })
@@ -779,54 +764,53 @@ impl From<Neighbor> for types::Neighbor {
         };
 
         types::Neighbor {
-            asn: n.asn,
-            remote_asn: n.remote_asn,
-            min_ttl: n.min_ttl,
-            name: n.name.clone(),
-            host: SocketAddr::new(n.addr, n.port).to_string(),
-            hold_time: n.hold_time,
-            idle_hold_time: n.idle_hold_time,
-            connect_retry: n.connect_retry_time,
-            keepalive: n.keepalive_time,
-            delay_open: n.delay_open_time,
-            resolution: n.clock_resolution,
-            group: n.group.clone(),
-            passive: n.passive_connection,
-            md5_auth_key: n.md5_auth_key.clone(),
-            multi_exit_discriminator: n.med,
-            communities: n.communities.clone(),
-            local_pref: n.local_pref,
-            enforce_first_as: n.enforce_first_as,
+            asn: self.asn,
+            remote_asn: self.remote_asn,
+            min_ttl: self.min_ttl,
+            name: self.name.clone(),
+            host: SocketAddr::new(addr, self.port).to_string(),
+            hold_time: self.hold_time,
+            idle_hold_time: self.idle_hold_time,
+            connect_retry: self.connect_retry_time,
+            keepalive: self.keepalive_time,
+            delay_open: self.delay_open_time,
+            resolution: self.clock_resolution,
+            group: self.group.clone(),
+            passive: self.passive_connection,
+            md5_auth_key: self.md5_auth_key.clone(),
+            multi_exit_discriminator: self.med,
+            communities: self.communities.clone(),
+            local_pref: self.local_pref,
+            enforce_first_as: self.enforce_first_as,
             ipv4_unicast,
             ipv6_unicast,
-            vlan_id: n.vlan_id,
-            connect_retry_jitter: n
+            vlan_id: self.vlan_id,
+            connect_retry_jitter: self
                 .connect_retry_jitter
                 .map(jitter_range_to_api),
-            idle_hold_jitter: n.idle_hold_jitter.map(jitter_range_to_api),
-            deterministic_collision_resolution: n
+            idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
+            deterministic_collision_resolution: self
                 .deterministic_collision_resolution,
         }
     }
-}
 
-impl From<UnnumberedNeighbor> for types::UnnumberedNeighbor {
-    fn from(n: UnnumberedNeighbor) -> types::UnnumberedNeighbor {
-        let ipv4_unicast = if n.enable_ipv4 {
-            let import_policy = match n.allow_import4.clone() {
+    fn into_unnumbered(self, interface: String) -> types::UnnumberedNeighbor {
+        // Build IPv4 unicast config if enabled
+        let ipv4_unicast = if self.enable_ipv4 {
+            let import_policy = match self.allow_import4.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy4::NoFiltering,
             };
-            let export_policy = match n.allow_export4.clone() {
+            let export_policy = match self.allow_export4.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy4::NoFiltering,
             };
             Some(Ipv4UnicastConfig {
-                nexthop: n.nexthop4,
+                nexthop: self.nexthop4,
                 import_policy,
                 export_policy,
             })
@@ -835,55 +819,60 @@ impl From<UnnumberedNeighbor> for types::UnnumberedNeighbor {
         };
 
         // Build IPv6 unicast config if enabled
-        let ipv6_unicast = if n.enable_ipv6 {
-            let import_policy = match n.allow_import6.clone() {
+        let ipv6_unicast = if self.enable_ipv6 {
+            let import_policy = match self.allow_import6.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy6::NoFiltering,
             };
-            let export_policy = match n.allow_export6.clone() {
+            let export_policy = match self.allow_export6.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy6::NoFiltering,
             };
             Some(Ipv6UnicastConfig {
-                nexthop: n.nexthop6,
+                nexthop: self.nexthop6,
                 import_policy,
                 export_policy,
             })
         } else {
             None
         };
+
         types::UnnumberedNeighbor {
-            asn: n.asn,
-            remote_asn: n.remote_asn,
-            min_ttl: n.min_ttl,
-            act_as_a_default_ipv6_router: n.act_as_a_default_ipv6_router,
-            name: n.name.clone(),
-            interface: n.interface.clone(),
-            hold_time: n.hold_time,
-            idle_hold_time: n.idle_hold_time,
-            connect_retry: n.connect_retry_time,
-            keepalive: n.keepalive_time,
-            delay_open: n.delay_open_time,
-            resolution: n.clock_resolution,
-            group: n.group.clone(),
-            passive: n.passive_connection,
-            md5_auth_key: n.md5_auth_key.clone(),
-            multi_exit_discriminator: n.med,
-            communities: n.communities.clone(),
-            local_pref: n.local_pref,
-            enforce_first_as: n.enforce_first_as,
+            asn: self.asn,
+            remote_asn: self.remote_asn,
+            min_ttl: self.min_ttl,
+            act_as_a_default_ipv6_router: if self.act_as_default_router {
+                1800
+            } else {
+                0
+            },
+            name: self.name.clone(),
+            interface,
+            hold_time: self.hold_time,
+            idle_hold_time: self.idle_hold_time,
+            connect_retry: self.connect_retry_time,
+            keepalive: self.keepalive_time,
+            delay_open: self.delay_open_time,
+            resolution: self.clock_resolution,
+            group: self.group.clone(),
+            passive: self.passive_connection,
+            md5_auth_key: self.md5_auth_key.clone(),
+            multi_exit_discriminator: self.med,
+            communities: self.communities.clone(),
+            local_pref: self.local_pref,
+            enforce_first_as: self.enforce_first_as,
             ipv4_unicast,
             ipv6_unicast,
-            vlan_id: n.vlan_id,
-            connect_retry_jitter: n
+            vlan_id: self.vlan_id,
+            connect_retry_jitter: self
                 .connect_retry_jitter
                 .map(jitter_range_to_api),
-            idle_hold_jitter: n.idle_hold_jitter.map(jitter_range_to_api),
-            deterministic_collision_resolution: n
+            idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
+            deterministic_collision_resolution: self
                 .deterministic_collision_resolution,
         }
     }
@@ -913,14 +902,8 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
                 NeighborCmd::ListUnnumbered { asn } => {
                     list_unnumbered_nbr(asn, c).await?
                 }
-                NeighborCmd::CreateUnnumbered(nbr) => {
-                    create_unnumbered_nbr(nbr, c).await?
-                }
                 NeighborCmd::ReadUnnumbered { asn, interface } => {
                     read_unnumbered_nbr(asn, interface, c).await?
-                }
-                NeighborCmd::UpdateUnnumbered(nbr) => {
-                    update_unnumbered_nbr(nbr, c).await?
                 }
                 NeighborCmd::DeleteUnnumbered { asn, interface } => {
                     delete_unnumbered_nbr(asn, interface, c).await?
@@ -1328,7 +1311,14 @@ async fn list_nbr(asn: u32, c: Client) -> Result<()> {
 }
 
 async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
-    c.create_neighbor_v3(&nbr.into()).await?;
+    match nbr.into_api_types()? {
+        ApiNeighborType::Numbered(n) => {
+            c.create_neighbor_v3(&n).await?;
+        }
+        ApiNeighborType::Unnumbered(n) => {
+            c.create_unnumbered_neighbor(&n).await?;
+        }
+    }
     Ok(())
 }
 
@@ -1342,7 +1332,14 @@ async fn read_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
 }
 
 async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
-    c.update_neighbor_v3(&nbr.into()).await?;
+    match nbr.into_api_types()? {
+        ApiNeighborType::Numbered(n) => {
+            c.update_neighbor_v3(&n).await?;
+        }
+        ApiNeighborType::Unnumbered(n) => {
+            c.update_unnumbered_neighbor(&n).await?;
+        }
+    }
     Ok(())
 }
 
@@ -1363,14 +1360,6 @@ async fn list_unnumbered_nbr(asn: u32, c: Client) -> Result<()> {
     Ok(())
 }
 
-async fn create_unnumbered_nbr(
-    nbr: UnnumberedNeighbor,
-    c: Client,
-) -> Result<()> {
-    c.create_unnumbered_neighbor(&nbr.into()).await?;
-    Ok(())
-}
-
 async fn read_unnumbered_nbr(
     asn: u32,
     interface: String,
@@ -1381,14 +1370,6 @@ async fn read_unnumbered_nbr(
         .await?
         .into_inner();
     println!("{nbr:#?}");
-    Ok(())
-}
-
-async fn update_unnumbered_nbr(
-    nbr: UnnumberedNeighbor,
-    c: Client,
-) -> Result<()> {
-    c.update_unnumbered_neighbor(&nbr.into()).await?;
     Ok(())
 }
 
@@ -1864,5 +1845,52 @@ mod tests {
         assert_eq!(originate6.prefixes.len(), 1);
         assert_eq!(originate6.prefixes[0].value.to_string(), "2001:db8::");
         assert_eq!(originate6.prefixes[0].length, 32);
+    }
+
+    #[test]
+    fn test_parse_peer_type_ipv4() {
+        // Test that IPv4 addresses are detected as numbered peers
+        match parse_peer_type("192.168.1.1") {
+            PeerType::Numbered(addr) => {
+                assert_eq!(addr.to_string(), "192.168.1.1");
+            }
+            PeerType::Unnumbered(_) => panic!("Expected numbered peer"),
+        }
+    }
+
+    #[test]
+    fn test_parse_peer_type_ipv6() {
+        // Test that IPv6 addresses are detected as numbered peers
+        match parse_peer_type("2001:db8::1") {
+            PeerType::Numbered(addr) => {
+                assert_eq!(addr.to_string(), "2001:db8::1");
+            }
+            PeerType::Unnumbered(_) => panic!("Expected numbered peer"),
+        }
+
+        match parse_peer_type("3fff:10::2") {
+            PeerType::Numbered(addr) => {
+                assert_eq!(addr.to_string(), "3fff:10::2");
+            }
+            PeerType::Unnumbered(_) => panic!("Expected numbered peer"),
+        }
+    }
+
+    #[test]
+    fn test_parse_peer_type_interface() {
+        // Test that interface names are detected as unnumbered peers
+        match parse_peer_type("eth0") {
+            PeerType::Unnumbered(iface) => {
+                assert_eq!(iface, "eth0");
+            }
+            PeerType::Numbered(_) => panic!("Expected unnumbered peer"),
+        }
+
+        match parse_peer_type("qsfp0") {
+            PeerType::Unnumbered(iface) => {
+                assert_eq!(iface, "qsfp0");
+            }
+            PeerType::Numbered(_) => panic!("Expected unnumbered peer"),
+        }
     }
 }
