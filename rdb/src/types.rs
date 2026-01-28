@@ -16,7 +16,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 // Re-export core types from rdb-types
-pub use rdb_types::{AddressFamily, Prefix, Prefix4, Prefix6, ProtocolFilter};
+pub use rdb_types::{
+    AddressFamily, PeerId, Prefix, Prefix4, Prefix6, ProtocolFilter,
+};
 
 // Marker types for compile-time address family discrimination.
 //
@@ -44,6 +46,40 @@ pub struct Ipv4Marker;
 #[derive(Clone, Copy, Debug)]
 pub struct Ipv6Marker;
 
+/// Pre-UNNUMBERED version of Path (uses BgpPathPropertiesV1).
+/// Used for API versions before VERSION_UNNUMBERED (5.0.0).
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+)]
+#[schemars(rename = "Path")]
+pub struct PathV1 {
+    pub nexthop: IpAddr,
+    pub shutdown: bool,
+    pub rib_priority: u8,
+    pub bgp: Option<BgpPathPropertiesV1>,
+    pub vlan_id: Option<u16>,
+}
+
+impl From<Path> for PathV1 {
+    fn from(value: Path) -> Self {
+        Self {
+            nexthop: value.nexthop,
+            shutdown: value.shutdown,
+            rib_priority: value.rib_priority,
+            bgp: value.bgp.map(BgpPathPropertiesV1::from),
+            vlan_id: value.vlan_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct Path {
     pub nexthop: IpAddr,
@@ -54,9 +90,7 @@ pub struct Path {
     /// is a link-local IPv6 address. For numbered peers, this is always None.
     ///
     /// Added in API version 5.0.0 (UNNUMBERED).
-    /// Hidden from OpenAPI schema to maintain backwards compatibility.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[schemars(skip)]
     pub nexthop_interface: Option<String>,
 
     pub shutdown: bool,
@@ -119,11 +153,61 @@ impl From<StaticRouteKey> for Path {
     }
 }
 
+/// Pre-UNNUMBERED version of BgpPathProperties (peer is IpAddr).
+/// Used for API versions before VERSION_UNNUMBERED (5.0.0).
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+)]
+#[schemars(rename = "BgpPathProperties")]
+pub struct BgpPathPropertiesV1 {
+    pub origin_as: u32,
+    pub id: u32,
+    pub peer: IpAddr,
+    pub med: Option<u32>,
+    pub local_pref: Option<u32>,
+    pub as_path: Vec<u32>,
+    pub stale: Option<DateTime<Utc>>,
+}
+
+impl From<BgpPathProperties> for BgpPathPropertiesV1 {
+    fn from(value: BgpPathProperties) -> Self {
+        Self {
+            origin_as: value.origin_as,
+            id: value.id,
+            // Convert PeerId to IpAddr - only Ip variant is valid for V1 API
+            peer: match value.peer {
+                PeerId::Ip(ip) => ip,
+                PeerId::Interface(iface) => {
+                    // This shouldn't happen in pre-UNNUMBERED versions
+                    // Log warning and use unspecified address as fallback
+                    eprintln!(
+                        "Warning: Interface peer '{}' in V1 API context",
+                        iface
+                    );
+                    IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+                }
+            },
+            med: value.med,
+            local_pref: value.local_pref,
+            as_path: value.as_path,
+            stale: value.stale,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct BgpPathProperties {
     pub origin_as: u32,
     pub id: u32,
-    pub peer: IpAddr,
+    pub peer: PeerId,
     pub med: Option<u32>,
     pub local_pref: Option<u32>,
     pub as_path: Vec<u32>,

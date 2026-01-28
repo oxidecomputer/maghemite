@@ -33,7 +33,7 @@ use rdb::{
     AddressFamily, Asn, BgpPathProperties, Db, ImportExportPolicy,
     ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4, Prefix6,
 };
-pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY};
+pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY, PeerId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -50,103 +50,6 @@ use std::{
 };
 
 const UNIT_SESSION_RUNNER: &str = "session_runner";
-
-/// Session indexing key that unifies numbered and unnumbered sessions.
-///
-/// This enum allows Router to index sessions by either:
-/// - IP address (numbered peers with known static IP)
-/// - Interface name (unnumbered peers discovered via NDP)
-///
-/// This unified key enables a single session map in Router that handles
-/// both numbered and unnumbered sessions transparently.
-///
-/// JSON serialization format:
-/// - Numbered: `{"ip": "192.0.2.1"}`
-/// - Unnumbered: `{"interface": "eth0"}`
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum PeerId {
-    /// Numbered peer identified by IP address
-    Ip(IpAddr),
-    /// Unnumbered peer identified by interface name
-    Interface(String),
-}
-
-impl Display for PeerId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Ip(ip) => write!(f, "{}", ip),
-            Self::Interface(iface) => write!(f, "{}", iface),
-        }
-    }
-}
-
-impl std::str::FromStr for PeerId {
-    type Err = std::convert::Infallible;
-
-    /// Parse a PeerId from a string representation.
-    /// Attempts to parse as an IP address first; if that fails, treats it as an interface name.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(ip) = s.parse::<IpAddr>() {
-            Ok(Self::Ip(ip))
-        } else {
-            Ok(Self::Interface(s.to_string()))
-        }
-    }
-}
-
-impl PeerId {
-    /// Check if this represents an unnumbered peer
-    pub fn is_unnumbered(&self) -> bool {
-        matches!(self, Self::Interface(_))
-    }
-
-    /// Check if this represents a numbered peer
-    pub fn is_numbered(&self) -> bool {
-        matches!(self, Self::Ip(_))
-    }
-}
-
-impl From<IpAddr> for PeerId {
-    fn from(ip: IpAddr) -> Self {
-        Self::Ip(ip)
-    }
-}
-
-impl From<std::net::Ipv4Addr> for PeerId {
-    fn from(ip: std::net::Ipv4Addr) -> Self {
-        Self::Ip(IpAddr::V4(ip))
-    }
-}
-
-impl From<std::net::Ipv6Addr> for PeerId {
-    fn from(ip: std::net::Ipv6Addr) -> Self {
-        Self::Ip(IpAddr::V6(ip))
-    }
-}
-
-impl From<String> for PeerId {
-    fn from(interface: String) -> Self {
-        Self::Interface(interface)
-    }
-}
-
-impl From<&str> for PeerId {
-    fn from(interface: &str) -> Self {
-        Self::Interface(interface.to_string())
-    }
-}
 
 /// The runtime state of an address-family for a given peer.
 /// This is instantiated after capability negotiation has completed.
@@ -1733,7 +1636,7 @@ pub enum CollisionResolution {
 
 impl<Cnx: BgpConnection + 'static> Drop for SessionRunner<Cnx> {
     fn drop(&mut self) {
-        let peer = &self.neighbor.peer;
+        let peer = self.peer_id();
         let final_state = *lock!(self.state);
         session_log_lite!(
             self,
@@ -1823,7 +1726,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Get the PeerId for this session.
-    pub fn get_peer_id(&self) -> PeerId {
+    pub fn peer_id(&self) -> PeerId {
         self.neighbor.peer.clone()
     }
 
@@ -1835,7 +1738,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self,
             info,
             "session runner (peer {}) received shutdown request, setting shutdown flag",
-            self.neighbor.peer;
+            self.peer_id();
         );
         self.shutdown.store(true, Ordering::Release);
     }
@@ -2208,7 +2111,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self,
                     info,
                     "session runner (peer: {}) caught shutdown flag",
-                    self.neighbor.peer;
+                    self.peer_id();
                 );
                 self.on_shutdown();
                 return;
@@ -6094,7 +5997,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         // Ensure the router has a fanout entry for this peer.
-        let peer_id = self.get_peer_id();
+        let peer_id = self.peer_id();
         if pc.ipv4_unicast.negotiated() {
             write_lock!(self.fanout4).add_egress(
                 peer_id.clone(),
@@ -6498,7 +6401,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 AdminEvent::SendRouteRefresh(af) => {
                     self.db.mark_bgp_peer_stale(
-                        pc.conn.peer().ip(),
+                        self.peer_id(),
                         AddressFamily::from(af),
                     );
                     self.send_route_refresh(&pc.conn, af);
@@ -7125,7 +7028,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self,
             info,
             "session runner (peer {}): shutdown start",
-            self.neighbor.peer
+            self.peer_id()
         );
 
         self.cleanup_connections();
@@ -7163,7 +7066,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             self,
             info,
             "session runner (peer {}): shutdown complete",
-            self.neighbor.peer
+            self.peer_id()
         );
     }
 
@@ -7898,7 +7801,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         conn_timer!(pc.conn, keepalive).disable();
         session_timer!(self, connect_retry).stop();
 
-        let peer_id = self.get_peer_id();
+        let peer_id = self.peer_id();
         if pc.ipv4_unicast.negotiated() {
             write_lock!(self.fanout4).remove_egress(&peer_id);
         }
@@ -7907,7 +7810,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         // remove peer prefixes from db
-        self.db.remove_bgp_prefixes_from_peer(&pc.conn.peer().ip());
+        self.db.remove_bgp_prefixes_from_peer(&self.peer_id());
     }
 
     /// Exit the established state into Idle.
@@ -8470,8 +8373,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             .map(Prefix::V4)
             .collect();
 
-        self.db
-            .remove_bgp_prefixes(&withdrawn, &pc.conn.peer().ip());
+        self.db.remove_bgp_prefixes(&withdrawn, &self.peer_id());
 
         let nlri: Vec<Prefix> = update
             .nlri
@@ -8493,7 +8395,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
             }
             let nexthop_interface =
-                derive_nexthop_interface(&self.neighbor.peer, nexthop);
+                derive_nexthop_interface(&self.peer_id(), nexthop);
             let path = rdb::Path {
                 nexthop,
                 nexthop_interface,
@@ -8501,7 +8403,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                 bgp: Some(BgpPathProperties {
                     origin_as: pc.asn,
-                    peer: pc.conn.peer().ip(),
+                    peer: self.peer_id(),
                     id: pc.id,
                     med: update.multi_exit_discriminator(),
                     local_pref: update.local_pref(),
@@ -8549,7 +8451,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             }
                         }
                         let nexthop_interface = derive_nexthop_interface(
-                            &self.neighbor.peer,
+                            &self.peer_id(),
                             mp_nexthop,
                         );
                         let path4 = rdb::Path {
@@ -8559,7 +8461,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                             bgp: Some(BgpPathProperties {
                                 origin_as: pc.asn,
-                                peer: pc.conn.peer().ip(),
+                                peer: self.peer_id(),
                                 id: pc.id,
                                 med: update.multi_exit_discriminator(),
                                 local_pref: update.local_pref(),
@@ -8626,10 +8528,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 as_path.extend(segments.value.iter());
                             }
                         }
-                        let nexthop_interface = derive_nexthop_interface(
-                            &self.neighbor.peer,
-                            nexthop6,
-                        );
+                        let nexthop_interface =
+                            derive_nexthop_interface(&self.peer_id(), nexthop6);
                         let path6 = rdb::Path {
                             nexthop: nexthop6,
                             nexthop_interface,
@@ -8637,7 +8537,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
                             bgp: Some(BgpPathProperties {
                                 origin_as: pc.asn,
-                                peer: pc.conn.peer().ip(),
+                                peer: self.peer_id(),
                                 id: pc.id,
                                 med: update.multi_exit_discriminator(),
                                 local_pref: update.local_pref(),
@@ -8667,10 +8567,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .map(Prefix::V4)
                         .collect();
 
-                    self.db.remove_bgp_prefixes(
-                        &mp_withdrawn4,
-                        &pc.conn.peer().ip(),
-                    );
+                    self.db
+                        .remove_bgp_prefixes(&mp_withdrawn4, &self.peer_id());
                 }
                 MpUnreachNlri::Ipv6Unicast(unreach6) => {
                     let originated6 = match self.db.get_origin6() {
@@ -8697,8 +8595,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .map(Prefix::V6)
                         .collect();
 
-                    self.db
-                        .remove_bgp_prefixes(&withdrawn6, &pc.conn.peer().ip());
+                    self.db.remove_bgp_prefixes(&withdrawn6, &self.peer_id());
                 }
             }
         }

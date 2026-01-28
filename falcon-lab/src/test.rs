@@ -157,7 +157,7 @@ pub async fn run_trio_unnumbered_test(
     );
 
     wait_for_eq!(
-        mgd.get_rib_imported(Some(&AddressFamily::Ipv4), None)
+        mgd.get_rib_imported_v2(Some(&AddressFamily::Ipv4), None)
             .await
             .map(|x| x.len())
             .unwrap_or(0),
@@ -166,7 +166,7 @@ pub async fn run_trio_unnumbered_test(
     );
 
     wait_for_eq!(
-        mgd.get_rib_imported(Some(&AddressFamily::Ipv4), None)
+        mgd.get_rib_imported_v2(Some(&AddressFamily::Ipv4), None)
             .await
             .map(|x| x.values().nth(0).map(|x| x.len()))
             .unwrap_or(None),
@@ -184,7 +184,7 @@ pub async fn run_trio_unnumbered_test(
     );
 
     wait_for_eq!(
-        mgd.get_rib_imported(Some(&AddressFamily::Ipv6), None)
+        mgd.get_rib_imported_v2(Some(&AddressFamily::Ipv6), None)
             .await
             .map(|x| x.len())
             .unwrap_or(0),
@@ -193,7 +193,7 @@ pub async fn run_trio_unnumbered_test(
     );
 
     wait_for_eq!(
-        mgd.get_rib_imported(Some(&AddressFamily::Ipv6), None)
+        mgd.get_rib_imported_v2(Some(&AddressFamily::Ipv6), None)
             .await
             .map(|x| x.values().nth(0).map(|x| x.len()))
             .unwrap_or(None),

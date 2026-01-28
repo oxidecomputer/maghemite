@@ -24,7 +24,8 @@ use dropshot::{
 };
 use dropshot_api_manager_types::api_versions;
 use rdb::{
-    BfdPeerConfig, Path as RdbPath, Prefix, Prefix4, Prefix6, StaticRouteKey,
+    BfdPeerConfig, Path as RdbPath, PathV1, Prefix, Prefix4, Prefix6,
+    StaticRouteKey,
     types::{AddressFamily, ProtocolFilter},
 };
 use schemars::JsonSchema;
@@ -359,25 +360,39 @@ pub trait MgAdminApi {
     async fn get_imported(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError>;
+    ) -> Result<HttpResponseOk<RibV1>, HttpError>;
 
     // exported moved under /rib/status in VERSION_IPV6_BASIC
     #[endpoint { method = GET, path = "/bgp/status/selected", versions = ..VERSION_IPV6_BASIC }]
     async fn get_selected(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError>;
+    ) -> Result<HttpResponseOk<RibV1>, HttpError>;
 
-    // imported moved under /rib/status in VERSION_IPV6_BASIC
-    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_IPV6_BASIC.. }]
+    // Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED): BgpPathProperties.peer is IpAddr
+    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
     async fn get_rib_imported(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<RibV1>, HttpError>;
+
+    // Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED): BgpPathProperties.peer is IpAddr
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
+    async fn get_rib_selected(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<RibV1>, HttpError>;
+
+    // VERSION_UNNUMBERED+: BgpPathProperties.peer is PeerId enum
+    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_UNNUMBERED.. }]
+    async fn get_rib_imported_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
     ) -> Result<HttpResponseOk<Rib>, HttpError>;
 
-    // exported moved under /rib/status in VERSION_IPV6_BASIC
-    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_IPV6_BASIC.. }]
-    async fn get_rib_selected(
+    // VERSION_UNNUMBERED+: BgpPathProperties.peer is PeerId enum
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_UNNUMBERED.. }]
+    async fn get_rib_selected_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
     ) -> Result<HttpResponseOk<Rib>, HttpError>;
@@ -633,6 +648,26 @@ pub struct NeighborSelectorV1 {
 // ============================================================================
 // Current API Types (VERSION_UNNUMBERED and later)
 // ============================================================================
+
+/// V1 Rib with PathV1
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[schemars(rename = "Rib")]
+pub struct RibV1(BTreeMap<String, BTreeSet<PathV1>>);
+
+impl From<rdb::db::Rib> for RibV1 {
+    fn from(value: rdb::db::Rib) -> Self {
+        RibV1(
+            value
+                .into_iter()
+                .map(|(k, v)| {
+                    let paths_v1: BTreeSet<PathV1> =
+                        v.into_iter().map(PathV1::from).collect();
+                    (k.to_string(), paths_v1)
+                })
+                .collect(),
+        )
+    }
+}
 
 /// Unified neighbor selector supporting both numbered and unnumbered peers
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]

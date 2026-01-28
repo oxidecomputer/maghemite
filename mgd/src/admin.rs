@@ -388,29 +388,43 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn get_imported(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError> {
-        bgp_admin::get_imported(ctx, request).await
+    ) -> Result<HttpResponseOk<RibV1>, HttpError> {
+        bgp_admin::get_imported_v1(ctx, request).await
     }
 
     async fn get_selected(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError> {
-        bgp_admin::get_selected(ctx, request).await
+    ) -> Result<HttpResponseOk<RibV1>, HttpError> {
+        bgp_admin::get_selected_v1(ctx, request).await
     }
 
     async fn get_rib_imported(
         ctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+    ) -> Result<HttpResponseOk<RibV1>, HttpError> {
         rib_admin::get_rib_imported(ctx, request).await
     }
 
     async fn get_rib_selected(
         ctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+    ) -> Result<HttpResponseOk<RibV1>, HttpError> {
         rib_admin::get_rib_selected(ctx, request).await
+    }
+
+    async fn get_rib_imported_v2(
+        ctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        rib_admin::get_rib_imported_v2(ctx, request).await
+    }
+
+    async fn get_rib_selected_v2(
+        ctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        rib_admin::get_rib_selected_v2(ctx, request).await
     }
 
     async fn get_neighbors(

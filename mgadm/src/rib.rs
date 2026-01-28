@@ -96,7 +96,7 @@ async fn get_imported(
     protocol: Option<ProtocolFilter>,
 ) -> Result<()> {
     let imported = c
-        .get_rib_imported(address_family.as_ref(), protocol.as_ref())
+        .get_rib_imported_v2(address_family.as_ref(), protocol.as_ref())
         .await?
         .into_inner();
 
@@ -110,7 +110,7 @@ async fn get_selected(
     protocol: Option<ProtocolFilter>,
 ) -> Result<()> {
     let selected = c
-        .get_rib_selected(address_family.as_ref(), protocol.as_ref())
+        .get_rib_selected_v2(address_family.as_ref(), protocol.as_ref())
         .await?
         .into_inner();
 
