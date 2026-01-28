@@ -169,24 +169,23 @@ impl UnnumberedManagerNdp {
         _asn: u32,
         interface: impl AsRef<str>,
     ) -> Result<(), ResolveNeighborError> {
-        let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
+        let interface_str = interface.as_ref();
 
-        // Remove interface from NDP manager
-        self.ndp_mgr.remove_interface(ifx.clone());
+        if let Ok(ifx) = Self::get_interface(interface_str, &self.log) {
+            self.ndp_mgr.remove_interface(ifx);
+        }
 
-        // Nexthop cleanup happens automatically via path removal
-
-        // Remove scope mapping
-        lock!(self.interface_scope_map).remove(&ifx.index);
+        // Clean up scope mapping by searching for interface name.
+        // This works whether or not the interface still exists in the system.
+        let mut scope_map = lock!(self.interface_scope_map);
+        if let Some((&scope_id, _)) = scope_map
+            .iter()
+            .find(|(_, name)| name.as_str() == interface_str)
+        {
+            scope_map.remove(&scope_id);
+        }
 
         Ok(())
-    }
-    pub fn get_neighbor_addr(
-        self: &Arc<Self>,
-        interface: impl AsRef<str>,
-    ) -> Result<Option<Ipv6Addr>, ResolveNeighborError> {
-        let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
-        Ok(self.ndp_mgr.get_peer(&ifx))
     }
 
     pub fn get_neighbor_session(
@@ -197,9 +196,8 @@ impl UnnumberedManagerNdp {
         Option<Arc<SessionRunner<BgpConnectionTcp>>>,
         ResolveNeighborError,
     > {
-        if let Some(addr) = self.get_neighbor_addr(interface)?
-            && let Some(rtr) = lock!(self.routers).get(&asn)
-            && let Some(session) = rtr.get_session(addr)
+        if let Some(rtr) = lock!(self.routers).get(&asn)
+            && let Some(session) = rtr.get_session(interface.as_ref())
         {
             return Ok(Some(session));
         };
