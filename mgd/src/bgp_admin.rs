@@ -1835,12 +1835,10 @@ pub(crate) mod helpers {
             "remove unnumbered neighbor (interface {interface}, asn {asn})"
         );
 
-        // If the unnumbered neighbor has a session, delete it first.
-        if let Some(addr) =
-            ctx.bgp.unnumbered_manager.get_neighbor_addr(interface)?
-        {
-            get_router!(&ctx, asn)?.delete_session(addr.into());
-        }
+        // Delete the BGP session for this unnumbered neighbor.
+        // Unnumbered sessions are keyed by interface name, not IP address.
+        get_router!(&ctx, asn)?
+            .delete_session(PeerId::Interface(interface.to_string()));
 
         // If the neighbor manager is running for this interface, remove
         // the neighbor
@@ -2131,17 +2129,13 @@ pub(crate) mod helpers {
         Ok(())
     }
 
-    pub(crate) async fn reset_neighbor(
-        ctx: Arc<HandlerContext>,
-        rq: NeighborResetRequest,
-    ) -> Result<HttpResponseUpdatedNoContent, Error> {
-        bgp_log!(ctx.log, info, "clear {rq}");
-
-        let session = get_router!(ctx, rq.asn)?
-            .get_session(rq.addr)
-            .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
-
-        match rq.op {
+    /// Central session reset logic - operates directly on a session.
+    /// Sends the appropriate FSM events based on the reset operation type.
+    fn reset_session(
+        session: &Arc<SessionRunner<BgpConnectionTcp>>,
+        op: NeighborResetOp,
+    ) -> Result<(), Error> {
+        match op {
             NeighborResetOp::Hard => {
                 session
                     .event_tx
@@ -2215,6 +2209,20 @@ pub(crate) mod helpers {
                 }
             }
         }
+        Ok(())
+    }
+
+    pub(crate) async fn reset_neighbor(
+        ctx: Arc<HandlerContext>,
+        rq: NeighborResetRequest,
+    ) -> Result<HttpResponseUpdatedNoContent, Error> {
+        bgp_log!(ctx.log, info, "clear {rq}");
+
+        let session = get_router!(ctx, rq.asn)?
+            .get_session(rq.addr)
+            .ok_or(Error::NotFound("session for bgp peer not found".into()))?;
+
+        reset_session(&session, rq.op)?;
         Ok(HttpResponseUpdatedNoContent())
     }
 
@@ -2228,28 +2236,15 @@ pub(crate) mod helpers {
             "op" => format!("{op:?}")
         );
 
-        if let Some(session) = ctx
+        let session = ctx
             .bgp
             .unnumbered_manager
             .get_neighbor_session(asn, interface)?
-        {
-            reset_neighbor(
-                ctx,
-                NeighborResetRequest {
-                    asn,
-                    addr: match session.neighbor.peer {
-                        PeerId::Ip(ip) => ip,
-                        PeerId::Interface(_) => {
-                            // For unnumbered sessions, use unspecified address
-                            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
-                        }
-                    },
-                    op,
-                },
-            )
-            .await?;
-        }
+            .ok_or(Error::NotFound(
+                "session for unnumbered neighbor not found".into(),
+            ))?;
 
+        reset_session(&session, op)?;
         Ok(HttpResponseUpdatedNoContent())
     }
 
