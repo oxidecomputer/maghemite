@@ -492,7 +492,7 @@ pub async fn create_unnumbered_neighbor(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = rqctx.context();
-    helpers::add_unnumbered_neighbor(ctx.clone(), rq)?;
+    helpers::add_unnumbered_neighbor(ctx.clone(), rq, false)?;
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -527,7 +527,7 @@ pub async fn update_unnumbered_neighbor(
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
     let rq = request.into_inner();
     let ctx = rqctx.context();
-    helpers::add_unnumbered_neighbor(ctx.clone(), rq)?;
+    helpers::add_unnumbered_neighbor(ctx.clone(), rq, true)?;
     Ok(HttpResponseUpdatedNoContent())
 }
 
@@ -1348,6 +1348,7 @@ async fn do_bgp_apply(
                     group.clone(),
                     cfg.clone(),
                 ),
+                true, // ensure mode: create or update as needed
             )?;
         }
 
@@ -2046,6 +2047,7 @@ pub(crate) mod helpers {
     pub(crate) fn add_unnumbered_neighbor(
         ctx: Arc<HandlerContext>,
         rq: UnnumberedNeighbor,
+        ensure: bool,
     ) -> Result<(), Error> {
         let log = &ctx.log;
         bgp_log!(log, info, "add unnumbered neighbor {}", rq.interface;
@@ -2124,6 +2126,7 @@ pub(crate) mod helpers {
             &rq.interface,
             info,
             rq.clone(),
+            ensure,
         )?;
 
         Ok(())
