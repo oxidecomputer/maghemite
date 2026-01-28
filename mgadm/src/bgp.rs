@@ -13,7 +13,7 @@ use mg_admin_client::{
         Ipv6UnicastConfig, NeighborResetRequest,
     },
 };
-use rdb::types::{PolicyAction, Prefix4, Prefix6};
+use rdb::types::{PeerId, PolicyAction, Prefix4, Prefix6};
 use std::{
     fs::read_to_string,
     io::{Write, stdout},
@@ -36,11 +36,11 @@ fn afi_to_api(afi: Afi) -> types::Afi {
     }
 }
 
-fn peer_id_to_api(peer_id: bgp::session::PeerId) -> types::PeerId {
+fn peer_id_to_api(peer_id: bgp::session::PeerId) -> PeerId {
     match peer_id {
-        bgp::session::PeerId::Ip(ip) => types::PeerId::Ip(ip),
+        bgp::session::PeerId::Ip(ip) => PeerId::Ip(ip),
         bgp::session::PeerId::Interface(interface) => {
-            types::PeerId::Interface(interface)
+            PeerId::Interface(interface)
         }
     }
 }
@@ -1599,7 +1599,7 @@ async fn get_fsm_history(
     let result = c
         .fsm_history_v2(&types::FsmHistoryRequest {
             asn,
-            peer: peer.map(types::PeerId::Ip),
+            peer: peer.map(PeerId::Ip),
             buffer: buffer_type,
         })
         .await?
@@ -1736,7 +1736,7 @@ async fn get_message_history(
     let result = c
         .message_history_v3(&types::MessageHistoryRequest {
             asn,
-            peer: Some(types::PeerId::Ip(peer)),
+            peer: Some(PeerId::Ip(peer)),
             direction: dir,
         })
         .await?

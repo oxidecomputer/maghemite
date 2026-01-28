@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "5.0.0"
+    "version": "4.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -102,32 +102,6 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/NeighborResetRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/bgp/clear/unnumbered-neighbor": {
-      "post": {
-        "operationId": "clear_unnumbered_neighbor",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UnnumberedNeighborResetRequest"
               }
             }
           },
@@ -258,8 +232,50 @@
       }
     },
     "/bgp/config/neighbor": {
+      "get": {
+        "operationId": "read_neighbor_v2",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
+            "name": "asn",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Neighbor"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
       "put": {
-        "operationId": "create_neighbor_v3",
+        "operationId": "create_neighbor_v2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -283,7 +299,7 @@
         }
       },
       "post": {
-        "operationId": "update_neighbor_v3",
+        "operationId": "update_neighbor_v2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -305,71 +321,27 @@
             "$ref": "#/components/responses/Error"
           }
         }
-      }
-    },
-    "/bgp/config/neighbor/{asn}/{peer}": {
-      "get": {
-        "operationId": "read_neighbor_v3",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "asn",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          {
-            "in": "path",
-            "name": "peer",
-            "description": "Peer identifier as a string.\n\n- For numbered peers: IP address (e.g., \"192.0.2.1\" or \"2001:db8::1\") - For unnumbered peers: Interface name (e.g., \"eth0\" or \"cxgbe0\")\n\nServer parses as IP address first; if parsing fails, treats as interface name. Uses PeerId::from_str() for type-safe conversion.",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Neighbor"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
       },
       "delete": {
-        "operationId": "delete_neighbor_v3",
+        "operationId": "delete_neighbor_v2",
         "parameters": [
           {
-            "in": "path",
+            "in": "query",
+            "name": "addr",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ip"
+            }
+          },
+          {
+            "in": "query",
             "name": "asn",
             "required": true,
             "schema": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
-            }
-          },
-          {
-            "in": "path",
-            "name": "peer",
-            "description": "Peer identifier as a string.\n\n- For numbered peers: IP address (e.g., \"192.0.2.1\" or \"2001:db8::1\") - For unnumbered peers: Interface name (e.g., \"eth0\" or \"cxgbe0\")\n\nServer parses as IP address first; if parsing fails, treats as interface name. Uses PeerId::from_str() for type-safe conversion.",
-            "required": true,
-            "schema": {
-              "type": "string"
             }
           }
         ],
@@ -386,12 +358,12 @@
         }
       }
     },
-    "/bgp/config/neighbors/{asn}": {
+    "/bgp/config/neighbors": {
       "get": {
-        "operationId": "read_neighbors_v3",
+        "operationId": "read_neighbors_v2",
         "parameters": [
           {
-            "in": "path",
+            "in": "query",
             "name": "asn",
             "description": "ASN of the router to get imported prefixes from.",
             "required": true,
@@ -897,174 +869,9 @@
         }
       }
     },
-    "/bgp/config/unnumbered-neighbor": {
-      "get": {
-        "operationId": "read_unnumbered_neighbor",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          {
-            "in": "query",
-            "name": "interface",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnnumberedNeighbor"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "put": {
-        "operationId": "create_unnumbered_neighbor",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UnnumberedNeighbor"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "post": {
-        "operationId": "update_unnumbered_neighbor",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UnnumberedNeighbor"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "resource updated"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "delete": {
-        "operationId": "delete_unnumbered_neighbor",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          {
-            "in": "query",
-            "name": "interface",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "successful deletion"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/bgp/config/unnumbered-neighbors": {
-      "get": {
-        "operationId": "read_unnumbered_neighbors",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "description": "ASN of the router to get imported prefixes from.",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Array_of_UnnumberedNeighbor",
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/UnnumberedNeighbor"
-                  }
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/bgp/history/fsm": {
       "get": {
-        "operationId": "fsm_history_v2",
+        "operationId": "fsm_history",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1097,7 +904,7 @@
     },
     "/bgp/history/message": {
       "get": {
-        "operationId": "message_history_v3",
+        "operationId": "message_history_v2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1156,12 +963,12 @@
     },
     "/bgp/status/exported": {
       "get": {
-        "operationId": "get_exported_v2",
+        "operationId": "get_exported",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ExportedSelector"
+                "$ref": "#/components/schemas/AsnSelector"
               }
             }
           },
@@ -1196,7 +1003,7 @@
     },
     "/bgp/status/neighbors": {
       "get": {
-        "operationId": "get_neighbors_v4",
+        "operationId": "get_neighbors_v3",
         "parameters": [
           {
             "in": "query",
@@ -1220,91 +1027,6 @@
                   "type": "object",
                   "additionalProperties": {
                     "$ref": "#/components/schemas/PeerInfo"
-                  }
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/ndp/interface": {
-      "get": {
-        "operationId": "get_ndp_interface_detail",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "description": "ASN of the router",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          {
-            "in": "query",
-            "name": "interface",
-            "description": "Interface name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NdpInterface"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
-    "/ndp/interfaces": {
-      "get": {
-        "operationId": "get_ndp_interfaces",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "asn",
-            "description": "ASN of the router to get imported prefixes from.",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Array_of_NdpInterface",
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/NdpInterface"
                   }
                 }
               }
@@ -1865,6 +1587,20 @@
           }
         ]
       },
+      "AsnSelector": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "description": "ASN of the router to get imported prefixes from.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "asn"
+        ]
+      },
       "BestpathFanoutRequest": {
         "type": "object",
         "properties": {
@@ -2100,6 +1836,7 @@
         ]
       },
       "BgpPathProperties": {
+        "description": "Pre-UNNUMBERED version of BgpPathProperties (peer is IpAddr). Used for API versions before VERSION_UNNUMBERED (5.0.0).",
         "type": "object",
         "properties": {
           "as_path": {
@@ -2990,38 +2727,6 @@
           }
         ]
       },
-      "ExportedSelector": {
-        "type": "object",
-        "properties": {
-          "afi": {
-            "nullable": true,
-            "description": "Optional address family filter (None = all negotiated families)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Afi"
-              }
-            ]
-          },
-          "asn": {
-            "description": "ASN of the router to get exported prefixes from.",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "peer": {
-            "nullable": true,
-            "description": "Optional peer filter using PeerId enum",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PeerId"
-              }
-            ]
-          }
-        },
-        "required": [
-          "asn"
-        ]
-      },
       "FsmEventBuffer": {
         "oneOf": [
           {
@@ -3111,7 +2816,6 @@
         ]
       },
       "FsmHistoryRequest": {
-        "description": "Unified FSM history request supporting both numbered and unnumbered peers",
         "type": "object",
         "properties": {
           "asn": {
@@ -3131,12 +2835,9 @@
           },
           "peer": {
             "nullable": true,
-            "description": "Optional peer filter using PeerId enum JSON format: {\"ip\": \"192.0.2.1\"} or {\"interface\": \"eth0\"}",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PeerId"
-              }
-            ]
+            "description": "Optional peer filter - if None, returns history for all peers",
+            "type": "string",
+            "format": "ip"
           }
         },
         "required": [
@@ -3144,11 +2845,10 @@
         ]
       },
       "FsmHistoryResponse": {
-        "description": "Unified FSM history response with string keys from PeerId Display Keys will be \"192.0.2.1\" or \"eth0\" format",
         "type": "object",
         "properties": {
           "by_peer": {
-            "description": "Events organized by peer identifier Each peer's value contains only the events from the requested buffer",
+            "description": "Events organized by peer address Each peer's value contains only the events from the requested buffer",
             "type": "object",
             "additionalProperties": {
               "type": "array",
@@ -3511,7 +3211,6 @@
         ]
       },
       "MessageHistoryRequest": {
-        "description": "Unified message history request supporting both numbered and unnumbered peers",
         "type": "object",
         "properties": {
           "asn": {
@@ -3531,12 +3230,9 @@
           },
           "peer": {
             "nullable": true,
-            "description": "Optional peer filter using PeerId enum JSON format: {\"ip\": \"192.0.2.1\"} or {\"interface\": \"eth0\"}",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PeerId"
-              }
-            ]
+            "description": "Optional peer filter - if None, returns history for all peers",
+            "type": "string",
+            "format": "ip"
           }
         },
         "required": [
@@ -3544,7 +3240,6 @@
         ]
       },
       "MessageHistoryResponse": {
-        "description": "Unified message history response with string keys from PeerId Display Keys will be \"192.0.2.1\" or \"eth0\" format",
         "type": "object",
         "properties": {
           "by_peer": {
@@ -3688,103 +3383,6 @@
               "withdrawn"
             ]
           }
-        ]
-      },
-      "NdpInterface": {
-        "description": "NDP state for an interface",
-        "type": "object",
-        "properties": {
-          "discovered_peer": {
-            "nullable": true,
-            "description": "Information about discovered peer (if any, including expired)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/NdpPeer"
-              }
-            ]
-          },
-          "interface": {
-            "description": "Interface name (e.g., \"qsfp0\")",
-            "type": "string"
-          },
-          "local_address": {
-            "description": "Local IPv6 link-local address",
-            "type": "string",
-            "format": "ipv6"
-          },
-          "router_lifetime": {
-            "description": "Router lifetime advertised by this router (seconds)",
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
-          },
-          "scope_id": {
-            "description": "IPv6 scope ID (interface index)",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "interface",
-          "local_address",
-          "router_lifetime",
-          "scope_id"
-        ]
-      },
-      "NdpPeer": {
-        "description": "Information about a discovered NDP peer",
-        "type": "object",
-        "properties": {
-          "address": {
-            "description": "Peer IPv6 address",
-            "type": "string",
-            "format": "ipv6"
-          },
-          "discovered_at": {
-            "description": "When the peer was first discovered (ISO 8601 timestamp)",
-            "type": "string"
-          },
-          "expired": {
-            "description": "Whether the peer entry has expired",
-            "type": "boolean"
-          },
-          "last_advertisement": {
-            "description": "When the most recent Router Advertisement was received (ISO 8601 timestamp)",
-            "type": "string"
-          },
-          "reachable_time": {
-            "description": "Reachable time from RA (milliseconds)",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "retrans_timer": {
-            "description": "Retransmit timer from RA (milliseconds)",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "router_lifetime": {
-            "description": "Router lifetime from RA (seconds)",
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
-          },
-          "time_until_expiry": {
-            "nullable": true,
-            "description": "Time until expiry (human-readable), or None if already expired",
-            "type": "string"
-          }
-        },
-        "required": [
-          "address",
-          "discovered_at",
-          "expired",
-          "last_advertisement",
-          "reachable_time",
-          "retrans_timer",
-          "router_lifetime"
         ]
       },
       "Neighbor": {
@@ -4237,6 +3835,7 @@
         ]
       },
       "Path": {
+        "description": "Pre-UNNUMBERED version of Path (uses BgpPathPropertiesV1). Used for API versions before VERSION_UNNUMBERED (5.0.0).",
         "type": "object",
         "properties": {
           "bgp": {
@@ -4823,38 +4422,6 @@
           "updates_sent"
         ]
       },
-      "PeerId": {
-        "description": "Session indexing key that unifies numbered and unnumbered sessions.\n\nThis enum allows Router to index sessions by either: - IP address (numbered peers with known static IP) - Interface name (unnumbered peers discovered via NDP)\n\nThis unified key enables a single session map in Router that handles both numbered and unnumbered sessions transparently.\n\nJSON serialization format: - Numbered: `{\"ip\": \"192.0.2.1\"}` - Unnumbered: `{\"interface\": \"eth0\"}`",
-        "oneOf": [
-          {
-            "description": "Numbered peer identified by IP address",
-            "type": "object",
-            "properties": {
-              "ip": {
-                "type": "string",
-                "format": "ip"
-              }
-            },
-            "required": [
-              "ip"
-            ],
-            "additionalProperties": false
-          },
-          {
-            "description": "Unnumbered peer identified by interface name",
-            "type": "object",
-            "properties": {
-              "interface": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "interface"
-            ],
-            "additionalProperties": false
-          }
-        ]
-      },
       "PeerInfo": {
         "type": "object",
         "properties": {
@@ -5043,6 +4610,7 @@
         ]
       },
       "Rib": {
+        "description": "V1 Rib with PathV1",
         "type": "object",
         "additionalProperties": {
           "type": "array",
@@ -5388,186 +4956,6 @@
           "passive",
           "resolution",
           "router_lifetime"
-        ]
-      },
-      "UnnumberedNeighbor": {
-        "type": "object",
-        "properties": {
-          "act_as_a_default_ipv6_router": {
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
-          },
-          "asn": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "communities": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          "connect_retry": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "connect_retry_jitter": {
-            "nullable": true,
-            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "delay_open": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "deterministic_collision_resolution": {
-            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
-            "type": "boolean"
-          },
-          "enforce_first_as": {
-            "type": "boolean"
-          },
-          "group": {
-            "type": "string"
-          },
-          "hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "idle_hold_jitter": {
-            "nullable": true,
-            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "idle_hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "interface": {
-            "type": "string"
-          },
-          "ipv4_unicast": {
-            "nullable": true,
-            "description": "IPv4 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv4UnicastConfig"
-              }
-            ]
-          },
-          "ipv6_unicast": {
-            "nullable": true,
-            "description": "IPv6 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv6UnicastConfig"
-              }
-            ]
-          },
-          "keepalive": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "local_pref": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "md5_auth_key": {
-            "nullable": true,
-            "type": "string"
-          },
-          "min_ttl": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0
-          },
-          "multi_exit_discriminator": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "name": {
-            "type": "string"
-          },
-          "passive": {
-            "type": "boolean"
-          },
-          "remote_asn": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "resolution": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "vlan_id": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "act_as_a_default_ipv6_router",
-          "asn",
-          "communities",
-          "connect_retry",
-          "delay_open",
-          "deterministic_collision_resolution",
-          "enforce_first_as",
-          "group",
-          "hold_time",
-          "idle_hold_time",
-          "interface",
-          "keepalive",
-          "name",
-          "passive",
-          "resolution"
-        ]
-      },
-      "UnnumberedNeighborResetRequest": {
-        "type": "object",
-        "properties": {
-          "asn": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "interface": {
-            "type": "string"
-          },
-          "op": {
-            "$ref": "#/components/schemas/NeighborResetOp"
-          }
-        },
-        "required": [
-          "asn",
-          "interface",
-          "op"
         ]
       },
       "UpdateErrorSubcode": {

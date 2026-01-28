@@ -22,6 +22,7 @@ progenitor::generate_api!(
         Prefix = rdb_types::Prefix,
         AddressFamily = rdb_types::AddressFamily,
         ProtocolFilter = rdb_types::ProtocolFilter,
+        PeerId = rdb_types::PeerId,
         Duration = std::time::Duration,
     }
 );
@@ -30,7 +31,6 @@ use colored::*;
 use rdb_types::{AddressFamily, Prefix, ProtocolFilter};
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
-use std::net::Ipv4Addr;
 use tabwriter::TabWriter;
 use types::{Path, Rib};
 
@@ -117,8 +117,17 @@ fn print_static_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
     for (prefix, paths) in routes.iter() {
         write!(&mut tw, "{prefix}").unwrap();
         for path in paths.iter() {
-            writeln!(&mut tw, "\t{}\t{:?}", path.nexthop, path.rib_priority,)
-                .unwrap();
+            let nexthop_display = match &path.nexthop_interface {
+                Some(iface) => format!("{}({})", iface, path.nexthop),
+                None => path.nexthop.to_string(),
+            };
+            writeln!(
+                &mut tw,
+                "\t{}\t{:?}",
+                nexthop_display,
+                path.rib_priority,
+            )
+            .unwrap();
         }
     }
 
@@ -137,7 +146,7 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
         "RIB Priority".dimmed(),
         "Local Pref".dimmed(),
         "Origin AS".dimmed(),
-        "Peer ID".dimmed(),
+        "Peer".dimmed(),
         "MED".dimmed(),
         "AS Path".dimmed(),
         "Stale".dimmed(),
@@ -148,14 +157,22 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
         write!(&mut tw, "{prefix}").unwrap();
         for path in paths.iter() {
             let bgp = path.bgp.as_ref().unwrap();
+            let nexthop_display = match &path.nexthop_interface {
+                Some(iface) => format!("{}({})", iface, path.nexthop),
+                None => path.nexthop.to_string(),
+            };
+            let peer_str = match &bgp.peer {
+                rdb_types::PeerId::Ip(ip) => ip.to_string(),
+                rdb_types::PeerId::Interface(iface) => iface.clone(),
+            };
             writeln!(
                 &mut tw,
                 "\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}",
-                path.nexthop,
+                nexthop_display,
                 path.rib_priority,
                 bgp.local_pref,
                 bgp.origin_as,
-                Ipv4Addr::from(bgp.id),
+                peer_str,
                 bgp.med,
                 bgp.as_path,
                 bgp.stale,
