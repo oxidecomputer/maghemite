@@ -1204,7 +1204,7 @@ impl Db {
     }
 
     // for each route in @prefixes, remove all bgp paths learned from @peer
-    pub fn remove_bgp_prefixes(&self, prefixes: &[Prefix], peer: &IpAddr) {
+    pub fn remove_bgp_prefixes(&self, prefixes: &[Prefix], peer: &PeerId) {
         let mut pcn = PrefixChangeNotification::default();
         self.remove_path_for_prefixes(
             prefixes,
@@ -1219,7 +1219,7 @@ impl Db {
 
     // wrapper for remove_bgp_prefixes to handle the "all routes" corner case.
     // e.g. when peer is deleted or exits Established state
-    pub fn remove_bgp_prefixes_from_peer(&self, peer: &IpAddr) {
+    pub fn remove_bgp_prefixes_from_peer(&self, peer: &PeerId) {
         // TODO(ipv6): call this just for enabled address-families.
         // no need to walk the full rib for an AF that isn't affected
         let peer_routes4: Vec<_> = self
@@ -1293,7 +1293,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn mark_bgp_peer_stale4(&self, peer: IpAddr) {
+    pub fn mark_bgp_peer_stale4(&self, peer: PeerId) {
         let mut rib = lock!(self.rib4_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
@@ -1315,7 +1315,7 @@ impl Db {
         });
     }
 
-    pub fn mark_bgp_peer_stale6(&self, peer: IpAddr) {
+    pub fn mark_bgp_peer_stale6(&self, peer: PeerId) {
         let mut rib = lock!(self.rib6_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
@@ -1352,9 +1352,9 @@ impl Db {
         *value = slot;
     }
 
-    pub fn mark_bgp_peer_stale(&self, peer: IpAddr, af: AddressFamily) {
+    pub fn mark_bgp_peer_stale(&self, peer: PeerId, af: AddressFamily) {
         match af {
-            AddressFamily::Ipv4 => self.mark_bgp_peer_stale4(peer),
+            AddressFamily::Ipv4 => self.mark_bgp_peer_stale4(peer.clone()),
             AddressFamily::Ipv6 => self.mark_bgp_peer_stale6(peer),
         }
     }
@@ -1453,7 +1453,7 @@ mod test {
         use crate::StaticRouteKey;
         use crate::{
             BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-            DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4, db::Db,
+            DEFAULT_RIB_PRIORITY_STATIC, Path, PeerId, Prefix, Prefix4, db::Db,
         };
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
@@ -1470,7 +1470,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 1111,
-                peer: remote_ip0,
+                peer: PeerId::Ip(remote_ip0),
                 id: 1111,
                 med: Some(1111),
                 local_pref: Some(1111),
@@ -1486,7 +1486,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 2222,
-                peer: remote_ip1,
+                peer: PeerId::Ip(remote_ip1),
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(2222),
@@ -1507,7 +1507,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 2222,
-                peer: remote_ip2,
+                peer: PeerId::Ip(remote_ip2),
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(4444),

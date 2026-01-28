@@ -32,7 +32,7 @@ use mg_api::{
     MessageHistoryRequest, MessageHistoryRequestV1, MessageHistoryRequestV4,
     MessageHistoryResponse, MessageHistoryResponseV1, MessageHistoryResponseV4,
     NdpInterface, NdpInterfaceSelector, NdpPeer, NeighborResetRequest,
-    NeighborResetRequestV1, NeighborSelector, NeighborSelectorV1, Rib,
+    NeighborResetRequestV1, NeighborSelector, NeighborSelectorV1, RibV1,
     UnnumberedNeighborResetRequest, UnnumberedNeighborSelector,
 };
 use mg_common::lock;
@@ -964,10 +964,11 @@ pub async fn get_exported_v2(
     Ok(HttpResponseOk(exported))
 }
 
-pub async fn get_imported(
+// Pre-UNNUMBERED versions (BgpPathProperties.peer is IpAddr)
+pub async fn get_imported_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AsnSelector>,
-) -> Result<HttpResponseOk<Rib>, HttpError> {
+) -> Result<HttpResponseOk<RibV1>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     let imported = get_router!(ctx, rq.asn)?
@@ -976,10 +977,10 @@ pub async fn get_imported(
     Ok(HttpResponseOk(imported.into()))
 }
 
-pub async fn get_selected(
+pub async fn get_selected_v1(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<AsnSelector>,
-) -> Result<HttpResponseOk<Rib>, HttpError> {
+) -> Result<HttpResponseOk<RibV1>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
     let selected = get_router!(ctx, rq.asn)?
@@ -1818,7 +1819,7 @@ pub(crate) mod helpers {
     ) -> Result<HttpResponseDeleted, Error> {
         bgp_log!(ctx.log, info, "remove neighbor (addr {addr}, asn {asn})");
 
-        ctx.db.remove_bgp_prefixes_from_peer(&addr);
+        ctx.db.remove_bgp_prefixes_from_peer(&PeerId::Ip(addr));
         ctx.db.remove_bgp_neighbor(addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 

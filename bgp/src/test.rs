@@ -2668,6 +2668,9 @@ fn unnumbered_three_router_chain(
     mock_ndp3.register_interface(r2_r3_interface.to_string(), r2_r3_scope_id);
 
     // Link-local addresses for each router
+    // IMPORTANT: R1 and R3 both use fe80::1 to test peer isolation bug
+    // In real unnumbered BGP, different routers can use the same link-local
+    // address because they're on different interfaces (different scope_ids)
     let r1_addr = SocketAddr::V6(SocketAddrV6::new(
         "fe80::1".parse().unwrap(),
         179,
@@ -2687,7 +2690,7 @@ fn unnumbered_three_router_chain(
         r2_r3_scope_id,
     ));
     let r3_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::3".parse().unwrap(),
+        "fe80::1".parse().unwrap(), // Same as R1, different scope_id
         179,
         0,
         r2_r3_scope_id,
@@ -3412,6 +3415,85 @@ fn test_three_router_chain_unnumbered() {
         r3_session.connection_count(),
         1,
         "R3 should have active connection"
+    );
+
+    // Step 8: Test route exchange and cleanup with peer isolation
+    // This tests that route cleanup properly distinguishes between unnumbered
+    // peers that may share the same link-local IP but have different scope_ids.
+
+    // Step 8a: Originate routes from R1 and R3
+    r1.router
+        .create_origin4(vec![cidr!("10.1.0.0/24")])
+        .expect("originate IPv4 route on R1");
+    r3.router
+        .create_origin4(vec![cidr!("10.3.0.0/24")])
+        .expect("originate IPv4 route on R3");
+
+    // Step 8b: Verify R2 receives both routes
+    let r1_prefix = Prefix::V4(cidr!("10.1.0.0/24"));
+    let r3_prefix = Prefix::V4(cidr!("10.3.0.0/24"));
+
+    wait_for!(
+        !r2.router.db.get_prefix_paths(&r1_prefix).is_empty(),
+        "R2 should receive route from R1"
+    );
+    wait_for!(
+        !r2.router.db.get_prefix_paths(&r3_prefix).is_empty(),
+        "R2 should receive route from R3"
+    );
+
+    let r1_paths = r2.router.db.get_prefix_paths(&r1_prefix);
+    let r3_paths = r2.router.db.get_prefix_paths(&r3_prefix);
+    assert_eq!(r1_paths.len(), 1, "Should have exactly one path from R1");
+    assert_eq!(r3_paths.len(), 1, "Should have exactly one path from R3");
+
+    // Step 8c: Shutdown R1 to bring down the BGP session to R2
+    r1.shutdown();
+
+    // Step 8d: Wait for R1's session to tear down
+    wait_for_neq!(
+        r1_session.state(),
+        FsmStateKind::Established,
+        "R1 session should tear down after shutdown"
+    );
+    wait_for_neq!(
+        r2_eth0_session.state(),
+        FsmStateKind::Established,
+        "R2 eth0 session should tear down after R1 shutdown"
+    );
+
+    // Step 8e: Verify R1's routes are withdrawn
+    wait_for!(
+        r2.router.db.get_prefix_paths(&r1_prefix).is_empty(),
+        "R2 should withdraw R1's routes after session teardown"
+    );
+
+    // Step 8f: Verify R3's routes are still present
+    // This assertion is expected to FAIL if the bug exists:
+    // BgpPathProperties.peer is an IpAddr (doesn't include scope_id).
+    // When R1's session tears down, remove_bgp_prefixes_from_peer() is called
+    // with R1's link-local address (fe80::1). If R3 also uses a link-local
+    // address without scope_id differentiation, the cleanup might incorrectly
+    // match and remove R3's routes too.
+    let r3_paths_after = r2.router.db.get_prefix_paths(&r3_prefix);
+    assert_eq!(
+        r3_paths_after.len(),
+        1,
+        "R2 should still have R3's routes after R1 shutdown. \
+         BUG: peer tracking uses IpAddr without scope_id, causing \
+         incorrect route removal when unnumbered peers share link-local IPs"
+    );
+
+    // Verify R2-R3 session is still Established
+    assert_eq!(
+        r2_eth1_session.state(),
+        FsmStateKind::Established,
+        "R2 eth1 session to R3 should stay Established"
+    );
+    assert_eq!(
+        r3_session.state(),
+        FsmStateKind::Established,
+        "R3 session should stay Established"
     );
 
     // Topology cleanup happens via Drop

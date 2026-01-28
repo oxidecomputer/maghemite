@@ -125,6 +125,7 @@ pub fn bgp_bestpaths(
 
 #[cfg(test)]
 mod test {
+    use crate::PeerId;
     use std::collections::BTreeSet;
     use std::net::IpAddr;
     use std::str::FromStr;
@@ -155,7 +156,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 470,
-                peer: remote_ip1,
+                peer: PeerId::Ip(remote_ip1),
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -180,7 +181,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 480,
-                peer: remote_ip2,
+                peer: PeerId::Ip(remote_ip2),
                 id: 48,
                 med: Some(75),
                 local_pref: Some(100),
@@ -215,7 +216,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 490,
-                peer: remote_ip3,
+                peer: PeerId::Ip(remote_ip3),
                 id: 49,
                 med: Some(100),
                 local_pref: Some(100),
@@ -316,7 +317,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 470,
-                peer: remote_ip1,
+                peer: PeerId::Ip(remote_ip1),
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -333,7 +334,7 @@ mod test {
             shutdown: true, // This path is shutdown
             bgp: Some(BgpPathProperties {
                 origin_as: 480,
-                peer: remote_ip2,
+                peer: PeerId::Ip(remote_ip2),
                 id: 48,
                 med: Some(75),
                 local_pref: Some(100),
@@ -378,7 +379,7 @@ mod test {
             shutdown: true,
             bgp: Some(BgpPathProperties {
                 origin_as: 470,
-                peer: remote_ip1,
+                peer: PeerId::Ip(remote_ip1),
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -425,7 +426,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 100,
-                peer: ip1,
+                peer: PeerId::Ip(ip1),
                 id: 1,
                 med: Some(50),
                 local_pref: Some(100),
@@ -442,7 +443,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 100,
-                peer: ip3,
+                peer: PeerId::Ip(ip3),
                 id: 1,
                 med: Some(100), // Higher MED = worse
                 local_pref: Some(100),
@@ -461,7 +462,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 200,
-                peer: ip2,
+                peer: PeerId::Ip(ip2),
                 id: 2,
                 med: Some(999), // Very high MED, but irrelevant - different AS
                 local_pref: Some(100),
@@ -479,7 +480,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 300,
-                peer: ip4,
+                peer: PeerId::Ip(ip4),
                 id: 3,
                 med: Some(10), // Low MED, but can't "steal" selection from other ASes
                 local_pref: Some(100),
@@ -546,7 +547,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 100,
-                peer: ip1,
+                peer: PeerId::Ip(ip1),
                 id: 1,
                 med: Some(50),
                 local_pref: Some(100),
@@ -563,7 +564,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 100,
-                peer: ip2,
+                peer: PeerId::Ip(ip2),
                 id: 1,
                 med: Some(50), // Same MED
                 local_pref: Some(100),
@@ -580,7 +581,7 @@ mod test {
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 100,
-                peer: ip3,
+                peer: PeerId::Ip(ip3),
                 id: 1,
                 med: Some(50), // Same MED
                 local_pref: Some(100),
