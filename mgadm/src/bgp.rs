@@ -13,7 +13,7 @@ use mg_admin_client::{
         Ipv6UnicastConfig, NeighborResetRequest,
     },
 };
-use rdb::types::{PeerId, PolicyAction, Prefix4, Prefix6};
+use rdb::types::{PeerId, Prefix4, Prefix6};
 use std::{
     fs::read_to_string,
     io::{Write, stdout},
@@ -136,8 +136,8 @@ pub struct HistorySubcommand {
 pub enum HistoryCmd {
     /// Get FSM event history for BGP sessions.
     Fsm {
-        /// Optional: Filter by specific peer address.
-        peer: Option<IpAddr>,
+        /// Optional: Filter by specific peer (IP address for numbered, interface name for unnumbered).
+        peer: Option<String>,
 
         /// Which buffer to display: 'major' (default) or 'all'.
         #[clap(default_value = "major")]
@@ -158,8 +158,8 @@ pub enum HistoryCmd {
 
     /// Get BGP message history for sessions.
     Message {
-        /// Peer address to show history for.
-        peer: IpAddr,
+        /// Peer to show history for (IP address for numbered, interface name for unnumbered).
+        peer: String,
 
         /// BGP Autonomous System number. Can be specified via ASN env var.
         #[clap(env)]
@@ -190,8 +190,8 @@ pub struct ClearSubcommand {
 pub enum ClearCmd {
     /// Clear the state of the selected BGP neighbor.
     Neighbor {
-        /// IP address of the neighbor you want to clear the state of.
-        addr: IpAddr,
+        /// Peer identifier (IP address for numbered, interface name for unnumbered).
+        peer: String,
 
         /// BGP Autonomous System number. Can be a 16-bit or 32-bit unsigned value.
         #[clap(env)]
@@ -496,25 +496,6 @@ pub struct RouterConfig {
     pub graceful_shutdown: bool,
 
     /// Autonomous system number for this router
-    #[clap(env)]
-    pub asn: u32,
-}
-
-#[derive(Args, Debug)]
-pub struct ExportPolicy {
-    /// Address of the peer to apply this policy to.
-    pub addr: IpAddr,
-
-    /// Prefix this policy applies to
-    pub prefix: Prefix4,
-
-    /// Priority of the policy, higher value is higher priority.
-    pub priority: u16,
-
-    /// The policy action to apply.
-    pub action: PolicyAction,
-
-    /// Autonomous system number for the router to add the export policy to.
     #[clap(env)]
     pub asn: u32,
 }
@@ -987,9 +968,9 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         Commands::Clear(cmd) => match cmd.command {
             ClearCmd::Neighbor {
                 asn,
-                addr,
+                peer,
                 operation,
-            } => clear_nbr(asn, addr, operation, c).await?,
+            } => clear_nbr(asn, peer, operation, c).await?,
         },
 
         Commands::Omicron(cmd) => match cmd.command {
@@ -1415,16 +1396,30 @@ async fn delete_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
 
 async fn clear_nbr(
     asn: u32,
-    addr: IpAddr,
+    peer: String,
     operation: NeighborOperation,
     c: Client,
 ) -> Result<()> {
-    c.clear_neighbor_v2(&NeighborResetRequest {
-        asn,
-        addr,
-        op: operation.into(),
-    })
-    .await?;
+    match parse_peer_type(&peer) {
+        PeerType::Numbered(addr) => {
+            c.clear_neighbor_v2(&NeighborResetRequest {
+                asn,
+                addr,
+                op: operation.into(),
+            })
+            .await?;
+        }
+        PeerType::Unnumbered(interface) => {
+            c.clear_unnumbered_neighbor(
+                &types::UnnumberedNeighborResetRequest {
+                    asn,
+                    interface,
+                    op: operation.into(),
+                },
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
 
@@ -1580,7 +1575,7 @@ async fn delete_shp(asn: u32, c: Client) -> Result<()> {
 async fn get_fsm_history(
     c: Client,
     asn: u32,
-    peer: Option<IpAddr>,
+    peer: Option<String>,
     buffer: &str,
     limit_str: &str,
     wide: bool,
@@ -1596,18 +1591,25 @@ async fn get_fsm_history(
         _ => "Major Events",
     };
 
+    // Parse peer filter if provided and convert to API type
+    let peer_id = peer.as_ref().map(|p| {
+        let bgp_peer_id: bgp::session::PeerId =
+            p.parse().expect("PeerId::from_str should always succeed");
+        peer_id_to_api(bgp_peer_id)
+    });
+
     let result = c
         .fsm_history_v2(&types::FsmHistoryRequest {
             asn,
-            peer: peer.map(PeerId::Ip),
+            peer: peer_id,
             buffer: buffer_type,
         })
         .await?
         .into_inner();
 
     if result.by_peer.is_empty() {
-        if let Some(peer_addr) = peer {
-            println!("No FSM history found for peer {}", peer_addr);
+        if let Some(peer_str) = peer {
+            println!("No FSM history found for peer {}", peer_str);
         } else {
             println!("No FSM history found for ASN {}", asn);
         }
@@ -1710,7 +1712,7 @@ async fn get_fsm_history(
 async fn get_message_history(
     c: Client,
     asn: u32,
-    peer: IpAddr,
+    peer: String,
     direction: &str,
     limit_str: &str,
     wide: bool,
@@ -1733,10 +1735,16 @@ async fn get_message_history(
         }
     };
 
+    // Parse peer and convert to API type
+    let bgp_peer_id: bgp::session::PeerId = peer
+        .parse()
+        .expect("PeerId::from_str should always succeed");
+    let peer_id = peer_id_to_api(bgp_peer_id);
+
     let result = c
         .message_history_v3(&types::MessageHistoryRequest {
             asn,
-            peer: Some(PeerId::Ip(peer)),
+            peer: Some(peer_id),
             direction: dir,
         })
         .await?
