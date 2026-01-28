@@ -11,36 +11,21 @@ use bgp::{
 use mg_common::lock;
 use ndp::{Ipv6NetworkInterface, NdpManager, NewInterfaceNdpManagerError};
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
-use rdb::Db;
-use slog::{Logger, error, info, o, warn};
+use slog::{Logger, error, o, warn};
 use std::{
     collections::{BTreeMap, HashMap},
-    net::{IpAddr, Ipv6Addr, SocketAddrV6},
+    net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
     sync::{Arc, Mutex, mpsc::channel},
-    thread::{sleep, spawn},
-    time::Duration,
 };
 
 pub const MOD_UNNUMBERED_MANAGER: &str = "unnumbered manager";
 
-pub struct UnnumberedNeighborManager {
+pub struct UnnumberedManagerNdp {
     routers: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
     ndp_mgr: Arc<NdpManager>,
-    pending_sessions: Mutex<HashMap<NbrKey, NbrInfo>>,
-    db: Db,
+    /// Maps scope_id (interface index) to interface name for Dispatcher routing
+    interface_scope_map: Mutex<HashMap<u32, String>>,
     log: Logger,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct NbrKey {
-    pub asn: u32,
-    pub interface: Ipv6NetworkInterface,
-}
-
-#[derive(Clone)]
-pub struct NbrInfo {
-    pub nbr: UnnumberedNeighbor,
-    pub session: SessionInfo,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -62,10 +47,9 @@ pub enum AddNeighborError {
     NdpManager(#[from] NewInterfaceNdpManagerError),
 }
 
-impl UnnumberedNeighborManager {
+impl UnnumberedManagerNdp {
     pub fn new(
         routers: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
-        db: Db,
         log: Logger,
     ) -> Arc<Self> {
         let log = log.new(o!(
@@ -74,23 +58,12 @@ impl UnnumberedNeighborManager {
             "module" => MOD_UNNUMBERED_MANAGER,
         ));
 
-        let s = Arc::new(Self {
+        Arc::new(Self {
             routers,
-            pending_sessions: Mutex::new(HashMap::default()),
+            interface_scope_map: Mutex::new(HashMap::default()),
             ndp_mgr: NdpManager::new(log.clone()),
-            db,
-            log: log.clone(),
-        });
-
-        {
-            let s = s.clone();
-            let log = log.clone();
-            // TODO(609) considermanaged threading appraoch
-            // https://github.com/oxidecomputer/maghemite/issues/609
-            spawn(move || s.run(log));
-        }
-
-        s
+            log,
+        })
     }
 
     pub fn add_neighbor(
@@ -99,42 +72,120 @@ impl UnnumberedNeighborManager {
         interface: impl AsRef<str>,
         info: SessionInfo,
         nbr: UnnumberedNeighbor,
+        ensure: bool,
     ) -> Result<(), AddNeighborError> {
-        let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
-        self.ndp_mgr
-            .add_interface(ifx.clone(), nbr.act_as_a_default_ipv6_router)?;
+        let interface_str = interface.as_ref();
 
-        lock!(self.pending_sessions).insert(
-            NbrKey {
-                asn,
-                interface: ifx,
-            },
-            NbrInfo { session: info, nbr },
-        );
+        // Try to get the interface - this can fail if the interface doesn't exist
+        // or isn't configured properly
+        let ifx_result = Self::get_interface(interface_str, &self.log);
+
+        // Check if we're in ensure mode and updating an existing session
+        let router_guard = lock!(self.routers);
+        let updating_existing = if ensure {
+            if let Some(router) = router_guard.get(&asn) {
+                router.get_session(interface_str).is_some()
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // If we're updating an existing session and the interface resolution failed,
+        // we can proceed without the interface info - the session already has it
+        let ifx: Option<Ipv6NetworkInterface> = match (
+            ifx_result,
+            updating_existing,
+        ) {
+            (Ok(ifx), _) => Some(ifx),
+            (Err(e), true) => {
+                // Updating existing session but interface not found - that's OK,
+                // we just skip interface setup and update the session config
+                slog::info!(
+                    self.log,
+                    "updating unnumbered session for interface that is not currently available";
+                    "interface" => interface_str,
+                    "error" => e.to_string(),
+                );
+                None
+            }
+            (Err(e), false) => {
+                // Not updating or interface is required for new session
+                return Err(AddNeighborError::Resolve(e));
+            }
+        };
+
+        // Only add/update interface in NDP manager if we successfully resolved it
+        if let Some(ref ifx) = ifx {
+            // Add interface to NDP manager for peer discovery
+            self.ndp_mgr
+                .add_interface(ifx.clone(), nbr.act_as_a_default_ipv6_router)?;
+
+            // Store scope_id mapping for Dispatcher routing
+            lock!(self.interface_scope_map).insert(ifx.index, ifx.name.clone());
+        }
+
+        // Create or update unnumbered session
+        if let Some(router) = router_guard.get(&asn) {
+            let (event_tx, event_rx) = channel();
+
+            // Use the resolved interface index if available, otherwise use 0 for updates
+            let scope_id = ifx.as_ref().map(|i| i.index).unwrap_or(0);
+            let placeholder_host =
+                SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, scope_id);
+
+            if let Err(e) = router.ensure_unnumbered_session(
+                interface_str.to_string(),
+                nbr.to_peer_config(placeholder_host),
+                None,
+                event_tx.clone(),
+                event_rx,
+                info,
+                self.clone(), // Pass unnumbered manager for active NDP queries
+            ) {
+                error!(
+                    self.log,
+                    "error creating/updating unnumbered session";
+                    "error" => e.to_string(),
+                    "interface" => interface_str,
+                );
+                return Err(AddNeighborError::Resolve(
+                    ResolveNeighborError::NoSuchInterface,
+                ));
+            }
+        } else {
+            warn!(
+                self.log,
+                "session configured for asn {}, but no router is running", asn
+            );
+        }
+
         Ok(())
     }
 
     pub fn remove_neighbor(
         self: &Arc<Self>,
-        asn: u32,
+        _asn: u32,
         interface: impl AsRef<str>,
     ) -> Result<(), ResolveNeighborError> {
-        let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
-        self.ndp_mgr.remove_interface(ifx.clone());
-        self.db.remove_unnumbered_nexthop_for_interface(&ifx);
-        lock!(self.pending_sessions).remove(&NbrKey {
-            asn,
-            interface: ifx,
-        });
+        let interface_str = interface.as_ref();
+
+        if let Ok(ifx) = Self::get_interface(interface_str, &self.log) {
+            self.ndp_mgr.remove_interface(ifx);
+        }
+
+        // Clean up scope mapping by searching for interface name.
+        // This works whether or not the interface still exists in the system.
+        let mut scope_map = lock!(self.interface_scope_map);
+        if let Some((&scope_id, _)) = scope_map
+            .iter()
+            .find(|(_, name)| name.as_str() == interface_str)
+        {
+            scope_map.remove(&scope_id);
+        }
 
         Ok(())
-    }
-    pub fn get_neighbor_addr(
-        self: &Arc<Self>,
-        interface: impl AsRef<str>,
-    ) -> Result<Option<Ipv6Addr>, ResolveNeighborError> {
-        let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
-        Ok(self.ndp_mgr.get_peer(&ifx))
     }
 
     pub fn get_neighbor_session(
@@ -145,13 +196,104 @@ impl UnnumberedNeighborManager {
         Option<Arc<SessionRunner<BgpConnectionTcp>>>,
         ResolveNeighborError,
     > {
-        if let Some(addr) = self.get_neighbor_addr(interface)?
-            && let Some(rtr) = lock!(self.routers).get(&asn)
-            && let Some(session) = rtr.get_session(addr.into())
+        if let Some(rtr) = lock!(self.routers).get(&asn)
+            && let Some(session) = rtr.get_session(interface.as_ref())
         {
             return Ok(Some(session));
         };
         Ok(None)
+    }
+
+    // =========================================================================
+    // NDP Query Interface
+    // =========================================================================
+    // These methods provide the query interface for SessionRunner and Dispatcher
+    // to access current NDP state without triggering session management.
+    //
+    // Currently, SessionRunner uses neighbor_cell for passive updates (updated by
+    // the run loop when NDP discovers peers). These methods are available for
+    // future active query scenarios.
+
+    /// Get the currently discovered neighbor for an interface.
+    ///
+    /// Returns the peer's link-local SocketAddr (with scope_id set) if a neighbor
+    /// has been discovered via NDP, or None if no neighbor is present.
+    ///
+    /// This is used by SessionRunner to actively query for peer addresses
+    /// when attempting connections on unnumbered interfaces.
+    ///
+    /// # Arguments
+    /// * `interface` - The interface name (e.g., "eth0")
+    ///
+    /// # Returns
+    /// * `Ok(Some(SocketAddr))` - Neighbor discovered at this address
+    /// * `Ok(None)` - No neighbor discovered yet
+    /// * `Err(ResolveNeighborError)` - Interface not found or not IPv6
+    pub fn get_neighbor_for_interface(
+        &self,
+        interface: impl AsRef<str>,
+    ) -> Result<Option<SocketAddr>, ResolveNeighborError> {
+        let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
+
+        if let Some(peer_addr) = self.ndp_mgr.get_peer(&ifx) {
+            // Construct SocketAddr with scope_id from interface index
+            let socket_addr = SocketAddr::V6(SocketAddrV6::new(
+                peer_addr, 179, // BGP port
+                0,   // flowinfo
+                ifx.index,
+            ));
+            Ok(Some(socket_addr))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get the interface name for a given IPv6 scope_id.
+    ///
+    /// This is used by Dispatcher to route incoming link-local connections
+    /// to the correct unnumbered session based on the scope_id in the peer
+    /// address.
+    ///
+    /// # Arguments
+    /// * `scope_id` - The IPv6 scope_id (interface index)
+    ///
+    /// # Returns
+    /// * `Some(interface_name)` - Interface found for this scope_id
+    /// * `None` - No interface registered with this scope_id
+    pub fn get_interface_for_scope(&self, scope_id: u32) -> Option<String> {
+        lock!(self.interface_scope_map).get(&scope_id).cloned()
+    }
+
+    /// Validate that a peer address matches the discovered neighbor for an interface.
+    ///
+    /// This is used by SessionRunner to validate incoming connections on
+    /// unnumbered interfaces, ensuring the connection is from the expected
+    /// NDP-discovered neighbor.
+    ///
+    /// # Arguments
+    /// * `interface` - The interface name
+    /// * `peer` - The peer address to validate
+    ///
+    /// # Returns
+    /// * `true` - Peer matches the discovered neighbor for this interface
+    /// * `false` - Peer does not match or no neighbor discovered
+    ///
+    /// Note: Currently unused as validation happens via Dispatcher routing.
+    /// Available for future explicit validation scenarios.
+    #[allow(dead_code)]
+    pub fn validate_peer_for_interface(
+        &self,
+        interface: impl AsRef<str>,
+        peer: SocketAddr,
+    ) -> bool {
+        // Get discovered neighbor for interface
+        if let Ok(Some(discovered)) = self.get_neighbor_for_interface(interface)
+        {
+            // Compare IP addresses (ignore port/flowinfo/scope_id differences)
+            discovered.ip() == peer.ip()
+        } else {
+            false
+        }
     }
 
     fn get_interface(
@@ -199,83 +341,136 @@ impl UnnumberedNeighborManager {
             index,
         })
     }
+}
 
-    pub fn get_pending(self: &Arc<Self>) -> HashMap<NbrKey, NbrInfo> {
-        lock!(self.pending_sessions).clone()
+// =========================================================================
+// UnnumberedManager Trait Implementation
+// =========================================================================
+// Provides the interface for Dispatcher to query interface mappings
+impl bgp::unnumbered::UnnumberedManager for UnnumberedManagerNdp {
+    fn get_interface_for_scope(&self, scope_id: u32) -> Option<String> {
+        // Delegate to the existing implementation
+        Self::get_interface_for_scope(self, scope_id)
     }
 
-    fn run(self: Arc<Self>, log: Logger) {
-        info!(log, "unnumbered manager loop starting");
-        const RUN_LOOP_INTERVAL: Duration = Duration::from_secs(1);
-        loop {
-            // clone the pending list so we don't hold the lock
-            //
-            // NOTE: sessions must be a named variable, the RHS of this
-            // statement cannot go into the for loop directly as that will
-            // cause the guard to be held across the for loop creating a
-            // deadlock with start_session on pending_sessions. This is known
-            // as temporary lifetime extension.
-            let sessions = self.get_pending();
+    fn get_neighbor_for_interface(
+        &self,
+        interface: &str,
+    ) -> Result<Option<SocketAddr>, Box<dyn std::error::Error>> {
+        // Delegate to the existing implementation
+        Self::get_neighbor_for_interface(self, interface)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    }
+}
 
-            for (key, session) in sessions.into_iter() {
-                if let Some(peer_addr) = self.ndp_mgr.get_peer(&key.interface) {
-                    self.start_session(
-                        key,
-                        session.session,
-                        session.nbr,
-                        peer_addr,
-                        &log,
-                    );
+impl UnnumberedManagerNdp {
+    /// List all NDP-managed interfaces with detailed discovery state.
+    ///
+    /// Returns a list of interfaces managed by this unnumbered manager,
+    /// including full peer advertisement information with timestamps.
+    ///
+    /// The caller should filter by ASN based on which neighbors are configured
+    /// for unnumbered BGP sessions.
+    pub fn list_ndp_interfaces(&self) -> Vec<ManagedInterfaceInfo> {
+        // Get detailed interface information from NDP manager
+        let detailed_interfaces = self.ndp_mgr.list_interfaces_detailed();
+
+        // Filter to only interfaces we're managing for BGP unnumbered
+        let scope_map = lock!(self.interface_scope_map);
+
+        detailed_interfaces
+            .into_iter()
+            .filter_map(|info| {
+                // Only include interfaces in our scope map
+                if !scope_map.contains_key(&info.interface.index) {
+                    return None;
                 }
-            }
-            sleep(RUN_LOOP_INTERVAL);
-        }
+
+                let peer_state =
+                    info.discovered_peer.as_ref().map(|detail| NdpPeerState {
+                        address: detail.address,
+                        first_seen: detail.first_seen,
+                        when: detail.when,
+                        router_lifetime: detail.router_lifetime,
+                        reachable_time: detail.reachable_time,
+                        retrans_timer: detail.retrans_timer,
+                        expired: detail.expired,
+                    });
+
+                Some(ManagedInterfaceInfo {
+                    interface: info.interface.name,
+                    local_address: info.interface.ip,
+                    scope_id: info.interface.index,
+                    peer_state,
+                })
+            })
+            .collect()
     }
 
-    fn start_session(
-        self: &Arc<Self>,
-        key: NbrKey,
-        session: SessionInfo,
-        neighbor: UnnumberedNeighbor,
-        peer_addr: Ipv6Addr,
-        log: &Logger,
-    ) {
-        let router_guard = lock!(self.routers);
-        let Some(router) = router_guard.get(&key.asn) else {
-            warn!(
-                log,
-                "session configured for asn {}, but no router is running",
-                key.asn
-            );
-            return;
-        };
+    /// Get detailed NDP state for a specific interface.
+    ///
+    /// Returns detailed information about peer discovery including timestamps,
+    /// RA parameters, and expiry status.
+    ///
+    /// Returns None if the interface is not managed by NDP.
+    pub fn get_ndp_interface_detail(
+        &self,
+        interface_name: &str,
+    ) -> Result<Option<InterfaceDetail>, ResolveNeighborError> {
+        let ifx = Self::get_interface(interface_name, &self.log)?;
 
-        let (event_tx, event_rx) = channel();
-
-        let host = SocketAddrV6::new(peer_addr, 0, 0, key.interface.index);
-
-        if let Err(e) = router.ensure_session(
-            neighbor.to_peer_config(host),
-            None,
-            event_tx.clone(),
-            event_rx,
-            session,
-        ) {
-            error!(
-                log,
-                "error starting unnumbered session";
-                "error" => e.to_string(),
-                "interface" => &neighbor.interface,
-            );
-            return;
+        // Check if we're managing this interface
+        if !lock!(self.interface_scope_map).contains_key(&ifx.index) {
+            return Ok(None);
         }
 
-        drop(router_guard);
+        // Get detailed peer information from NDP manager
+        let peer_state =
+            self.ndp_mgr
+                .get_peer_detail(&ifx)
+                .map(|detail| NdpPeerState {
+                    address: detail.address,
+                    first_seen: detail.first_seen,
+                    when: detail.when,
+                    router_lifetime: detail.router_lifetime,
+                    reachable_time: detail.reachable_time,
+                    retrans_timer: detail.retrans_timer,
+                    expired: detail.expired,
+                });
 
-        self.db
-            .add_unnumbered_nexthop(peer_addr, key.interface.clone());
-
-        // if we are here the session has started, remove it from pending
-        lock!(self.pending_sessions).remove(&key);
+        Ok(Some(InterfaceDetail {
+            local_address: ifx.ip,
+            scope_id: ifx.index,
+            peer_state,
+        }))
     }
+}
+
+/// Information about a managed interface with NDP state
+#[derive(Debug, Clone)]
+pub struct ManagedInterfaceInfo {
+    pub interface: String,
+    pub local_address: Ipv6Addr,
+    pub scope_id: u32,
+    pub peer_state: Option<NdpPeerState>,
+}
+
+/// Detailed NDP state for a specific interface
+#[derive(Debug, Clone)]
+pub struct InterfaceDetail {
+    pub local_address: Ipv6Addr,
+    pub scope_id: u32,
+    pub peer_state: Option<NdpPeerState>,
+}
+
+/// Detailed NDP peer state with full RA information
+#[derive(Debug, Clone)]
+pub struct NdpPeerState {
+    pub address: Ipv6Addr,
+    pub first_seen: std::time::Instant,
+    pub when: std::time::Instant,
+    pub router_lifetime: u16,
+    pub reachable_time: u32,
+    pub retrans_timer: u32,
+    pub expired: bool,
 }

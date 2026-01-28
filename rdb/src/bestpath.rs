@@ -125,6 +125,7 @@ pub fn bgp_bestpaths(
 
 #[cfg(test)]
 mod test {
+    use crate::PeerId;
     use std::collections::BTreeSet;
     use std::net::IpAddr;
     use std::str::FromStr;
@@ -150,11 +151,12 @@ mod test {
         // Add one path and make sure we get it back
         let path1 = Path {
             nexthop: remote_ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 470,
-                peer: remote_ip1,
+                peer: PeerId::Ip(remote_ip1),
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -174,11 +176,12 @@ mod test {
         // Add path2:
         let mut path2 = Path {
             nexthop: remote_ip2,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 480,
-                peer: remote_ip2,
+                peer: PeerId::Ip(remote_ip2),
                 id: 48,
                 med: Some(75),
                 local_pref: Some(100),
@@ -208,11 +211,12 @@ mod test {
         // filter. The max=2 limit determines which paths are returned.
         let path3 = Path {
             nexthop: remote_ip3,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 490,
-                peer: remote_ip3,
+                peer: PeerId::Ip(remote_ip3),
                 id: 49,
                 med: Some(100),
                 local_pref: Some(100),
@@ -261,6 +265,7 @@ mod test {
         //   > static is preferred over bgp when RIB priority matches
         let mut path4 = Path {
             nexthop: remote_ip4,
+            nexthop_interface: None,
             rib_priority: u8::MAX,
             shutdown: false,
             bgp: None,
@@ -307,11 +312,12 @@ mod test {
         // Create two equivalent BGP paths, but one is shutdown
         let active_path = Path {
             nexthop: remote_ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 470,
-                peer: remote_ip1,
+                peer: PeerId::Ip(remote_ip1),
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -323,11 +329,12 @@ mod test {
 
         let shutdown_path = Path {
             nexthop: remote_ip2,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: true, // This path is shutdown
             bgp: Some(BgpPathProperties {
                 origin_as: 480,
-                peer: remote_ip2,
+                peer: PeerId::Ip(remote_ip2),
                 id: 48,
                 med: Some(75),
                 local_pref: Some(100),
@@ -367,11 +374,12 @@ mod test {
         // Test with two shutdown paths - both should be returned when max=2
         let shutdown_path2 = Path {
             nexthop: remote_ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: true,
             bgp: Some(BgpPathProperties {
                 origin_as: 470,
-                peer: remote_ip1,
+                peer: PeerId::Ip(remote_ip1),
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -413,11 +421,12 @@ mod test {
         // Path from ip3 has MED 100 (worse)
         let as100_path_good = Path {
             nexthop: ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 100,
-                peer: ip1,
+                peer: PeerId::Ip(ip1),
                 id: 1,
                 med: Some(50),
                 local_pref: Some(100),
@@ -429,11 +438,12 @@ mod test {
 
         let as100_path_bad = Path {
             nexthop: ip3,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 100,
-                peer: ip3,
+                peer: PeerId::Ip(ip3),
                 id: 1,
                 med: Some(100), // Higher MED = worse
                 local_pref: Some(100),
@@ -447,11 +457,12 @@ mod test {
         // This should NOT be excluded just because AS 100 has a lower MED
         let as200_path = Path {
             nexthop: ip2,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 200,
-                peer: ip2,
+                peer: PeerId::Ip(ip2),
                 id: 2,
                 med: Some(999), // Very high MED, but irrelevant - different AS
                 local_pref: Some(100),
@@ -464,11 +475,12 @@ mod test {
         // AS 300: one path with low MED
         let as300_path = Path {
             nexthop: ip4,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 300,
-                peer: ip4,
+                peer: PeerId::Ip(ip4),
                 id: 3,
                 med: Some(10), // Low MED, but can't "steal" selection from other ASes
                 local_pref: Some(100),
@@ -530,11 +542,12 @@ mod test {
         // Three paths from AS 100, all with same MED
         let path1 = Path {
             nexthop: ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 100,
-                peer: ip1,
+                peer: PeerId::Ip(ip1),
                 id: 1,
                 med: Some(50),
                 local_pref: Some(100),
@@ -546,11 +559,12 @@ mod test {
 
         let path2 = Path {
             nexthop: ip2,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 100,
-                peer: ip2,
+                peer: PeerId::Ip(ip2),
                 id: 1,
                 med: Some(50), // Same MED
                 local_pref: Some(100),
@@ -562,11 +576,12 @@ mod test {
 
         let path3 = Path {
             nexthop: ip3,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 100,
-                peer: ip3,
+                peer: PeerId::Ip(ip3),
                 id: 1,
                 med: Some(50), // Same MED
                 local_pref: Some(100),

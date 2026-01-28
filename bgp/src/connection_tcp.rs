@@ -19,8 +19,10 @@ use crate::{
         RouteRefreshParseError, RouteRefreshParseErrorReason, UpdateMessage,
     },
     session::{
-        ConnectionEvent, FsmEvent, SessionEndpoint, SessionEvent, SessionInfo,
+        ConnectionEvent, FsmEvent, PeerId, SessionEndpoint, SessionEvent,
+        SessionInfo,
     },
+    unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
 use slog::Logger;
@@ -28,7 +30,7 @@ use std::{
     collections::BTreeMap,
     io::Read,
     io::Write,
-    net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::atomic::AtomicBool,
     sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
     thread::{JoinHandle, sleep},
@@ -49,7 +51,7 @@ use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;
 #[cfg(target_os = "illumos")]
-use std::collections::HashSet;
+use std::{collections::HashSet, net::IpAddr};
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
@@ -73,10 +75,33 @@ enum RecvError {
 
 pub struct BgpListenerTcp {
     listener: TcpListener,
+    unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+}
+
+impl BgpListenerTcp {
+    /// Resolve incoming peer address to appropriate PeerId.
+    fn resolve_session_key(&self, peer_addr: SocketAddr) -> PeerId {
+        // Try interface-based routing for IPv6 link-local addresses
+        if let Some(ref mgr) = self.unnumbered_manager
+            && let SocketAddr::V6(v6_addr) = peer_addr
+            && v6_addr.ip().is_unicast_link_local()
+        {
+            let scope_id = v6_addr.scope_id();
+            if let Some(interface) = mgr.get_interface_for_scope(scope_id) {
+                return PeerId::Interface(interface);
+            }
+        }
+
+        // Default to IP-based routing
+        PeerId::Ip(peer_addr.ip())
+    }
 }
 
 impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
-    fn bind<A: ToSocketAddrs>(addr: A) -> Result<Self, Error>
+    fn bind<A: ToSocketAddrs>(
+        addr: A,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    ) -> Result<Self, Error>
     where
         Self: Sized,
     {
@@ -89,14 +114,17 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
             ))?;
         let listener = TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
-        Ok(Self { listener })
+        Ok(Self {
+            listener,
+            unnumbered_manager,
+        })
     }
 
     fn accept(
         &self,
         log: Logger,
-        addr_to_session: Arc<
-            Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionTcp>>>,
+        peer_to_session: Arc<
+            Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionTcp>>>,
         >,
         timeout: Duration,
     ) -> Result<BgpConnectionTcp, Error> {
@@ -115,8 +143,11 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                     let mut local = conn.local_addr()?;
                     local.set_ip(local.ip().to_canonical());
 
+                    // Resolve peer address to appropriate PeerId (IP or Interface)
+                    let key = self.resolve_session_key(peer);
+
                     // Check if we have a session for this peer
-                    match lock!(addr_to_session).get(&ip) {
+                    match lock!(peer_to_session).get(&key) {
                         Some(session_endpoint) => {
                             let config = lock!(session_endpoint.config);
                             return BgpConnectionTcp::with_conn(

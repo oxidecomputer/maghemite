@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
-    net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
+    net::{IpAddr, SocketAddr, SocketAddrV6},
     sync::atomic::Ordering,
     time::Duration,
 };
@@ -196,12 +196,6 @@ pub struct UnnumberedNeighbor {
     pub act_as_a_default_ipv6_router: u16,
     #[serde(flatten)]
     pub parameters: BgpPeerParameters,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
-pub struct PendingUnnumberedNeighbor {
-    pub interface: String,
-    pub local_addr: Ipv6Addr,
 }
 
 impl From<Neighbor> for PeerConfig {

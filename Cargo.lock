@@ -3450,6 +3450,7 @@ version = "0.1.0"
 dependencies = [
  "bfd",
  "bgp",
+ "chrono",
  "dropshot",
  "dropshot-api-manager-types",
  "rdb",
@@ -3548,6 +3549,7 @@ dependencies = [
  "humantime",
  "mg-admin-client 0.1.0",
  "mg-common",
+ "natord",
  "oxide-tokio-rt",
  "oxnet",
  "rdb",
@@ -3572,6 +3574,7 @@ dependencies = [
  "gateway-client",
  "hostname 0.3.1",
  "http",
+ "humantime",
  "mg-api",
  "mg-common",
  "mg-lower",
@@ -3658,6 +3661,12 @@ dependencies = [
  "spin 0.9.8",
  "version_check",
 ]
+
+[[package]]
+name = "natord"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "308d96db8debc727c3fd9744aac51751243420e46edf401010908da7f8d5e57c"
 
 [[package]]
 name = "ndp"

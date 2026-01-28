@@ -441,3 +441,143 @@ pub enum ProtocolFilter {
     /// Static routes only
     Static,
 }
+
+/// Identifies a BGP peer for session management and route tracking.
+///
+/// BGP peers can be identified in two ways:
+/// - **Numbered**: Traditional BGP peering using explicit IP addresses
+/// - **Unnumbered**: Modern peering using interface names with link-local addresses
+///
+/// # Unnumbered Peering
+///
+/// Unnumbered BGP uses interface names as stable identifiers instead of IP addresses.
+/// This is important because:
+/// - Link-local IPv6 addresses are discovered dynamically via NDP
+/// - Multiple interfaces may have peers with the same link-local address
+///   (e.g., fe80::1 on eth0 and fe80::1 on eth1)
+/// - Scope ID (interface index) disambiguates link-local addresses, but is not
+///   stable across reboots
+/// - Interface names provide stable, unambiguous peer identification
+///
+/// # Route Tracking
+///
+/// This type is used in [`BgpPathProperties`](crate::BgpPathProperties) to track
+/// which peer advertised a route. Using `PeerId` instead of `IpAddr` ensures:
+/// - Unnumbered peers are properly distinguished even if they share link-local IPs
+/// - Route cleanup correctly removes only the routes from the intended peer
+/// - No cross-contamination when multiple unnumbered sessions exist
+///
+/// # Examples
+///
+/// ```
+/// use rdb_types::PeerId;
+/// use std::net::IpAddr;
+///
+/// // Numbered peer
+/// let numbered = PeerId::Ip("192.0.2.1".parse::<IpAddr>().unwrap());
+///
+/// // Unnumbered peer
+/// let unnumbered = PeerId::Interface("eth0".to_string());
+/// ```
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+pub enum PeerId {
+    /// Numbered peer identified by IP address
+    ///
+    /// Used for traditional BGP sessions where peers are configured with
+    /// explicit IP addresses (either IPv4 or IPv6 global unicast).
+    Ip(IpAddr),
+
+    /// Unnumbered peer identified by interface name
+    ///
+    /// Used for unnumbered BGP sessions where peers are discovered via NDP
+    /// on a specific interface. The interface name (e.g., "eth0") provides
+    /// stable identification even though the peer's link-local address may
+    /// be dynamic or shared with other interfaces.
+    Interface(String),
+}
+
+impl fmt::Display for PeerId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ip(ip) => write!(f, "{}", ip),
+            Self::Interface(name) => write!(f, "{}", name),
+        }
+    }
+}
+
+impl From<IpAddr> for PeerId {
+    fn from(ip: IpAddr) -> Self {
+        Self::Ip(ip)
+    }
+}
+
+impl From<&str> for PeerId {
+    fn from(s: &str) -> Self {
+        // Try to parse as IP first, otherwise treat as interface name
+        if let Ok(ip) = s.parse::<IpAddr>() {
+            Self::Ip(ip)
+        } else {
+            Self::Interface(s.to_string())
+        }
+    }
+}
+
+impl From<String> for PeerId {
+    fn from(s: String) -> Self {
+        // Try to parse as IP first, otherwise treat as interface name
+        if let Ok(ip) = s.parse::<IpAddr>() {
+            Self::Ip(ip)
+        } else {
+            Self::Interface(s)
+        }
+    }
+}
+
+impl From<Ipv4Addr> for PeerId {
+    fn from(ip: Ipv4Addr) -> Self {
+        Self::Ip(IpAddr::V4(ip))
+    }
+}
+
+impl From<Ipv6Addr> for PeerId {
+    fn from(ip: Ipv6Addr) -> Self {
+        Self::Ip(IpAddr::V6(ip))
+    }
+}
+
+impl FromStr for PeerId {
+    type Err = std::convert::Infallible;
+
+    /// Parse a PeerId from a string representation.
+    /// Attempts to parse as an IP address first; if that fails, treats it as an interface name.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(ip) = s.parse::<IpAddr>() {
+            Ok(Self::Ip(ip))
+        } else {
+            Ok(Self::Interface(s.to_string()))
+        }
+    }
+}
+
+impl PeerId {
+    /// Check if this represents an unnumbered peer
+    pub fn is_unnumbered(&self) -> bool {
+        matches!(self, Self::Interface(_))
+    }
+
+    /// Check if this represents a numbered peer
+    pub fn is_numbered(&self) -> bool {
+        matches!(self, Self::Ip(_))
+    }
+}

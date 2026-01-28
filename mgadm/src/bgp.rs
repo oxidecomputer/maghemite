@@ -5,6 +5,22 @@
 use anyhow::Result;
 use bgp::{messages::Afi, params::JitterRange};
 use clap::{Args, Subcommand, ValueEnum};
+use colored::*;
+use mg_admin_client::{
+    Client,
+    types::{
+        self, ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
+        Ipv6UnicastConfig, NeighborResetRequest,
+    },
+};
+use rdb::types::{PeerId, Prefix4, Prefix6};
+use std::{
+    fs::read_to_string,
+    io::{Write, stdout},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    time::Duration,
+};
+use tabwriter::TabWriter;
 
 fn jitter_range_to_api(j: JitterRange) -> types::JitterRange {
     types::JitterRange {
@@ -19,23 +35,15 @@ fn afi_to_api(afi: Afi) -> types::Afi {
         Afi::Ipv6 => types::Afi::Ipv6,
     }
 }
-use colored::*;
-use mg_admin_client::{
-    Client,
-    types::{
-        self, ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
-        Ipv6UnicastConfig, NeighborResetRequest,
-    },
-};
-use rdb::types::{PolicyAction, Prefix4, Prefix6};
-use std::{
-    fs::read_to_string,
-    io::{Write, stdout},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    ops::{Deref, DerefMut},
-    time::Duration,
-};
-use tabwriter::TabWriter;
+
+fn peer_id_to_api(peer_id: bgp::session::PeerId) -> PeerId {
+    match peer_id {
+        bgp::session::PeerId::Ip(ip) => PeerId::Ip(ip),
+        bgp::session::PeerId::Interface(interface) => {
+            PeerId::Interface(interface)
+        }
+    }
+}
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -103,15 +111,18 @@ pub enum StatusCmd {
         mode: NeighborDisplayMode,
     },
 
-    PendingNeighbors {
-        #[clap(env)]
-        asn: u32,
-    },
-
     /// Get the prefixes exported by a BGP router.
     Exported {
         #[clap(env)]
         asn: u32,
+
+        /// Optional peer filter (IP address or interface name)
+        #[clap(long)]
+        peer: Option<String>,
+
+        /// Optional address family filter (ipv4 or ipv6). If not specified, shows both.
+        #[clap(long, value_enum)]
+        afi: Option<Afi>,
     },
 }
 
@@ -125,8 +136,8 @@ pub struct HistorySubcommand {
 pub enum HistoryCmd {
     /// Get FSM event history for BGP sessions.
     Fsm {
-        /// Optional: Filter by specific peer address.
-        peer: Option<IpAddr>,
+        /// Optional: Filter by specific peer (IP address for numbered, interface name for unnumbered).
+        peer: Option<String>,
 
         /// Which buffer to display: 'major' (default) or 'all'.
         #[clap(default_value = "major")]
@@ -147,8 +158,8 @@ pub enum HistoryCmd {
 
     /// Get BGP message history for sessions.
     Message {
-        /// Peer address to show history for.
-        peer: IpAddr,
+        /// Peer to show history for (IP address for numbered, interface name for unnumbered).
+        peer: String,
 
         /// BGP Autonomous System number. Can be specified via ASN env var.
         #[clap(env)]
@@ -179,8 +190,8 @@ pub struct ClearSubcommand {
 pub enum ClearCmd {
     /// Clear the state of the selected BGP neighbor.
     Neighbor {
-        /// IP address of the neighbor you want to clear the state of.
-        addr: IpAddr,
+        /// Peer identifier (IP address for numbered, interface name for unnumbered).
+        peer: String,
 
         /// BGP Autonomous System number. Can be a 16-bit or 32-bit unsigned value.
         #[clap(env)]
@@ -297,28 +308,14 @@ pub enum NeighborCmd {
         #[clap(env)]
         asn: u32,
     },
-    /// List the unnumbered neighbors of a given router.
-    ListUnnumbered {
-        #[clap(env)]
-        asn: u32,
-    },
 
     /// Create a neighbor configuration.
     Create(Neighbor),
 
-    /// Create an unnumbered neighbor configuration.
-    CreateUnnumbered(UnnumberedNeighbor),
-
-    /// Read a neighbor configuration.
+    /// Read a neighbor configuration (supports both IP and interface).
     Read {
-        addr: IpAddr,
-        #[clap(env)]
-        asn: u32,
-    },
-
-    /// Read an unnumbered neighbor configuration.
-    ReadUnnumbered {
-        interface: String,
+        /// Peer identifier (IP address for numbered, interface name for unnumbered)
+        peer: String,
         #[clap(env)]
         asn: u32,
     },
@@ -326,19 +323,10 @@ pub enum NeighborCmd {
     /// Update a neighbor's configuration.
     Update(Neighbor),
 
-    /// Update an unnumbered neighbor's configuration.
-    UpdateUnnumbered(UnnumberedNeighbor),
-
-    /// Delete a neighbor configuration
+    /// Delete a neighbor configuration (supports both IP and interface)
     Delete {
-        addr: IpAddr,
-        #[clap(env)]
-        asn: u32,
-    },
-
-    /// Delete an unnumbered neighbor configuration
-    DeleteUnnumbered {
-        interface: String,
+        /// Peer identifier (IP address for numbered, interface name for unnumbered)
+        peer: String,
         #[clap(env)]
         asn: u32,
     },
@@ -513,25 +501,6 @@ pub struct RouterConfig {
 }
 
 #[derive(Args, Debug)]
-pub struct ExportPolicy {
-    /// Address of the peer to apply this policy to.
-    pub addr: IpAddr,
-
-    /// Prefix this policy applies to
-    pub prefix: Prefix4,
-
-    /// Priority of the policy, higher value is higher priority.
-    pub priority: u16,
-
-    /// The policy action to apply.
-    pub action: PolicyAction,
-
-    /// Autonomous system number for the router to add the export policy to.
-    #[clap(env)]
-    pub asn: u32,
-}
-
-#[derive(Args, Debug)]
 pub struct Originate4 {
     /// Autonomous system number for the router to originated the prefixes from.
     #[clap(env)]
@@ -563,59 +532,23 @@ pub struct Withdraw4 {
 
 #[derive(Args, Debug)]
 pub struct Neighbor {
-    /// Neighbor address
-    addr: IpAddr,
-
-    #[command(flatten)]
-    common: NeighborCommon,
-}
-
-impl Deref for Neighbor {
-    type Target = NeighborCommon;
-    fn deref(&self) -> &Self::Target {
-        &self.common
-    }
-}
-
-impl DerefMut for Neighbor {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.common
-    }
-}
-
-#[derive(Args, Debug)]
-pub struct UnnumberedNeighbor {
-    /// Neighbor address
-    interface: String,
-
-    /// Some routers such as those from Arista require that we act as a default
-    /// router in order to peer over BGP unnumbered.
-    act_as_a_default_ipv6_router: u16,
-
-    #[command(flatten)]
-    common: NeighborCommon,
-}
-
-impl Deref for UnnumberedNeighbor {
-    type Target = NeighborCommon;
-    fn deref(&self) -> &Self::Target {
-        &self.common
-    }
-}
-
-impl DerefMut for UnnumberedNeighbor {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.common
-    }
-}
-
-#[derive(Args, Debug)]
-pub struct NeighborCommon {
     /// Name for this neighbor
     name: String,
 
+    /// Peer identifier: either an IP address (numbered) or interface name (unnumbered)
+    peer: String,
+
     /// Peer group to add the neighbor to.
     group: String,
+
+    /// Autonomous system number for the router to add the neighbor to.
+    #[clap(env)]
+    asn: u32,
+
+    /// Act as a default IPv6 router for unnumbered peering (some routers like Arista require this).
+    /// Ignored for numbered peers. Maps to router lifetime of 1800s if true, 0s if false.
+    #[arg(long, default_value_t = false)]
+    act_as_default_router: bool,
 
     /// Neighbor BGP TCP port.
     #[arg(long, default_value_t = 179)]
@@ -724,30 +657,58 @@ pub struct NeighborCommon {
     /// IPv6 nexthop override for this neighbor (requires --enable-ipv6).
     #[arg(long, requires = "enable_ipv6")]
     pub nexthop6: Option<IpAddr>,
-
-    /// Autonomous system number for the router to add the neighbor to.
-    #[clap(env)]
-    pub asn: u32,
 }
 
-impl From<Neighbor> for types::Neighbor {
-    fn from(n: Neighbor) -> types::Neighbor {
+/// Peer type determined by parsing the peer string
+enum PeerType {
+    Numbered(IpAddr),
+    Unnumbered(String),
+}
+
+/// API neighbor type wrapper for conversion
+enum ApiNeighborType {
+    Numbered(types::Neighbor),
+    Unnumbered(types::UnnumberedNeighbor),
+}
+
+/// Determine if a peer string is an IP address or interface name
+fn parse_peer_type(peer: &str) -> PeerType {
+    match peer.parse::<IpAddr>() {
+        Ok(addr) => PeerType::Numbered(addr),
+        Err(_) => PeerType::Unnumbered(peer.to_string()),
+    }
+}
+
+impl Neighbor {
+    /// Convert to either numbered or unnumbered neighbor type based on peer detection
+    fn into_api_types(self) -> Result<ApiNeighborType> {
+        match parse_peer_type(&self.peer) {
+            PeerType::Numbered(addr) => {
+                Ok(ApiNeighborType::Numbered(self.into_numbered(addr)))
+            }
+            PeerType::Unnumbered(interface) => {
+                Ok(ApiNeighborType::Unnumbered(self.into_unnumbered(interface)))
+            }
+        }
+    }
+
+    fn into_numbered(self, addr: IpAddr) -> types::Neighbor {
         // Build IPv4 unicast config if enabled
-        let ipv4_unicast = if n.enable_ipv4 {
-            let import_policy = match n.allow_import4.clone() {
+        let ipv4_unicast = if self.enable_ipv4 {
+            let import_policy = match self.allow_import4.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy4::NoFiltering,
             };
-            let export_policy = match n.allow_export4.clone() {
+            let export_policy = match self.allow_export4.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy4::NoFiltering,
             };
             Some(Ipv4UnicastConfig {
-                nexthop: n.nexthop4,
+                nexthop: self.nexthop4,
                 import_policy,
                 export_policy,
             })
@@ -756,21 +717,21 @@ impl From<Neighbor> for types::Neighbor {
         };
 
         // Build IPv6 unicast config if enabled
-        let ipv6_unicast = if n.enable_ipv6 {
-            let import_policy = match n.allow_import6.clone() {
+        let ipv6_unicast = if self.enable_ipv6 {
+            let import_policy = match self.allow_import6.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy6::NoFiltering,
             };
-            let export_policy = match n.allow_export6.clone() {
+            let export_policy = match self.allow_export6.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy6::NoFiltering,
             };
             Some(Ipv6UnicastConfig {
-                nexthop: n.nexthop6,
+                nexthop: self.nexthop6,
                 import_policy,
                 export_policy,
             })
@@ -779,54 +740,53 @@ impl From<Neighbor> for types::Neighbor {
         };
 
         types::Neighbor {
-            asn: n.asn,
-            remote_asn: n.remote_asn,
-            min_ttl: n.min_ttl,
-            name: n.name.clone(),
-            host: SocketAddr::new(n.addr, n.port).to_string(),
-            hold_time: n.hold_time,
-            idle_hold_time: n.idle_hold_time,
-            connect_retry: n.connect_retry_time,
-            keepalive: n.keepalive_time,
-            delay_open: n.delay_open_time,
-            resolution: n.clock_resolution,
-            group: n.group.clone(),
-            passive: n.passive_connection,
-            md5_auth_key: n.md5_auth_key.clone(),
-            multi_exit_discriminator: n.med,
-            communities: n.communities.clone(),
-            local_pref: n.local_pref,
-            enforce_first_as: n.enforce_first_as,
+            asn: self.asn,
+            remote_asn: self.remote_asn,
+            min_ttl: self.min_ttl,
+            name: self.name.clone(),
+            host: SocketAddr::new(addr, self.port).to_string(),
+            hold_time: self.hold_time,
+            idle_hold_time: self.idle_hold_time,
+            connect_retry: self.connect_retry_time,
+            keepalive: self.keepalive_time,
+            delay_open: self.delay_open_time,
+            resolution: self.clock_resolution,
+            group: self.group.clone(),
+            passive: self.passive_connection,
+            md5_auth_key: self.md5_auth_key.clone(),
+            multi_exit_discriminator: self.med,
+            communities: self.communities.clone(),
+            local_pref: self.local_pref,
+            enforce_first_as: self.enforce_first_as,
             ipv4_unicast,
             ipv6_unicast,
-            vlan_id: n.vlan_id,
-            connect_retry_jitter: n
+            vlan_id: self.vlan_id,
+            connect_retry_jitter: self
                 .connect_retry_jitter
                 .map(jitter_range_to_api),
-            idle_hold_jitter: n.idle_hold_jitter.map(jitter_range_to_api),
-            deterministic_collision_resolution: n
+            idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
+            deterministic_collision_resolution: self
                 .deterministic_collision_resolution,
         }
     }
-}
 
-impl From<UnnumberedNeighbor> for types::UnnumberedNeighbor {
-    fn from(n: UnnumberedNeighbor) -> types::UnnumberedNeighbor {
-        let ipv4_unicast = if n.enable_ipv4 {
-            let import_policy = match n.allow_import4.clone() {
+    fn into_unnumbered(self, interface: String) -> types::UnnumberedNeighbor {
+        // Build IPv4 unicast config if enabled
+        let ipv4_unicast = if self.enable_ipv4 {
+            let import_policy = match self.allow_import4.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy4::NoFiltering,
             };
-            let export_policy = match n.allow_export4.clone() {
+            let export_policy = match self.allow_export4.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy4::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy4::NoFiltering,
             };
             Some(Ipv4UnicastConfig {
-                nexthop: n.nexthop4,
+                nexthop: self.nexthop4,
                 import_policy,
                 export_policy,
             })
@@ -835,55 +795,60 @@ impl From<UnnumberedNeighbor> for types::UnnumberedNeighbor {
         };
 
         // Build IPv6 unicast config if enabled
-        let ipv6_unicast = if n.enable_ipv6 {
-            let import_policy = match n.allow_import6.clone() {
+        let ipv6_unicast = if self.enable_ipv6 {
+            let import_policy = match self.allow_import6.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy6::NoFiltering,
             };
-            let export_policy = match n.allow_export6.clone() {
+            let export_policy = match self.allow_export6.clone() {
                 Some(prefixes) => {
                     ImportExportPolicy6::Allow(prefixes.into_iter().collect())
                 }
                 None => ImportExportPolicy6::NoFiltering,
             };
             Some(Ipv6UnicastConfig {
-                nexthop: n.nexthop6,
+                nexthop: self.nexthop6,
                 import_policy,
                 export_policy,
             })
         } else {
             None
         };
+
         types::UnnumberedNeighbor {
-            asn: n.asn,
-            remote_asn: n.remote_asn,
-            min_ttl: n.min_ttl,
-            act_as_a_default_ipv6_router: n.act_as_a_default_ipv6_router,
-            name: n.name.clone(),
-            interface: n.interface.clone(),
-            hold_time: n.hold_time,
-            idle_hold_time: n.idle_hold_time,
-            connect_retry: n.connect_retry_time,
-            keepalive: n.keepalive_time,
-            delay_open: n.delay_open_time,
-            resolution: n.clock_resolution,
-            group: n.group.clone(),
-            passive: n.passive_connection,
-            md5_auth_key: n.md5_auth_key.clone(),
-            multi_exit_discriminator: n.med,
-            communities: n.communities.clone(),
-            local_pref: n.local_pref,
-            enforce_first_as: n.enforce_first_as,
+            asn: self.asn,
+            remote_asn: self.remote_asn,
+            min_ttl: self.min_ttl,
+            act_as_a_default_ipv6_router: if self.act_as_default_router {
+                1800
+            } else {
+                0
+            },
+            name: self.name.clone(),
+            interface,
+            hold_time: self.hold_time,
+            idle_hold_time: self.idle_hold_time,
+            connect_retry: self.connect_retry_time,
+            keepalive: self.keepalive_time,
+            delay_open: self.delay_open_time,
+            resolution: self.clock_resolution,
+            group: self.group.clone(),
+            passive: self.passive_connection,
+            md5_auth_key: self.md5_auth_key.clone(),
+            multi_exit_discriminator: self.med,
+            communities: self.communities.clone(),
+            local_pref: self.local_pref,
+            enforce_first_as: self.enforce_first_as,
             ipv4_unicast,
             ipv6_unicast,
-            vlan_id: n.vlan_id,
-            connect_retry_jitter: n
+            vlan_id: self.vlan_id,
+            connect_retry_jitter: self
                 .connect_retry_jitter
                 .map(jitter_range_to_api),
-            idle_hold_jitter: n.idle_hold_jitter.map(jitter_range_to_api),
-            deterministic_collision_resolution: n
+            idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
+            deterministic_collision_resolution: self
                 .deterministic_collision_resolution,
         }
     }
@@ -903,27 +868,12 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             ConfigCmd::Neighbor(cmd) => match cmd.command {
                 NeighborCmd::List { asn } => list_nbr(asn, c).await?,
                 NeighborCmd::Create(nbr) => create_nbr(nbr, c).await?,
-                NeighborCmd::Read { asn, addr } => {
-                    read_nbr(asn, addr, c).await?
+                NeighborCmd::Read { asn, peer } => {
+                    read_nbr(asn, peer, c).await?
                 }
                 NeighborCmd::Update(nbr) => update_nbr(nbr, c).await?,
-                NeighborCmd::Delete { asn, addr } => {
-                    delete_nbr(asn, addr, c).await?
-                }
-                NeighborCmd::ListUnnumbered { asn } => {
-                    list_unnumbered_nbr(asn, c).await?
-                }
-                NeighborCmd::CreateUnnumbered(nbr) => {
-                    create_unnumbered_nbr(nbr, c).await?
-                }
-                NeighborCmd::ReadUnnumbered { asn, interface } => {
-                    read_unnumbered_nbr(asn, interface, c).await?
-                }
-                NeighborCmd::UpdateUnnumbered(nbr) => {
-                    update_unnumbered_nbr(nbr, c).await?
-                }
-                NeighborCmd::DeleteUnnumbered { asn, interface } => {
-                    delete_unnumbered_nbr(asn, interface, c).await?
+                NeighborCmd::Delete { asn, peer } => {
+                    delete_nbr(asn, peer, c).await?
                 }
             },
 
@@ -982,10 +932,9 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             StatusCmd::Neighbors { asn, mode } => {
                 get_neighbors(c, asn, mode).await?
             }
-            StatusCmd::PendingNeighbors { asn } => {
-                list_unnumbered_pending(asn, c).await?
+            StatusCmd::Exported { asn, peer, afi } => {
+                get_exported(c, asn, peer, afi).await?
             }
-            StatusCmd::Exported { asn } => get_exported(c, asn).await?,
         },
 
         Commands::History(cmd) => match cmd.command {
@@ -1019,9 +968,9 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         Commands::Clear(cmd) => match cmd.command {
             ClearCmd::Neighbor {
                 asn,
-                addr,
+                peer,
                 operation,
-            } => clear_nbr(asn, addr, operation, c).await?,
+            } => clear_nbr(asn, peer, operation, c).await?,
         },
 
         Commands::Omicron(cmd) => match cmd.command {
@@ -1075,9 +1024,18 @@ async fn get_neighbors(
     asn: u32,
     mode: NeighborDisplayMode,
 ) -> Result<()> {
-    let result = c.get_neighbors_v3(asn).await?;
+    let result = c.get_neighbors_v4(asn).await?.into_inner();
     let mut sorted: Vec<_> = result.iter().collect();
-    sorted.sort_by_key(|(ip, _)| ip.parse::<IpAddr>().ok());
+
+    // Sort using natural sorting to handle both IP addresses and interface names
+    sorted.sort_by(|(a, _), (b, _)| {
+        // Try parsing as IP addresses first for proper IP sorting
+        match (a.parse::<IpAddr>(), b.parse::<IpAddr>()) {
+            (Ok(ip_a), Ok(ip_b)) => ip_a.cmp(&ip_b),
+            // Fall back to natural sorting for interface names or mixed cases
+            _ => natord::compare(a, b),
+        }
+    });
 
     match mode {
         NeighborDisplayMode::summary => {
@@ -1311,9 +1269,25 @@ fn display_neighbors_detail(
     Ok(())
 }
 
-async fn get_exported(c: Client, asn: u32) -> Result<()> {
+async fn get_exported(
+    c: Client,
+    asn: u32,
+    peer: Option<String>,
+    afi: Option<Afi>,
+) -> Result<()> {
+    // Parse peer filter if provided and convert to API type
+    let peer_id = peer.map(|p| {
+        let bgp_peer_id: bgp::session::PeerId =
+            p.parse().expect("PeerId::from_str should always succeed");
+        peer_id_to_api(bgp_peer_id)
+    });
+
     let exported = c
-        .get_exported(&types::AsnSelector { asn })
+        .get_exported_v2(&types::ExportedSelector {
+            asn,
+            peer: peer_id,
+            afi: afi.map(afi_to_api),
+        })
         .await?
         .into_inner();
 
@@ -1322,94 +1296,130 @@ async fn get_exported(c: Client, asn: u32) -> Result<()> {
 }
 
 async fn list_nbr(asn: u32, c: Client) -> Result<()> {
-    let nbrs = c.read_neighbors_v2(asn).await?;
-    println!("{nbrs:#?}");
+    // Get both numbered and unnumbered neighbors
+    let numbered = c.read_neighbors_v3(asn).await?.into_inner();
+    let unnumbered = c.read_unnumbered_neighbors(asn).await?.into_inner();
+
+    if numbered.is_empty() && unnumbered.is_empty() {
+        println!("No neighbors configured for ASN {}", asn);
+        return Ok(());
+    }
+
+    // Use TabWriter for formatted output
+    let mut tw = TabWriter::new(stdout());
+    writeln!(
+        &mut tw,
+        "{}\t{}\t{}\t{}",
+        "Peer".dimmed(),
+        "ASN".dimmed(),
+        "Group".dimmed(),
+        "Name".dimmed(),
+    )?;
+
+    // Display numbered neighbors
+    for nbr in &numbered {
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}\t{}",
+            nbr.host, nbr.asn, nbr.group, nbr.name,
+        )?;
+    }
+
+    // Display unnumbered neighbors
+    for nbr in &unnumbered {
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}\t{}",
+            nbr.interface, nbr.asn, nbr.group, nbr.name,
+        )?;
+    }
+
+    tw.flush()?;
     Ok(())
 }
 
 async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
-    c.create_neighbor_v2(&nbr.into()).await?;
+    match nbr.into_api_types()? {
+        ApiNeighborType::Numbered(n) => {
+            c.create_neighbor_v3(&n).await?;
+        }
+        ApiNeighborType::Unnumbered(n) => {
+            c.create_unnumbered_neighbor(&n).await?;
+        }
+    }
     Ok(())
 }
 
-async fn read_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
-    let nbr = c.read_neighbor_v2(&addr, asn).await?.into_inner();
-    println!("{nbr:#?}");
+async fn read_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
+    match parse_peer_type(&peer) {
+        PeerType::Numbered(addr) => {
+            let nbr = c
+                .read_neighbor_v3(asn, &addr.to_string())
+                .await?
+                .into_inner();
+            println!("{nbr:#?}");
+        }
+        PeerType::Unnumbered(interface) => {
+            let nbr = c
+                .read_unnumbered_neighbor(asn, &interface)
+                .await?
+                .into_inner();
+            println!("{nbr:#?}");
+        }
+    }
     Ok(())
 }
 
 async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
-    c.update_neighbor_v2(&nbr.into()).await?;
+    match nbr.into_api_types()? {
+        ApiNeighborType::Numbered(n) => {
+            c.update_neighbor_v3(&n).await?;
+        }
+        ApiNeighborType::Unnumbered(n) => {
+            c.update_unnumbered_neighbor(&n).await?;
+        }
+    }
     Ok(())
 }
 
-async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
-    c.delete_neighbor_v2(&addr, asn).await?;
-    Ok(())
-}
-
-async fn list_unnumbered_pending(asn: u32, c: Client) -> Result<()> {
-    let pending = c.read_pending_unnumbered_neighbors(asn).await?;
-    println!("{pending:#?}");
-    Ok(())
-}
-
-async fn list_unnumbered_nbr(asn: u32, c: Client) -> Result<()> {
-    let nbrs = c.read_unnumbered_neighbors(asn).await?;
-    println!("{nbrs:#?}");
-    Ok(())
-}
-
-async fn create_unnumbered_nbr(
-    nbr: UnnumberedNeighbor,
-    c: Client,
-) -> Result<()> {
-    c.create_unnumbered_neighbor(&nbr.into()).await?;
-    Ok(())
-}
-
-async fn read_unnumbered_nbr(
-    asn: u32,
-    interface: String,
-    c: Client,
-) -> Result<()> {
-    let nbr = c
-        .read_unnumbered_neighbor(asn, &interface)
-        .await?
-        .into_inner();
-    println!("{nbr:#?}");
-    Ok(())
-}
-
-async fn update_unnumbered_nbr(
-    nbr: UnnumberedNeighbor,
-    c: Client,
-) -> Result<()> {
-    c.update_unnumbered_neighbor(&nbr.into()).await?;
-    Ok(())
-}
-
-async fn delete_unnumbered_nbr(
-    asn: u32,
-    interface: String,
-    c: Client,
-) -> Result<()> {
-    c.delete_unnumbered_neighbor(asn, &interface).await?;
+async fn delete_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
+    match parse_peer_type(&peer) {
+        PeerType::Numbered(addr) => {
+            c.delete_neighbor_v3(asn, &addr.to_string()).await?;
+        }
+        PeerType::Unnumbered(interface) => {
+            c.delete_unnumbered_neighbor(asn, &interface).await?;
+        }
+    }
     Ok(())
 }
 
 async fn clear_nbr(
     asn: u32,
-    addr: IpAddr,
+    peer: String,
     operation: NeighborOperation,
     c: Client,
 ) -> Result<()> {
-    c.clear_neighbor_v2(&NeighborResetRequest {
-        asn,
-        addr,
-        op: operation.into(),
-    })
-    .await?;
+    match parse_peer_type(&peer) {
+        PeerType::Numbered(addr) => {
+            c.clear_neighbor_v2(&NeighborResetRequest {
+                asn,
+                addr,
+                op: operation.into(),
+            })
+            .await?;
+        }
+        PeerType::Unnumbered(interface) => {
+            c.clear_unnumbered_neighbor(
+                &types::UnnumberedNeighborResetRequest {
+                    asn,
+                    interface,
+                    op: operation.into(),
+                },
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
 
@@ -1565,7 +1575,7 @@ async fn delete_shp(asn: u32, c: Client) -> Result<()> {
 async fn get_fsm_history(
     c: Client,
     asn: u32,
-    peer: Option<IpAddr>,
+    peer: Option<String>,
     buffer: &str,
     limit_str: &str,
     wide: bool,
@@ -1581,18 +1591,25 @@ async fn get_fsm_history(
         _ => "Major Events",
     };
 
+    // Parse peer filter if provided and convert to API type
+    let peer_id = peer.as_ref().map(|p| {
+        let bgp_peer_id: bgp::session::PeerId =
+            p.parse().expect("PeerId::from_str should always succeed");
+        peer_id_to_api(bgp_peer_id)
+    });
+
     let result = c
-        .fsm_history(&types::FsmHistoryRequest {
+        .fsm_history_v2(&types::FsmHistoryRequest {
             asn,
-            peer,
+            peer: peer_id,
             buffer: buffer_type,
         })
         .await?
         .into_inner();
 
     if result.by_peer.is_empty() {
-        if let Some(peer_addr) = peer {
-            println!("No FSM history found for peer {}", peer_addr);
+        if let Some(peer_str) = peer {
+            println!("No FSM history found for peer {}", peer_str);
         } else {
             println!("No FSM history found for ASN {}", asn);
         }
@@ -1695,7 +1712,7 @@ async fn get_fsm_history(
 async fn get_message_history(
     c: Client,
     asn: u32,
-    peer: IpAddr,
+    peer: String,
     direction: &str,
     limit_str: &str,
     wide: bool,
@@ -1718,10 +1735,16 @@ async fn get_message_history(
         }
     };
 
+    // Parse peer and convert to API type
+    let bgp_peer_id: bgp::session::PeerId = peer
+        .parse()
+        .expect("PeerId::from_str should always succeed");
+    let peer_id = peer_id_to_api(bgp_peer_id);
+
     let result = c
-        .message_history_v2(&types::MessageHistoryRequest {
+        .message_history_v3(&types::MessageHistoryRequest {
             asn,
-            peer: Some(peer),
+            peer: Some(peer_id),
             direction: dir,
         })
         .await?
@@ -1861,5 +1884,52 @@ mod tests {
         assert_eq!(originate6.prefixes.len(), 1);
         assert_eq!(originate6.prefixes[0].value.to_string(), "2001:db8::");
         assert_eq!(originate6.prefixes[0].length, 32);
+    }
+
+    #[test]
+    fn test_parse_peer_type_ipv4() {
+        // Test that IPv4 addresses are detected as numbered peers
+        match parse_peer_type("192.168.1.1") {
+            PeerType::Numbered(addr) => {
+                assert_eq!(addr.to_string(), "192.168.1.1");
+            }
+            PeerType::Unnumbered(_) => panic!("Expected numbered peer"),
+        }
+    }
+
+    #[test]
+    fn test_parse_peer_type_ipv6() {
+        // Test that IPv6 addresses are detected as numbered peers
+        match parse_peer_type("2001:db8::1") {
+            PeerType::Numbered(addr) => {
+                assert_eq!(addr.to_string(), "2001:db8::1");
+            }
+            PeerType::Unnumbered(_) => panic!("Expected numbered peer"),
+        }
+
+        match parse_peer_type("3fff:10::2") {
+            PeerType::Numbered(addr) => {
+                assert_eq!(addr.to_string(), "3fff:10::2");
+            }
+            PeerType::Unnumbered(_) => panic!("Expected numbered peer"),
+        }
+    }
+
+    #[test]
+    fn test_parse_peer_type_interface() {
+        // Test that interface names are detected as unnumbered peers
+        match parse_peer_type("eth0") {
+            PeerType::Unnumbered(iface) => {
+                assert_eq!(iface, "eth0");
+            }
+            PeerType::Numbered(_) => panic!("Expected unnumbered peer"),
+        }
+
+        match parse_peer_type("qsfp0") {
+            PeerType::Unnumbered(iface) => {
+                assert_eq!(iface, "qsfp0");
+            }
+            PeerType::Numbered(_) => panic!("Expected unnumbered peer"),
+        }
     }
 }

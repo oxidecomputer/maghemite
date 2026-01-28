@@ -15,11 +15,10 @@ use crate::log::rdb_log;
 use crate::types::*;
 use chrono::Utc;
 use mg_common::{lock, read_lock, write_lock};
-use ndp::Ipv6NetworkInterface;
 use sled::Tree;
 use slog::{Logger, error};
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr};
 use std::num::NonZeroU8;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -113,9 +112,6 @@ pub struct Db {
     /// Information is not available until first successful communication with MGS.
     slot: Arc<RwLock<Option<u16>>>,
 
-    /// A map from peer addresses to the corresponding local interface.
-    unnumbered_nexthop: Arc<Mutex<HashMap<Ipv6Addr, Ipv6NetworkInterface>>>,
-
     log: Logger,
 }
 unsafe impl Sync for Db {}
@@ -142,7 +138,6 @@ impl Db {
             watchers: Arc::new(RwLock::new(Vec::new())),
             reaper: Reaper::new(rib_loc),
             slot: Arc::new(RwLock::new(None)),
-            unnumbered_nexthop: Arc::new(Mutex::new(HashMap::new())),
             log,
         })
     }
@@ -1209,7 +1204,7 @@ impl Db {
     }
 
     // for each route in @prefixes, remove all bgp paths learned from @peer
-    pub fn remove_bgp_prefixes(&self, prefixes: &[Prefix], peer: &IpAddr) {
+    pub fn remove_bgp_prefixes(&self, prefixes: &[Prefix], peer: &PeerId) {
         let mut pcn = PrefixChangeNotification::default();
         self.remove_path_for_prefixes(
             prefixes,
@@ -1224,7 +1219,7 @@ impl Db {
 
     // wrapper for remove_bgp_prefixes to handle the "all routes" corner case.
     // e.g. when peer is deleted or exits Established state
-    pub fn remove_bgp_prefixes_from_peer(&self, peer: &IpAddr) {
+    pub fn remove_bgp_prefixes_from_peer(&self, peer: &PeerId) {
         // TODO(ipv6): call this just for enabled address-families.
         // no need to walk the full rib for an AF that isn't affected
         let peer_routes4: Vec<_> = self
@@ -1298,7 +1293,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn mark_bgp_peer_stale4(&self, peer: IpAddr) {
+    pub fn mark_bgp_peer_stale4(&self, peer: PeerId) {
         let mut rib = lock!(self.rib4_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
@@ -1320,7 +1315,7 @@ impl Db {
         });
     }
 
-    pub fn mark_bgp_peer_stale6(&self, peer: IpAddr) {
+    pub fn mark_bgp_peer_stale6(&self, peer: PeerId) {
         let mut rib = lock!(self.rib6_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
@@ -1357,43 +1352,11 @@ impl Db {
         *value = slot;
     }
 
-    pub fn mark_bgp_peer_stale(&self, peer: IpAddr, af: AddressFamily) {
+    pub fn mark_bgp_peer_stale(&self, peer: PeerId, af: AddressFamily) {
         match af {
-            AddressFamily::Ipv4 => self.mark_bgp_peer_stale4(peer),
+            AddressFamily::Ipv4 => self.mark_bgp_peer_stale4(peer.clone()),
             AddressFamily::Ipv6 => self.mark_bgp_peer_stale6(peer),
         }
-    }
-
-    pub fn add_unnumbered_nexthop(
-        &self,
-        nexthop: Ipv6Addr,
-        interface: Ipv6NetworkInterface,
-    ) {
-        self.unnumbered_nexthop
-            .lock()
-            .unwrap()
-            .insert(nexthop, interface);
-    }
-
-    pub fn remove_unnumbered_nexthop_for_interface(
-        &self,
-        interface: &Ipv6NetworkInterface,
-    ) {
-        self.unnumbered_nexthop
-            .lock()
-            .unwrap()
-            .retain(|_k, v| v != interface);
-    }
-
-    pub fn get_interface_for_unnumbered_nexthop(
-        &self,
-        nexthop: Ipv6Addr,
-    ) -> Option<Ipv6NetworkInterface> {
-        self.unnumbered_nexthop
-            .lock()
-            .unwrap()
-            .get(&nexthop)
-            .cloned()
     }
 }
 
@@ -1490,7 +1453,7 @@ mod test {
         use crate::StaticRouteKey;
         use crate::{
             BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-            DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4, db::Db,
+            DEFAULT_RIB_PRIORITY_STATIC, Path, PeerId, Prefix, Prefix4, db::Db,
         };
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
@@ -1502,11 +1465,12 @@ mod test {
 
         let bgp_path0 = Path {
             nexthop: remote_ip0,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 1111,
-                peer: remote_ip0,
+                peer: PeerId::Ip(remote_ip0),
                 id: 1111,
                 med: Some(1111),
                 local_pref: Some(1111),
@@ -1517,11 +1481,12 @@ mod test {
         };
         let bgp_path1 = Path {
             nexthop: remote_ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 2222,
-                peer: remote_ip1,
+                peer: PeerId::Ip(remote_ip1),
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(2222),
@@ -1537,11 +1502,12 @@ mod test {
         // BESTPATH_FANOUT is increased to test ECMP.
         let bgp_path2 = Path {
             nexthop: remote_ip2,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 2222,
-                peer: remote_ip2,
+                peer: PeerId::Ip(remote_ip2),
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(4444),

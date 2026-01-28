@@ -4,14 +4,13 @@
 
 use crate::connection::BgpConnection;
 use crate::session::{
-    AdminEvent, FsmEvent, RouteUpdate, RouteUpdate4, RouteUpdate6,
+    AdminEvent, FsmEvent, PeerId, RouteUpdate, RouteUpdate4, RouteUpdate6,
 };
 use crate::{COMPONENT_BGP, MOD_NEIGHBOR};
 use rdb::types::{Ipv4Marker, Ipv6Marker, Prefix4, Prefix6};
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
-use std::net::IpAddr;
 use std::sync::mpsc::Sender;
 
 const UNIT_FANOUT: &str = "fanout";
@@ -26,8 +25,8 @@ pub type Fanout6<Cnx> = Fanout<Cnx, Ipv6Marker>;
 /// - Fanout4 (Fanout<_, Ipv4Marker>) only accepts Prefix4
 /// - Fanout6 (Fanout<_, Ipv6Marker>) only accepts Prefix6
 pub struct Fanout<Cnx: BgpConnection, Af> {
-    /// Indexed neighbor address
-    egress: BTreeMap<IpAddr, Egress<Cnx>>,
+    /// Indexed by peer identifier (IP address or interface name)
+    egress: BTreeMap<PeerId, Egress<Cnx>>,
     /// Zero-sized marker for address family type enforcement
     _af: PhantomData<Af>,
 }
@@ -68,12 +67,12 @@ impl<Cnx: BgpConnection> Fanout<Cnx, Ipv4Marker> {
     /// Announce and/or withdraw IPv4 routes to all peers except the origin.
     pub fn send_except(
         &self,
-        origin: IpAddr,
+        origin: &PeerId,
         nlri: Vec<Prefix4>,
         withdrawn: Vec<Prefix4>,
     ) {
-        for (peer_addr, egress) in &self.egress {
-            if *peer_addr == origin {
+        for (peer_id, egress) in &self.egress {
+            if peer_id == origin {
                 continue;
             }
             if !nlri.is_empty() {
@@ -111,12 +110,12 @@ impl<Cnx: BgpConnection> Fanout<Cnx, Ipv6Marker> {
     /// Announce and/or withdraw IPv6 routes to all peers except the origin.
     pub fn send_except(
         &self,
-        origin: IpAddr,
+        origin: &PeerId,
         nlri: Vec<Prefix6>,
         withdrawn: Vec<Prefix6>,
     ) {
-        for (peer_addr, egress) in &self.egress {
-            if *peer_addr == origin {
+        for (peer_id, egress) in &self.egress {
+            if peer_id == origin {
                 continue;
             }
             if !nlri.is_empty() {
@@ -135,12 +134,12 @@ impl<Cnx: BgpConnection> Fanout<Cnx, Ipv6Marker> {
 
 // Common methods available for all address families
 impl<Cnx: BgpConnection, Af> Fanout<Cnx, Af> {
-    pub fn add_egress(&mut self, peer: IpAddr, egress: Egress<Cnx>) {
+    pub fn add_egress(&mut self, peer: PeerId, egress: Egress<Cnx>) {
         self.egress.insert(peer, egress);
     }
 
-    pub fn remove_egress(&mut self, peer: IpAddr) {
-        self.egress.remove(&peer);
+    pub fn remove_egress(&mut self, peer: &PeerId) {
+        self.egress.remove(peer);
     }
 
     pub fn is_empty(&self) -> bool {
