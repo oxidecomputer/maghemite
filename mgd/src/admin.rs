@@ -13,7 +13,7 @@ use dropshot::{
 };
 use mg_api::*;
 use mg_common::stats::MgLowerStats;
-use rdb::{BfdPeerConfig, Db, Prefix};
+use rdb::{BfdPeerConfig, Db, PeerId, Prefix};
 use slog::{Logger, error, info, o};
 use std::collections::HashMap;
 #[cfg(feature = "mg-lower")]
@@ -378,10 +378,7 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn get_exported_v2(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<ExportedSelector>,
-    ) -> Result<
-        HttpResponseOk<HashMap<bgp::session::PeerId, Vec<Prefix>>>,
-        HttpError,
-    > {
+    ) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError> {
         bgp_admin::get_exported_v2(ctx, request).await
     }
 
