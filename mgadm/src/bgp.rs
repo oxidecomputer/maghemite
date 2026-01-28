@@ -1045,7 +1045,16 @@ async fn get_neighbors(
 ) -> Result<()> {
     let result = c.get_neighbors_v4(asn).await?.into_inner();
     let mut sorted: Vec<_> = result.iter().collect();
-    sorted.sort_by_key(|(peer_str, _)| peer_str.parse::<IpAddr>().ok());
+
+    // Sort using natural sorting to handle both IP addresses and interface names
+    sorted.sort_by(|(a, _), (b, _)| {
+        // Try parsing as IP addresses first for proper IP sorting
+        match (a.parse::<IpAddr>(), b.parse::<IpAddr>()) {
+            (Ok(ip_a), Ok(ip_b)) => ip_a.cmp(&ip_b),
+            // Fall back to natural sorting for interface names or mixed cases
+            _ => natord::compare(a, b),
+        }
+    });
 
     match mode {
         NeighborDisplayMode::summary => {
