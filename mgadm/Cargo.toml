@@ -20,3 +20,4 @@ serde_json.workspace = true
 oxnet.workspace = true
 tabwriter.workspace = true
 rdb.workspace = true
+natord.workspace = true
