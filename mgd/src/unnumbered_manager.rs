@@ -72,27 +72,71 @@ impl UnnumberedManagerNdp {
         interface: impl AsRef<str>,
         info: SessionInfo,
         nbr: UnnumberedNeighbor,
+        ensure: bool,
     ) -> Result<(), AddNeighborError> {
-        let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
+        let interface_str = interface.as_ref();
 
-        // Add interface to NDP manager for peer discovery
-        self.ndp_mgr
-            .add_interface(ifx.clone(), nbr.act_as_a_default_ipv6_router)?;
+        // Try to get the interface - this can fail if the interface doesn't exist
+        // or isn't configured properly
+        let ifx_result = Self::get_interface(interface_str, &self.log);
 
-        // Store scope_id mapping for Dispatcher routing
-        lock!(self.interface_scope_map).insert(ifx.index, ifx.name.clone());
-
-        // Create unnumbered session immediately
+        // Check if we're in ensure mode and updating an existing session
         let router_guard = lock!(self.routers);
+        let updating_existing = if ensure {
+            if let Some(router) = router_guard.get(&asn) {
+                router.get_session(interface_str).is_some()
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // If we're updating an existing session and the interface resolution failed,
+        // we can proceed without the interface info - the session already has it
+        let ifx: Option<Ipv6NetworkInterface> = match (
+            ifx_result,
+            updating_existing,
+        ) {
+            (Ok(ifx), _) => Some(ifx),
+            (Err(e), true) => {
+                // Updating existing session but interface not found - that's OK,
+                // we just skip interface setup and update the session config
+                slog::info!(
+                    self.log,
+                    "updating unnumbered session for interface that is not currently available";
+                    "interface" => interface_str,
+                    "error" => e.to_string(),
+                );
+                None
+            }
+            (Err(e), false) => {
+                // Not updating or interface is required for new session
+                return Err(AddNeighborError::Resolve(e));
+            }
+        };
+
+        // Only add/update interface in NDP manager if we successfully resolved it
+        if let Some(ref ifx) = ifx {
+            // Add interface to NDP manager for peer discovery
+            self.ndp_mgr
+                .add_interface(ifx.clone(), nbr.act_as_a_default_ipv6_router)?;
+
+            // Store scope_id mapping for Dispatcher routing
+            lock!(self.interface_scope_map).insert(ifx.index, ifx.name.clone());
+        }
+
+        // Create or update unnumbered session
         if let Some(router) = router_guard.get(&asn) {
             let (event_tx, event_rx) = channel();
 
-            // Create peer config with placeholder address
+            // Use the resolved interface index if available, otherwise use 0 for updates
+            let scope_id = ifx.as_ref().map(|i| i.index).unwrap_or(0);
             let placeholder_host =
-                SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, ifx.index);
+                SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, scope_id);
 
             if let Err(e) = router.ensure_unnumbered_session(
-                ifx.name.clone(),
+                interface_str.to_string(),
                 nbr.to_peer_config(placeholder_host),
                 None,
                 event_tx.clone(),
@@ -102,9 +146,9 @@ impl UnnumberedManagerNdp {
             ) {
                 error!(
                     self.log,
-                    "error creating unnumbered session";
+                    "error creating/updating unnumbered session";
                     "error" => e.to_string(),
-                    "interface" => &nbr.interface,
+                    "interface" => interface_str,
                 );
                 return Err(AddNeighborError::Resolve(
                     ResolveNeighborError::NoSuchInterface,
