@@ -25,7 +25,7 @@ use rhai::AST;
 use slog::Logger;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     sync::{
         Arc, Mutex, MutexGuard, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -388,12 +388,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(session)
     }
 
-    pub fn delete_session(&self, addr: IpAddr) {
-        // Use PeerId::Ip for numbered sessions
-        let key = PeerId::Ip(addr);
-        lock!(self.peer_to_session).remove(&key);
-        self.remove_fanout(addr); // addr converts to PeerId::Ip
-        if let Some(s) = lock!(self.sessions).remove(&key) {
+    pub fn delete_session(&self, peer: impl Into<PeerId>) {
+        let peer_id = peer.into();
+        lock!(self.peer_to_session).remove(&peer_id);
+        self.remove_fanout(peer_id.clone());
+        if let Some(s) = lock!(self.sessions).remove(&peer_id) {
             s.shutdown();
         }
     }
