@@ -81,8 +81,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 hostname = "0.3"
 thiserror = "1.0"
 dropshot = { version = "0.16.6", features = [ "usdt-probes" ] }
-dropshot-api-manager = "0.2.4"
-dropshot-api-manager-types = "0.2.4"
+dropshot-api-manager = "0.3.0"
+dropshot-api-manager-types = "0.3.0"
 schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
 tokio = { version = "1.37", features = ["full"] }
 serde_repr = "0.1"
@@ -136,15 +136,13 @@ natord = "1.0"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "4bd8a40c0f5c05de7bb29b5f592f2dc99b4fd1d7"
+rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "4bd8a40c0f5c05de7bb29b5f592f2dc99b4fd1d7"
+rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 
 [workspace.dependencies.dpd-client]
-#path = "/home/ry/src/dendrite/dpd-client"
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "ry/v4-over-v6-routes"
-#branch = "main"
+branch = "main"
 package = "dpd-client"

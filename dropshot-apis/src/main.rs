@@ -44,7 +44,6 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
                 ..Default::default()
             },
             api_description: ddm_admin_api_mod::stub_api_description,
-            extra_validation: None,
         },
         ManagedApiConfig {
             ident: "mg-admin",
@@ -58,7 +57,6 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
                 ..Default::default()
             },
             api_description: mg_admin_api_mod::stub_api_description,
-            extra_validation: None,
         },
     ];
 
