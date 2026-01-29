@@ -7,10 +7,13 @@ use crate::{
     log::dpd_log,
     platform::{Dpd, SwitchZone},
 };
-use dpd_client::{Client as DpdClient, types, types::LinkState};
+use dpd_client::{
+    Client as DpdClient,
+    types::{self, LinkState, Route},
+};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Path, Prefix};
-use slog::Logger;
+use slog::{Logger, warn};
 use std::{
     collections::{BTreeSet, HashSet},
     hash::Hash,
@@ -409,6 +412,10 @@ pub(crate) fn get_routes_for_prefix(
 
             let mut result: Vec<RouteHash> = Vec::new();
             for r in dpd_routes.iter() {
+                let Route::V4(r) = r else {
+                    warn!(log, "v4 over v6 routes not yet implemented");
+                    continue;
+                };
                 if r.tag != MG_LOWER_TAG {
                     continue;
                 }

@@ -19,7 +19,7 @@ pub(crate) trait Dpd {
         &self,
         cidr: &Ipv4Net,
     ) -> Result<
-        dpd_client::ResponseValue<Vec<Ipv4Route>>,
+        dpd_client::ResponseValue<Vec<Route>>,
         progenitor_client::Error<DpdError>,
     >;
     async fn route_ipv6_get(
@@ -157,7 +157,7 @@ impl Dpd for ProductionDpd {
         &self,
         cidr: &Ipv4Net,
     ) -> Result<
-        dpd_client::ResponseValue<Vec<Ipv4Route>>,
+        dpd_client::ResponseValue<Vec<Route>>,
         progenitor_client::Error<DpdError>,
     > {
         self.client.route_ipv4_get(cidr).await
@@ -412,7 +412,7 @@ pub(crate) mod test {
             &self,
             cidr: &Ipv4Net,
         ) -> Result<
-            dpd_client::ResponseValue<Vec<Ipv4Route>>,
+            dpd_client::ResponseValue<Vec<Route>>,
             progenitor_client::Error<DpdError>,
         > {
             let result = self
@@ -421,7 +421,10 @@ pub(crate) mod test {
                 .unwrap()
                 .get(cidr)
                 .cloned()
-                .unwrap_or(Vec::default());
+                .unwrap_or(Vec::default())
+                .into_iter()
+                .map(Route::V4)
+                .collect();
             Ok(dpd_response_ok!(result))
         }
 

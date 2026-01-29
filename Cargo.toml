@@ -118,11 +118,11 @@ gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "m
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "4bd8a40c0f5c05de7bb29b5f592f2dc99b4fd1d7"
+rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
-rev = "4bd8a40c0f5c05de7bb29b5f592f2dc99b4fd1d7"
+rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
