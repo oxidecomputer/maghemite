@@ -54,5 +54,4 @@ server=$(ipadm show-addr "$EXT_INTERFACE"/dhcp -po ADDR | sed 's#/.*##g')
 pfexec ./dhcp-server "$first" "$last" "$gw" "$server" &> /work/dhcp-server.log &
 
 RUST_LOG=debug pfexec ./falcon-lab run \
-	--dendrite-commit 0c2ab6c341bf9e3802c688961b3bc687b941a144 \
 	trio-unnumbered
