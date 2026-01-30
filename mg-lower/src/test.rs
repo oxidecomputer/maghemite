@@ -32,6 +32,7 @@ async fn sync_prefix_test() {
             "4.0.0.0/24".parse::<Prefix4>().unwrap().into(),
             vec![Path {
                 nexthop: "3.0.0.1".parse().unwrap(),
+                nexthop_interface: None,
                 shutdown: false,
                 rib_priority: 10,
                 bgp: None,
@@ -181,33 +182,33 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
     // Add three initial prefixes to dpd
     dpd.v4_routes.lock().unwrap().insert(
         "1.0.0.0/24".parse().unwrap(),
-        vec![Ipv4Route {
+        vec![dpd_client::types::Route::V4(Ipv4Route {
             link_id: LinkId(0),
             port_id: PortId::Qsfp("qsfp0".parse().unwrap()),
             tag: String::from("mg_lower_test"),
             tgt_ip: "1.0.0.1".parse().unwrap(),
             vlan_id: None,
-        }],
+        })],
     );
     dpd.v4_routes.lock().unwrap().insert(
         "2.0.0.0/24".parse().unwrap(),
-        vec![Ipv4Route {
+        vec![dpd_client::types::Route::V4(Ipv4Route {
             link_id: LinkId(0),
             port_id: PortId::Qsfp("qsfp0".parse().unwrap()),
             tag: String::from("mg_lower_test"),
             tgt_ip: "2.0.0.1".parse().unwrap(),
             vlan_id: None,
-        }],
+        })],
     );
     dpd.v4_routes.lock().unwrap().insert(
         "3.0.0.0/24".parse().unwrap(),
-        vec![Ipv4Route {
+        vec![dpd_client::types::Route::V4(Ipv4Route {
             link_id: LinkId(0),
             port_id: PortId::Qsfp("qsfp1".parse().unwrap()),
             tag: String::from("mg_lower_test"),
             tgt_ip: "3.0.0.1".parse().unwrap(),
             vlan_id: None,
-        }],
+        })],
     );
 
     // Add three initial prefixes to ddm
@@ -235,6 +236,7 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
         "1.0.0.0/24".parse::<Prefix4>().unwrap().into(),
         vec![Path {
             nexthop: "1.0.0.1".parse().unwrap(),
+            nexthop_interface: None,
             shutdown: false,
             rib_priority: 10,
             bgp: None,
@@ -247,6 +249,7 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
         "2.0.0.0/24".parse::<Prefix4>().unwrap().into(),
         vec![Path {
             nexthop: "2.0.0.1".parse().unwrap(),
+            nexthop_interface: None,
             shutdown: false,
             rib_priority: 10,
             bgp: None,
@@ -259,6 +262,7 @@ fn test_setup(tep: Ipv6Addr, dpd: &TestDpd, ddm: &TestDdm, rib: &mut Rib) {
         "3.0.0.0/24".parse::<Prefix4>().unwrap().into(),
         vec![Path {
             nexthop: "3.0.0.1".parse().unwrap(),
+            nexthop_interface: None,
             shutdown: false,
             rib_priority: 10,
             bgp: None,

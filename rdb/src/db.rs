@@ -45,6 +45,10 @@ const BGP_ROUTER: &str = "bgp_router";
 /// information.
 const BGP_NEIGHBOR: &str = "bgp_neighbor";
 
+/// The handle used to open a persistent key-value tree for BGP neighbor
+/// information.
+const BGP_UNNUMBERED_NEIGHBOR: &str = "bgp_unnumbered_neighbor";
+
 /// The handle used to open a persistent key-value tree for settings
 /// information.
 const SETTINGS: &str = "settings";
@@ -101,7 +105,7 @@ pub struct Db {
     /// A set of watchers that are notified when changes to the data store occur.
     watchers: Arc<RwLock<Vec<Watcher>>>,
 
-    /// Reaps expired routes from the local RIB
+    /// Reaps expired routes from the local RIB.
     reaper: Arc<Reaper>,
 
     /// Switch slot reported from MGS.
@@ -318,6 +322,28 @@ impl Db {
         Ok(())
     }
 
+    pub fn add_unnumbered_bgp_neighbor(
+        &self,
+        nbr: BgpUnnumberedNeighborInfo,
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
+        let key = nbr.interface.clone();
+        let value = serde_json::to_string(&nbr)?;
+        tree.insert(key.as_str(), value.as_str())?;
+        tree.flush()?;
+        Ok(())
+    }
+
+    pub fn remove_unnumbered_bgp_neighbor(
+        &self,
+        interface: &str,
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
+        tree.remove(interface)?;
+        tree.flush()?;
+        Ok(())
+    }
+
     pub fn remove_bgp_neighbor(&self, addr: IpAddr) -> Result<(), Error> {
         let tree = self.persistent.open_tree(BGP_NEIGHBOR)?;
         let key = addr.to_string();
@@ -352,6 +378,45 @@ impl Db {
                             self,
                             error,
                             "error parsing bgp neighbor entry value {value:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
+                        );
+                        return None;
+                    }
+                };
+                Some(value)
+            })
+            .collect();
+        Ok(result)
+    }
+
+    pub fn get_unnumbered_bgp_neighbors(
+        &self,
+    ) -> Result<Vec<BgpUnnumberedNeighborInfo>, Error> {
+        let tree = self.persistent.open_tree(BGP_UNNUMBERED_NEIGHBOR)?;
+        let result = tree
+            .scan_prefix(vec![])
+            .filter_map(|item| {
+                let (_key, value) = match item {
+                    Ok(item) => item,
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error fetching unnumbered bgp neighbor entry {item:?}: {e}";
+                            "unit" => UNIT_PERSISTENT
+                        );
+                        return None;
+                    }
+                };
+                let value = String::from_utf8_lossy(&value);
+                let value: BgpUnnumberedNeighborInfo = match serde_json::from_str(&value)
+                {
+                    Ok(item) => item,
+                    Err(ref e) => {
+                        rdb_log!(
+                            self,
+                            error,
+                            "error parsing unnumbered bgp neighbor entry value {value:?}: {e}";
                             "unit" => UNIT_PERSISTENT
                         );
                         return None;
@@ -1139,7 +1204,7 @@ impl Db {
     }
 
     // for each route in @prefixes, remove all bgp paths learned from @peer
-    pub fn remove_bgp_prefixes(&self, prefixes: &[Prefix], peer: &IpAddr) {
+    pub fn remove_bgp_prefixes(&self, prefixes: &[Prefix], peer: &PeerId) {
         let mut pcn = PrefixChangeNotification::default();
         self.remove_path_for_prefixes(
             prefixes,
@@ -1154,7 +1219,7 @@ impl Db {
 
     // wrapper for remove_bgp_prefixes to handle the "all routes" corner case.
     // e.g. when peer is deleted or exits Established state
-    pub fn remove_bgp_prefixes_from_peer(&self, peer: &IpAddr) {
+    pub fn remove_bgp_prefixes_from_peer(&self, peer: &PeerId) {
         // TODO(ipv6): call this just for enabled address-families.
         // no need to walk the full rib for an AF that isn't affected
         let peer_routes4: Vec<_> = self
@@ -1163,7 +1228,7 @@ impl Db {
             .copied()
             .collect();
         let peer_routes6: Vec<_> = self
-            .full_rib(Some(AddressFamily::Ipv4))
+            .full_rib(Some(AddressFamily::Ipv6))
             .keys()
             .copied()
             .collect();
@@ -1228,9 +1293,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn mark_bgp_peer_stale(&self, peer: IpAddr) {
-        // TODO(ipv6): call this just for enabled address-families.
-        // no need to walk the full rib for an AF that isn't affected
+    pub fn mark_bgp_peer_stale4(&self, peer: PeerId) {
         let mut rib = lock!(self.rib4_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
@@ -1250,7 +1313,9 @@ impl Db {
                 path.replace(t);
             }
         });
+    }
 
+    pub fn mark_bgp_peer_stale6(&self, peer: PeerId) {
         let mut rib = lock!(self.rib6_loc);
         rib.iter_mut().for_each(|(_prefix, path)| {
             let targets: Vec<Path> = path
@@ -1285,6 +1350,13 @@ impl Db {
     pub fn set_slot(&mut self, slot: Option<u16>) {
         let mut value = self.slot.write().unwrap();
         *value = slot;
+    }
+
+    pub fn mark_bgp_peer_stale(&self, peer: PeerId, af: AddressFamily) {
+        match af {
+            AddressFamily::Ipv4 => self.mark_bgp_peer_stale4(peer.clone()),
+            AddressFamily::Ipv6 => self.mark_bgp_peer_stale6(peer),
+        }
     }
 }
 
@@ -1343,6 +1415,7 @@ mod test {
     use crate::{
         AddressFamily, DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4,
         Prefix6, StaticRouteKey, db::Db, test::TestDb, types::PrefixDbKey,
+        types::test_helpers::path_vecs_equal,
     };
     use mg_common::log::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -1360,14 +1433,14 @@ mod test {
         loc_rib_paths: Vec<Path>,
     ) -> bool {
         let curr_rib_in_paths = db.get_prefix_paths(prefix);
-        if curr_rib_in_paths != rib_in_paths {
+        if !path_vecs_equal(&curr_rib_in_paths, &rib_in_paths) {
             eprintln!("curr_rib_in_paths: {:?}", curr_rib_in_paths);
             eprintln!("rib_in_paths: {:?}", rib_in_paths);
             return false;
         }
 
         let curr_loc_rib_paths = db.get_selected_prefix_paths(prefix);
-        if curr_loc_rib_paths != loc_rib_paths {
+        if !path_vecs_equal(&curr_loc_rib_paths, &loc_rib_paths) {
             eprintln!("curr_loc_rib_paths: {:?}", curr_loc_rib_paths);
             eprintln!("loc_rib_paths: {:?}", loc_rib_paths);
             return false;
@@ -1380,7 +1453,7 @@ mod test {
         use crate::StaticRouteKey;
         use crate::{
             BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-            DEFAULT_RIB_PRIORITY_STATIC, Path, Prefix, Prefix4, db::Db,
+            DEFAULT_RIB_PRIORITY_STATIC, Path, PeerId, Prefix, Prefix4, db::Db,
         };
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
@@ -1392,11 +1465,12 @@ mod test {
 
         let bgp_path0 = Path {
             nexthop: remote_ip0,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 1111,
-                peer: remote_ip0,
+                peer: PeerId::Ip(remote_ip0),
                 id: 1111,
                 med: Some(1111),
                 local_pref: Some(1111),
@@ -1407,11 +1481,12 @@ mod test {
         };
         let bgp_path1 = Path {
             nexthop: remote_ip1,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 2222,
-                peer: remote_ip1,
+                peer: PeerId::Ip(remote_ip1),
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(2222),
@@ -1427,11 +1502,12 @@ mod test {
         // BESTPATH_FANOUT is increased to test ECMP.
         let bgp_path2 = Path {
             nexthop: remote_ip2,
+            nexthop_interface: None,
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
                 origin_as: 2222,
-                peer: remote_ip2,
+                peer: PeerId::Ip(remote_ip2),
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(4444),
@@ -1440,6 +1516,9 @@ mod test {
             }),
             vlan_id: None,
         };
+        // Static routes for testing replacement semantics:
+        // static_key0 and static_key0_updated have the SAME identity (nexthop, vlan_id)
+        // but different rib_priority. Adding both should result in replacement.
         let static_key0 = StaticRouteKey {
             prefix: p0,
             nexthop: remote_ip0,
@@ -1447,11 +1526,22 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
         };
         let static_path0 = Path::from(static_key0);
-        let static_key1 = StaticRouteKey {
+        let static_key0_updated = StaticRouteKey {
             prefix: p0,
             nexthop: remote_ip0,
             vlan_id: None,
             rib_priority: DEFAULT_RIB_PRIORITY_STATIC + 10,
+        };
+        let static_path0_updated = Path::from(static_key0_updated);
+
+        // Static route for testing ECMP:
+        // static_key1 has a DIFFERENT identity (different nexthop) than static_key0,
+        // so both should coexist in the RIB.
+        let static_key1 = StaticRouteKey {
+            prefix: p0,
+            nexthop: remote_ip1,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
         };
         let static_path1 = Path::from(static_key1);
 
@@ -1468,25 +1558,55 @@ mod test {
         assert!(db.full_rib(None).is_empty());
         assert!(db.loc_rib(None).is_empty());
 
-        // both paths have the same next-hop, but not all fields
-        // from StaticRouteKey match (rib_priority is different).
-        db.add_static_routes(&[static_key0, static_key1]).expect(
-            "add_static_routes failed for {static_key0} and {static_key1}",
-        );
+        // =====================================================================
+        // Test 1: Replacement semantics
+        // Adding two static routes with the same identity (nexthop, vlan_id)
+        // should result in the second replacing the first.
+        // =====================================================================
+        db.add_static_routes(&[static_key0])
+            .expect("add static_key0");
 
-        // expected current state
-        // rib_in:
-        // - p0 via static_path0, static_path1
-        // loc_rib:
-        // - p0 via static_path0  (win by rib_priority)
-        let rib_in_paths = vec![static_path0.clone(), static_path1.clone()];
+        // Verify static_path0 is installed
+        let rib_in_paths = vec![static_path0.clone()];
         let loc_rib_paths = vec![static_path0.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
 
-        // rib_priority differs, so removal of static_key0
-        // should not affect path from static_key1
+        // Add static_key0_updated (same identity, different rib_priority)
+        // This should REPLACE static_path0, not add a second path
+        db.add_static_routes(&[static_key0_updated])
+            .expect("add static_key0_updated");
+
+        // Verify only static_path0_updated exists (replacement occurred)
+        let rib_in_paths = vec![static_path0_updated.clone()];
+        let loc_rib_paths = vec![static_path0_updated.clone()];
+        assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
+
+        // =====================================================================
+        // Test 2: ECMP - multiple static routes with different identities
+        // Adding a static route with a different nexthop should coexist.
+        // =====================================================================
+        db.add_static_routes(&[static_key1])
+            .expect("add static_key1");
+
+        // Verify both paths coexist (ECMP)
+        // static_path0_updated (nexthop=remote_ip0) and static_path1 (nexthop=remote_ip1)
+        let rib_in_paths =
+            vec![static_path0_updated.clone(), static_path1.clone()];
+        // loc_rib should have static_path0 or static_path1 based on bestpath
+        // Both have the same rib_priority (static_path0_updated has +10, static_path1 has base)
+        // so static_path1 wins (lower rib_priority is better)
+        let loc_rib_paths = vec![static_path1.clone()];
+        assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
+
+        // =====================================================================
+        // Test 3: Removal by identity
+        // Removing static_key0 should only remove static_path0_updated,
+        // leaving static_path1 intact (different identity).
+        // =====================================================================
         db.remove_static_routes(&[static_key0])
-            .expect("remove_static_routes_failed for {static_key0}");
+            .expect("remove static_key0");
+
+        // Verify static_path1 still exists
         let rib_in_paths = vec![static_path1.clone()];
         let loc_rib_paths = vec![static_path1.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
@@ -1498,14 +1618,14 @@ mod test {
 
         // expected current state
         // rib_in:
-        // - p0 via static_path1, bgp_path0
+        // - p0 via bgp_path0, static_path1 (ordered by nexthop IP)
         // - p1 via bgp_path{0,1,2}
         // - p2 via bgp_path{1,2}
         // loc_rib:
         // - p0 via static_path1 (win by rib_priority/protocol)
         // - p1 via bgp_path2    (win by local pref)
         // - p2 via bgp_path2    (win by local pref)
-        let rib_in_paths = vec![static_path1.clone(), bgp_path0.clone()];
+        let rib_in_paths = vec![bgp_path0.clone(), static_path1.clone()];
         let loc_rib_paths = vec![static_path1.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
         let rib_in_paths =
@@ -1520,14 +1640,14 @@ mod test {
         db.remove_bgp_prefixes(&[p2], &bgp_path1.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
-        // - p0 via static_path1, bgp_path0
+        // - p0 via bgp_path0, static_path1 (ordered by nexthop IP)
         // - p1 via bgp_path{0,1,2}
         // - p2 via bgp_path2
         // loc_rib:
         // - p0 via static_path1 (win by rib_priority/protocol)
         // - p1 via bgp_path2    (win by local pref)
         // - p2 via bgp_path2    (win by local pref)
-        let rib_in_paths = vec![static_path1.clone(), bgp_path0.clone()];
+        let rib_in_paths = vec![bgp_path0.clone(), static_path1.clone()];
         let loc_rib_paths = vec![static_path1.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
         let rib_in_paths =
