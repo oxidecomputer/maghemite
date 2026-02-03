@@ -53,5 +53,17 @@ gw=$(bmat address ls -f extra -Ho gateway)
 server=$(ipadm show-addr "$EXT_INTERFACE"/dhcp -po ADDR | sed 's#/.*##g')
 pfexec ./dhcp-server "$first" "$last" "$gw" "$server" &> /work/dhcp-server.log &
 
+# workaround for https://www.illumos.org/issues/17853
+# create a dummy0 vnic that persists beyond shutdown of falcon topology to avoid
+# the final vnic removal triggering a panic
+if ! error=$(pfexec dladm create-vnic -l $EXT_INTERFACE dummy0 2>&1); then
+    if [[ "$error" == *"object already exists"* ]]; then
+        echo "VNIC already exists, continuing..."
+    else
+        echo "Unexpected error: $error" >&2
+        exit 1
+    fi
+fi
+
 RUST_LOG=debug pfexec ./falcon-lab run \
 	trio-unnumbered
