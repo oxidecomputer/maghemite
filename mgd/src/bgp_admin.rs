@@ -4,7 +4,7 @@
 
 #![allow(clippy::type_complexity)]
 use crate::unnumbered_manager::{NdpPeerState, UnnumberedManagerNdp};
-use crate::validation::{validate_prefixes_v4, validate_prefixes_v6};
+use crate::validation::{validate_prefixes, validate_prefixes_v4, validate_prefixes_v6};
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::{
     BGP_PORT,
@@ -1197,7 +1197,7 @@ async fn do_bgp_apply(
     let log = ctx.log.clone();
 
     // Validate originate prefixes before processing
-    validate_prefixes_v4(&rq.originate)?;
+    validate_prefixes(&rq.originate)?;
 
     bgp_log!(log, info, "bgp apply: {rq:#?}";
         "params" => format!("{rq:?}")

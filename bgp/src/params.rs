@@ -9,7 +9,7 @@ use crate::{
 };
 use rdb::{
     ImportExportPolicy4, ImportExportPolicy6, ImportExportPolicyV1,
-    PolicyAction, Prefix4, Prefix6,
+    PolicyAction, Prefix, Prefix4, Prefix6,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1065,7 +1065,7 @@ pub struct ApplyRequest {
     /// ASN to apply changes to.
     pub asn: u32,
     /// Complete set of prefixes to originate.
-    pub originate: Vec<Prefix4>,
+    pub originate: Vec<Prefix>,
     /// Checker rhai code to apply to ingress open and update messages.
     pub checker: Option<CheckerSource>,
     /// Checker rhai code to apply to egress open and update messages.
@@ -1081,7 +1081,7 @@ impl From<ApplyRequestV1> for ApplyRequest {
     fn from(req: ApplyRequestV1) -> Self {
         Self {
             asn: req.asn,
-            originate: req.originate,
+            originate: req.originate.iter().map(|p| Prefix::V4(*p)).collect(),
             checker: req.checker,
             shaper: req.shaper,
             peers: req
