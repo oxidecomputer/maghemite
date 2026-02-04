@@ -7,14 +7,16 @@ use crate::bfd_admin::BfdContext;
 use crate::bgp_admin::BgpContext;
 use crate::log::dlog;
 use bgp::connection_tcp::{BgpConnectionTcp, BgpListenerTcp};
-use bgp::params::BgpPeerParametersV1;
+use bgp::params::{BgpPeerParameters, Ipv4UnicastConfig, Ipv6UnicastConfig};
 use clap::{Parser, Subcommand};
 use mg_common::cli::oxide_cli_style;
 use mg_common::lock;
 use mg_common::log::init_logger;
 use mg_common::stats::MgLowerStats;
 use rand::Fill;
-use rdb::{BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo};
+use rdb::{
+    BfdPeerConfig, BgpNeighborInfo, BgpRouterInfo, BgpUnnumberedNeighborInfo,
+};
 use signal::handle_signals;
 use slog::Logger;
 use std::collections::{BTreeMap, BTreeSet};
@@ -166,6 +168,8 @@ async fn run(args: RunArgs) {
             .expect("get BGP routers from datastore"),
         db.get_bgp_neighbors()
             .expect("get BGP neighbors from data store"),
+        db.get_unnumbered_bgp_neighbors()
+            .expect("get BGP unnumbered neighbors from data store"),
     );
 
     start_bfd_sessions(
@@ -284,6 +288,7 @@ fn start_bgp_routers(
     context: Arc<HandlerContext>,
     routers: BTreeMap<u32, BgpRouterInfo>,
     neighbors: Vec<BgpNeighborInfo>,
+    uneighbors: Vec<BgpUnnumberedNeighborInfo>,
 ) {
     dlog!(context.log, info, "starting bgp routers: {routers:#?}");
     let mut guard = context.bgp.router.lock().expect("lock bgp routers");
@@ -303,14 +308,14 @@ fn start_bgp_routers(
     drop(guard);
 
     for nbr in neighbors {
-        bgp_admin::helpers::add_neighbor_v1(
+        bgp_admin::helpers::add_neighbor(
             context.clone(),
-            bgp::params::NeighborV1 {
+            bgp::params::Neighbor {
                 asn: nbr.asn,
                 group: nbr.group.clone(),
                 name: nbr.name.clone(),
                 host: nbr.host,
-                parameters: BgpPeerParametersV1 {
+                parameters: BgpPeerParameters {
                     remote_asn: nbr.parameters.remote_asn,
                     min_ttl: nbr.parameters.min_ttl,
                     hold_time: nbr.parameters.hold_time,
@@ -327,22 +332,88 @@ fn start_bgp_routers(
                     communities: nbr.parameters.communities.clone(),
                     local_pref: nbr.parameters.local_pref,
                     enforce_first_as: nbr.parameters.enforce_first_as,
-                    allow_import:
-                        rdb::ImportExportPolicyV1::from_per_af_policies(
-                            &nbr.parameters.allow_import4,
-                            &nbr.parameters.allow_import6,
-                        ),
-                    allow_export:
-                        rdb::ImportExportPolicyV1::from_per_af_policies(
-                            &nbr.parameters.allow_export4,
-                            &nbr.parameters.allow_export6,
-                        ),
+                    deterministic_collision_resolution: false,
+                    idle_hold_jitter: None,
+                    connect_retry_jitter: None,
+                    ipv4_unicast: if nbr.parameters.ipv4_enabled {
+                        Some(Ipv4UnicastConfig {
+                            nexthop: nbr.parameters.nexthop4,
+                            import_policy: nbr.parameters.allow_import4.clone(),
+                            export_policy: nbr.parameters.allow_export4.clone(),
+                        })
+                    } else {
+                        None
+                    },
+                    ipv6_unicast: if nbr.parameters.ipv6_enabled {
+                        Some(Ipv6UnicastConfig {
+                            nexthop: nbr.parameters.nexthop6,
+                            import_policy: nbr.parameters.allow_import6.clone(),
+                            export_policy: nbr.parameters.allow_export6.clone(),
+                        })
+                    } else {
+                        None
+                    },
                     vlan_id: nbr.parameters.vlan_id,
                 },
             },
             true,
         )
         .unwrap_or_else(|_| panic!("add BGP neighbor {nbr:#?}"));
+    }
+
+    for nbr in uneighbors {
+        bgp_admin::helpers::add_unnumbered_neighbor(
+            context.clone(),
+            bgp::params::UnnumberedNeighbor {
+                asn: nbr.asn,
+                group: nbr.group.clone(),
+                name: nbr.name.clone(),
+                interface: nbr.interface.clone(),
+                act_as_a_default_ipv6_router: 0,
+                parameters: BgpPeerParameters {
+                    remote_asn: nbr.parameters.remote_asn,
+                    min_ttl: nbr.parameters.min_ttl,
+                    hold_time: nbr.parameters.hold_time,
+                    idle_hold_time: nbr.parameters.idle_hold_time,
+                    delay_open: nbr.parameters.delay_open,
+                    connect_retry: nbr.parameters.connect_retry,
+                    keepalive: nbr.parameters.keepalive,
+                    resolution: nbr.parameters.resolution,
+                    passive: nbr.parameters.passive,
+                    md5_auth_key: nbr.parameters.md5_auth_key.clone(),
+                    multi_exit_discriminator: nbr
+                        .parameters
+                        .multi_exit_discriminator,
+                    communities: nbr.parameters.communities.clone(),
+                    local_pref: nbr.parameters.local_pref,
+                    enforce_first_as: nbr.parameters.enforce_first_as,
+                    deterministic_collision_resolution: false,
+                    idle_hold_jitter: None,
+                    connect_retry_jitter: None,
+                    ipv4_unicast: if nbr.parameters.ipv4_enabled {
+                        Some(Ipv4UnicastConfig {
+                            nexthop: nbr.parameters.nexthop4,
+                            import_policy: nbr.parameters.allow_import4.clone(),
+                            export_policy: nbr.parameters.allow_export4.clone(),
+                        })
+                    } else {
+                        None
+                    },
+                    ipv6_unicast: if nbr.parameters.ipv6_enabled {
+                        Some(Ipv6UnicastConfig {
+                            nexthop: nbr.parameters.nexthop6,
+                            import_policy: nbr.parameters.allow_import6.clone(),
+                            export_policy: nbr.parameters.allow_export6.clone(),
+                        })
+                    } else {
+                        None
+                    },
+                    vlan_id: nbr.parameters.vlan_id,
+                },
+            },
+            true,
+        )
+        .unwrap_or_else(|_| panic!("add BGP unnumbered neighbor {nbr:#?}"));
     }
 }
 
