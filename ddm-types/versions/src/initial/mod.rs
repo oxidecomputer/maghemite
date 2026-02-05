@@ -2,4 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-pub use ddm_types_versions::latest::exchange::*;
+//! Version `INITIAL` of the DDM Admin API.
+
+pub mod admin;
+pub mod db;
+pub mod exchange;

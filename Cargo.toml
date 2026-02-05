@@ -8,6 +8,7 @@ default-members = [
     "ddm-admin-client",
     "ddm-api",
     "ddm-types",
+    "ddm-types/versions",
     "dropshot-apis",
     "bfd",
     "util",
@@ -33,6 +34,7 @@ members = [
     "ddm-admin-client",
     "ddm-api",
     "ddm-types",
+    "ddm-types/versions",
     "dropshot-apis",
     "bfd",
     "package",
@@ -114,6 +116,7 @@ proptest = "1.4"
 serial_test = "3.2"
 ddm-api = { path = "ddm-api" }
 ddm-types = { path = "ddm-types" }
+ddm-types-versions = { path = "ddm-types/versions" }
 gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
 
 [workspace.dependencies.opte-ioctl]
