@@ -37,6 +37,30 @@ use std::{
 // Use non-standard port outside the privileged range to avoid needing privs
 const TEST_BGP_PORT: u16 = 10179;
 
+// =============================================================================
+// Test timer configuration
+// =============================================================================
+// All tests use these same BGP timer values. Verification durations are derived
+// from these to ensure tests wait long enough without excessive duration.
+
+/// Standard connect_retry timer used by all tests
+const TEST_CONNECT_RETRY_SECS: u64 = 1;
+
+/// Standard hold_time used by all tests
+const TEST_HOLD_TIME_SECS: u64 = 6;
+
+/// Duration to verify sessions don't establish when they shouldn't.
+/// Waits for 3 connect_retry cycles - if FSM was going to incorrectly
+/// attempt a connection, it would have done so by now.
+const CONNECT_RETRY_VERIFICATION: Duration =
+    Duration::from_secs(TEST_CONNECT_RETRY_SECS * 3);
+
+/// Duration to verify established sessions stay established.
+/// Waits slightly longer than hold_time to ensure keepalives are being
+/// exchanged properly and the session doesn't timeout.
+const ESTABLISHED_VERIFICATION: Duration =
+    Duration::from_secs(TEST_HOLD_TIME_SECS + 2);
+
 // XXX: add an iBGP option for the tests
 // XXX: Add test impl of BgpConnection (and Clock?) for FSM tests.
 //      The DUT will still have a SessionRunner & timers, but the test peer will
@@ -2103,9 +2127,9 @@ fn test_unnumbered_peer_expiry_and_rediscovery() {
     wait_for!(session1.get_peer_socket_addr().is_none());
 
     // CRITICAL: Session must STAY Established despite NDP expiry
-    // Loop for 30s to ensure it doesn't drop to Idle
+    // Verify for longer than hold_time to ensure keepalives are exchanged
     let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(30) {
+    while start.elapsed() < ESTABLISHED_VERIFICATION {
         assert_eq!(
             session1.state(),
             FsmStateKind::Established,
@@ -3075,9 +3099,9 @@ fn test_unnumbered_unaffected_by_ndp() {
     );
 
     // Step 7: Assert sessions still stay Established
-    // Give it a few seconds to ensure no FSM transitions occur
+    // Verify for longer than hold_time to ensure keepalives are exchanged
     let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(3) {
+    while start.elapsed() < ESTABLISHED_VERIFICATION {
         assert_eq!(
             session1.state(),
             FsmStateKind::Established,
@@ -3821,8 +3845,8 @@ fn test_unnumbered_interface_lifecycle() {
         "Stage 1: Session2 should reach Connect or Active"
     );
 
-    // Wait additional time to verify sessions don't reach Established
-    sleep(Duration::from_secs(5));
+    // Wait for multiple connect_retry cycles to verify sessions don't establish
+    sleep(CONNECT_RETRY_VERIFICATION);
 
     // Verify sessions are still not Established
     wait_for!(
@@ -3890,10 +3914,10 @@ fn test_unnumbered_interface_lifecycle() {
         "Stage 3: interface_is_active should return false after removal"
     );
 
-    // Sessions must STAY Established
-    // BGP timers handle session teardown, not interface removal
+    // Sessions must STAY Established - verify for longer than hold_time to
+    // ensure keepalives are being exchanged properly
     let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(10) {
+    while start.elapsed() < ESTABLISHED_VERIFICATION {
         wait_for_eq!(
             session1.state(),
             FsmStateKind::Established,
@@ -3945,9 +3969,9 @@ fn test_unnumbered_interface_lifecycle() {
 
     // Sessions should cycle in Connect/Active but not re-establish
     // (interface_is_active returns false, blocking connection attempts)
-    // Verify for 30 seconds to ensure they don't re-establish
+    // Verify for multiple connect_retry cycles
     let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(30) {
+    while start.elapsed() < CONNECT_RETRY_VERIFICATION {
         assert_ne!(
             session1.state(),
             FsmStateKind::Established,
