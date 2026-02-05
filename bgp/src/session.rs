@@ -1700,7 +1700,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// Get the current peer address for this session.
     ///
     /// For numbered peers, returns the configured address.
-    /// For unnumbered peers, queries the NDP neighbor (does not check interface_is_active).
+    /// For unnumbered peers, queries the NDP neighbor.
     pub fn get_peer_socket_addr(&self) -> Option<SocketAddr> {
         match &self.neighbor.peer {
             PeerId::Interface(iface) => {

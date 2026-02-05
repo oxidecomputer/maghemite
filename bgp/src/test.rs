@@ -3852,7 +3852,16 @@ fn test_unnumbered_interface_lifecycle() {
         "Stage 2: interface_is_active should return true after add_system_interface"
     );
 
-    // Discover peers via NDP
+    // Simulate monitor thread detecting interfaces and activating NDP
+    // This is what UnnumberedManagerNdp::activate_interface() does
+    mock_ndp1
+        .activate_ndp("eth0")
+        .expect("Stage 2: activate_ndp should succeed");
+    mock_ndp2
+        .activate_ndp("eth0")
+        .expect("Stage 2: activate_ndp should succeed");
+
+    // Discover peers via NDP (now possible since NDP is activated)
     mock_ndp1.discover_peer("eth0", r2_ip).unwrap();
     mock_ndp2.discover_peer("eth0", r1_ip).unwrap();
 
@@ -3966,9 +3975,16 @@ fn test_unnumbered_interface_lifecycle() {
         "Stage 4: R2 interface_is_active should return true after re-add"
     );
 
-    // NDP neighbors should still be known from Stage 2 discovery
-    // (remove_system_interface doesn't clear discoveries, just marks inactive)
-    // Rediscover to ensure clean state
+    // Simulate monitor thread detecting interfaces and re-activating NDP
+    // (remove_system_interface clears NDP state, so must re-activate)
+    mock_ndp1
+        .activate_ndp("eth0")
+        .expect("Stage 4: activate_ndp should succeed after re-add");
+    mock_ndp2
+        .activate_ndp("eth0")
+        .expect("Stage 4: activate_ndp should succeed after re-add");
+
+    // Rediscover peers (NDP state was cleared when interface was removed)
     mock_ndp1.discover_peer("eth0", r2_ip).unwrap();
     mock_ndp2.discover_peer("eth0", r1_ip).unwrap();
 

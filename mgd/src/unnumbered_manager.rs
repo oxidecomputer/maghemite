@@ -7,16 +7,31 @@ use bgp::{
     unnumbered::NdpNeighbor,
 };
 use mg_common::lock;
+use mg_common::thread::ManagedThread;
 use ndp::{Ipv6NetworkInterface, NdpManager, NewInterfaceNdpManagerError};
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use slog::{Logger, o, warn};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     net::{IpAddr, Ipv6Addr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
 };
 
 pub const MOD_UNNUMBERED_MANAGER: &str = "unnumbered manager";
+
+/// How often to poll for interface availability changes.
+const INTERFACE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Configuration for a pending interface (configured but not yet available)
+#[derive(Debug, Clone)]
+struct PendingInterfaceConfig {
+    router_lifetime: u16,
+}
 
 pub struct UnnumberedManagerNdp {
     routers: Arc<Mutex<BTreeMap<u32, Arc<Router<BgpConnectionTcp>>>>>,
@@ -24,6 +39,27 @@ pub struct UnnumberedManagerNdp {
     /// Maps scope_id (interface index) to interface name for Dispatcher routing
     interface_scope_map: Mutex<HashMap<u32, String>>,
     log: Logger,
+
+    // =========================================================================
+    // Interface monitoring state
+    // =========================================================================
+    /// Interfaces that are configured but not yet available on the system.
+    /// When an interface appears, it will be moved to active and registered
+    /// with the NDP manager.
+    pending_interfaces: Mutex<HashMap<String, PendingInterfaceConfig>>,
+
+    /// Interfaces that are currently active (registered with NDP manager).
+    /// Used to detect when an interface is removed from the system.
+    active_interfaces: Mutex<HashSet<String>>,
+
+    /// Managed thread for interface monitoring.
+    /// Stored to ensure automatic cleanup on drop - the ManagedThread's Drop
+    /// impl will signal shutdown and join the thread.
+    _monitor_thread: Arc<ManagedThread>,
+
+    /// Condvar to wake the monitor thread when work is added
+    monitor_condvar: Condvar,
+    monitor_mutex: Mutex<()>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -56,12 +92,247 @@ impl UnnumberedManagerNdp {
             "module" => MOD_UNNUMBERED_MANAGER,
         ));
 
-        Arc::new(Self {
+        // Create the managed thread and get its dropped flag before constructing
+        // the manager, so we can pass the flag to the thread function.
+        let monitor_thread = Arc::new(ManagedThread::new());
+        let dropped = monitor_thread.dropped_flag();
+
+        let manager = Arc::new(Self {
             routers,
             interface_scope_map: Mutex::new(HashMap::default()),
             ndp_mgr: NdpManager::new(log.clone()),
             log,
-        })
+            pending_interfaces: Mutex::new(HashMap::new()),
+            active_interfaces: Mutex::new(HashSet::new()),
+            _monitor_thread: Arc::clone(&monitor_thread),
+            monitor_condvar: Condvar::new(),
+            monitor_mutex: Mutex::new(()),
+        });
+
+        // Spawn and register the interface monitor thread.
+        // The ManagedThread will automatically signal shutdown and join the
+        // thread when the manager is dropped.
+        let monitor_manager = Arc::clone(&manager);
+        let handle = thread::Builder::new()
+            .name("unnumbered-interface-monitor".to_string())
+            .spawn(move || {
+                monitor_manager.run_interface_monitor(dropped);
+            })
+            .expect("failed to spawn interface monitor thread");
+        monitor_thread.start(handle);
+
+        manager
+    }
+
+    /// Main loop for the interface monitor thread.
+    ///
+    /// This thread periodically checks for interface availability changes:
+    /// - Pending interfaces that have become available (need NDP activation)
+    /// - Active interfaces that have been removed (need NDP deactivation)
+    ///
+    /// Uses batched interface checking: a single call to `NetworkInterface::show()`
+    /// per poll cycle, regardless of how many interfaces are being monitored.
+    ///
+    /// The `dropped` flag is set by the ManagedThread when the manager is dropped,
+    /// signaling this thread to exit.
+    fn run_interface_monitor(&self, dropped: Arc<AtomicBool>) {
+        slog::info!(self.log, "interface monitor started");
+
+        loop {
+            // Check for shutdown (set by ManagedThread::drop)
+            if dropped.load(Ordering::Relaxed) {
+                slog::info!(self.log, "interface monitor shutting down");
+                break;
+            }
+
+            // Check if there's any work to do
+            let has_pending = !lock!(self.pending_interfaces).is_empty();
+            let has_active = !lock!(self.active_interfaces).is_empty();
+
+            if has_pending || has_active {
+                // Get all system interfaces once (single syscall)
+                match Self::get_available_interfaces() {
+                    Ok(available) => {
+                        // Check for interfaces that have appeared
+                        self.check_pending_interfaces(&available);
+
+                        // Check for interfaces that have been removed
+                        self.check_active_interfaces(&available);
+                    }
+                    Err(e) => {
+                        slog::warn!(
+                            self.log,
+                            "failed to enumerate system interfaces";
+                            "error" => %e,
+                        );
+                    }
+                }
+            }
+
+            // Wait for the poll interval or until woken up
+            let guard = lock!(self.monitor_mutex);
+            let _result = self
+                .monitor_condvar
+                .wait_timeout(guard, INTERFACE_POLL_INTERVAL);
+        }
+
+        slog::info!(self.log, "interface monitor exited");
+    }
+
+    /// Get the set of interface names that are available for NDP.
+    ///
+    /// An interface is considered available if it exists on the system and
+    /// has an IPv6 link-local address configured.
+    fn get_available_interfaces()
+    -> Result<HashSet<String>, network_interface::Error> {
+        let interfaces = NetworkInterface::show()?;
+
+        Ok(interfaces
+            .into_iter()
+            .filter(|iface| {
+                iface
+                    .addr
+                    .map(|addr| {
+                        matches!(addr.ip(), IpAddr::V6(ip) if ip.is_unicast_link_local())
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|iface| iface.name)
+            .collect())
+    }
+
+    /// Check pending interfaces to see if any have become available.
+    ///
+    /// Takes a pre-computed set of available interfaces to avoid repeated syscalls.
+    fn check_pending_interfaces(&self, available: &HashSet<String>) {
+        let mut pending = lock!(self.pending_interfaces);
+        let mut to_activate = Vec::new();
+
+        // Find interfaces that are now available
+        for (interface_name, config) in pending.iter() {
+            if available.contains(interface_name) {
+                to_activate.push((interface_name.clone(), config.clone()));
+            }
+        }
+
+        // Remove from pending and activate
+        for (interface_name, config) in to_activate {
+            pending.remove(&interface_name);
+            drop(pending); // Release lock before activation
+
+            self.activate_interface(&interface_name, config.router_lifetime);
+
+            pending = lock!(self.pending_interfaces);
+        }
+    }
+
+    /// Check active interfaces to see if any have been removed.
+    ///
+    /// Takes a pre-computed set of available interfaces to avoid repeated syscalls.
+    fn check_active_interfaces(&self, available: &HashSet<String>) {
+        let mut active = lock!(self.active_interfaces);
+        let mut to_deactivate = Vec::new();
+
+        // Find interfaces that are no longer available
+        for interface_name in active.iter() {
+            if !available.contains(interface_name) {
+                to_deactivate.push(interface_name.clone());
+            }
+        }
+
+        // Remove from active and deactivate
+        for interface_name in to_deactivate {
+            active.remove(&interface_name);
+            drop(active); // Release lock before deactivation
+
+            self.deactivate_interface(&interface_name);
+
+            active = lock!(self.active_interfaces);
+        }
+    }
+
+    /// Activate an interface that has become available.
+    ///
+    /// This registers the interface with the NDP manager for peer discovery.
+    fn activate_interface(&self, interface_name: &str, router_lifetime: u16) {
+        slog::info!(
+            self.log,
+            "interface became available, activating NDP";
+            "interface" => interface_name,
+        );
+
+        match Self::get_interface(interface_name, &self.log) {
+            Ok(ifx) => {
+                // Add interface to NDP manager for peer discovery
+                if let Err(e) =
+                    self.ndp_mgr.add_interface(ifx.clone(), router_lifetime)
+                {
+                    slog::warn!(
+                        self.log,
+                        "failed to add interface to NDP manager";
+                        "interface" => interface_name,
+                        "error" => e.to_string(),
+                    );
+                    return;
+                }
+
+                // Store scope_id mapping for Dispatcher routing
+                lock!(self.interface_scope_map)
+                    .insert(ifx.index, ifx.name.clone());
+
+                // Track as active
+                lock!(self.active_interfaces)
+                    .insert(interface_name.to_string());
+
+                slog::info!(
+                    self.log,
+                    "interface activated for NDP";
+                    "interface" => interface_name,
+                    "scope_id" => ifx.index,
+                    "local_addr" => ifx.ip.to_string(),
+                );
+            }
+            Err(e) => {
+                // Race condition - interface disappeared between check and activation
+                slog::warn!(
+                    self.log,
+                    "interface disappeared during activation";
+                    "interface" => interface_name,
+                    "error" => e.to_string(),
+                );
+                // Re-add to pending so we try again later
+                lock!(self.pending_interfaces).insert(
+                    interface_name.to_string(),
+                    PendingInterfaceConfig { router_lifetime },
+                );
+            }
+        }
+    }
+
+    /// Deactivate an interface that has been removed.
+    ///
+    /// This removes the interface from the NDP manager and cleans up mappings.
+    fn deactivate_interface(&self, interface_name: &str) {
+        slog::info!(
+            self.log,
+            "interface removed, deactivating NDP";
+            "interface" => interface_name,
+        );
+
+        // Try to get interface info for NDP manager removal
+        // (may fail if interface is already gone)
+        if let Ok(ifx) = Self::get_interface(interface_name, &self.log) {
+            self.ndp_mgr.remove_interface(ifx);
+        }
+
+        // Clean up scope mapping by searching for interface name
+        let mut scope_map = lock!(self.interface_scope_map);
+        if let Some((&scope_id, _)) = scope_map
+            .iter()
+            .find(|(_, name)| name.as_str() == interface_name)
+        {
+            scope_map.remove(&scope_id);
+        }
     }
 
     /// Register an interface for NDP peer discovery.
@@ -74,8 +345,9 @@ impl UnnumberedManagerNdp {
     /// BGP session creation is handled separately by the caller.
     ///
     /// If the interface doesn't exist yet, this is not an error - the interface
-    /// will be registered when it appears. The caller should still create the
-    /// BGP session, which will wait for the interface to become available.
+    /// will be added to a pending list and registered when it appears. The
+    /// caller should still create the BGP session, which will wait for the
+    /// interface to become available.
     pub fn add_interface(
         self: &Arc<Self>,
         interface: impl AsRef<str>,
@@ -93,16 +365,35 @@ impl UnnumberedManagerNdp {
                 // Store scope_id mapping for Dispatcher routing
                 lock!(self.interface_scope_map)
                     .insert(ifx.index, ifx.name.clone());
-            }
-            Err(e) => {
-                // Interface not found - that's OK, it may appear later.
-                // The BGP session (created by caller) will wait for it.
+
+                // Track as active
+                lock!(self.active_interfaces).insert(interface_str.to_string());
+
                 slog::info!(
                     self.log,
-                    "interface not currently available for NDP setup";
+                    "interface registered for NDP peer discovery";
+                    "interface" => interface_str,
+                    "scope_id" => ifx.index,
+                    "local_addr" => ifx.ip.to_string(),
+                );
+            }
+            Err(e) => {
+                // Interface not found - add to pending list.
+                // The monitor thread will activate it when it appears.
+                slog::info!(
+                    self.log,
+                    "interface not currently available, adding to pending";
                     "interface" => interface_str,
                     "error" => e.to_string(),
                 );
+
+                lock!(self.pending_interfaces).insert(
+                    interface_str.to_string(),
+                    PendingInterfaceConfig { router_lifetime },
+                );
+
+                // Wake up the monitor thread since there's new work
+                self.monitor_condvar.notify_one();
             }
         };
 
@@ -114,6 +405,7 @@ impl UnnumberedManagerNdp {
     /// This method only handles NDP-related cleanup:
     /// - Removes the interface from the NDP manager
     /// - Removes the scope_id -> interface mapping
+    /// - Removes from pending/active tracking
     ///
     /// BGP session deletion is handled separately by the caller.
     pub fn remove_interface(
@@ -122,6 +414,13 @@ impl UnnumberedManagerNdp {
     ) -> Result<(), ResolveNeighborError> {
         let interface_str = interface.as_ref();
 
+        // Remove from pending if it was waiting to be activated
+        lock!(self.pending_interfaces).remove(interface_str);
+
+        // Remove from active tracking
+        lock!(self.active_interfaces).remove(interface_str);
+
+        // Remove from NDP manager if interface exists
         if let Ok(ifx) = Self::get_interface(interface_str, &self.log) {
             self.ndp_mgr.remove_interface(ifx);
         }
@@ -135,6 +434,12 @@ impl UnnumberedManagerNdp {
         {
             scope_map.remove(&scope_id);
         }
+
+        slog::info!(
+            self.log,
+            "interface unregistered from NDP peer discovery";
+            "interface" => interface_str,
+        );
 
         Ok(())
     }
