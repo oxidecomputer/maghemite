@@ -2237,12 +2237,34 @@ fn test_multiple_unnumbered_sessions() {
 
 /// Test: Same link-local address on multiple interfaces.
 ///
+/// Topology:
+/// ```text
+///         eth0 (scope 2)                    eth0 (scope 2)
+///        ┌─────────────┐                   ┌─────────────┐
+///        │  fe80::1%2  │◄─────────────────►│  fe80::2%2  │
+///        │             │      link 0       │             │
+///        │   Router1   │                   │   Router2   │
+///        │             │      link 1       │             │
+///        │  fe80::1%3  │◄─────────────────►│  fe80::2%3  │
+///        └─────────────┘                   └─────────────┘
+///         eth1 (scope 3)                    eth1 (scope 3)
+/// ```
+///
+/// NDP discovery (what each router sees as its peer):
+/// ```text
+/// R1's view:  eth0 -> fe80::2%2,  eth1 -> fe80::2%3  (both point to R2)
+/// R2's view:  eth0 -> fe80::1%2,  eth1 -> fe80::1%3  (both point to R1)
+/// ```
+///
 /// Expected behavior:
 /// - Two routers, each with two interfaces (eth0 and eth1)
-/// - Both interfaces use fe80::1 as the link-local address
-/// - scope_id differentiates them
+/// - Both interfaces discover the same peer link-local (fe80::2 from R1's view)
+/// - scope_id differentiates the interfaces (2 for eth0, 3 for eth1)
 /// - Both sessions establish independently
 /// - NDP changes on one interface don't affect the other
+///
+/// This tests that when NDP discovers the same IP on multiple interfaces,
+/// each interface's scope_id correctly identifies which physical link to use.
 #[test]
 fn test_same_linklocal_multiple_interfaces() {
     let (router1, mock_ndp1, sessions1, router2, _mock_ndp2, sessions2) =
@@ -2252,20 +2274,20 @@ fn test_same_linklocal_multiple_interfaces() {
             RouteExchange::Ipv4 { nexthop: None },
         );
 
-    // Override discovered peers to use same link-local on both interfaces
-    let linklocal_ip: Ipv6Addr = "fe80::1".parse().unwrap();
-    mock_ndp1.discover_peer("eth0", linklocal_ip).unwrap();
-    mock_ndp1.discover_peer("eth1", linklocal_ip).unwrap();
+    // The helper already discovers fe80::2 on both interfaces of mock_ndp1.
+    // The point of this test is to verify that the same peer IP (fe80::2) on
+    // multiple interfaces is correctly differentiated by scope_id.
+    let peer_ip: Ipv6Addr = "fe80::2".parse().unwrap();
 
-    // Expected SocketAddrs with correct scope_id and port
-    let linklocal_eth0 = SocketAddr::V6(SocketAddrV6::new(
-        linklocal_ip,
+    // Expected SocketAddrs - same IP but different scope_id per interface
+    let peer_eth0 = SocketAddr::V6(SocketAddrV6::new(
+        peer_ip,
         TEST_BGP_PORT,
         0,
         2, // scope_id 2 for eth0
     ));
-    let linklocal_eth1 = SocketAddr::V6(SocketAddrV6::new(
-        linklocal_ip, // SAME IP
+    let peer_eth1 = SocketAddr::V6(SocketAddrV6::new(
+        peer_ip, // SAME IP as eth0
         TEST_BGP_PORT,
         0,
         3, // scope_id 3 for eth1
@@ -2283,8 +2305,10 @@ fn test_same_linklocal_multiple_interfaces() {
     wait_for_eq!(session2_eth1.state(), FsmStateKind::Established);
 
     // Verify both sessions see the same IP but different scope_id
-    assert_eq!(session1_eth0.get_peer_socket_addr(), Some(linklocal_eth0));
-    assert_eq!(session1_eth1.get_peer_socket_addr(), Some(linklocal_eth1));
+    // This is the core of the test: same peer IP (fe80::2) is correctly
+    // distinguished by scope_id (2 for eth0, 3 for eth1)
+    assert_eq!(session1_eth0.get_peer_socket_addr(), Some(peer_eth0));
+    assert_eq!(session1_eth1.get_peer_socket_addr(), Some(peer_eth1));
 
     // Verify they're truly independent: change eth0's peer
     let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
@@ -2293,11 +2317,11 @@ fn test_same_linklocal_multiple_interfaces() {
         SocketAddr::V6(SocketAddrV6::new(new_peer_ip, TEST_BGP_PORT, 0, 2));
     wait_for!(session1_eth0.get_peer_socket_addr() == Some(new_peer_eth0));
 
-    // eth1 should still see fe80::1 with scope 3
+    // eth1 should still see fe80::2 with scope 3
     assert_eq!(
         session1_eth1.get_peer_socket_addr(),
-        Some(linklocal_eth1),
-        "eth1 should still see fe80::1 with its own scope_id"
+        Some(peer_eth1),
+        "eth1 should still see fe80::2 with its own scope_id"
     );
 
     // CRITICAL: All sessions must stay Established
