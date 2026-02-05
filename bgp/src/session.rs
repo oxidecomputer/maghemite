@@ -8402,29 +8402,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        let nexthop = match update.nexthop() {
-            Ok(nh) => match nh {
-                BgpNexthop::Ipv4(ip4) => IpAddr::V4(ip4),
-                BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(ip6),
-                BgpNexthop::Ipv6Double(addrs) => IpAddr::V6(addrs.global),
-            },
-            Err(e) => {
-                session_log!(
-                    self,
-                    warn,
-                    pc.conn,
-                    "error parsing nexthop from update: {e}";
-                    "error" => format!("{e}"),
-                    "message" => "update",
-                    "message_contents" => format!("{update}").as_str()
-                );
-                self.counters
-                    .update_nexhop_missing
-                    .fetch_add(1, Ordering::Relaxed);
-                return;
-            }
-        };
-
         let withdrawn: Vec<Prefix> = update
             .withdrawn
             .iter()
@@ -8435,45 +8412,59 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         self.db.remove_bgp_prefixes(&withdrawn, &self.peer_id());
 
-        let nlri: Vec<Prefix> = update
-            .nlri
-            .iter()
-            .filter(|p| {
-                !originated4.contains(p)
-                    && p.valid_for_rib()
-                    && !self.prefix_via_self(Prefix::V4(**p), nexthop)
-            })
-            .copied()
-            .map(Prefix::V4)
-            .collect();
+        if let Some(nexthop) = update.nexthop4().map(IpAddr::V4) {
+            let nlri: Vec<Prefix> = update
+                .nlri
+                .iter()
+                .filter(|p| {
+                    !originated4.contains(p)
+                        && p.valid_for_rib()
+                        && !self.prefix_via_self(Prefix::V4(**p), nexthop)
+                })
+                .copied()
+                .map(Prefix::V4)
+                .collect();
 
-        if !nlri.is_empty() {
-            let mut as_path = Vec::new();
-            if let Some(segments_list) = update.as_path() {
-                for segments in &segments_list {
-                    as_path.extend(segments.value.iter());
+            if !nlri.is_empty() {
+                let mut as_path = Vec::new();
+                if let Some(segments_list) = update.as_path() {
+                    for segments in &segments_list {
+                        as_path.extend(segments.value.iter());
+                    }
                 }
-            }
-            let nexthop_interface =
-                derive_nexthop_interface(&self.peer_id(), nexthop);
-            let path = rdb::Path {
-                nexthop,
-                nexthop_interface,
-                shutdown: update.graceful_shutdown(),
-                rib_priority: DEFAULT_RIB_PRIORITY_BGP,
-                bgp: Some(BgpPathProperties {
-                    origin_as: pc.asn,
-                    peer: self.peer_id(),
-                    id: pc.id,
-                    med: update.multi_exit_discriminator(),
-                    local_pref: update.local_pref(),
-                    as_path,
-                    stale: None,
-                }),
-                vlan_id: lock!(self.session).vlan_id,
-            };
+                let nexthop_interface =
+                    derive_nexthop_interface(&self.peer_id(), nexthop);
+                let path = rdb::Path {
+                    nexthop,
+                    nexthop_interface,
+                    shutdown: update.graceful_shutdown(),
+                    rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+                    bgp: Some(BgpPathProperties {
+                        origin_as: pc.asn,
+                        peer: self.peer_id(),
+                        id: pc.id,
+                        med: update.multi_exit_discriminator(),
+                        local_pref: update.local_pref(),
+                        as_path,
+                        stale: None,
+                    }),
+                    vlan_id: lock!(self.session).vlan_id,
+                };
 
-            self.db.add_bgp_prefixes(&nlri, path.clone());
+                self.db.add_bgp_prefixes(&nlri, path.clone());
+            }
+        } else if !update.nlri.is_empty() {
+            session_log!(
+                self,
+                warn,
+                pc.conn,
+                "update has traditional nlri encoding but no nexthop4";
+                "message" => "update",
+                "message_contents" => format!("{update}").as_str()
+            );
+            self.counters
+                .update_nexhop_missing
+                .fetch_add(1, Ordering::Relaxed);
         }
 
         // Process MP_REACH_NLRI for IPv4 and IPv6 routes
@@ -8484,7 +8475,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         BgpNexthop::Ipv4(ip4) => IpAddr::V4(*ip4),
                         BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
                         BgpNexthop::Ipv6Double(addrs) => {
-                            IpAddr::V6(addrs.global)
+                            if self.is_unnumbered() {
+                                IpAddr::V6(addrs.link_local)
+                            } else {
+                                IpAddr::V6(addrs.global)
+                            }
                         }
                     };
 
@@ -8552,7 +8547,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let nexthop6 = match &reach6.nexthop {
                         BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
                         BgpNexthop::Ipv6Double(addrs) => {
-                            IpAddr::V6(addrs.global)
+                            if self.is_unnumbered() {
+                                IpAddr::V6(addrs.link_local)
+                            } else {
+                                IpAddr::V6(addrs.global)
+                            }
                         }
                         BgpNexthop::Ipv4(ip4) => {
                             // IPv4 nexthop for IPv6 routes is unusual but possible
