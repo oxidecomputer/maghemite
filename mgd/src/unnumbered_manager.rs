@@ -3,20 +3,17 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use bgp::{
-    connection_tcp::BgpConnectionTcp,
-    params::UnnumberedNeighbor,
-    router::Router,
-    session::{SessionInfo, SessionRunner},
+    connection_tcp::BgpConnectionTcp, router::Router, session::SessionRunner,
     unnumbered::NdpNeighbor,
 };
 use mg_common::lock;
 use ndp::{Ipv6NetworkInterface, NdpManager, NewInterfaceNdpManagerError};
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
-use slog::{Logger, error, o, warn};
+use slog::{Logger, o, warn};
 use std::{
     collections::{BTreeMap, HashMap},
-    net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
-    sync::{Arc, Mutex, mpsc::channel},
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+    sync::{Arc, Mutex},
 };
 
 pub const MOD_UNNUMBERED_MANAGER: &str = "unnumbered manager";
@@ -67,108 +64,60 @@ impl UnnumberedManagerNdp {
         })
     }
 
-    pub fn add_neighbor(
+    /// Register an interface for NDP peer discovery.
+    ///
+    /// This method only handles NDP-related setup:
+    /// - Resolves the interface to get its IPv6 link-local address
+    /// - Registers the interface with the NDP manager for peer discovery
+    /// - Stores the scope_id -> interface mapping for Dispatcher routing
+    ///
+    /// BGP session creation is handled separately by the caller.
+    ///
+    /// If the interface doesn't exist yet, this is not an error - the interface
+    /// will be registered when it appears. The caller should still create the
+    /// BGP session, which will wait for the interface to become available.
+    pub fn add_interface(
         self: &Arc<Self>,
-        asn: u32,
         interface: impl AsRef<str>,
-        info: SessionInfo,
-        nbr: UnnumberedNeighbor,
-        ensure: bool,
+        router_lifetime: u16,
     ) -> Result<(), AddNeighborError> {
         let interface_str = interface.as_ref();
 
         // Try to get the interface - this can fail if the interface doesn't exist
         // or isn't configured properly
-        let ifx_result = Self::get_interface(interface_str, &self.log);
+        match Self::get_interface(interface_str, &self.log) {
+            Ok(ifx) => {
+                // Add interface to NDP manager for peer discovery
+                self.ndp_mgr.add_interface(ifx.clone(), router_lifetime)?;
 
-        // Check if we're in ensure mode and updating an existing session
-        let router_guard = lock!(self.routers);
-        let updating_existing = if ensure {
-            if let Some(router) = router_guard.get(&asn) {
-                router.get_session(interface_str).is_some()
-            } else {
-                false
+                // Store scope_id mapping for Dispatcher routing
+                lock!(self.interface_scope_map)
+                    .insert(ifx.index, ifx.name.clone());
             }
-        } else {
-            false
-        };
-
-        // Interface resolution can fail if the interface doesn't exist yet.
-        // We allow session creation regardless - the FSM will wait for the
-        // interface to appear before attempting connections.
-        let ifx: Option<Ipv6NetworkInterface> = match ifx_result {
-            Ok(ifx) => Some(ifx),
             Err(e) => {
-                // Interface not found - that's OK for both new sessions and updates.
-                // For new sessions: FSM will wait for interface to appear.
-                // For updates: session already has whatever info it needs.
-                let action = if updating_existing {
-                    "updating"
-                } else {
-                    "creating"
-                };
+                // Interface not found - that's OK, it may appear later.
+                // The BGP session (created by caller) will wait for it.
                 slog::info!(
                     self.log,
-                    "{} unnumbered session for interface that is not currently available",
-                    action;
+                    "interface not currently available for NDP setup";
                     "interface" => interface_str,
                     "error" => e.to_string(),
                 );
-                None
             }
         };
-
-        // Only add/update interface in NDP manager if we successfully resolved it
-        if let Some(ref ifx) = ifx {
-            // Add interface to NDP manager for peer discovery
-            self.ndp_mgr
-                .add_interface(ifx.clone(), nbr.act_as_a_default_ipv6_router)?;
-
-            // Store scope_id mapping for Dispatcher routing
-            lock!(self.interface_scope_map).insert(ifx.index, ifx.name.clone());
-        }
-
-        // Create or update unnumbered session
-        if let Some(router) = router_guard.get(&asn) {
-            let (event_tx, event_rx) = channel();
-
-            // Use the resolved interface index if available, otherwise use 0 for updates
-            let scope_id = ifx.as_ref().map(|i| i.index).unwrap_or(0);
-            let placeholder_host =
-                SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, scope_id);
-
-            if let Err(e) = router.ensure_unnumbered_session(
-                interface_str.to_string(),
-                nbr.to_peer_config(placeholder_host),
-                None,
-                event_tx.clone(),
-                event_rx,
-                info,
-                self.clone(), // Pass unnumbered manager for active NDP queries
-            ) {
-                error!(
-                    self.log,
-                    "error creating/updating unnumbered session";
-                    "error" => e.to_string(),
-                    "interface" => interface_str,
-                );
-                return Err(AddNeighborError::Resolve(
-                    ResolveNeighborError::NoSuchInterface,
-                ));
-            }
-        } else {
-            warn!(
-                self.log,
-                "session configured for asn {}, but no router is running", asn
-            );
-        }
 
         Ok(())
     }
 
-    pub fn remove_neighbor(
+    /// Unregister an interface from NDP peer discovery.
+    ///
+    /// This method only handles NDP-related cleanup:
+    /// - Removes the interface from the NDP manager
+    /// - Removes the scope_id -> interface mapping
+    ///
+    /// BGP session deletion is handled separately by the caller.
+    pub fn remove_interface(
         self: &Arc<Self>,
-        _asn: u32,
         interface: impl AsRef<str>,
     ) -> Result<(), ResolveNeighborError> {
         let interface_str = interface.as_ref();

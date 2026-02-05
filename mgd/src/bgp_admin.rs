@@ -1844,9 +1844,8 @@ pub(crate) mod helpers {
         get_router!(&ctx, asn)?
             .delete_session(PeerId::Interface(interface.to_string()));
 
-        // If the neighbor manager is running for this interface, remove
-        // the neighbor
-        ctx.bgp.unnumbered_manager.remove_neighbor(asn, interface)?;
+        // Unregister the interface from NDP peer discovery
+        ctx.bgp.unnumbered_manager.remove_interface(interface)?;
 
         // And now clear out the top level database entry
         ctx.db.remove_unnumbered_bgp_neighbor(interface)?;
@@ -2057,7 +2056,42 @@ pub(crate) mod helpers {
             "params" => format!("{rq:#?}")
         );
 
+        let (event_tx, event_rx) = channel();
         let info = SessionInfo::from(&rq.parameters);
+
+        // XXX: remove this when PeerConfig no longer requires a SocketAddr
+        let placeholder_host = std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::UNSPECIFIED,
+            0,
+            0,
+            0,
+        );
+
+        let start_session = if ensure {
+            match get_router!(&ctx, rq.asn)?.ensure_unnumbered_session(
+                rq.interface.clone(),
+                rq.to_peer_config(placeholder_host),
+                None,
+                event_tx.clone(),
+                event_rx,
+                info,
+                ctx.bgp.unnumbered_manager.clone(),
+            )? {
+                EnsureSessionResult::New(_) => true,
+                EnsureSessionResult::Updated(_) => false,
+            }
+        } else {
+            get_router!(&ctx, rq.asn)?.new_unnumbered_session(
+                rq.interface.clone(),
+                rq.to_peer_config(placeholder_host),
+                None,
+                event_tx.clone(),
+                event_rx,
+                info,
+                ctx.bgp.unnumbered_manager.clone(),
+            )?;
+            true
+        };
 
         // Extract per-AF policies and nexthop for database storage
         let (allow_import4, allow_export4, nexthop4) =
@@ -2124,13 +2158,14 @@ pub(crate) mod helpers {
                 },
             })?;
 
-        ctx.bgp.unnumbered_manager.add_neighbor(
-            rq.asn,
-            &rq.interface,
-            info,
-            rq.clone(),
-            ensure,
-        )?;
+        // Register interface for NDP peer discovery (NDP-only, no session creation)
+        ctx.bgp
+            .unnumbered_manager
+            .add_interface(&rq.interface, rq.act_as_a_default_ipv6_router)?;
+
+        if start_session {
+            start_bgp_session(&event_tx)?;
+        }
 
         Ok(())
     }

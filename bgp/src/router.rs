@@ -318,6 +318,36 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn new_unnumbered_session(
+        self: &Arc<Self>,
+        interface: String,
+        peer: PeerConfig,
+        bind_addr: Option<SocketAddr>,
+        event_tx: Sender<FsmEvent<Cnx>>,
+        event_rx: Receiver<FsmEvent<Cnx>>,
+        info: SessionInfo,
+        unnumbered_manager: Arc<dyn UnnumberedManager>,
+    ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
+        let p2s = lock!(self.peer_to_session);
+        // Use PeerId::Interface for unnumbered sessions
+        let key = PeerId::Interface(interface);
+        if p2s.contains_key(&key) {
+            Err(Error::PeerExists)
+        } else {
+            self.new_session_locked(
+                p2s,
+                key,
+                peer,
+                bind_addr,
+                event_tx,
+                event_rx,
+                info,
+                Some(unnumbered_manager),
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn new_session_locked(
         self: &Arc<Self>,
         mut p2s: MutexGuard<BTreeMap<PeerId, SessionEndpoint<Cnx>>>,

@@ -8804,11 +8804,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         *lock!(self.neighbor.name) = cfg.name;
         let mut reset_needed = false;
 
-        if self.neighbor.peer != PeerId::Ip(cfg.host.ip())
-            || self.neighbor.port != cfg.host.port()
-        {
-            return Err(Error::PeerAddressUpdate);
-        }
+        // Note: We don't validate that cfg.host matches self.neighbor.peer here.
+        // Session identity is enforced by the lookup mechanism - you can only
+        // update a session you found via its PeerId (IP for numbered, interface
+        // for unnumbered). The cfg.host field is a placeholder for unnumbered
+        // sessions anyway.
+        // XXX: consider re-adding this when PeerConfig uses PeerId
 
         if cfg.keepalive >= cfg.hold_time {
             return Err(Error::KeepaliveLargerThanHoldTime);

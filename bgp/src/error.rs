@@ -196,9 +196,6 @@ pub enum Error {
     #[error("Message conversion: {0}")]
     MessageConversion(#[from] crate::messages::MessageConvertError),
 
-    #[error("Changing peer address is not supported. Delete and recreate.")]
-    PeerAddressUpdate,
-
     #[error("Failed to send event: {0}")]
     EventSend(String),
 
