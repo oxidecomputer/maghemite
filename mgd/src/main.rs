@@ -121,7 +121,7 @@ async fn run(args: RunArgs) {
     let bfd = BfdContext::new(log.clone());
 
     let context = Arc::new(HandlerContext {
-        #[cfg(feature = "mg-lower")]
+        #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
         tep: tep_ula,
         log: log.clone(),
         bgp,
@@ -147,17 +147,24 @@ async fn run(args: RunArgs) {
         );
     }
 
-    #[cfg(feature = "mg-lower")]
+    #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
     {
         let rt = Arc::new(tokio::runtime::Handle::current());
         let ctx = context.clone();
         let log = log.clone();
         let db = ctx.db.clone();
         let stats = context.mg_lower_stats.clone();
+        let dpd = mg_lower::ProductionDpd {
+            client: mg_lower::new_dpd_client(&log),
+        };
+        let ddm = mg_lower::ProductionDdm {
+            client: mg_lower::new_ddm_client(&log),
+        };
+        let sw = mg_lower::ProductionSwitchZone {};
         Builder::new()
             .name("mg-lower".to_string())
             .spawn(move || {
-                mg_lower::run(ctx.tep, db, log, stats, rt);
+                mg_lower::run(ctx.tep, db, log, stats, rt, &dpd, &ddm, &sw);
             })
             .expect("failed to start mg-lower");
     }

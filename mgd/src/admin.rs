@@ -16,7 +16,7 @@ use mg_common::stats::MgLowerStats;
 use rdb::{BfdPeerConfig, Db, PeerId, Prefix};
 use slog::{Logger, error, info, o};
 use std::collections::HashMap;
-#[cfg(feature = "mg-lower")]
+#[cfg(all(feature = "mg-lower", target_os = "illumos"))]
 use std::net::Ipv6Addr;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -25,7 +25,7 @@ use tokio::task::JoinHandle;
 const UNIT_API_SERVER: &str = "api_server";
 
 pub struct HandlerContext {
-    #[cfg(feature = "mg-lower")]
+    #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
     pub tep: Ipv6Addr, // tunnel endpoint address
     pub bgp: BgpContext,
     pub bfd: BfdContext,

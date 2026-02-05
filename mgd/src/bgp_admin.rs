@@ -2590,7 +2590,7 @@ mod tests {
     use bgp::params::{ApplyRequestV1, BgpPeerConfigV1, BgpPeerParametersV1};
     use mg_common::stats::MgLowerStats;
     use rdb::test::get_test_db;
-    #[cfg(feature = "mg-lower")]
+    #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
     use std::net::Ipv6Addr;
     use std::{
         collections::{BTreeMap, HashMap},
@@ -2617,7 +2617,7 @@ mod tests {
 
         let db = get_test_db("apply_remove_entire_group", log.clone()).unwrap();
         let ctx = Arc::new(HandlerContext {
-            #[cfg(feature = "mg-lower")]
+            #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
             tep: Ipv6Addr::UNSPECIFIED,
             bgp: BgpContext::new(
                 Arc::new(Mutex::new(BTreeMap::new())),

@@ -7,10 +7,9 @@ use crate::{
     log::dpd_log,
     platform::{Dpd, SwitchZone},
 };
-use dpd_client::{
-    Client as DpdClient,
-    types::{self, LinkState, Route},
-};
+#[cfg(target_os = "illumos")]
+use dpd_client::Client as DpdClient;
+use dpd_client::types::{self, LinkState, Route};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Path, Prefix};
 use slog::{Logger, warn};
@@ -540,7 +539,8 @@ pub(crate) fn get_routes_for_prefix(
 
 /// Create a new Dendrite/dpd client. The lower half always runs on the same
 /// host/zone as the underlying platform.
-pub(crate) fn new_dpd_client(log: &Logger) -> DpdClient {
+#[cfg(target_os = "illumos")]
+pub fn new_dpd_client(log: &Logger) -> DpdClient {
     let client_state = dpd_client::ClientState {
         tag: MG_LOWER_TAG.into(),
         log: log.clone(),

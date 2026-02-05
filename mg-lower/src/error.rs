@@ -16,8 +16,8 @@ pub enum Error {
     #[error("no nexthop route {0}")]
     NoNexthopRoute(String),
 
-    #[error("libnet error route {0}")]
-    LibnetRoute(#[from] libnet::route::Error),
+    #[error("route lookup error {0}")]
+    SysRoute(#[from] crate::platform::SysRouteError),
 
     #[error("oxnet ipnet prefix error {0}")]
     OxnetIpnetPrevix(#[from] oxnet::IpNetPrefixError),
