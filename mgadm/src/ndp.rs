@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 use colored::Colorize;
 use mg_admin_client::Client;
 use std::io::{Write, stdout};
@@ -11,14 +11,32 @@ use tabwriter::TabWriter;
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// List all interfaces with NDP discovery state
-    List {
+    /// View NDP status
+    Status(StatusArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct StatusArgs {
+    #[command(subcommand)]
+    command: StatusCmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum StatusCmd {
+    /// Show NDP manager state
+    Manager {
         #[clap(env)]
         asn: u32,
     },
 
-    /// Get detailed NDP state for a specific interface
-    Status {
+    /// List all NDP-managed interfaces
+    Interfaces {
+        #[clap(env)]
+        asn: u32,
+    },
+
+    /// Show detailed state for a specific interface
+    Interface {
         #[clap(env)]
         asn: u32,
         interface: String,
@@ -27,15 +45,64 @@ pub enum Commands {
 
 pub async fn commands(command: Commands, c: Client) -> Result<()> {
     match command {
-        Commands::List { asn } => ndp_list(asn, c).await?,
-        Commands::Status { asn, interface } => {
-            ndp_status(asn, interface, c).await?
-        }
+        Commands::Status(args) => match args.command {
+            StatusCmd::Manager { asn } => ndp_manager_status(asn, c).await?,
+            StatusCmd::Interfaces { asn } => ndp_interfaces(asn, c).await?,
+            StatusCmd::Interface { asn, interface } => {
+                ndp_interface_detail(asn, interface, c).await?
+            }
+        },
     }
     Ok(())
 }
 
-async fn ndp_list(asn: u32, c: Client) -> Result<()> {
+async fn ndp_manager_status(asn: u32, c: Client) -> Result<()> {
+    let state = c.get_ndp_manager_state(asn).await?.into_inner();
+
+    println!("NDP Manager State (ASN {})", asn);
+    println!("{}", "=".repeat(60));
+    println!();
+
+    // Monitor thread status
+    let monitor_status = if state.monitor_thread_running {
+        "Running".green()
+    } else {
+        "Stopped".red()
+    };
+    println!("Monitor Thread: {}", monitor_status);
+    println!();
+
+    // Pending interfaces
+    println!(
+        "Pending Interfaces (configured, waiting for system): {}",
+        state.pending_interfaces.len()
+    );
+    if state.pending_interfaces.is_empty() {
+        println!("  (none)");
+    } else {
+        for pending in &state.pending_interfaces {
+            println!(
+                "  {} (router_lifetime: {}s)",
+                pending.interface, pending.router_lifetime
+            );
+        }
+    }
+    println!();
+
+    // Active interfaces
+    println!("Active Interfaces: {}", state.active_interfaces.len());
+    if state.active_interfaces.is_empty() {
+        println!("  (none)");
+    } else {
+        for iface in &state.active_interfaces {
+            println!("  {}", iface);
+        }
+    }
+
+    Ok(())
+}
+
+async fn ndp_interfaces(asn: u32, c: Client) -> Result<()> {
     let interfaces = c.get_ndp_interfaces(asn).await?.into_inner();
 
     if interfaces.is_empty() {
@@ -46,11 +113,13 @@ async fn ndp_list(asn: u32, c: Client) -> Result<()> {
     let mut tw = TabWriter::new(stdout());
     writeln!(
         &mut tw,
-        "{}\t{}\t{}\t{}\t{}",
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
         "Interface".dimmed(),
         "Local Address".dimmed(),
-        "Scope ID".dimmed(),
+        "Scope".dimmed(),
         "Discovered Peer".dimmed(),
+        "TX".dimmed(),
+        "RX".dimmed(),
         "Reachable".dimmed(),
     )?;
 
@@ -59,7 +128,7 @@ async fn ndp_list(asn: u32, c: Client) -> Result<()> {
             Some(peer) => {
                 let addr_str = format!("{}%{}", peer.address, iface.interface);
                 let reachable = if peer.expired {
-                    "No (expired)".red()
+                    "No".red()
                 } else {
                     "Yes".green()
                 };
@@ -68,13 +137,32 @@ async fn ndp_list(asn: u32, c: Client) -> Result<()> {
             None => ("None".to_string(), "N/A".dimmed()),
         };
 
+        let (tx_str, rx_str) = match &iface.thread_state {
+            Some(ts) => {
+                let tx = if ts.tx_running {
+                    "Run".green()
+                } else {
+                    "Stop".red()
+                };
+                let rx = if ts.rx_running {
+                    "Run".green()
+                } else {
+                    "Stop".red()
+                };
+                (tx, rx)
+            }
+            None => ("N/A".dimmed(), "N/A".dimmed()),
+        };
+
         writeln!(
             &mut tw,
-            "{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             iface.interface,
             iface.local_address,
             iface.scope_id,
             peer_str,
+            tx_str,
+            rx_str,
             reachable_str,
         )?;
     }
@@ -83,15 +171,18 @@ async fn ndp_list(asn: u32, c: Client) -> Result<()> {
     Ok(())
 }
 
-async fn ndp_status(asn: u32, interface: String, c: Client) -> Result<()> {
+async fn ndp_interface_detail(
+    asn: u32,
+    interface: String,
+    c: Client,
+) -> Result<()> {
     let detail = c
         .get_ndp_interface_detail(asn, &interface)
         .await?
         .into_inner();
 
-    println!("{}", "=".repeat(80));
     println!("NDP State: {}", interface);
-    println!("{}", "=".repeat(80));
+    println!("{}", "=".repeat(60));
     println!();
 
     println!("Interface Information:");
@@ -102,6 +193,27 @@ async fn ndp_status(asn: u32, interface: String, c: Client) -> Result<()> {
         "  Router Lifetime (advertised): {}s",
         detail.router_lifetime
     );
+    println!();
+
+    // Thread state
+    println!("Thread State:");
+    if let Some(ts) = &detail.thread_state {
+        let tx_status = if ts.tx_running {
+            "Running".green()
+        } else {
+            "Stopped".red()
+        };
+        let rx_status = if ts.rx_running {
+            "Running".green()
+        } else {
+            "Stopped".red()
+        };
+        println!("  TX Loop: {}", tx_status);
+        println!("  RX Loop: {}", rx_status);
+    } else {
+        println!("  TX Loop: {}", "Unknown".dimmed());
+        println!("  RX Loop: {}", "Unknown".dimmed());
+    }
     println!();
 
     if let Some(peer) = detail.discovered_peer {

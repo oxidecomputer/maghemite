@@ -131,9 +131,24 @@ impl NdpManager {
                     interface: iface_mgr.inner.ifx.clone(),
                     router_lifetime: iface_mgr.inner.router_lifetime,
                     discovered_peer,
+                    thread_state: Some(iface_mgr.thread_state()),
                 }
             })
             .collect()
+    }
+
+    /// Get the thread state for a specific interface.
+    ///
+    /// Returns None if the interface is not managed by NDP.
+    pub fn get_interface_thread_state(
+        &self,
+        ifx: &Ipv6NetworkInterface,
+    ) -> Option<InterfaceThreadState> {
+        let ifxs_guard = read_lock!(self.interfaces);
+        ifxs_guard
+            .iter()
+            .find(|x| &x.inner.ifx == ifx)
+            .map(|iface_mgr| iface_mgr.thread_state())
     }
 }
 
@@ -170,7 +185,24 @@ pub enum NewInterfaceNdpManagerError {
     ThreadSpawn(std::io::Error),
 }
 
+/// Thread state for an interface's NDP rx/tx loops
+#[derive(Debug, Clone)]
+pub struct InterfaceThreadState {
+    /// Whether the TX loop thread is running
+    pub tx_running: bool,
+    /// Whether the RX loop thread is running
+    pub rx_running: bool,
+}
+
 impl InterfaceNdpManager {
+    /// Query the current state of the rx/tx threads for this interface.
+    pub fn thread_state(&self) -> InterfaceThreadState {
+        InterfaceThreadState {
+            tx_running: self._tx_thread.is_running(),
+            rx_running: self._rx_thread.is_running(),
+        }
+    }
+
     /// Create a new interface manager for a given interface.
     pub fn new(
         ifx: Ipv6NetworkInterface,
@@ -380,4 +412,6 @@ pub struct InterfaceAdvertisementInfo {
     pub router_lifetime: u16,
     /// Discovered peer information (if any)
     pub discovered_peer: Option<PeerAdvertisementInfo>,
+    /// Thread state for rx/tx loops (None if interface not active)
+    pub thread_state: Option<InterfaceThreadState>,
 }

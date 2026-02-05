@@ -3,7 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #![allow(clippy::type_complexity)]
-use crate::unnumbered_manager::{NdpPeerState, UnnumberedManagerNdp};
+use crate::unnumbered_manager::{
+    NdpPeerState, NdpThreadStateInternal, UnnumberedManagerNdp,
+};
 use crate::validation::{
     validate_prefixes, validate_prefixes_v4, validate_prefixes_v6,
 };
@@ -33,7 +35,8 @@ use mg_api::{
     FsmHistoryResponse, FsmHistoryResponseV4, MessageDirection,
     MessageHistoryRequest, MessageHistoryRequestV1, MessageHistoryRequestV4,
     MessageHistoryResponse, MessageHistoryResponseV1, MessageHistoryResponseV4,
-    NdpInterface, NdpInterfaceSelector, NdpPeer, NeighborResetRequest,
+    NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
+    NdpPendingInterface, NdpThreadState, NeighborResetRequest,
     NeighborResetRequestV1, NeighborSelector, NeighborSelectorV1, RibV1,
     UnnumberedNeighborResetRequest, UnnumberedNeighborSelector,
 };
@@ -608,6 +611,42 @@ fn convert_ndp_peer_to_api(state: &NdpPeerState) -> NdpPeer {
     }
 }
 
+/// Convert internal thread state to API type
+fn convert_thread_state_to_api(
+    state: Option<&NdpThreadStateInternal>,
+) -> Option<NdpThreadState> {
+    state.map(|s| NdpThreadState {
+        tx_running: s.tx_running,
+        rx_running: s.rx_running,
+    })
+}
+
+pub async fn get_ndp_manager_state(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    _request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<NdpManagerState>, HttpError> {
+    let ctx = rqctx.context();
+
+    // Get manager state from unnumbered manager
+    let manager_state = ctx.bgp.unnumbered_manager.get_manager_state();
+
+    // Convert pending interfaces to API type
+    let pending_interfaces = manager_state
+        .pending_interfaces
+        .into_iter()
+        .map(|p| NdpPendingInterface {
+            interface: p.interface,
+            router_lifetime: p.router_lifetime,
+        })
+        .collect();
+
+    Ok(HttpResponseOk(NdpManagerState {
+        monitor_thread_running: manager_state.monitor_thread_running,
+        pending_interfaces,
+        active_interfaces: manager_state.active_interfaces,
+    }))
+}
+
 pub async fn get_ndp_interfaces(
     rqctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
@@ -641,6 +680,8 @@ pub async fn get_ndp_interfaces(
         {
             let discovered_peer =
                 ndp.peer_state.as_ref().map(convert_ndp_peer_to_api);
+            let thread_state =
+                convert_thread_state_to_api(ndp.thread_state.as_ref());
 
             result.push(NdpInterface {
                 interface: neighbor.interface.clone(),
@@ -648,6 +689,7 @@ pub async fn get_ndp_interfaces(
                 scope_id: ndp.scope_id,
                 router_lifetime: neighbor.router_lifetime,
                 discovered_peer,
+                thread_state,
             });
         }
     }
@@ -702,6 +744,8 @@ pub async fn get_ndp_interface_detail(
 
     let discovered_peer =
         ndp_detail.peer_state.as_ref().map(convert_ndp_peer_to_api);
+    let thread_state =
+        convert_thread_state_to_api(ndp_detail.thread_state.as_ref());
 
     Ok(HttpResponseOk(NdpInterface {
         interface: rq.interface,
@@ -709,6 +753,7 @@ pub async fn get_ndp_interface_detail(
         scope_id: ndp_detail.scope_id,
         router_lifetime: neighbor.router_lifetime,
         discovered_peer,
+        thread_state,
     }))
 }
 

@@ -635,6 +635,32 @@ impl bgp::unnumbered::UnnumberedManager for UnnumberedManagerNdp {
 }
 
 impl UnnumberedManagerNdp {
+    /// Get the current state of the NDP manager.
+    ///
+    /// Returns information about the monitor thread, pending interfaces,
+    /// and active interfaces.
+    pub fn get_manager_state(&self) -> NdpManagerStateInternal {
+        NdpManagerStateInternal {
+            monitor_thread_running: self._monitor_thread.is_running(),
+            pending_interfaces: self.get_pending_interfaces(),
+            active_interfaces: lock!(self.active_interfaces)
+                .iter()
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Get all interfaces that are configured but not yet available on the system.
+    pub fn get_pending_interfaces(&self) -> Vec<PendingInterfaceInfo> {
+        lock!(self.pending_interfaces)
+            .iter()
+            .map(|(name, config)| PendingInterfaceInfo {
+                interface: name.clone(),
+                router_lifetime: config.router_lifetime,
+            })
+            .collect()
+    }
+
     /// List all NDP-managed interfaces with detailed discovery state.
     ///
     /// Returns a list of interfaces managed by this unnumbered manager,
@@ -668,11 +694,19 @@ impl UnnumberedManagerNdp {
                         expired: detail.expired,
                     });
 
+                let thread_state = info.thread_state.as_ref().map(|ts| {
+                    NdpThreadStateInternal {
+                        tx_running: ts.tx_running,
+                        rx_running: ts.rx_running,
+                    }
+                });
+
                 Some(ManagedInterfaceInfo {
                     interface: info.interface.name,
                     local_address: info.interface.ip,
                     scope_id: info.interface.index,
                     peer_state,
+                    thread_state,
                 })
             })
             .collect()
@@ -709,10 +743,20 @@ impl UnnumberedManagerNdp {
                     expired: detail.expired,
                 });
 
+        // Get thread state from NDP manager
+        let thread_state =
+            self.ndp_mgr.get_interface_thread_state(&ifx).map(|ts| {
+                NdpThreadStateInternal {
+                    tx_running: ts.tx_running,
+                    rx_running: ts.rx_running,
+                }
+            });
+
         Ok(Some(InterfaceDetail {
             local_address: ifx.ip,
             scope_id: ifx.index,
             peer_state,
+            thread_state,
         }))
     }
 }
@@ -724,6 +768,7 @@ pub struct ManagedInterfaceInfo {
     pub local_address: Ipv6Addr,
     pub scope_id: u32,
     pub peer_state: Option<NdpPeerState>,
+    pub thread_state: Option<NdpThreadStateInternal>,
 }
 
 /// Detailed NDP state for a specific interface
@@ -732,6 +777,7 @@ pub struct InterfaceDetail {
     pub local_address: Ipv6Addr,
     pub scope_id: u32,
     pub peer_state: Option<NdpPeerState>,
+    pub thread_state: Option<NdpThreadStateInternal>,
 }
 
 /// Detailed NDP peer state with full RA information
@@ -744,4 +790,26 @@ pub struct NdpPeerState {
     pub reachable_time: u32,
     pub retrans_timer: u32,
     pub expired: bool,
+}
+
+/// Thread state for rx/tx loops on an interface
+#[derive(Debug, Clone)]
+pub struct NdpThreadStateInternal {
+    pub tx_running: bool,
+    pub rx_running: bool,
+}
+
+/// Information about a pending interface (configured but not yet on system)
+#[derive(Debug, Clone)]
+pub struct PendingInterfaceInfo {
+    pub interface: String,
+    pub router_lifetime: u16,
+}
+
+/// Overall NDP manager state
+#[derive(Debug, Clone)]
+pub struct NdpManagerStateInternal {
+    pub monitor_thread_running: bool,
+    pub pending_interfaces: Vec<PendingInterfaceInfo>,
+    pub active_interfaces: Vec<String>,
 }

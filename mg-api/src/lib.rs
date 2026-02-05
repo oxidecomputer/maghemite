@@ -576,6 +576,12 @@ pub trait MgAdminApi {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<SwitchIdentifiers>, HttpError>;
 
+    #[endpoint { method = GET, path = "/ndp/manager", versions = VERSION_UNNUMBERED.. }]
+    async fn get_ndp_manager_state(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<NdpManagerState>, HttpError>;
+
     #[endpoint { method = GET, path = "/ndp/interfaces", versions = VERSION_UNNUMBERED.. }]
     async fn get_ndp_interfaces(
         rqctx: RequestContext<Self::Context>,
@@ -988,6 +994,35 @@ pub struct NdpInterfaceSelector {
     pub interface: String,
 }
 
+/// NDP manager state showing overall health and interface status
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct NdpManagerState {
+    /// Whether the interface monitor thread is running
+    pub monitor_thread_running: bool,
+    /// Interfaces configured but not yet available on the system
+    pub pending_interfaces: Vec<NdpPendingInterface>,
+    /// Interfaces currently active in NDP (available on system)
+    pub active_interfaces: Vec<String>,
+}
+
+/// Information about a pending NDP interface
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct NdpPendingInterface {
+    /// Interface name
+    pub interface: String,
+    /// Configured router lifetime (seconds)
+    pub router_lifetime: u16,
+}
+
+/// Thread state for NDP rx/tx loops on an interface
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct NdpThreadState {
+    /// Whether the TX loop thread is running
+    pub tx_running: bool,
+    /// Whether the RX loop thread is running
+    pub rx_running: bool,
+}
+
 /// NDP state for an interface
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct NdpInterface {
@@ -1001,6 +1036,8 @@ pub struct NdpInterface {
     pub router_lifetime: u16,
     /// Information about discovered peer (if any, including expired)
     pub discovered_peer: Option<NdpPeer>,
+    /// Thread state for rx/tx loops (None if interface not active in NDP)
+    pub thread_state: Option<NdpThreadState>,
 }
 
 /// Information about a discovered NDP peer

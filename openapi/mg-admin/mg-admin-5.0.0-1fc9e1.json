@@ -1319,6 +1319,42 @@
         }
       }
     },
+    "/ndp/manager": {
+      "get": {
+        "operationId": "get_ndp_manager_state",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NdpManagerState"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/rib/config/bestpath/fanout": {
       "get": {
         "operationId": "read_rib_bestpath_fanout",
@@ -3722,6 +3758,15 @@
             "type": "integer",
             "format": "uint32",
             "minimum": 0
+          },
+          "thread_state": {
+            "nullable": true,
+            "description": "Thread state for rx/tx loops (None if interface not active in NDP)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NdpThreadState"
+              }
+            ]
           }
         },
         "required": [
@@ -3729,6 +3774,35 @@
           "local_address",
           "router_lifetime",
           "scope_id"
+        ]
+      },
+      "NdpManagerState": {
+        "description": "NDP manager state showing overall health and interface status",
+        "type": "object",
+        "properties": {
+          "active_interfaces": {
+            "description": "Interfaces currently active in NDP (available on system)",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "monitor_thread_running": {
+            "description": "Whether the interface monitor thread is running",
+            "type": "boolean"
+          },
+          "pending_interfaces": {
+            "description": "Interfaces configured but not yet available on the system",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NdpPendingInterface"
+            }
+          }
+        },
+        "required": [
+          "active_interfaces",
+          "monitor_thread_running",
+          "pending_interfaces"
         ]
       },
       "NdpPeer": {
@@ -3784,6 +3858,44 @@
           "reachable_time",
           "retrans_timer",
           "router_lifetime"
+        ]
+      },
+      "NdpPendingInterface": {
+        "description": "Information about a pending NDP interface",
+        "type": "object",
+        "properties": {
+          "interface": {
+            "description": "Interface name",
+            "type": "string"
+          },
+          "router_lifetime": {
+            "description": "Configured router lifetime (seconds)",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "interface",
+          "router_lifetime"
+        ]
+      },
+      "NdpThreadState": {
+        "description": "Thread state for NDP rx/tx loops on an interface",
+        "type": "object",
+        "properties": {
+          "rx_running": {
+            "description": "Whether the RX loop thread is running",
+            "type": "boolean"
+          },
+          "tx_running": {
+            "description": "Whether the TX loop thread is running",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rx_running",
+          "tx_running"
         ]
       },
       "Neighbor": {

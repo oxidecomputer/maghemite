@@ -629,6 +629,13 @@ impl MgAdminApi for MgAdminApiImpl {
         static_admin::switch_identifiers(ctx).await
     }
 
+    async fn get_ndp_manager_state(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<NdpManagerState>, HttpError> {
+        bgp_admin::get_ndp_manager_state(ctx, request).await
+    }
+
     async fn get_ndp_interfaces(
         ctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
