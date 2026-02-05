@@ -4,7 +4,9 @@
 
 #![allow(clippy::type_complexity)]
 use crate::unnumbered_manager::{NdpPeerState, UnnumberedManagerNdp};
-use crate::validation::{validate_prefixes, validate_prefixes_v4, validate_prefixes_v6};
+use crate::validation::{
+    validate_prefixes, validate_prefixes_v4, validate_prefixes_v6,
+};
 use crate::{admin::HandlerContext, error::Error, log::bgp_log};
 use bgp::{
     BGP_PORT,
