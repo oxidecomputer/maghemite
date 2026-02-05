@@ -273,11 +273,13 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         unnumbered_manager: Arc<dyn UnnumberedManager>,
     ) -> Result<EnsureSessionResult<Cnx>, Error> {
         let p2s = lock!(self.peer_to_session);
-        let key = PeerId::Interface(interface);
+        let key = PeerId::Interface(interface.clone());
         if p2s.contains_key(&key) {
             // Session exists, just update config
+            // Drop the lock before calling update to avoid potential deadlock
+            drop(p2s);
             Ok(EnsureSessionResult::Updated(
-                self.update_session(peer, info)?,
+                self.update_unnumbered_session(&interface, peer, info)?,
             ))
         } else {
             // Create new unnumbered session
@@ -380,6 +382,29 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         let key = PeerId::Ip(peer.host.ip());
         let session = match lock!(self.sessions).get(&key) {
             None => return Err(Error::UnknownPeer(peer.host.ip())),
+            Some(s) => s.clone(),
+        };
+
+        session.update_session_parameters(peer, info)?;
+
+        Ok(session)
+    }
+
+    pub fn update_unnumbered_session(
+        self: &Arc<Self>,
+        interface: &str,
+        peer: PeerConfig,
+        info: SessionInfo,
+    ) -> Result<Arc<SessionRunner<Cnx>>, Error> {
+        // Use PeerId::Interface for unnumbered sessions
+        let key = PeerId::Interface(interface.to_string());
+        let session = match lock!(self.sessions).get(&key) {
+            None => {
+                return Err(Error::InternalCommunication(format!(
+                    "unnumbered session not found for interface: {}",
+                    interface
+                )));
+            }
             Some(s) => s.clone(),
         };
 
