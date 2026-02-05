@@ -12,7 +12,7 @@ use dpd_client::Client as DpdClient;
 use dpd_client::types::{self, LinkState, Route};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Path, Prefix};
-use slog::{Logger, warn};
+use slog::Logger;
 use std::{
     collections::{BTreeSet, HashSet},
     hash::Hash,
@@ -41,18 +41,16 @@ impl RouteHash {
         nexthop: IpAddr,
         vlan_id: Option<u16>,
     ) -> Result<Self, &'static str> {
-        match (cidr, nexthop) {
-            (IpNet::V4(_), IpAddr::V4(_)) | (IpNet::V6(_), IpAddr::V6(_)) => {
-                Ok(RouteHash {
-                    cidr,
-                    port_id,
-                    link_id,
-                    nexthop,
-                    vlan_id,
-                })
-            }
-            _ => Err("mismatched subnet and target"),
+        if matches!(cidr, IpNet::V6(_)) && matches!(nexthop, IpAddr::V4(_)) {
+            return Err("mismatched subnet and target");
         }
+        Ok(RouteHash {
+            cidr,
+            port_id,
+            link_id,
+            nexthop,
+            vlan_id,
+        })
     }
 
     pub fn for_prefix_path(
@@ -62,18 +60,13 @@ impl RouteHash {
     ) -> Result<RouteHash, Error> {
         let (port_id, link_id) = get_port_and_link(sw, &path)?;
 
-        let rh = RouteHash {
-            cidr: match prefix {
-                Prefix::V4(p) => Ipv4Net::new(p.value, p.length)?.into(),
-                Prefix::V6(p) => Ipv6Net::new(p.value, p.length)?.into(),
-            },
-            port_id,
-            link_id,
-            nexthop: path.nexthop,
-            vlan_id: path.vlan_id,
+        let cidr = match prefix {
+            Prefix::V4(p) => Ipv4Net::new(p.value, p.length)?.into(),
+            Prefix::V6(p) => Ipv6Net::new(p.value, p.length)?.into(),
         };
 
-        Ok(rh)
+        RouteHash::new(cidr, port_id, link_id, path.nexthop, path.vlan_id)
+            .map_err(|e| Error::AddressFamilyMismatch(e.to_string()))
     }
 }
 
@@ -185,15 +178,15 @@ where
                     continue;
                 }
 
-                let target = types::Ipv4Route {
+                let target = types::RouteTarget::V4(types::Ipv4Route {
                     tag,
                     port_id,
                     link_id,
                     tgt_ip,
                     vlan_id,
-                };
+                });
 
-                let update = types::Ipv4RouteUpdate {
+                let update = types::Ipv4RouteUpdateV2 {
                     cidr: c,
                     target,
                     replace: false,
@@ -252,22 +245,22 @@ where
                 }
             }
             (IpNet::V4(c), IpAddr::V6(tgt_ip)) => {
-                let target = types::Ipv6Route {
+                let target = types::RouteTarget::V6(types::Ipv6Route {
                     tag,
                     port_id,
                     link_id,
                     tgt_ip,
                     vlan_id,
-                };
+                });
 
-                let update = types::Ipv4OverIpv6RouteUpdate {
+                let update = types::Ipv4RouteUpdateV2 {
                     cidr: c,
                     target,
                     replace: false,
                 };
-                if let Err(e) = rt.block_on(async {
-                    dpd.route_ipv4_over_ipv6_add(&update).await
-                }) {
+                if let Err(e) =
+                    rt.block_on(async { dpd.route_ipv4_add(&update).await })
+                {
                     dpd_log!(log,
                         error,
                         "failed to create route {r:?} {e}";
@@ -291,26 +284,51 @@ where
         let port_id = r.port_id.clone();
         let link_id = r.link_id;
 
-        let cidr = match r.cidr {
-            IpNet::V4(cidr) => cidr,
-            IpNet::V6(_) => continue,
-        };
-        let target = match r.nexthop {
-            IpAddr::V4(tgt_ip) => tgt_ip,
-            IpAddr::V6(_) => continue,
-        };
-        if let Err(e) = rt.block_on(async {
-            dpd.route_ipv4_delete_target(&cidr, &port_id, &link_id, &target)
-                .await
-        }) {
-            dpd_log!(log,
-                error,
-                "failed to delete route in ASIC {r:?} via {}: {e}", r.nexthop;
-                "error" => format!("{e}"),
-                "prefix" => format!("r:?"),
-                "nexthop" => format!("{}", r.nexthop)
-            );
-            Err(e)?;
+        match (r.cidr, r.nexthop) {
+            (IpNet::V4(cidr), tgt_ip) => {
+                if let Err(e) = rt.block_on(async {
+                    dpd.route_ipv4_delete_target(
+                        &cidr, &port_id, &link_id, &tgt_ip,
+                    )
+                    .await
+                }) {
+                    dpd_log!(log,
+                        error,
+                        "failed to delete route in ASIC {r:?} via {}: {e}", r.nexthop;
+                        "error" => format!("{e}"),
+                        "prefix" => format!("{}", r.cidr),
+                        "nexthop" => format!("{}", r.nexthop)
+                    );
+                    Err(e)?;
+                }
+            }
+            (IpNet::V6(cidr), IpAddr::V6(tgt_ip)) => {
+                if let Err(e) = rt.block_on(async {
+                    dpd.route_ipv6_delete_target(
+                        &cidr, &port_id, &link_id, &tgt_ip,
+                    )
+                    .await
+                }) {
+                    dpd_log!(log,
+                        error,
+                        "failed to delete route in ASIC {r:?} via {}: {e}", r.nexthop;
+                        "error" => format!("{e}"),
+                        "prefix" => format!("{}", r.cidr),
+                        "nexthop" => format!("{}", r.nexthop)
+                    );
+                    Err(e)?;
+                }
+            }
+            (IpNet::V6(_), IpAddr::V4(_)) => {
+                dpd_log!(log,
+                    error,
+                    "v6-over-v4 routes are not supported: subnet {} target {}",
+                    r.cidr, r.nexthop;
+                    "prefix" => format!("{}", r.cidr),
+                    "nexthop" => format!("{}", r.nexthop)
+                );
+                continue;
+            }
         }
     }
     Ok(())
@@ -462,26 +480,38 @@ pub(crate) fn get_routes_for_prefix(
 
             let mut result: Vec<RouteHash> = Vec::new();
             for r in dpd_routes.iter() {
-                let Route::V4(r) = r else {
-                    warn!(log, "v4 over v6 routes not yet implemented");
-                    continue;
+                let (tag, port_id, link_id, tgt_ip, vlan_id) = match r {
+                    Route::V4(v4) => (
+                        &v4.tag,
+                        v4.port_id.clone(),
+                        v4.link_id,
+                        IpAddr::V4(v4.tgt_ip),
+                        v4.vlan_id,
+                    ),
+                    Route::V6(v6) => (
+                        &v6.tag,
+                        v6.port_id.clone(),
+                        v6.link_id,
+                        IpAddr::V6(v6.tgt_ip),
+                        v6.vlan_id,
+                    ),
                 };
-                if r.tag != MG_LOWER_TAG {
+                if tag != MG_LOWER_TAG {
                     continue;
                 }
                 match RouteHash::new(
                     cidr.into(),
-                    r.port_id.clone(),
-                    r.link_id,
-                    r.tgt_ip.into(),
-                    r.vlan_id,
+                    port_id.clone(),
+                    link_id,
+                    tgt_ip,
+                    vlan_id,
                 ) {
                     Ok(rh) => result.push(rh),
                     Err(e) => {
                         dpd_log!(log,
                             error,
                             "route hash creation failed for {prefix} (port: {}, link: {}, tgt_ip: {}, vlan_id: {:?}): {e}",
-                            r.port_id.clone(), r.link_id, r.tgt_ip, r.vlan_id;
+                            port_id, link_id, tgt_ip, vlan_id;
                             "error" => format!("{e}"),
                             "prefix" => format!("r:?")
                         );

@@ -20,5 +20,8 @@ pub enum Error {
     SysRoute(#[from] crate::platform::SysRouteError),
 
     #[error("oxnet ipnet prefix error {0}")]
-    OxnetIpnetPrevix(#[from] oxnet::IpNetPrefixError),
+    OxnetIpnetPrefix(#[from] oxnet::IpNetPrefixError),
+
+    #[error("address family mismatch: {0}")]
+    AddressFamilyMismatch(String),
 }

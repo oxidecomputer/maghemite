@@ -115,7 +115,7 @@ checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 [[package]]
 name = "api_identity"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#194594d3cc000bac981a69a11f8cc0916cb727db"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#4b3cdb4e30b917347208b200fa5fb4d3f644f837"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -790,17 +790,16 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
 name = "common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=main#9f6b8f71c2b626e21dc03ea686abda3846dc44c2"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=trey%2Fv4_over_v6_delete#543dab2a9462c682be2a5172594ffc34caad1c63"
 dependencies = [
  "anyhow",
  "chrono",
- "oximeter",
  "oxnet",
  "rand 0.9.2",
  "schemars 0.8.22",
@@ -1442,7 +1441,7 @@ dependencies = [
 [[package]]
 name = "dpd-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dendrite?branch=main#9f6b8f71c2b626e21dc03ea686abda3846dc44c2"
+source = "git+https://github.com/oxidecomputer/dendrite?branch=trey%2Fv4_over_v6_delete#543dab2a9462c682be2a5172594ffc34caad1c63"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1719,7 +1718,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2565,7 +2564,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-layer",
@@ -2993,7 +2992,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3052,7 +3051,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3423,12 +3422,12 @@ dependencies = [
 [[package]]
 name = "mg-admin-client"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/maghemite?rev=396bb3c570be65f4e8c73ea3243f4af6561a823a#396bb3c570be65f4e8c73ea3243f4af6561a823a"
+source = "git+https://github.com/oxidecomputer/maghemite?rev=3abfb8eb7f6d4ca4658981b4a7a76759a0a3f8ec#3abfb8eb7f6d4ca4658981b4a7a76759a0a3f8ec"
 dependencies = [
  "chrono",
  "colored",
  "progenitor 0.11.2",
- "rdb-types 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=396bb3c570be65f4e8c73ea3243f4af6561a823a)",
+ "rdb-types 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=3abfb8eb7f6d4ca4658981b4a7a76759a0a3f8ec)",
  "reqwest",
  "schemars 0.8.22",
  "serde",
@@ -4043,7 +4042,7 @@ dependencies = [
 [[package]]
 name = "omicron-common"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#194594d3cc000bac981a69a11f8cc0916cb727db"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#4b3cdb4e30b917347208b200fa5fb4d3f644f837"
 dependencies = [
  "anyhow",
  "api_identity",
@@ -4060,7 +4059,7 @@ dependencies = [
  "ipnetwork",
  "itertools 0.14.0",
  "macaddr",
- "mg-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=396bb3c570be65f4e8c73ea3243f4af6561a823a)",
+ "mg-admin-client 0.1.0 (git+https://github.com/oxidecomputer/maghemite?rev=3abfb8eb7f6d4ca4658981b4a7a76759a0a3f8ec)",
  "omicron-uuid-kinds",
  "omicron-workspace-hack",
  "oxnet",
@@ -4103,7 +4102,7 @@ dependencies = [
 [[package]]
 name = "omicron-uuid-kinds"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#194594d3cc000bac981a69a11f8cc0916cb727db"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#4b3cdb4e30b917347208b200fa5fb4d3f644f837"
 dependencies = [
  "daft",
  "newtype-uuid",
@@ -4361,7 +4360,7 @@ dependencies = [
 [[package]]
 name = "oximeter"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#194594d3cc000bac981a69a11f8cc0916cb727db"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#4b3cdb4e30b917347208b200fa5fb4d3f644f837"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4433,7 +4432,7 @@ dependencies = [
 [[package]]
 name = "oximeter-macro-impl"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#194594d3cc000bac981a69a11f8cc0916cb727db"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#4b3cdb4e30b917347208b200fa5fb4d3f644f837"
 dependencies = [
  "omicron-workspace-hack",
  "proc-macro2",
@@ -4466,7 +4465,7 @@ dependencies = [
 [[package]]
 name = "oximeter-schema"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#194594d3cc000bac981a69a11f8cc0916cb727db"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#4b3cdb4e30b917347208b200fa5fb4d3f644f837"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4487,7 +4486,7 @@ dependencies = [
 [[package]]
 name = "oximeter-timeseries-macro"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#194594d3cc000bac981a69a11f8cc0916cb727db"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#4b3cdb4e30b917347208b200fa5fb4d3f644f837"
 dependencies = [
  "omicron-workspace-hack",
  "oximeter-schema",
@@ -4500,7 +4499,7 @@ dependencies = [
 [[package]]
 name = "oximeter-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#194594d3cc000bac981a69a11f8cc0916cb727db"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#4b3cdb4e30b917347208b200fa5fb4d3f644f837"
 dependencies = [
  "bytes",
  "chrono",
@@ -4521,7 +4520,7 @@ dependencies = [
 [[package]]
 name = "oximeter-types-versions"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/omicron?branch=main#194594d3cc000bac981a69a11f8cc0916cb727db"
+source = "git+https://github.com/oxidecomputer/omicron?branch=main#4b3cdb4e30b917347208b200fa5fb4d3f644f837"
 dependencies = [
  "chrono",
  "omicron-common",
@@ -5266,7 +5265,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.36",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -5303,9 +5302,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5446,7 +5445,7 @@ dependencies = [
 [[package]]
 name = "rdb-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/maghemite?rev=396bb3c570be65f4e8c73ea3243f4af6561a823a#396bb3c570be65f4e8c73ea3243f4af6561a823a"
+source = "git+https://github.com/oxidecomputer/maghemite?rev=3abfb8eb7f6d4ca4658981b4a7a76759a0a3f8ec#3abfb8eb7f6d4ca4658981b4a7a76759a0a3f8ec"
 dependencies = [
  "oxnet",
  "schemars 0.8.22",
@@ -5692,7 +5691,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6576,7 +6575,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
@@ -6894,7 +6893,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6903,7 +6902,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8c27177b12a6399ffc08b98f76f7c9a1f4fe9fc967c784c5a071fa8d93cf7e1"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7466,7 +7465,7 @@ dependencies = [
 [[package]]
 name = "transceiver-controller"
 version = "0.1.1"
-source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#7c7e703317cc313d9c3d7a66bf98c133f01cbebb"
+source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#e395c5c7304465f30acb720839755c5dd9da9f70"
 dependencies = [
  "anyhow",
  "clap",
@@ -7490,7 +7489,7 @@ dependencies = [
 [[package]]
 name = "transceiver-decode"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#7c7e703317cc313d9c3d7a66bf98c133f01cbebb"
+source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#e395c5c7304465f30acb720839755c5dd9da9f70"
 dependencies = [
  "schemars 0.8.22",
  "serde",
@@ -7502,7 +7501,7 @@ dependencies = [
 [[package]]
 name = "transceiver-messages"
 version = "0.1.1"
-source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#7c7e703317cc313d9c3d7a66bf98c133f01cbebb"
+source = "git+https://github.com/oxidecomputer/transceiver-control?branch=main#e395c5c7304465f30acb720839755c5dd9da9f70"
 dependencies = [
  "bitflags 2.10.0",
  "clap",
@@ -8215,7 +8214,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
