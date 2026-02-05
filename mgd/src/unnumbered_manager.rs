@@ -7,6 +7,7 @@ use bgp::{
     params::UnnumberedNeighbor,
     router::Router,
     session::{SessionInfo, SessionRunner},
+    unnumbered::NdpNeighbor,
 };
 use mg_common::lock;
 use ndp::{Ipv6NetworkInterface, NdpManager, NewInterfaceNdpManagerError};
@@ -92,27 +93,28 @@ impl UnnumberedManagerNdp {
             false
         };
 
-        // If we're updating an existing session and the interface resolution failed,
-        // we can proceed without the interface info - the session already has it
-        let ifx: Option<Ipv6NetworkInterface> = match (
-            ifx_result,
-            updating_existing,
-        ) {
-            (Ok(ifx), _) => Some(ifx),
-            (Err(e), true) => {
-                // Updating existing session but interface not found - that's OK,
-                // we just skip interface setup and update the session config
+        // Interface resolution can fail if the interface doesn't exist yet.
+        // We allow session creation regardless - the FSM will wait for the
+        // interface to appear before attempting connections.
+        let ifx: Option<Ipv6NetworkInterface> = match ifx_result {
+            Ok(ifx) => Some(ifx),
+            Err(e) => {
+                // Interface not found - that's OK for both new sessions and updates.
+                // For new sessions: FSM will wait for interface to appear.
+                // For updates: session already has whatever info it needs.
+                let action = if updating_existing {
+                    "updating"
+                } else {
+                    "creating"
+                };
                 slog::info!(
                     self.log,
-                    "updating unnumbered session for interface that is not currently available";
+                    "{} unnumbered session for interface that is not currently available",
+                    action;
                     "interface" => interface_str,
                     "error" => e.to_string(),
                 );
                 None
-            }
-            (Err(e), false) => {
-                // Not updating or interface is required for new session
-                return Err(AddNeighborError::Resolve(e));
             }
         };
 
@@ -216,7 +218,7 @@ impl UnnumberedManagerNdp {
 
     /// Get the currently discovered neighbor for an interface.
     ///
-    /// Returns the peer's link-local SocketAddr (with scope_id set) if a neighbor
+    /// Returns the peer's link-local IPv6 address and scope_id if a neighbor
     /// has been discovered via NDP, or None if no neighbor is present.
     ///
     /// This is used by SessionRunner to actively query for peer addresses
@@ -226,26 +228,19 @@ impl UnnumberedManagerNdp {
     /// * `interface` - The interface name (e.g., "eth0")
     ///
     /// # Returns
-    /// * `Ok(Some(SocketAddr))` - Neighbor discovered at this address
+    /// * `Ok(Some(NdpNeighbor))` - Neighbor discovered on this interface
     /// * `Ok(None)` - No neighbor discovered yet
     /// * `Err(ResolveNeighborError)` - Interface not found or not IPv6
-    pub fn get_neighbor_for_interface(
+    pub fn get_neighbor_by_interface(
         &self,
         interface: impl AsRef<str>,
-    ) -> Result<Option<SocketAddr>, ResolveNeighborError> {
+    ) -> Result<Option<NdpNeighbor>, ResolveNeighborError> {
         let ifx = Self::get_interface(interface.as_ref(), &self.log)?;
 
-        if let Some(peer_addr) = self.ndp_mgr.get_peer(&ifx) {
-            // Construct SocketAddr with scope_id from interface index
-            let socket_addr = SocketAddr::V6(SocketAddrV6::new(
-                peer_addr, 179, // BGP port
-                0,   // flowinfo
-                ifx.index,
-            ));
-            Ok(Some(socket_addr))
-        } else {
-            Ok(None)
-        }
+        Ok(self.ndp_mgr.get_peer(&ifx).map(|peer_addr| NdpNeighbor {
+            addr: peer_addr,
+            scope_id: ifx.index,
+        }))
     }
 
     /// Get the interface name for a given IPv6 scope_id.
@@ -287,10 +282,10 @@ impl UnnumberedManagerNdp {
         peer: SocketAddr,
     ) -> bool {
         // Get discovered neighbor for interface
-        if let Ok(Some(discovered)) = self.get_neighbor_for_interface(interface)
+        if let Ok(Some(discovered)) = self.get_neighbor_by_interface(interface)
         {
             // Compare IP addresses (ignore port/flowinfo/scope_id differences)
-            discovered.ip() == peer.ip()
+            IpAddr::V6(discovered.addr) == peer.ip()
         } else {
             false
         }
@@ -348,18 +343,40 @@ impl UnnumberedManagerNdp {
 // =========================================================================
 // Provides the interface for Dispatcher to query interface mappings
 impl bgp::unnumbered::UnnumberedManager for UnnumberedManagerNdp {
-    fn get_interface_for_scope(&self, scope_id: u32) -> Option<String> {
+    fn interface_is_active(&self, interface: &str) -> bool {
+        // Delegate to the existing implementation
+        Self::get_interface(interface, &self.log).is_ok()
+    }
+
+    fn get_interface_by_scope(&self, scope_id: u32) -> Option<String> {
         // Delegate to the existing implementation
         Self::get_interface_for_scope(self, scope_id)
     }
 
-    fn get_neighbor_for_interface(
+    fn get_neighbor_by_interface(
         &self,
         interface: &str,
-    ) -> Result<Option<SocketAddr>, Box<dyn std::error::Error>> {
+    ) -> Result<
+        Option<bgp::unnumbered::NdpNeighbor>,
+        bgp::unnumbered::UnnumberedError,
+    > {
         // Delegate to the existing implementation
-        Self::get_neighbor_for_interface(self, interface)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        Self::get_neighbor_by_interface(self, interface).map_err(|e| match e {
+            ResolveNeighborError::NoSuchInterface => {
+                bgp::unnumbered::UnnumberedError::InterfaceNotFound(
+                    interface.to_string(),
+                )
+            }
+            ResolveNeighborError::NotIpv6Interface => {
+                bgp::unnumbered::UnnumberedError::NotIpv6(interface.to_string())
+            }
+            ResolveNeighborError::System(sys_err) => {
+                bgp::unnumbered::UnnumberedError::ResolutionFailed {
+                    interface: interface.to_string(),
+                    reason: sys_err.to_string(),
+                }
+            }
+        })
     }
 }
 

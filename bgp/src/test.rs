@@ -14,6 +14,7 @@ use crate::{
         AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, PeerId,
         SessionEndpoint, SessionInfo, SessionRunner,
     },
+    unnumbered::UnnumberedManager,
     unnumbered_mock::UnnumberedManagerMock,
 };
 use lazy_static::lazy_static;
@@ -23,12 +24,13 @@ use mg_common::*;
 use rdb::{Asn, ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::{IpAddr, SocketAddr, SocketAddrV6},
+    net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
         mpsc::channel,
     },
+    thread::{Builder, sleep},
     time::{Duration, Instant},
 };
 
@@ -100,7 +102,7 @@ impl<Cnx: BgpConnection + 'static> TestRouter<Cnx> {
         let listen_addr = self.dispatcher.listen_addr().to_string();
         let listen_addr_for_log = listen_addr.clone();
         eprintln!("Spawning Dispatcher thread for {}", listen_addr);
-        std::thread::Builder::new()
+        Builder::new()
             .name(format!("bgp-listener-{}", listen_addr))
             .spawn(move || {
                 d.run::<Listener>();
@@ -327,7 +329,7 @@ where
         let listen_addr = dispatcher.listen_addr().to_string();
         let listen_addr_for_log = listen_addr.clone();
         eprintln!("Spawning Dispatcher thread for {}", listen_addr);
-        std::thread::Builder::new()
+        Builder::new()
             .name(format!("bgp-listener-{}", listen_addr))
             .spawn(move || {
                 d.run::<Listener>();
@@ -1792,7 +1794,7 @@ fn unnumbered_peering_helper(
         // Router 1 dispatcher for this interface
         let r1_addr = SocketAddr::V6(SocketAddrV6::new(
             "fe80::1".parse().unwrap(),
-            179,
+            TEST_BGP_PORT,
             0,
             *scope_id,
         ));
@@ -1805,7 +1807,7 @@ fn unnumbered_peering_helper(
 
         let d1 = disp1.clone();
         let iface_name = iface.clone();
-        std::thread::Builder::new()
+        Builder::new()
             .name(format!("bgp-listener-r1-{}", iface_name))
             .spawn(move || {
                 d1.run::<BgpListenerChannel>();
@@ -1817,7 +1819,7 @@ fn unnumbered_peering_helper(
         // Router 2 dispatcher for this interface
         let r2_addr = SocketAddr::V6(SocketAddrV6::new(
             "fe80::2".parse().unwrap(),
-            179,
+            TEST_BGP_PORT,
             0,
             *scope_id,
         ));
@@ -1830,7 +1832,7 @@ fn unnumbered_peering_helper(
 
         let d2 = disp2.clone();
         let iface_name = iface.clone();
-        std::thread::Builder::new()
+        Builder::new()
             .name(format!("bgp-listener-r2-{}", iface_name))
             .spawn(move || {
                 d2.run::<BgpListenerChannel>();
@@ -1872,7 +1874,7 @@ fn unnumbered_peering_helper(
         let (event_tx1, event_rx1) = channel();
         let bind_addr1 = SocketAddr::V6(SocketAddrV6::new(
             "fe80::1".parse().unwrap(),
-            179,
+            TEST_BGP_PORT,
             0,
             *scope_id,
         ));
@@ -1881,7 +1883,7 @@ fn unnumbered_peering_helper(
             bind_addr1,
             SocketAddr::V6(SocketAddrV6::new(
                 "fe80::2".parse().unwrap(),
-                179,
+                TEST_BGP_PORT,
                 0,
                 *scope_id,
             )),
@@ -1923,7 +1925,7 @@ fn unnumbered_peering_helper(
         let (event_tx2, event_rx2) = channel();
         let bind_addr2 = SocketAddr::V6(SocketAddrV6::new(
             "fe80::2".parse().unwrap(),
-            179,
+            TEST_BGP_PORT,
             0,
             *scope_id,
         ));
@@ -1932,7 +1934,7 @@ fn unnumbered_peering_helper(
             bind_addr2,
             SocketAddr::V6(SocketAddrV6::new(
                 "fe80::1".parse().unwrap(),
-                179,
+                TEST_BGP_PORT,
                 0,
                 *scope_id,
             )),
@@ -1971,18 +1973,8 @@ fn unnumbered_peering_helper(
         sessions2.push(session2);
 
         // Discover peers via NDP BEFORE starting sessions
-        let peer1_addr = SocketAddr::V6(SocketAddrV6::new(
-            "fe80::1".parse().unwrap(),
-            179,
-            0,
-            *scope_id,
-        ));
-        let peer2_addr = SocketAddr::V6(SocketAddrV6::new(
-            "fe80::2".parse().unwrap(),
-            179,
-            0,
-            *scope_id,
-        ));
+        let peer1_addr: Ipv6Addr = "fe80::1".parse().unwrap();
+        let peer2_addr: Ipv6Addr = "fe80::2".parse().unwrap();
 
         mock_ndp1.discover_peer(iface, peer2_addr).unwrap();
         mock_ndp2.discover_peer(iface, peer1_addr).unwrap();
@@ -2021,11 +2013,11 @@ fn test_unnumbered_session_survives_peer_change() {
     let session2 = &sessions2[0];
 
     // Debug: check what's happening
-    std::thread::sleep(Duration::from_secs(5));
+    sleep(Duration::from_secs(5));
     eprintln!("Session1 state: {:?}", session1.state());
     eprintln!("Session2 state: {:?}", session2.state());
-    eprintln!("Session1 peer addr: {:?}", session1.get_peer_addr());
-    eprintln!("Session2 peer addr: {:?}", session2.get_peer_addr());
+    eprintln!("Session1 peer addr: {:?}", session1.get_peer_socket_addr());
+    eprintln!("Session2 peer addr: {:?}", session2.get_peer_socket_addr());
     eprintln!("Session1 is_unnumbered: {}", session1.is_unnumbered());
     eprintln!("Session2 is_unnumbered: {}", session2.is_unnumbered());
 
@@ -2036,23 +2028,20 @@ fn test_unnumbered_session_survives_peer_change() {
     // Verify initial peer addresses
     let peer2_addr = SocketAddr::V6(SocketAddrV6::new(
         "fe80::2".parse().unwrap(),
-        179,
+        TEST_BGP_PORT,
         0,
         2,
     ));
-    assert_eq!(session1.get_peer_addr(), Some(peer2_addr));
+    assert_eq!(session1.get_peer_socket_addr(), Some(peer2_addr));
 
     // Simulate cable swap: Router 1's interface now sees a different peer
-    let new_peer_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::99".parse().unwrap(),
-        179,
-        0,
-        2,
-    ));
-    mock_ndp1.discover_peer("eth0", new_peer_addr).unwrap();
+    let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
+    mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
 
     // Router 1's query now returns the new peer
-    wait_for!(session1.get_peer_addr() == Some(new_peer_addr));
+    let new_peer_addr =
+        SocketAddr::V6(SocketAddrV6::new(new_peer_ip, TEST_BGP_PORT, 0, 2));
+    wait_for!(session1.get_peer_socket_addr() == Some(new_peer_addr));
 
     // CRITICAL: Session must stay Established (NDP change doesn't affect FSM)
     assert_eq!(
@@ -2076,7 +2065,7 @@ fn test_unnumbered_session_survives_peer_change() {
     wait_for_eq!(session1.state(), FsmStateKind::Established);
 
     // After reset, session1 still queries the new peer address
-    assert_eq!(session1.get_peer_addr(), Some(new_peer_addr));
+    assert_eq!(session1.get_peer_socket_addr(), Some(new_peer_addr));
 
     // Clean up
     router1.shutdown();
@@ -2111,7 +2100,7 @@ fn test_unnumbered_peer_expiry_and_rediscovery() {
     mock_ndp1.expire_peer("eth0").unwrap();
 
     // Router 1's query now returns None
-    wait_for!(session1.get_peer_addr().is_none());
+    wait_for!(session1.get_peer_socket_addr().is_none());
 
     // CRITICAL: Session must STAY Established despite NDP expiry
     // Loop for 30s to ensure it doesn't drop to Idle
@@ -2127,20 +2116,17 @@ fn test_unnumbered_peer_expiry_and_rediscovery() {
             FsmStateKind::Established,
             "Remote session should also stay Established"
         );
-        std::thread::sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(100));
     }
 
     // Rediscover peer
-    let peer2_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::2".parse().unwrap(),
-        179,
-        0,
-        2,
-    ));
-    mock_ndp1.discover_peer("eth0", peer2_addr).unwrap();
+    let peer2_ip: Ipv6Addr = "fe80::2".parse().unwrap();
+    mock_ndp1.discover_peer("eth0", peer2_ip).unwrap();
 
     // Router 1's query returns the peer again
-    wait_for!(session1.get_peer_addr() == Some(peer2_addr));
+    let peer2_addr =
+        SocketAddr::V6(SocketAddrV6::new(peer2_ip, TEST_BGP_PORT, 0, 2));
+    wait_for!(session1.get_peer_socket_addr() == Some(peer2_addr));
 
     // Sessions should still be Established
     assert_eq!(session1.state(), FsmStateKind::Established);
@@ -2179,14 +2165,11 @@ fn test_multiple_unnumbered_sessions() {
     wait_for_eq!(session2_eth1.state(), FsmStateKind::Established);
 
     // Change Router 1's eth0 NDP neighbor
-    let new_peer = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::99".parse().unwrap(),
-        179,
-        0,
-        2,
-    ));
-    mock_ndp1.discover_peer("eth0", new_peer).unwrap();
-    wait_for!(session1_eth0.get_peer_addr() == Some(new_peer));
+    let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
+    mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
+    let new_peer =
+        SocketAddr::V6(SocketAddrV6::new(new_peer_ip, TEST_BGP_PORT, 0, 2));
+    wait_for!(session1_eth0.get_peer_socket_addr() == Some(new_peer));
 
     // CRITICAL: All sessions must stay Established
     assert_eq!(
@@ -2213,12 +2196,12 @@ fn test_multiple_unnumbered_sessions() {
     // Verify eth1 peer address unchanged
     let peer2_eth1 = SocketAddr::V6(SocketAddrV6::new(
         "fe80::2".parse().unwrap(),
-        179,
+        TEST_BGP_PORT,
         0,
         3,
     ));
     assert_eq!(
-        session1_eth1.get_peer_addr(),
+        session1_eth1.get_peer_socket_addr(),
         Some(peer2_eth1),
         "eth1 peer should be unchanged"
     );
@@ -2246,22 +2229,23 @@ fn test_same_linklocal_multiple_interfaces() {
         );
 
     // Override discovered peers to use same link-local on both interfaces
+    let linklocal_ip: Ipv6Addr = "fe80::1".parse().unwrap();
+    mock_ndp1.discover_peer("eth0", linklocal_ip).unwrap();
+    mock_ndp1.discover_peer("eth1", linklocal_ip).unwrap();
+
+    // Expected SocketAddrs with correct scope_id and port
     let linklocal_eth0 = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::1".parse().unwrap(),
-        179,
+        linklocal_ip,
+        TEST_BGP_PORT,
         0,
         2, // scope_id 2 for eth0
     ));
     let linklocal_eth1 = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::1".parse().unwrap(), // SAME IP
-        179,
+        linklocal_ip, // SAME IP
+        TEST_BGP_PORT,
         0,
         3, // scope_id 3 for eth1
     ));
-
-    // Router 1 sees fe80::1 on both eth0 (scope 2) and eth1 (scope 3)
-    mock_ndp1.discover_peer("eth0", linklocal_eth0).unwrap();
-    mock_ndp1.discover_peer("eth1", linklocal_eth1).unwrap();
 
     let session1_eth0 = &sessions1[0];
     let session1_eth1 = &sessions1[1];
@@ -2275,22 +2259,19 @@ fn test_same_linklocal_multiple_interfaces() {
     wait_for_eq!(session2_eth1.state(), FsmStateKind::Established);
 
     // Verify both sessions see the same IP but different scope_id
-    assert_eq!(session1_eth0.get_peer_addr(), Some(linklocal_eth0));
-    assert_eq!(session1_eth1.get_peer_addr(), Some(linklocal_eth1));
+    assert_eq!(session1_eth0.get_peer_socket_addr(), Some(linklocal_eth0));
+    assert_eq!(session1_eth1.get_peer_socket_addr(), Some(linklocal_eth1));
 
     // Verify they're truly independent: change eth0's peer
-    let new_peer_eth0 = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::99".parse().unwrap(),
-        179,
-        0,
-        2,
-    ));
-    mock_ndp1.discover_peer("eth0", new_peer_eth0).unwrap();
-    wait_for!(session1_eth0.get_peer_addr() == Some(new_peer_eth0));
+    let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
+    mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
+    let new_peer_eth0 =
+        SocketAddr::V6(SocketAddrV6::new(new_peer_ip, TEST_BGP_PORT, 0, 2));
+    wait_for!(session1_eth0.get_peer_socket_addr() == Some(new_peer_eth0));
 
     // eth1 should still see fe80::1 with scope 3
     assert_eq!(
-        session1_eth1.get_peer_addr(),
+        session1_eth1.get_peer_socket_addr(),
         Some(linklocal_eth1),
         "eth1 should still see fe80::1 with its own scope_id"
     );
@@ -2448,18 +2429,12 @@ fn unnumbered_pair(
     mock_ndp2.register_interface(interface_name.to_string(), scope_id);
 
     // Allocate link-local addresses with scope_id
-    let r1_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::1".parse().unwrap(),
-        179,
-        0,
-        scope_id,
-    ));
-    let r2_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::2".parse().unwrap(),
-        179,
-        0,
-        scope_id,
-    ));
+    let r1_ip: Ipv6Addr = "fe80::1".parse().unwrap();
+    let r2_ip: Ipv6Addr = "fe80::2".parse().unwrap();
+    let r1_addr =
+        SocketAddr::V6(SocketAddrV6::new(r1_ip, TEST_BGP_PORT, 0, scope_id));
+    let r2_addr =
+        SocketAddr::V6(SocketAddrV6::new(r2_ip, TEST_BGP_PORT, 0, scope_id));
 
     // Create session maps
     let p2s1: Arc<
@@ -2485,7 +2460,7 @@ fn unnumbered_pair(
 
     // Start dispatchers in background threads
     let d1 = dispatcher1.clone();
-    std::thread::Builder::new()
+    Builder::new()
         .name(format!("bgp-listener-{}-r1", test_name))
         .spawn(move || {
             d1.run::<BgpListenerChannel>();
@@ -2493,7 +2468,7 @@ fn unnumbered_pair(
         .expect("spawn dispatcher1");
 
     let d2 = dispatcher2.clone();
-    std::thread::Builder::new()
+    Builder::new()
         .name(format!("bgp-listener-{}-r2", test_name))
         .spawn(move || {
             d2.run::<BgpListenerChannel>();
@@ -2590,10 +2565,10 @@ fn unnumbered_pair(
 
     // Discover peers via NDP
     mock_ndp1
-        .discover_peer(interface_name, r2_addr)
+        .discover_peer(interface_name, r2_ip)
         .expect("discover peer on r1");
     mock_ndp2
-        .discover_peer(interface_name, r1_addr)
+        .discover_peer(interface_name, r1_ip)
         .expect("discover peer on r2");
 
     // Start sessions
@@ -2671,27 +2646,30 @@ fn unnumbered_three_router_chain(
     // IMPORTANT: R1 and R3 both use fe80::1 to test peer isolation bug
     // In real unnumbered BGP, different routers can use the same link-local
     // address because they're on different interfaces (different scope_ids)
+    let r1_ip: Ipv6Addr = "fe80::1".parse().unwrap();
+    let r2_ip: Ipv6Addr = "fe80::2".parse().unwrap();
+    let r3_ip: Ipv6Addr = "fe80::1".parse().unwrap(); // Same as R1, different scope_id
     let r1_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::1".parse().unwrap(),
-        179,
+        r1_ip,
+        TEST_BGP_PORT,
         0,
         r1_r2_scope_id,
     ));
     let r2_eth0_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::2".parse().unwrap(),
-        179,
+        r2_ip,
+        TEST_BGP_PORT,
         0,
         r1_r2_scope_id,
     ));
     let r2_eth1_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::2".parse().unwrap(),
-        179,
+        r2_ip,
+        TEST_BGP_PORT,
         0,
         r2_r3_scope_id,
     ));
     let r3_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::1".parse().unwrap(), // Same as R1, different scope_id
-        179,
+        r3_ip,
+        TEST_BGP_PORT,
         0,
         r2_r3_scope_id,
     ));
@@ -2714,7 +2692,7 @@ fn unnumbered_three_router_chain(
         log.clone(),
         Some(mock_ndp1.clone()),
     ));
-    std::thread::Builder::new()
+    Builder::new()
         .name(format!("bgp-listener-r1-{}", r1_r2_interface))
         .spawn({
             let d = disp1.clone();
@@ -2729,7 +2707,7 @@ fn unnumbered_three_router_chain(
         log.clone(),
         Some(mock_ndp2.clone()),
     ));
-    std::thread::Builder::new()
+    Builder::new()
         .name(format!("bgp-listener-r2-{}", r1_r2_interface))
         .spawn({
             let d = disp2_eth0.clone();
@@ -2743,7 +2721,7 @@ fn unnumbered_three_router_chain(
         log.clone(),
         Some(mock_ndp2.clone()),
     ));
-    std::thread::Builder::new()
+    Builder::new()
         .name(format!("bgp-listener-r2-{}", r2_r3_interface))
         .spawn({
             let d = disp2_eth1.clone();
@@ -2758,7 +2736,7 @@ fn unnumbered_three_router_chain(
         log.clone(),
         Some(mock_ndp3.clone()),
     ));
-    std::thread::Builder::new()
+    Builder::new()
         .name(format!("bgp-listener-r3-{}", r2_r3_interface))
         .spawn({
             let d = disp3.clone();
@@ -2925,16 +2903,16 @@ fn unnumbered_three_router_chain(
 
     // Discover peers via NDP
     mock_ndp1
-        .discover_peer(r1_r2_interface, r2_eth0_addr)
+        .discover_peer(r1_r2_interface, r2_ip)
         .expect("r1 discovers r2");
     mock_ndp2
-        .discover_peer(r1_r2_interface, r1_addr)
+        .discover_peer(r1_r2_interface, r1_ip)
         .expect("r2 discovers r1 on eth0");
     mock_ndp2
-        .discover_peer(r2_r3_interface, r3_addr)
+        .discover_peer(r2_r3_interface, r3_ip)
         .expect("r2 discovers r3 on eth1");
     mock_ndp3
-        .discover_peer(r2_r3_interface, r2_eth1_addr)
+        .discover_peer(r2_r3_interface, r2_ip)
         .expect("r3 discovers r2");
 
     // Start all sessions
@@ -3020,43 +2998,46 @@ fn test_unnumbered_unaffected_by_ndp() {
     );
 
     // Verify initial peer addresses
+    let initial_r2_ip: Ipv6Addr = "fe80::2".parse().unwrap();
+    let initial_r1_ip: Ipv6Addr = "fe80::1".parse().unwrap();
     let initial_r2_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::2".parse().unwrap(),
-        179,
+        initial_r2_ip,
+        TEST_BGP_PORT,
         0,
         scope_id,
     ));
     let initial_r1_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::1".parse().unwrap(),
-        179,
+        initial_r1_ip,
+        TEST_BGP_PORT,
         0,
         scope_id,
     ));
     assert_eq!(
-        session1.get_peer_addr(),
+        session1.get_peer_socket_addr(),
         Some(initial_r2_addr),
         "R1 should see R2's address initially"
     );
     assert_eq!(
-        session2.get_peer_addr(),
+        session2.get_peer_socket_addr(),
         Some(initial_r1_addr),
         "R2 should see R1's address initially"
     );
 
     // Step 2: Update NDP neighbor to new IP on R1
-    let new_peer_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::99".parse().unwrap(),
-        179,
-        0,
-        scope_id,
-    ));
+    let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
     r1.mock_ndp
-        .discover_peer("eth0", new_peer_addr)
+        .discover_peer("eth0", new_peer_ip)
         .expect("update peer on R1");
 
     // Step 3: Verify get_peer_addr() returns new IP
+    let new_peer_addr = SocketAddr::V6(SocketAddrV6::new(
+        new_peer_ip,
+        TEST_BGP_PORT,
+        0,
+        scope_id,
+    ));
     wait_for!(
-        session1.get_peer_addr() == Some(new_peer_addr),
+        session1.get_peer_socket_addr() == Some(new_peer_addr),
         "R1 should see new peer address"
     );
 
@@ -3089,7 +3070,7 @@ fn test_unnumbered_unaffected_by_ndp() {
 
     // Step 6: Verify get_peer_addr() returns None
     wait_for!(
-        session1.get_peer_addr().is_none(),
+        session1.get_peer_socket_addr().is_none(),
         "R1 should see no peer after expiry"
     );
 
@@ -3107,17 +3088,17 @@ fn test_unnumbered_unaffected_by_ndp() {
             FsmStateKind::Established,
             "R2 session must stay Established despite R1's NDP expiry"
         );
-        std::thread::sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(100));
     }
 
     // Step 8: Rediscover original peer
     r1.mock_ndp
-        .discover_peer("eth0", initial_r2_addr)
+        .discover_peer("eth0", initial_r2_ip)
         .expect("rediscover peer on R1");
 
     // Step 9: Verify get_peer_addr() returns original peer
     wait_for!(
-        session1.get_peer_addr() == Some(initial_r2_addr),
+        session1.get_peer_socket_addr() == Some(initial_r2_addr),
         "R1 should see original peer after rediscovery"
     );
 
@@ -3173,30 +3154,31 @@ fn test_unnumbered_ndp_change() {
     // Verify initial peer addresses
     let initial_r2_addr = SocketAddr::V6(SocketAddrV6::new(
         "fe80::2".parse().unwrap(),
-        179,
+        TEST_BGP_PORT,
         0,
         scope_id,
     ));
     assert_eq!(
-        session1.get_peer_addr(),
+        session1.get_peer_socket_addr(),
         Some(initial_r2_addr),
         "R1 should see R2's initial address"
     );
 
     // Step 2: Change NDP neighbor to new IP on R1
-    let new_peer_addr = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::88".parse().unwrap(),
-        179,
-        0,
-        scope_id,
-    ));
+    let new_peer_ip: Ipv6Addr = "fe80::88".parse().unwrap();
     r1.mock_ndp
-        .discover_peer("eth0", new_peer_addr)
+        .discover_peer("eth0", new_peer_ip)
         .expect("update peer on R1");
 
     // Step 3: Verify get_peer_addr() returns new IP
+    let new_peer_addr = SocketAddr::V6(SocketAddrV6::new(
+        new_peer_ip,
+        TEST_BGP_PORT,
+        0,
+        scope_id,
+    ));
     wait_for!(
-        session1.get_peer_addr() == Some(new_peer_addr),
+        session1.get_peer_socket_addr() == Some(new_peer_addr),
         "R1 should see new peer address"
     );
 
@@ -3234,7 +3216,7 @@ fn test_unnumbered_ndp_change() {
 
     // Step 8: Verify reconnection used the new peer address
     assert_eq!(
-        session1.get_peer_addr(),
+        session1.get_peer_socket_addr(),
         Some(new_peer_addr),
         "R1 should still see new peer address after reconnection"
     );
@@ -3315,10 +3297,10 @@ fn test_three_router_chain_unnumbered() {
 
     // Step 3: Verify R2's two sessions use different scope_ids
     let r2_eth0_peer = r2_eth0_session
-        .get_peer_addr()
+        .get_peer_socket_addr()
         .expect("R2 eth0 should have peer");
     let r2_eth1_peer = r2_eth1_session
-        .get_peer_addr()
+        .get_peer_socket_addr()
         .expect("R2 eth1 should have peer");
 
     // Extract scope_ids from peer addresses
@@ -3347,26 +3329,26 @@ fn test_three_router_chain_unnumbered() {
     );
 
     // Step 4: Change NDP on R2's eth0 interface to a new peer
-    let new_eth0_peer = SocketAddr::V6(SocketAddrV6::new(
-        "fe80::99".parse().unwrap(),
-        179,
-        0,
-        r1_r2_scope_id,
-    ));
-
+    let new_eth0_ip: Ipv6Addr = "fe80::99".parse().unwrap();
     r2.mock_ndp
-        .discover_peer("eth0", new_eth0_peer)
+        .discover_peer("eth0", new_eth0_ip)
         .expect("update eth0 peer on R2");
 
     // Step 5: Verify only eth0 session's get_peer_addr() changes
+    let new_eth0_peer = SocketAddr::V6(SocketAddrV6::new(
+        new_eth0_ip,
+        TEST_BGP_PORT,
+        0,
+        r1_r2_scope_id,
+    ));
     wait_for!(
-        r2_eth0_session.get_peer_addr() == Some(new_eth0_peer),
+        r2_eth0_session.get_peer_socket_addr() == Some(new_eth0_peer),
         "R2 eth0 session should see new peer address"
     );
 
     // Step 6: Verify eth1 session unaffected
     assert_eq!(
-        r2_eth1_session.get_peer_addr(),
+        r2_eth1_session.get_peer_socket_addr(),
         Some(r2_eth1_peer),
         "R2 eth1 session should still have original peer"
     );
@@ -3647,4 +3629,367 @@ fn test_unnumbered_dualstack_route_exchange() {
     );
 
     // Topology cleanup happens via Drop
+}
+
+/// Test: Complete interface availability lifecycle for unnumbered BGP.
+///
+/// Validates FSM behavior through the full interface lifecycle:
+/// - Stage 1: Sessions configured before interfaces exist on system
+/// - Stage 2: Interfaces appear, sessions establish
+/// - Stage 3: Interface removed on one side, sessions stay Established
+/// - Stage 4: Sessions reset while interfaces inactive, cannot establish until interfaces return
+#[test]
+fn test_unnumbered_interface_lifecycle() {
+    let log = init_file_logger("unnumbered_interface_lifecycle.log");
+
+    // =========================================================================
+    // Setup: Two routers with interface CONFIGURED but NOT on system
+    // =========================================================================
+
+    let db1 = rdb::test::get_test_db("unnumbered_lifecycle_r1", log.clone())
+        .expect("create db1");
+    let db2 = rdb::test::get_test_db("unnumbered_lifecycle_r2", log.clone())
+        .expect("create db2");
+
+    let mock_ndp1 = UnnumberedManagerMock::new();
+    let mock_ndp2 = UnnumberedManagerMock::new();
+
+    let scope_id = 2u32;
+
+    // ONLY configure interface mapping - do NOT add to system yet
+    mock_ndp1.configure_interface("eth0".to_string(), scope_id);
+    mock_ndp2.configure_interface("eth0".to_string(), scope_id);
+
+    // Create session maps
+    let p2s1: Arc<
+        Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
+    > = Arc::new(Mutex::new(BTreeMap::new()));
+    let p2s2: Arc<
+        Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionChannel>>>,
+    > = Arc::new(Mutex::new(BTreeMap::new()));
+
+    // Create dispatchers (needed for inbound connections)
+    let r1_ip: Ipv6Addr = "fe80::1".parse().unwrap();
+    let r2_ip: Ipv6Addr = "fe80::2".parse().unwrap();
+    let r1_addr =
+        SocketAddr::V6(SocketAddrV6::new(r1_ip, TEST_BGP_PORT, 0, scope_id));
+    let r2_addr =
+        SocketAddr::V6(SocketAddrV6::new(r2_ip, TEST_BGP_PORT, 0, scope_id));
+
+    let disp1 = Arc::new(Dispatcher::new(
+        p2s1.clone(),
+        r1_addr.to_string(),
+        log.clone(),
+        Some(mock_ndp1.clone()),
+    ));
+    let disp2 = Arc::new(Dispatcher::new(
+        p2s2.clone(),
+        r2_addr.to_string(),
+        log.clone(),
+        Some(mock_ndp2.clone()),
+    ));
+
+    let d1 = disp1.clone();
+    Builder::new()
+        .name("bgp-listener-r1".to_string())
+        .spawn(move || d1.run::<BgpListenerChannel>())
+        .expect("spawn dispatcher1");
+
+    let d2 = disp2.clone();
+    Builder::new()
+        .name("bgp-listener-r2".to_string())
+        .spawn(move || d2.run::<BgpListenerChannel>())
+        .expect("spawn dispatcher2");
+
+    // Create routers
+    let router1 = Arc::new(Router::new(
+        RouterConfig {
+            asn: Asn::FourOctet(64512),
+            id: 1,
+        },
+        log.clone(),
+        db1.db().clone(),
+        p2s1.clone(),
+    ));
+    let router2 = Arc::new(Router::new(
+        RouterConfig {
+            asn: Asn::FourOctet(64513),
+            id: 2,
+        },
+        log.clone(),
+        db2.db().clone(),
+        p2s2.clone(),
+    ));
+
+    router1.run();
+    router2.run();
+
+    // Create sessions
+    let (event_tx1, event_rx1) = channel();
+    let session_info1 = create_test_session_info(
+        RouteExchange::Ipv4 { nexthop: None },
+        r1_addr,
+        r2_addr,
+        false,
+    );
+    let peer_config1 = PeerConfig {
+        name: "peer_eth0".to_string(),
+        group: String::new(),
+        host: r2_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+
+    let result1 = router1
+        .ensure_unnumbered_session(
+            "eth0".to_string(),
+            peer_config1,
+            Some(r1_addr),
+            event_tx1.clone(),
+            event_rx1,
+            session_info1,
+            mock_ndp1.clone(),
+        )
+        .expect("create session1");
+
+    let session1 = match result1 {
+        EnsureSessionResult::New(s) => s,
+        EnsureSessionResult::Updated(s) => s,
+    };
+
+    let (event_tx2, event_rx2) = channel();
+    let session_info2 = create_test_session_info(
+        RouteExchange::Ipv4 { nexthop: None },
+        r2_addr,
+        r1_addr,
+        false,
+    );
+    let peer_config2 = PeerConfig {
+        name: "peer_eth0".to_string(),
+        group: String::new(),
+        host: r1_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+
+    let result2 = router2
+        .ensure_unnumbered_session(
+            "eth0".to_string(),
+            peer_config2,
+            Some(r2_addr),
+            event_tx2.clone(),
+            event_rx2,
+            session_info2,
+            mock_ndp2.clone(),
+        )
+        .expect("create session2");
+
+    let session2 = match result2 {
+        EnsureSessionResult::New(s) => s,
+        EnsureSessionResult::Updated(s) => s,
+    };
+
+    // Start sessions
+    event_tx1
+        .send(FsmEvent::Admin(AdminEvent::ManualStart))
+        .expect("start session1");
+    event_tx2
+        .send(FsmEvent::Admin(AdminEvent::ManualStart))
+        .expect("start session2");
+
+    // =========================================================================
+    // Stage 1: Interface not present - sessions cannot establish
+    // =========================================================================
+
+    // Wait for FSM to reach Connect or Active state
+    wait_for!(
+        session1.state() == FsmStateKind::Connect
+            || session1.state() == FsmStateKind::Active,
+        "Stage 1: Session1 should reach Connect or Active"
+    );
+    wait_for!(
+        session2.state() == FsmStateKind::Connect
+            || session2.state() == FsmStateKind::Active,
+        "Stage 1: Session2 should reach Connect or Active"
+    );
+
+    // Wait additional time to verify sessions don't reach Established
+    sleep(Duration::from_secs(5));
+
+    // Verify sessions are still not Established
+    wait_for!(
+        session1.state() != FsmStateKind::Established,
+        "Stage 1: Session1 must not reach Established when interface missing"
+    );
+    wait_for!(
+        session2.state() != FsmStateKind::Established,
+        "Stage 1: Session2 must not reach Established when interface missing"
+    );
+
+    // =========================================================================
+    // Stage 2: Interface appears - sessions establish
+    // =========================================================================
+
+    // Simulate interfaces appearing on the system
+    mock_ndp1.add_system_interface("eth0");
+    mock_ndp2.add_system_interface("eth0");
+
+    // Verify interface_is_active() now returns true
+    assert!(
+        mock_ndp1.interface_is_active("eth0"),
+        "Stage 2: interface_is_active should return true after add_system_interface"
+    );
+    assert!(
+        mock_ndp2.interface_is_active("eth0"),
+        "Stage 2: interface_is_active should return true after add_system_interface"
+    );
+
+    // Discover peers via NDP
+    mock_ndp1.discover_peer("eth0", r2_ip).unwrap();
+    mock_ndp2.discover_peer("eth0", r1_ip).unwrap();
+
+    // Sessions should now establish
+    wait_for_eq!(
+        session1.state(),
+        FsmStateKind::Established,
+        "Stage 2: Session1 should reach Established after interface appears"
+    );
+    wait_for_eq!(
+        session2.state(),
+        FsmStateKind::Established,
+        "Stage 2: Session2 should reach Established after interface appears"
+    );
+
+    // =========================================================================
+    // Stage 3: Interface removed - sessions stay Established
+    // =========================================================================
+
+    // Remove interface from system on Router 1 (but keep configuration)
+    mock_ndp1.remove_system_interface("eth0");
+
+    // Verify interface_is_active() now returns false
+    assert!(
+        !mock_ndp1.interface_is_active("eth0"),
+        "Stage 3: interface_is_active should return false after removal"
+    );
+
+    // Sessions must STAY Established
+    // BGP timers handle session teardown, not interface removal
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(10) {
+        wait_for_eq!(
+            session1.state(),
+            FsmStateKind::Established,
+            "Stage 3: Session1 must stay Established despite interface removal"
+        );
+        wait_for_eq!(
+            session2.state(),
+            FsmStateKind::Established,
+            "Stage 3: Session2 must stay Established (interface still present on remote)"
+        );
+        sleep(Duration::from_millis(500));
+    }
+
+    // =========================================================================
+    // Stage 4: Session reset while interface inactive, then re-establishes
+    // =========================================================================
+
+    // Remove interface on both sides to simulate link failure scenario
+    mock_ndp2.remove_system_interface("eth0");
+
+    // Verify both interfaces are now inactive
+    assert!(
+        !mock_ndp1.interface_is_active("eth0"),
+        "Stage 4: R1 interface should still be inactive from Stage 3"
+    );
+    assert!(
+        !mock_ndp2.interface_is_active("eth0"),
+        "Stage 4: R2 interface should now be inactive"
+    );
+
+    // Reset sessions via admin event (simulates operator intervention or
+    // external trigger after detecting link issues)
+    event_tx1
+        .send(FsmEvent::Admin(AdminEvent::Reset))
+        .expect("reset session1");
+    event_tx2
+        .send(FsmEvent::Admin(AdminEvent::Reset))
+        .expect("reset session2");
+
+    // Wait for sessions to leave Established state after Reset
+    wait_for!(
+        session1.state() != FsmStateKind::Established,
+        "Stage 4: Session1 should leave Established after Reset"
+    );
+    wait_for!(
+        session2.state() != FsmStateKind::Established,
+        "Stage 4: Session2 should leave Established after Reset"
+    );
+
+    // Sessions should cycle in Connect/Active but not re-establish
+    // (interface_is_active returns false, blocking connection attempts)
+    // Verify for 30 seconds to ensure they don't re-establish
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(30) {
+        assert_ne!(
+            session1.state(),
+            FsmStateKind::Established,
+            "Stage 4: Session1 must not re-establish while interface inactive"
+        );
+        assert_ne!(
+            session2.state(),
+            FsmStateKind::Established,
+            "Stage 4: Session2 must not re-establish while interface inactive"
+        );
+        sleep(Duration::from_millis(500));
+    }
+
+    // Now bring interfaces back on both sides
+    mock_ndp1.add_system_interface("eth0");
+    mock_ndp2.add_system_interface("eth0");
+
+    // Verify interface_is_active() returns true again
+    assert!(
+        mock_ndp1.interface_is_active("eth0"),
+        "Stage 4: R1 interface_is_active should return true after re-add"
+    );
+    assert!(
+        mock_ndp2.interface_is_active("eth0"),
+        "Stage 4: R2 interface_is_active should return true after re-add"
+    );
+
+    // NDP neighbors should still be known from Stage 2 discovery
+    // (remove_system_interface doesn't clear discoveries, just marks inactive)
+    // Rediscover to ensure clean state
+    mock_ndp1.discover_peer("eth0", r2_ip).unwrap();
+    mock_ndp2.discover_peer("eth0", r1_ip).unwrap();
+
+    // Sessions should now re-establish
+    wait_for_eq!(
+        session1.state(),
+        FsmStateKind::Established,
+        "Stage 4: Session1 should re-establish after interface returns"
+    );
+    wait_for_eq!(
+        session2.state(),
+        FsmStateKind::Established,
+        "Stage 4: Session2 should re-establish after interface returns"
+    );
+
+    // =========================================================================
+    // Cleanup
+    // =========================================================================
+
+    router1.shutdown();
+    router2.shutdown();
+    disp1.shutdown();
+    disp2.shutdown();
 }

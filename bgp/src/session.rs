@@ -1698,14 +1698,29 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Get the current peer address for this session.
-    pub fn get_peer_addr(&self) -> Option<SocketAddr> {
+    ///
+    /// For numbered peers, returns the configured address.
+    /// For unnumbered peers, queries the NDP neighbor (does not check interface_is_active).
+    pub fn get_peer_socket_addr(&self) -> Option<SocketAddr> {
         match &self.neighbor.peer {
             PeerId::Interface(iface) => {
-                // Unnumbered: query UnnumberedManager
-                if let Some(ref mgr) = self.unnumbered_manager {
-                    mgr.get_neighbor_for_interface(iface).ok().flatten()
-                } else {
-                    None
+                // Unnumbered: query UnnumberedManager for NDP neighbor
+                let mgr = self.unnumbered_manager.as_ref()?;
+                match mgr.get_neighbor_by_interface(iface) {
+                    Ok(Some(neighbor)) => {
+                        Some(neighbor.to_socket_addr(self.neighbor.port))
+                    }
+                    Ok(None) => None, // No neighbor discovered yet - expected
+                    Err(e) => {
+                        session_log_lite!(
+                            self,
+                            debug,
+                            "failed to query neighbor for interface";
+                            "interface" => iface,
+                            "error" => e.to_string()
+                        );
+                        None
+                    }
                 }
             }
             PeerId::Ip(ip) => {
@@ -1715,14 +1730,59 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
+    /// Resolve peer address for outbound connection attempts.
+    ///
+    /// For numbered peers, returns the configured address.
+    /// For unnumbered peers, verifies interface is active and queries NDP neighbor.
+    /// Returns None if:
+    /// - Unnumbered peer has no UnnumberedManager configured
+    /// - Interface is not active on the system
+    /// - No NDP neighbor has been discovered
+    fn try_resolve_connect_addr(&self) -> Option<SocketAddr> {
+        match &self.neighbor.peer {
+            PeerId::Interface(iface) => {
+                let mgr = self.unnumbered_manager.as_ref()?;
+                if !mgr.interface_is_active(iface) {
+                    session_log_lite!(
+                        self,
+                        debug,
+                        "interface not active, skipping connection";
+                        "interface" => iface
+                    );
+                    return None;
+                }
+                match mgr.get_neighbor_by_interface(iface) {
+                    Ok(Some(neighbor)) => {
+                        Some(neighbor.to_socket_addr(self.neighbor.port))
+                    }
+                    Ok(None) => {
+                        session_log_lite!(
+                            self,
+                            debug,
+                            "no NDP neighbor discovered yet";
+                            "interface" => iface
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        session_log_lite!(
+                            self,
+                            warn,
+                            "failed to query neighbor for interface";
+                            "interface" => iface,
+                            "error" => e.to_string()
+                        );
+                        None
+                    }
+                }
+            }
+            PeerId::Ip(ip) => Some(SocketAddr::new(*ip, self.neighbor.port)),
+        }
+    }
+
     /// Check if this is an unnumbered session.
     pub fn is_unnumbered(&self) -> bool {
         matches!(self.neighbor.peer, PeerId::Interface(_))
-    }
-
-    /// Check if a neighbor is currently available for connection attempts.
-    pub fn has_neighbor(&self) -> bool {
-        self.get_peer_addr().is_some()
     }
 
     /// Get the PeerId for this session.
@@ -1818,16 +1878,16 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             // release lock before calling connect
         }
 
-        let peer_addr = match self.get_peer_addr() {
-            Some(addr) => addr,
-            None => {
-                session_log_lite!(
-                    self,
-                    debug,
-                    "no peer address available, skipping connection attempt"
-                );
-                return;
-            }
+        // Resolve peer address. For unnumbered peers, this verifies interface
+        // is active and queries NDP for the neighbor address.
+        let Some(peer_addr) = self.try_resolve_connect_addr() else {
+            session_log_lite!(
+                self,
+                debug,
+                "cannot resolve peer address, skipping connection attempt";
+                "peer" => format!("{:?}", self.neighbor.peer)
+            );
+            return;
         };
 
         let handle = match Cnx::Connector::connect(

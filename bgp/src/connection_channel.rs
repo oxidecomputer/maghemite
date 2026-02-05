@@ -193,7 +193,7 @@ impl BgpListenerChannel {
             && v6_addr.ip().is_unicast_link_local()
         {
             let scope_id = v6_addr.scope_id();
-            if let Some(interface) = mgr.get_interface_for_scope(scope_id) {
+            if let Some(interface) = mgr.get_interface_by_scope(scope_id) {
                 return PeerId::Interface(interface);
             }
         }

@@ -53,40 +53,34 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
         }
     }
 
+    /// Try to resolve peer address to an unnumbered interface.
+    ///
+    /// Returns `Some(PeerId::Interface)` if:
+    /// - We have an unnumbered manager
+    /// - The peer address is IPv6 link-local
+    /// - We have an interface configured for this scope_id
+    /// - The interface is active on the system
+    fn try_resolve_unnumbered(&self, peer_addr: SocketAddr) -> Option<PeerId> {
+        let mgr = self.unnumbered_manager.as_ref()?;
+        let v6_addr = match peer_addr {
+            SocketAddr::V6(v6) if v6.ip().is_unicast_link_local() => v6,
+            _ => return None,
+        };
+        let interface = mgr.get_interface_by_scope(v6_addr.scope_id())?;
+        if mgr.interface_is_active(&interface) {
+            Some(PeerId::Interface(interface))
+        } else {
+            None
+        }
+    }
+
     /// Resolve incoming peer address to appropriate PeerId.
     ///
-    /// For IPv6 link-local addresses with an unnumbered manager, attempts to
-    /// resolve scope_id to interface name for interface-based routing.
-    /// Falls back to IP-based routing for all other cases.
+    /// For IPv6 link-local addresses, attempts interface-based routing via
+    /// unnumbered manager. Falls back to IP-based routing otherwise.
     fn resolve_session_key(&self, peer_addr: SocketAddr) -> PeerId {
-        // Try interface-based routing for IPv6 link-local addresses
-        if let Some(ref mgr) = self.unnumbered_manager
-            && let SocketAddr::V6(v6_addr) = peer_addr
-            && v6_addr.ip().is_unicast_link_local()
-        {
-            let scope_id = v6_addr.scope_id();
-            if let Some(interface) = mgr.get_interface_for_scope(scope_id) {
-                dispatcher_log!(self,
-                    debug,
-                    "routing link-local connection to interface session";
-                    "peer" => format!("{}", peer_addr),
-                    "scope_id" => scope_id,
-                    "interface" => &interface,
-                    "listen_address" => &self.listen
-                );
-                return PeerId::Interface(interface);
-            }
-            dispatcher_log!(self,
-                debug,
-                "no interface mapping for link-local scope_id, using IP lookup";
-                "peer" => format!("{}", peer_addr),
-                "scope_id" => scope_id,
-                "listen_address" => &self.listen
-            );
-        }
-
-        // Default to IP-based routing
-        PeerId::Ip(peer_addr.ip())
+        self.try_resolve_unnumbered(peer_addr)
+            .unwrap_or_else(|| PeerId::Ip(peer_addr.ip()))
     }
 
     pub fn run<Listener: BgpListener<Cnx>>(&self) {
@@ -208,7 +202,16 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                             continue 'listener;
                         }
                     }
-                    None => continue 'accept,
+                    None => {
+                        dispatcher_log!(self,
+                            debug,
+                            "no session found for peer, dropping connection";
+                            "peer" => format!("{}", peer_addr),
+                            "resolved_key" => format!("{:?}", key),
+                            "listen_address" => &self.listen
+                        );
+                        continue 'accept;
+                    }
                 }
             }
         }
