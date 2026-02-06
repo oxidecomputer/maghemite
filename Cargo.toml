@@ -144,5 +144,5 @@ rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "trey/v4_over_v6_delete"
+rev = "37992295b5dc708d8f120cee805d67418741b556"
 package = "dpd-client"

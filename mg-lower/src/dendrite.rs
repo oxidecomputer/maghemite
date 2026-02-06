@@ -186,7 +186,7 @@ where
                     vlan_id,
                 });
 
-                let update = types::Ipv4RouteUpdateV2 {
+                let update = types::Ipv4RouteUpdate {
                     cidr: c,
                     target,
                     replace: false,
@@ -253,7 +253,7 @@ where
                     vlan_id,
                 });
 
-                let update = types::Ipv4RouteUpdateV2 {
+                let update = types::Ipv4RouteUpdate {
                     cidr: c,
                     target,
                     replace: false,

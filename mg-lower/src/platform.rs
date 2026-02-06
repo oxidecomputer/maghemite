@@ -153,7 +153,7 @@ pub trait Dpd {
 
     async fn route_ipv4_add<'a>(
         &'a self,
-        body: &'a Ipv4RouteUpdateV2,
+        body: &'a Ipv4RouteUpdate,
     ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>;
 
     async fn route_ipv6_add<'a>(
@@ -322,7 +322,7 @@ impl Dpd for ProductionDpd {
 
     async fn route_ipv4_add<'a>(
         &'a self,
-        body: &'a Ipv4RouteUpdateV2,
+        body: &'a Ipv4RouteUpdate,
     ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>
     {
         self.client.route_ipv4_add(body).await
@@ -626,7 +626,7 @@ pub(crate) mod test {
 
         async fn route_ipv4_add<'a>(
             &'a self,
-            body: &'a Ipv4RouteUpdateV2,
+            body: &'a Ipv4RouteUpdate,
         ) -> Result<
             dpd_client::ResponseValue<()>,
             progenitor_client::Error<DpdError>,
