@@ -4,10 +4,18 @@
 <service_bundle type='manifest' name='mg-ddm'>
 
 <service name='oxide/mg-ddm' type='service' version='1'>
-  <create_default_instance enabled='false' />
+  <create_default_instance enabled='true' />
   <dependency name='network' grouping='require_all' restart_on='none'
     type='service'>
   <service_fmri value='svc:/milestone/network:default' />
+  </dependency>
+
+  <dependency name='zone_network_setup' grouping='optional_all' restart_on='none' type='service'>
+    <service_fmri value='svc:/oxide/zone-network-setup:default' />
+  </dependency>
+
+  <dependency name='switch_zone_setup' grouping='optional_all' restart_on='none' type='service'>
+    <service_fmri value='svc:/oxide/switch_zone_setup:default' />
   </dependency>
 
   <exec_method type='method' name='start'
