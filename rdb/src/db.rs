@@ -726,13 +726,29 @@ impl Db {
     where
         F: Fn(&Prefix, &BTreeSet<Path>) -> bool,
     {
+        // Fetch fanout once before the loops to avoid repeated sled access
+        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
+            rdb_log!(
+                self,
+                error,
+                "failed to get bestpath fanout: {e}";
+                "unit" => UNIT_RIB
+            );
+            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
+        });
+
         {
             // only grab the lock once, release it once the loop ends
             let rib4_in = lock!(self.rib4_in);
             let mut rib4_loc = lock!(self.rib4_loc);
-            for (prefix, paths) in self.full_rib4().iter() {
+            for (prefix, paths) in rib4_in.iter() {
                 if bestpath_needed(&Prefix::from(*prefix), paths) {
-                    self.update_rib4_loc(&rib4_in, &mut rib4_loc, prefix);
+                    Self::update_rib_loc(
+                        prefix,
+                        paths,
+                        &mut rib4_loc,
+                        fanout.get() as usize,
+                    );
                 }
             }
         }
@@ -741,10 +757,31 @@ impl Db {
             // only grab the lock once, release it once the loop ends
             let rib6_in = lock!(self.rib6_in);
             let mut rib6_loc = lock!(self.rib6_loc);
-            for (prefix, paths) in self.full_rib6().iter() {
+            for (prefix, paths) in rib6_in.iter() {
                 if bestpath_needed(&Prefix::from(*prefix), paths) {
-                    self.update_rib6_loc(&rib6_in, &mut rib6_loc, prefix);
+                    Self::update_rib_loc(
+                        prefix,
+                        paths,
+                        &mut rib6_loc,
+                        fanout.get() as usize,
+                    );
                 }
+            }
+        }
+    }
+
+    fn update_rib_loc<P: Ord + Copy>(
+        prefix: &P,
+        paths: &BTreeSet<Path>,
+        rib_loc: &mut BTreeMap<P, BTreeSet<Path>>,
+        fanout: usize,
+    ) {
+        match bestpaths(paths, fanout) {
+            Some(bp) => {
+                rib_loc.insert(*prefix, bp);
+            }
+            None => {
+                rib_loc.remove(prefix);
             }
         }
     }
@@ -960,6 +997,17 @@ impl Db {
     }
 
     pub fn set_nexthop_shutdown(&self, nexthop: IpAddr, shutdown: bool) {
+        // Fetch fanout once before modifying paths
+        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
+            rdb_log!(
+                self,
+                error,
+                "failed to get bestpath fanout: {e}";
+                "unit" => UNIT_RIB
+            );
+            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
+        });
+
         let mut pcn = PrefixChangeNotification::default();
         let mut pcn6 = PrefixChangeNotification::default();
         {
@@ -976,8 +1024,15 @@ impl Db {
                 }
             }
             for prefix in pcn.changed.iter() {
-                if let Prefix::V4(p4) = prefix {
-                    self.update_rib4_loc(&rib4_in, &mut rib4_loc, p4);
+                if let Prefix::V4(p4) = prefix
+                    && let Some(paths) = rib4_in.get(p4)
+                {
+                    Self::update_rib_loc(
+                        p4,
+                        paths,
+                        &mut rib4_loc,
+                        fanout.get() as usize,
+                    );
                 }
             }
         }
@@ -996,8 +1051,15 @@ impl Db {
                 }
             }
             for prefix in pcn6.changed.iter() {
-                if let Prefix::V6(p6) = prefix {
-                    self.update_rib6_loc(&rib6_in, &mut rib6_loc, p6);
+                if let Prefix::V6(p6) = prefix
+                    && let Some(paths) = rib6_in.get(p6)
+                {
+                    Self::update_rib_loc(
+                        p6,
+                        paths,
+                        &mut rib6_loc,
+                        fanout.get() as usize,
+                    );
                 }
             }
         }
