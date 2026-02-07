@@ -22,10 +22,7 @@ pub(crate) trait Dpd {
     async fn route_ipv4_get(
         &self,
         cidr: &Ipv4Net,
-    ) -> Result<
-        dpd_client::ResponseValue<Vec<Route>>,
-        DpdClientError<DpdError>,
-    >;
+    ) -> Result<dpd_client::ResponseValue<Vec<Route>>, DpdClientError<DpdError>>;
     async fn route_ipv6_get(
         &self,
         cidr: &Ipv6Net,
@@ -37,10 +34,7 @@ pub(crate) trait Dpd {
         &self,
         port_id: &PortId,
         link_id: &LinkId,
-    ) -> Result<
-        dpd_client::ResponseValue<Link>,
-        DpdClientError<DpdError>,
-    >;
+    ) -> Result<dpd_client::ResponseValue<Link>, DpdClientError<DpdError>>;
     async fn loopback_ipv6_create(
         &self,
         addr: &Ipv6Entry,
@@ -49,10 +43,7 @@ pub(crate) trait Dpd {
     async fn link_list_all<'a>(
         &'a self,
         filter: Option<&'a str>,
-    ) -> Result<
-        dpd_client::ResponseValue<Vec<Link>>,
-        DpdClientError<DpdError>,
-    >;
+    ) -> Result<dpd_client::ResponseValue<Vec<Link>>, DpdClientError<DpdError>>;
 
     async fn link_ipv4_list<'a>(
         &'a self,
@@ -160,10 +151,8 @@ impl Dpd for ProductionDpd {
     async fn route_ipv4_get(
         &self,
         cidr: &Ipv4Net,
-    ) -> Result<
-        dpd_client::ResponseValue<Vec<Route>>,
-        DpdClientError<DpdError>,
-    > {
+    ) -> Result<dpd_client::ResponseValue<Vec<Route>>, DpdClientError<DpdError>>
+    {
         self.client.route_ipv4_get(cidr).await
     }
 
@@ -181,28 +170,22 @@ impl Dpd for ProductionDpd {
         &self,
         port_id: &PortId,
         link_id: &LinkId,
-    ) -> Result<
-        dpd_client::ResponseValue<Link>,
-        DpdClientError<DpdError>,
-    > {
+    ) -> Result<dpd_client::ResponseValue<Link>, DpdClientError<DpdError>> {
         self.client.link_get(port_id, link_id).await
     }
 
     async fn loopback_ipv6_create(
         &self,
         addr: &Ipv6Entry,
-    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
-    {
+    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
         self.client.loopback_ipv6_create(addr).await
     }
 
     async fn link_list_all<'a>(
         &'a self,
         filter: Option<&'a str>,
-    ) -> Result<
-        dpd_client::ResponseValue<Vec<Link>>,
-        DpdClientError<DpdError>,
-    > {
+    ) -> Result<dpd_client::ResponseValue<Vec<Link>>, DpdClientError<DpdError>>
+    {
         self.client.link_list_all(filter).await
     }
 
@@ -239,16 +222,14 @@ impl Dpd for ProductionDpd {
     async fn route_ipv4_add<'a>(
         &'a self,
         body: &'a Ipv4RouteUpdate,
-    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
-    {
+    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
         self.client.route_ipv4_add(body).await
     }
 
     async fn route_ipv6_add<'a>(
         &'a self,
         body: &'a Ipv6RouteUpdate,
-    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
-    {
+    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
         self.client.route_ipv6_add(body).await
     }
 
@@ -258,8 +239,7 @@ impl Dpd for ProductionDpd {
         port_id: &'a PortId,
         link_id: &'a LinkId,
         tgt_ip: &'a std::net::Ipv4Addr,
-    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
-    {
+    ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>> {
         self.client
             .route_ipv4_delete_target(cidr, port_id, link_id, tgt_ip)
             .await
@@ -397,10 +377,8 @@ pub(crate) mod test {
             &self,
             port_id: &PortId,
             link_id: &LinkId,
-        ) -> Result<
-            dpd_client::ResponseValue<Link>,
-            DpdClientError<DpdError>,
-        > {
+        ) -> Result<dpd_client::ResponseValue<Link>, DpdClientError<DpdError>>
+        {
             let links = self.links.lock().unwrap();
             let link = links
                 .iter()
@@ -452,10 +430,8 @@ pub(crate) mod test {
         async fn loopback_ipv6_create(
             &self,
             addr: &Ipv6Entry,
-        ) -> Result<
-            dpd_client::ResponseValue<()>,
-            DpdClientError<DpdError>,
-        > {
+        ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
+        {
             self.loopback.lock().unwrap().replace(addr.clone());
             Ok(dpd_response_ok!(()))
         }
@@ -528,10 +504,8 @@ pub(crate) mod test {
         async fn route_ipv4_add<'a>(
             &'a self,
             body: &'a Ipv4RouteUpdate,
-        ) -> Result<
-            dpd_client::ResponseValue<()>,
-            DpdClientError<DpdError>,
-        > {
+        ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
+        {
             let mut routes = self.v4_routes.lock().unwrap();
             match routes.get_mut(&body.cidr) {
                 Some(targets) => {
@@ -547,10 +521,8 @@ pub(crate) mod test {
         async fn route_ipv6_add<'a>(
             &'a self,
             body: &'a Ipv6RouteUpdate,
-        ) -> Result<
-            dpd_client::ResponseValue<()>,
-            DpdClientError<DpdError>,
-        > {
+        ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
+        {
             let mut routes = self.v6_routes.lock().unwrap();
             match routes.get_mut(&body.cidr) {
                 Some(targets) => {
@@ -569,10 +541,8 @@ pub(crate) mod test {
             port_id: &'a PortId,
             link_id: &'a LinkId,
             tgt_ip: &'a std::net::Ipv4Addr,
-        ) -> Result<
-            dpd_client::ResponseValue<()>,
-            DpdClientError<DpdError>,
-        > {
+        ) -> Result<dpd_client::ResponseValue<()>, DpdClientError<DpdError>>
+        {
             let mut routes = self.v4_routes.lock().unwrap();
             if let Some(targets) = routes.get_mut(cidr) {
                 targets.retain(|x| {
