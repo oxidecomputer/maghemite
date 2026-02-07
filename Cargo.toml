@@ -74,9 +74,9 @@ hyper-util = { version = "0.1", features = ["full"] }
 serde_json = "1.0.148"
 percent-encoding = "2.3.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
-progenitor = "0.11"
-progenitor-client = "0.11"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+progenitor = "0.12"
+progenitor-client = "0.12"
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 clap = { version = "4.5.54", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "3.0"
@@ -128,3 +128,4 @@ rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 git = "https://github.com/oxidecomputer/dendrite"
 branch = "main"
 package = "dpd-client"
+
