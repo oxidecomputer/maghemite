@@ -47,7 +47,14 @@ impl NdpManager {
         ifx: Ipv6NetworkInterface,
         router_lifetime: u16,
     ) -> Result<(), NewInterfaceNdpManagerError> {
-        write_lock!(self.interfaces).push(InterfaceNdpManager::new(
+        let mut interfaces = write_lock!(self.interfaces);
+        // Dont create a manager thread for interfaces that are already
+        // being managed.
+        if interfaces.iter().any(|x| x.inner.ifx == ifx) {
+            return Ok(());
+        }
+
+        interfaces.push(InterfaceNdpManager::new(
             ifx,
             router_lifetime,
             self.log.clone(),
