@@ -376,7 +376,7 @@ fn start_bgp_routers(
                 group: nbr.group.clone(),
                 name: nbr.name.clone(),
                 interface: nbr.interface.clone(),
-                act_as_a_default_ipv6_router: 0,
+                act_as_a_default_ipv6_router: nbr.router_lifetime,
                 parameters: BgpPeerParameters {
                     remote_asn: nbr.parameters.remote_asn,
                     min_ttl: nbr.parameters.min_ttl,
