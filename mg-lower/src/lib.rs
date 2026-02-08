@@ -7,22 +7,16 @@
 //! routing platform. The only platform currently supported is Dendrite.
 
 #![allow(clippy::result_large_err)]
-
 use crate::dendrite::{
-    RouteHash, get_routes_for_prefix, new_dpd_client, update_dendrite,
+    RouteHash, ensure_tep_addr, get_routes_for_prefix, update_dendrite,
 };
 use crate::error::Error;
-use ddm::{
-    BOUNDARY_SERVICES_VNI, add_tunnel_routes, new_ddm_client,
-    remove_tunnel_routes,
-};
+use ddm::{BOUNDARY_SERVICES_VNI, add_tunnel_routes, remove_tunnel_routes};
 use ddm_admin_client::types::TunnelOrigin;
-use dendrite::{ensure_tep_addr, link_is_up};
+use dendrite::link_is_up;
 use log::mgl_log;
 use mg_common::stats::MgLowerStats as Stats;
-use platform::{
-    Ddm, Dpd, ProductionDdm, ProductionDpd, ProductionSwitchZone, SwitchZone,
-};
+use platform::{Ddm, Dpd, SwitchZone};
 use rdb::db::Rib;
 use rdb::{DEFAULT_ROUTE_PRIORITY, Db, Prefix, PrefixChangeNotification};
 use slog::Logger;
@@ -32,6 +26,14 @@ use std::sync::Arc;
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::thread::sleep;
 use std::time::Duration;
+
+// Re-export production backends so callers (e.g. mgd) can construct them.
+#[cfg(target_os = "illumos")]
+pub use {
+    crate::dendrite::new_dpd_client,
+    ddm::new_ddm_client,
+    platform::{ProductionDdm, ProductionDpd, ProductionSwitchZone},
+};
 
 mod ddm;
 mod dendrite;
@@ -55,12 +57,16 @@ const UNIT_EVENT_LOOP: &str = "event_loop";
 /// moving foward. The loop runs on the calling thread, so callers are
 /// responsible for running this function in a separate thread if asynchronous
 /// execution is required.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     tep: Ipv6Addr, //tunnel endpoint address
     db: Db,
     log: Logger,
     stats: Arc<Stats>,
     rt: Arc<tokio::runtime::Handle>,
+    dpd: &impl Dpd,
+    ddm: &impl Ddm,
+    sw: &impl SwitchZone,
 ) {
     loop {
         let (tx, rx) = channel();
@@ -69,16 +75,8 @@ pub fn run(
         // we're initializing
         db.watch(MG_LOWER_TAG.into(), tx);
 
-        // initialize the underlying router with the current state
-        let dpd = ProductionDpd {
-            client: new_dpd_client(&log),
-        };
-        let ddm = ProductionDdm {
-            client: new_ddm_client(&log),
-        };
-        let sw = ProductionSwitchZone {};
         if let Err(e) =
-            full_sync(tep, &db, &log, &dpd, &ddm, &sw, &stats, rt.clone())
+            full_sync(tep, &db, &log, dpd, ddm, sw, &stats, rt.clone())
         {
             mgl_log!(log,
                 error,
@@ -99,9 +97,9 @@ pub fn run(
                         &db,
                         change,
                         &log,
-                        &dpd,
-                        &ddm,
-                        &sw,
+                        dpd,
+                        ddm,
+                        sw,
                         rt.clone(),
                     ) {
                         mgl_log!(log,
@@ -120,9 +118,9 @@ pub fn run(
                         tep,
                         &db,
                         &log,
-                        &dpd,
-                        &ddm,
-                        &sw,
+                        dpd,
+                        ddm,
+                        sw,
                         &stats,
                         rt.clone(),
                     ) {

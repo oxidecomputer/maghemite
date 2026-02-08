@@ -3,21 +3,47 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
+use bgp::{messages::Afi, params::JitterRange};
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
 use mg_admin_client::{
     Client,
     types::{
-        self, ImportExportPolicy, NeighborResetOp as MgdNeighborResetOp,
-        NeighborResetRequest,
+        self, ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
+        Ipv6UnicastConfig, NeighborResetRequest,
     },
 };
-use rdb::types::{PolicyAction, Prefix, Prefix4, Prefix6};
-use std::fs::read_to_string;
-use std::io::{Write, stdout};
-use std::net::{IpAddr, SocketAddr};
-use std::time::Duration;
+use rdb::types::{PeerId, Prefix4, Prefix6};
+use std::{
+    fs::read_to_string,
+    io::{Write, stdout},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    time::Duration,
+};
 use tabwriter::TabWriter;
+
+fn jitter_range_to_api(j: JitterRange) -> types::JitterRange {
+    types::JitterRange {
+        min: j.min,
+        max: j.max,
+    }
+}
+
+fn afi_to_api(afi: Afi) -> types::Afi {
+    match afi {
+        Afi::Ipv4 => types::Afi::Ipv4,
+        Afi::Ipv6 => types::Afi::Ipv6,
+    }
+}
+
+fn peer_id_to_api(peer_id: bgp::session::PeerId) -> PeerId {
+    match peer_id {
+        bgp::session::PeerId::Ip(ip) => PeerId::Ip(ip),
+        bgp::session::PeerId::Interface(interface) => {
+            PeerId::Interface(interface)
+        }
+    }
+}
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -58,6 +84,15 @@ pub enum ConfigCmd {
     Policy(PolicySubcommand),
 }
 
+#[derive(Clone, Debug, ValueEnum)]
+#[allow(non_camel_case_types)]
+pub enum NeighborDisplayMode {
+    /// Display summary information (default).
+    summary,
+    /// Display detailed information.
+    detail,
+}
+
 #[derive(Debug, Args)]
 pub struct StatusSubcommand {
     #[command(subcommand)]
@@ -70,12 +105,24 @@ pub enum StatusCmd {
     Neighbors {
         #[clap(env)]
         asn: u32,
+
+        /// Display mode: summary (default) or detail.
+        #[clap(long, value_enum, default_value = "summary")]
+        mode: NeighborDisplayMode,
     },
 
     /// Get the prefixes exported by a BGP router.
     Exported {
         #[clap(env)]
         asn: u32,
+
+        /// Optional peer filter (IP address or interface name)
+        #[clap(long)]
+        peer: Option<String>,
+
+        /// Optional address family filter (ipv4 or ipv6). If not specified, shows both.
+        #[clap(long, value_enum)]
+        afi: Option<Afi>,
     },
 }
 
@@ -89,8 +136,8 @@ pub struct HistorySubcommand {
 pub enum HistoryCmd {
     /// Get FSM event history for BGP sessions.
     Fsm {
-        /// Optional: Filter by specific peer address.
-        peer: Option<IpAddr>,
+        /// Optional: Filter by specific peer (IP address for numbered, interface name for unnumbered).
+        peer: Option<String>,
 
         /// Which buffer to display: 'major' (default) or 'all'.
         #[clap(default_value = "major")]
@@ -111,8 +158,8 @@ pub enum HistoryCmd {
 
     /// Get BGP message history for sessions.
     Message {
-        /// Peer address to show history for.
-        peer: IpAddr,
+        /// Peer to show history for (IP address for numbered, interface name for unnumbered).
+        peer: String,
 
         /// BGP Autonomous System number. Can be specified via ASN env var.
         #[clap(env)]
@@ -132,27 +179,6 @@ pub enum HistoryCmd {
     },
 }
 
-#[derive(Clone, Debug, ValueEnum)]
-#[allow(non_camel_case_types)]
-pub enum NeighborResetOp {
-    /// Perform a hard reset of the neighbor. This resets the TCP connection.
-    hard,
-    /// Send a route refresh to the neighbor. Does not reset the TCP connection.
-    soft_inbound,
-    /// Re-send all originated routes to the neighbor. Does not reset the TCP connection.
-    soft_outbound,
-}
-
-impl From<NeighborResetOp> for MgdNeighborResetOp {
-    fn from(op: NeighborResetOp) -> MgdNeighborResetOp {
-        match op {
-            NeighborResetOp::hard => MgdNeighborResetOp::Hard,
-            NeighborResetOp::soft_inbound => MgdNeighborResetOp::SoftInbound,
-            NeighborResetOp::soft_outbound => MgdNeighborResetOp::SoftOutbound,
-        }
-    }
-}
-
 #[derive(Debug, Args)]
 pub struct ClearSubcommand {
     #[command(subcommand)]
@@ -164,14 +190,67 @@ pub struct ClearSubcommand {
 pub enum ClearCmd {
     /// Clear the state of the selected BGP neighbor.
     Neighbor {
-        /// IP address of the neighbor you want to clear the state of.
-        addr: IpAddr,
-        #[clap(value_enum)]
-        clear_type: NeighborResetOp,
-        /// BGP Autonomous System number.  Can be a 16-bit or 32-bit unsigned value.
+        /// Peer identifier (IP address for numbered, interface name for unnumbered).
+        peer: String,
+
+        /// BGP Autonomous System number. Can be a 16-bit or 32-bit unsigned value.
         #[clap(env)]
         asn: u32,
+
+        #[command(subcommand)]
+        operation: NeighborOperation,
     },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum NeighborOperation {
+    /// Perform a hard reset of the neighbor. This resets the TCP connection.
+    Hard,
+
+    /// Perform a soft reset (does not reset TCP connection)
+    Soft {
+        #[command(subcommand)]
+        direction: SoftDirection,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum SoftDirection {
+    /// Send a route refresh to the neighbor
+    Inbound {
+        /// Address family to refresh (if not specified, refreshes all negotiated AFs)
+        #[clap(value_enum)]
+        afi: Option<Afi>,
+    },
+
+    /// Re-send all originated routes to the neighbor
+    Outbound {
+        /// Address family to re-advertise (if not specified, re-advertises all negotiated AFs)
+        #[clap(value_enum)]
+        afi: Option<Afi>,
+    },
+}
+
+impl From<NeighborOperation> for types::NeighborResetOp {
+    fn from(op: NeighborOperation) -> Self {
+        match op {
+            NeighborOperation::Hard => types::NeighborResetOp::Hard,
+            NeighborOperation::Soft { direction } => direction.into(),
+        }
+    }
+}
+
+impl From<SoftDirection> for types::NeighborResetOp {
+    fn from(direction: SoftDirection) -> Self {
+        match direction {
+            SoftDirection::Inbound { afi } => {
+                types::NeighborResetOp::SoftInbound(afi.map(afi_to_api))
+            }
+            SoftDirection::Outbound { afi } => {
+                types::NeighborResetOp::SoftOutbound(afi.map(afi_to_api))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -233,9 +312,10 @@ pub enum NeighborCmd {
     /// Create a neighbor configuration.
     Create(Neighbor),
 
-    /// Read a neighbor configuration.
+    /// Read a neighbor configuration (supports both IP and interface).
     Read {
-        addr: IpAddr,
+        /// Peer identifier (IP address for numbered, interface name for unnumbered)
+        peer: String,
         #[clap(env)]
         asn: u32,
     },
@@ -243,9 +323,10 @@ pub enum NeighborCmd {
     /// Update a neighbor's configuration.
     Update(Neighbor),
 
-    /// Delete a neighbor configuration
+    /// Delete a neighbor configuration (supports both IP and interface)
     Delete {
-        addr: IpAddr,
+        /// Peer identifier (IP address for numbered, interface name for unnumbered)
+        peer: String,
         #[clap(env)]
         asn: u32,
     },
@@ -420,25 +501,6 @@ pub struct RouterConfig {
 }
 
 #[derive(Args, Debug)]
-pub struct ExportPolicy {
-    /// Address of the peer to apply this policy to.
-    pub addr: IpAddr,
-
-    /// Prefix this policy applies to
-    pub prefix: Prefix4,
-
-    /// Priority of the policy, higher value is higher priority.
-    pub priority: u16,
-
-    /// The policy action to apply.
-    pub action: PolicyAction,
-
-    /// Autonomous system number for the router to add the export policy to.
-    #[clap(env)]
-    pub asn: u32,
-}
-
-#[derive(Args, Debug)]
 pub struct Originate4 {
     /// Autonomous system number for the router to originated the prefixes from.
     #[clap(env)]
@@ -473,11 +535,20 @@ pub struct Neighbor {
     /// Name for this neighbor
     name: String,
 
-    /// Neighbor address
-    addr: IpAddr,
+    /// Peer identifier: either an IP address (numbered) or interface name (unnumbered)
+    peer: String,
 
     /// Peer group to add the neighbor to.
     group: String,
+
+    /// Autonomous system number for the router to add the neighbor to.
+    #[clap(env)]
+    asn: u32,
+
+    /// Act as a default IPv6 router for unnumbered peering (some routers like Arista require this).
+    /// Ignored for numbered peers. Maps to router lifetime of 1800s if true, 0s if false.
+    #[arg(long, default_value_t = false)]
+    act_as_default_router: bool,
 
     /// Neighbor BGP TCP port.
     #[arg(long, default_value_t = 179)]
@@ -491,9 +562,17 @@ pub struct Neighbor {
     #[arg(long, default_value_t = 0)]
     idle_hold_time: u64,
 
+    /// Jitter range for idle hold timer (min,max format, e.g., "0.75,1.0").
+    #[arg(long)]
+    pub idle_hold_jitter: Option<JitterRange>,
+
     /// How long to wait between connection retries (s).
     #[arg(long, default_value_t = 5)]
     connect_retry_time: u64,
+
+    /// Jitter range for connect_retry timer (min,max format, e.g., "0.75,1.0").
+    #[arg(long)]
+    pub connect_retry_jitter: Option<JitterRange>,
 
     /// Interval for sending keepalive messages (s).
     #[arg(long, default_value_t = 2)]
@@ -503,9 +582,13 @@ pub struct Neighbor {
     #[arg(long, default_value_t = 0)]
     delay_open_time: u64,
 
-    /// Blocking interval for message loops (ms).
+    /// Enable deterministic collision resolution in Established state.
+    #[arg(long, default_value_t = false)]
+    pub deterministic_collision_resolution: bool,
+
+    /// Timer granularity in ms (how often do timers tick).
     #[arg(long, default_value_t = 100)]
-    resolution: u64,
+    clock_resolution: u64,
 
     /// Do not initiate connections, only accept them.
     #[arg(long, default_value_t = false)]
@@ -543,59 +626,230 @@ pub struct Neighbor {
     #[arg(long)]
     pub vlan_id: Option<u16>,
 
+    /// Enable IPv4 unicast address family.
     #[arg(long)]
-    pub allow_export: Option<Vec<Prefix4>>,
+    pub enable_ipv4: bool,
 
+    /// IPv4 prefixes to allow importing (requires --enable-ipv4).
+    #[arg(long, requires = "enable_ipv4")]
+    pub allow_import4: Option<Vec<Prefix4>>,
+
+    /// IPv4 prefixes to allow exporting (requires --enable-ipv4).
+    #[arg(long, requires = "enable_ipv4")]
+    pub allow_export4: Option<Vec<Prefix4>>,
+
+    /// IPv4 nexthop override for this neighbor (requires --enable-ipv4).
+    #[arg(long, requires = "enable_ipv4")]
+    pub nexthop4: Option<IpAddr>,
+
+    /// Enable IPv6 unicast address family.
     #[arg(long)]
-    pub allow_import: Option<Vec<Prefix4>>,
+    pub enable_ipv6: bool,
 
-    /// Autonomous system number for the router to add the neighbor to.
-    #[clap(env)]
-    pub asn: u32,
+    /// IPv6 prefixes to allow importing (requires --enable-ipv6).
+    #[arg(long, requires = "enable_ipv6")]
+    pub allow_import6: Option<Vec<Prefix6>>,
+
+    /// IPv6 prefixes to allow exporting (requires --enable-ipv6).
+    #[arg(long, requires = "enable_ipv6")]
+    pub allow_export6: Option<Vec<Prefix6>>,
+
+    /// IPv6 nexthop override for this neighbor (requires --enable-ipv6).
+    #[arg(long, requires = "enable_ipv6")]
+    pub nexthop6: Option<IpAddr>,
 }
 
-impl From<Neighbor> for types::Neighbor {
-    fn from(n: Neighbor) -> types::Neighbor {
+/// Peer type determined by parsing the peer string
+enum PeerType {
+    Numbered(IpAddr),
+    Unnumbered(String),
+}
+
+/// API neighbor type wrapper for conversion
+enum ApiNeighborType {
+    Numbered(types::Neighbor),
+    Unnumbered(types::UnnumberedNeighbor),
+}
+
+/// Determine if a peer string is an IP address or interface name
+fn parse_peer_type(peer: &str) -> PeerType {
+    match peer.parse::<IpAddr>() {
+        Ok(addr) => PeerType::Numbered(addr),
+        Err(_) => PeerType::Unnumbered(peer.to_string()),
+    }
+}
+
+impl Neighbor {
+    /// Convert to either numbered or unnumbered neighbor type based on peer detection
+    fn into_api_types(self) -> Result<ApiNeighborType> {
+        match parse_peer_type(&self.peer) {
+            PeerType::Numbered(addr) => {
+                Ok(ApiNeighborType::Numbered(self.into_numbered(addr)))
+            }
+            PeerType::Unnumbered(interface) => {
+                Ok(ApiNeighborType::Unnumbered(self.into_unnumbered(interface)))
+            }
+        }
+    }
+
+    fn into_numbered(self, addr: IpAddr) -> types::Neighbor {
+        // Build IPv4 unicast config if enabled
+        let ipv4_unicast = if self.enable_ipv4 {
+            let import_policy = match self.allow_import4.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy4::NoFiltering,
+            };
+            let export_policy = match self.allow_export4.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy4::NoFiltering,
+            };
+            Some(Ipv4UnicastConfig {
+                nexthop: self.nexthop4,
+                import_policy,
+                export_policy,
+            })
+        } else {
+            None
+        };
+
+        // Build IPv6 unicast config if enabled
+        let ipv6_unicast = if self.enable_ipv6 {
+            let import_policy = match self.allow_import6.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy6::NoFiltering,
+            };
+            let export_policy = match self.allow_export6.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy6::NoFiltering,
+            };
+            Some(Ipv6UnicastConfig {
+                nexthop: self.nexthop6,
+                import_policy,
+                export_policy,
+            })
+        } else {
+            None
+        };
+
         types::Neighbor {
-            asn: n.asn,
-            remote_asn: n.remote_asn,
-            min_ttl: n.min_ttl,
-            name: n.name,
-            host: SocketAddr::new(n.addr, n.port).to_string(),
-            hold_time: n.hold_time,
-            idle_hold_time: n.idle_hold_time,
-            connect_retry: n.connect_retry_time,
-            keepalive: n.keepalive_time,
-            delay_open: n.delay_open_time,
-            resolution: n.resolution,
-            group: n.group,
-            passive: n.passive_connection,
-            md5_auth_key: n.md5_auth_key.clone(),
-            multi_exit_discriminator: n.med,
-            communities: n.communities,
-            local_pref: n.local_pref,
-            enforce_first_as: n.enforce_first_as,
-            allow_export: match n.allow_export {
-                Some(prefixes) => ImportExportPolicy::Allow(
-                    prefixes
-                        .clone()
-                        .into_iter()
-                        .map(|x| Prefix::V4(Prefix4::new(x.value, x.length)))
-                        .collect(),
-                ),
-                None => ImportExportPolicy::NoFiltering,
+            asn: self.asn,
+            remote_asn: self.remote_asn,
+            min_ttl: self.min_ttl,
+            name: self.name.clone(),
+            host: SocketAddr::new(addr, self.port).to_string(),
+            hold_time: self.hold_time,
+            idle_hold_time: self.idle_hold_time,
+            connect_retry: self.connect_retry_time,
+            keepalive: self.keepalive_time,
+            delay_open: self.delay_open_time,
+            resolution: self.clock_resolution,
+            group: self.group.clone(),
+            passive: self.passive_connection,
+            md5_auth_key: self.md5_auth_key.clone(),
+            multi_exit_discriminator: self.med,
+            communities: self.communities.clone(),
+            local_pref: self.local_pref,
+            enforce_first_as: self.enforce_first_as,
+            ipv4_unicast,
+            ipv6_unicast,
+            vlan_id: self.vlan_id,
+            connect_retry_jitter: self
+                .connect_retry_jitter
+                .map(jitter_range_to_api),
+            idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
+            deterministic_collision_resolution: self
+                .deterministic_collision_resolution,
+        }
+    }
+
+    fn into_unnumbered(self, interface: String) -> types::UnnumberedNeighbor {
+        // Build IPv4 unicast config if enabled
+        let ipv4_unicast = if self.enable_ipv4 {
+            let import_policy = match self.allow_import4.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy4::NoFiltering,
+            };
+            let export_policy = match self.allow_export4.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy4::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy4::NoFiltering,
+            };
+            Some(Ipv4UnicastConfig {
+                nexthop: self.nexthop4,
+                import_policy,
+                export_policy,
+            })
+        } else {
+            None
+        };
+
+        // Build IPv6 unicast config if enabled
+        let ipv6_unicast = if self.enable_ipv6 {
+            let import_policy = match self.allow_import6.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy6::NoFiltering,
+            };
+            let export_policy = match self.allow_export6.clone() {
+                Some(prefixes) => {
+                    ImportExportPolicy6::Allow(prefixes.into_iter().collect())
+                }
+                None => ImportExportPolicy6::NoFiltering,
+            };
+            Some(Ipv6UnicastConfig {
+                nexthop: self.nexthop6,
+                import_policy,
+                export_policy,
+            })
+        } else {
+            None
+        };
+
+        types::UnnumberedNeighbor {
+            asn: self.asn,
+            remote_asn: self.remote_asn,
+            min_ttl: self.min_ttl,
+            act_as_a_default_ipv6_router: if self.act_as_default_router {
+                1800
+            } else {
+                0
             },
-            allow_import: match n.allow_import {
-                Some(prefixes) => ImportExportPolicy::Allow(
-                    prefixes
-                        .clone()
-                        .into_iter()
-                        .map(|x| Prefix::V4(Prefix4::new(x.value, x.length)))
-                        .collect(),
-                ),
-                None => ImportExportPolicy::NoFiltering,
-            },
-            vlan_id: n.vlan_id,
+            name: self.name.clone(),
+            interface,
+            hold_time: self.hold_time,
+            idle_hold_time: self.idle_hold_time,
+            connect_retry: self.connect_retry_time,
+            keepalive: self.keepalive_time,
+            delay_open: self.delay_open_time,
+            resolution: self.clock_resolution,
+            group: self.group.clone(),
+            passive: self.passive_connection,
+            md5_auth_key: self.md5_auth_key.clone(),
+            multi_exit_discriminator: self.med,
+            communities: self.communities.clone(),
+            local_pref: self.local_pref,
+            enforce_first_as: self.enforce_first_as,
+            ipv4_unicast,
+            ipv6_unicast,
+            vlan_id: self.vlan_id,
+            connect_retry_jitter: self
+                .connect_retry_jitter
+                .map(jitter_range_to_api),
+            idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
+            deterministic_collision_resolution: self
+                .deterministic_collision_resolution,
         }
     }
 }
@@ -614,12 +868,12 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             ConfigCmd::Neighbor(cmd) => match cmd.command {
                 NeighborCmd::List { asn } => list_nbr(asn, c).await?,
                 NeighborCmd::Create(nbr) => create_nbr(nbr, c).await?,
-                NeighborCmd::Read { asn, addr } => {
-                    read_nbr(asn, addr, c).await?
+                NeighborCmd::Read { asn, peer } => {
+                    read_nbr(asn, peer, c).await?
                 }
                 NeighborCmd::Update(nbr) => update_nbr(nbr, c).await?,
-                NeighborCmd::Delete { asn, addr } => {
-                    delete_nbr(asn, addr, c).await?
+                NeighborCmd::Delete { asn, peer } => {
+                    delete_nbr(asn, peer, c).await?
                 }
             },
 
@@ -675,8 +929,12 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         },
 
         Commands::Status(cmd) => match cmd.command {
-            StatusCmd::Neighbors { asn } => get_neighbors(c, asn).await?,
-            StatusCmd::Exported { asn } => get_exported(c, asn).await?,
+            StatusCmd::Neighbors { asn, mode } => {
+                get_neighbors(c, asn, mode).await?
+            }
+            StatusCmd::Exported { asn, peer, afi } => {
+                get_exported(c, asn, peer, afi).await?
+            }
         },
 
         Commands::History(cmd) => match cmd.command {
@@ -710,9 +968,9 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
         Commands::Clear(cmd) => match cmd.command {
             ClearCmd::Neighbor {
                 asn,
-                addr,
-                clear_type,
-            } => clear_nbr(asn, addr, clear_type, c).await?,
+                peer,
+                operation,
+            } => clear_nbr(asn, peer, operation, c).await?,
         },
 
         Commands::Omicron(cmd) => match cmd.command {
@@ -761,11 +1019,46 @@ async fn delete_router(asn: u32, c: Client) -> Result<()> {
     Ok(())
 }
 
-async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
-    let result = c.get_neighbors_v2(asn).await?;
+async fn get_neighbors(
+    c: Client,
+    asn: u32,
+    mode: NeighborDisplayMode,
+) -> Result<()> {
+    let result = c.get_neighbors_v4(asn).await?.into_inner();
     let mut sorted: Vec<_> = result.iter().collect();
-    sorted.sort_by_key(|(ip, _)| ip.parse::<IpAddr>().ok());
 
+    // Sort using natural sorting to handle both IP addresses and interface names
+    sorted.sort_by(|(a, _), (b, _)| {
+        // Try parsing as IP addresses first for proper IP sorting
+        match (a.parse::<IpAddr>(), b.parse::<IpAddr>()) {
+            (Ok(ip_a), Ok(ip_b)) => ip_a.cmp(&ip_b),
+            // Fall back to natural sorting for interface names or mixed cases
+            _ => natord::compare(a, b),
+        }
+    });
+
+    match mode {
+        NeighborDisplayMode::summary => {
+            display_neighbors_summary(&sorted)?;
+        }
+        NeighborDisplayMode::detail => {
+            display_neighbors_detail(&sorted)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Format a Duration as decimal seconds (e.g., "4.300s", "0.100s", "10.000s")
+fn format_duration_decimal(d: Duration) -> String {
+    let secs = d.as_secs();
+    let millis = d.subsec_millis();
+    format!("{}.{:03}s", secs, millis)
+}
+
+fn display_neighbors_summary(
+    neighbors: &[(&String, &types::PeerInfo)],
+) -> Result<()> {
     let mut tw = TabWriter::new(stdout());
     writeln!(
         &mut tw,
@@ -779,28 +1072,18 @@ async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
     )
     .unwrap();
 
-    for (addr, info) in sorted.iter() {
+    for (addr, info) in neighbors.iter() {
         writeln!(
             &mut tw,
             "{}\t{:?}\t{:?}\t{:}\t{}/{}\t{}/{}",
             addr,
             info.asn,
-            info.state,
-            humantime::Duration::from(Duration::from_millis(
-                info.duration_millis
-            ),),
-            humantime::Duration::from(Duration::from_secs(
-                info.timers.hold.configured.secs
-            )),
-            humantime::Duration::from(Duration::from_secs(
-                info.timers.hold.negotiated.secs
-            )),
-            humantime::Duration::from(Duration::from_secs(
-                info.timers.keepalive.configured.secs,
-            )),
-            humantime::Duration::from(Duration::from_secs(
-                info.timers.keepalive.negotiated.secs,
-            )),
+            info.fsm_state,
+            humantime::Duration::from(info.fsm_state_duration),
+            humantime::Duration::from(info.timers.hold.configured),
+            humantime::Duration::from(info.timers.hold.negotiated),
+            humantime::Duration::from(info.timers.keepalive.configured),
+            humantime::Duration::from(info.timers.keepalive.negotiated),
         )
         .unwrap();
     }
@@ -808,9 +1091,203 @@ async fn get_neighbors(c: Client, asn: u32) -> Result<()> {
     Ok(())
 }
 
-async fn get_exported(c: Client, asn: u32) -> Result<()> {
+fn display_neighbors_detail(
+    neighbors: &[(&String, &types::PeerInfo)],
+) -> Result<()> {
+    for (i, (addr, info)) in neighbors.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+
+        println!("{}", "=".repeat(80));
+        println!("{}", format!("Neighbor: {}", addr).bold());
+        println!("{}", "=".repeat(80));
+
+        println!("\n{}", "Basic Information:".bold());
+        println!("  Name: {}", info.name);
+        println!("  Peer Group: {}", info.peer_group);
+        println!("  FSM State: {:?}", info.fsm_state);
+        println!(
+            "  FSM State Duration: {}",
+            humantime::Duration::from(info.fsm_state_duration)
+        );
+        if let Some(asn) = info.asn {
+            println!("  Peer ASN: {}", asn);
+        }
+        if let Some(id) = info.id {
+            println!("  Peer Router ID: {}", Ipv4Addr::from(id));
+        }
+
+        println!("\n{}", "Connection:".bold());
+        println!("  Local: {}:{}", info.local_ip, info.local_tcp_port);
+        println!("  Remote: {}:{}", info.remote_ip, info.remote_tcp_port);
+
+        println!("\n{}", "Address Families:".bold());
+        println!("  IPv4 Unicast:");
+        println!("    Import Policy: {:?}", info.ipv4_unicast.import_policy);
+        println!("    Export Policy: {:?}", info.ipv4_unicast.export_policy);
+        if let Some(nh) = info.ipv4_unicast.nexthop {
+            println!("    Nexthop: {}", nh);
+        }
+
+        println!("  IPv6 Unicast:");
+        println!("    Import Policy: {:?}", info.ipv6_unicast.import_policy);
+        println!("    Export Policy: {:?}", info.ipv6_unicast.export_policy);
+        if let Some(nh) = info.ipv6_unicast.nexthop {
+            println!("    Nexthop: {}", nh);
+        }
+
+        println!("\n{}", "Timers:".bold());
+        println!(
+            "  Hold Time: configured={}, negotiated={}, remaining={}",
+            format_duration_decimal(info.timers.hold.configured),
+            format_duration_decimal(info.timers.hold.negotiated),
+            format_duration_decimal(info.timers.hold.remaining),
+        );
+        println!(
+            "  Keepalive: configured={}, negotiated={}, remaining={}",
+            format_duration_decimal(info.timers.keepalive.configured),
+            format_duration_decimal(info.timers.keepalive.negotiated),
+            format_duration_decimal(info.timers.keepalive.remaining),
+        );
+        println!(
+            "  Connect Retry: configured={}, remaining={}",
+            format_duration_decimal(info.timers.connect_retry.configured),
+            format_duration_decimal(info.timers.connect_retry.remaining),
+        );
+        match &info.timers.connect_retry_jitter {
+            Some(jitter) => {
+                println!("    Jitter: {}-{}", jitter.min, jitter.max)
+            }
+            None => println!("    Jitter: none"),
+        }
+        println!(
+            "  Idle Hold: configured={}, remaining={}",
+            format_duration_decimal(info.timers.idle_hold.configured),
+            format_duration_decimal(info.timers.idle_hold.remaining),
+        );
+        match &info.timers.idle_hold_jitter {
+            Some(jitter) => {
+                println!("    Jitter: {}-{}", jitter.min, jitter.max)
+            }
+            None => println!("    Jitter: none"),
+        }
+        println!(
+            "  Delay Open: configured={}, remaining={}",
+            format_duration_decimal(info.timers.delay_open.configured),
+            format_duration_decimal(info.timers.delay_open.remaining),
+        );
+
+        if !info.received_capabilities.is_empty() {
+            println!("\n{}", "Received Capabilities:".bold());
+            for cap in &info.received_capabilities {
+                println!("  {:?}", cap);
+            }
+        }
+
+        println!("\n{}", "Counters:".bold());
+        println!("  Prefixes:");
+        println!("    Advertised: {}", info.counters.prefixes_advertised);
+        println!("    Imported: {}", info.counters.prefixes_imported);
+
+        println!("  Messages Sent:");
+        println!("    Opens: {}", info.counters.opens_sent);
+        println!("    Updates: {}", info.counters.updates_sent);
+        println!("    Keepalives: {}", info.counters.keepalives_sent);
+        println!("    Route Refresh: {}", info.counters.route_refresh_sent);
+        println!("    Notifications: {}", info.counters.notifications_sent);
+
+        println!("  Messages Received:");
+        println!("    Opens: {}", info.counters.opens_received);
+        println!("    Updates: {}", info.counters.updates_received);
+        println!("    Keepalives: {}", info.counters.keepalives_received);
+        println!(
+            "    Route Refresh: {}",
+            info.counters.route_refresh_received
+        );
+        println!(
+            "    Notifications: {}",
+            info.counters.notifications_received
+        );
+
+        println!("  FSM Transitions:");
+        println!(
+            "    To Established: {}",
+            info.counters.transitions_to_established
+        );
+        println!("    To Idle: {}", info.counters.transitions_to_idle);
+        println!("    To Connect: {}", info.counters.transitions_to_connect);
+
+        println!("  Connections:");
+        println!(
+            "    Active Accepted: {}",
+            info.counters.active_connections_accepted
+        );
+        println!(
+            "    Active Declined: {}",
+            info.counters.active_connections_declined
+        );
+        println!(
+            "    Passive Accepted: {}",
+            info.counters.passive_connections_accepted
+        );
+        println!(
+            "    Passive Declined: {}",
+            info.counters.passive_connections_declined
+        );
+        println!(
+            "    Connection Retries: {}",
+            info.counters.connection_retries
+        );
+
+        // Error Counters
+        println!("\n{}", "Error Counters:".bold());
+        println!(
+            "  TCP Connection Failures: {}",
+            info.counters.tcp_connection_failure
+        );
+        println!("  MD5 Auth Failures: {}", info.counters.md5_auth_failures);
+        println!(
+            "  Hold Timer Expirations: {}",
+            info.counters.hold_timer_expirations
+        );
+        println!(
+            "  Update Nexthop Missing: {}",
+            info.counters.update_nexhop_missing
+        );
+        println!(
+            "  Open Handle Failures: {}",
+            info.counters.open_handle_failures
+        );
+        println!(
+            "  Notification Send Failures: {}",
+            info.counters.notification_send_failure
+        );
+        println!("  Connector Panics: {}", info.counters.connector_panics);
+    }
+
+    Ok(())
+}
+
+async fn get_exported(
+    c: Client,
+    asn: u32,
+    peer: Option<String>,
+    afi: Option<Afi>,
+) -> Result<()> {
+    // Parse peer filter if provided and convert to API type
+    let peer_id = peer.map(|p| {
+        let bgp_peer_id: bgp::session::PeerId =
+            p.parse().expect("PeerId::from_str should always succeed");
+        peer_id_to_api(bgp_peer_id)
+    });
+
     let exported = c
-        .get_exported(&types::AsnSelector { asn })
+        .get_exported_v2(&types::ExportedSelector {
+            asn,
+            peer: peer_id,
+            afi: afi.map(afi_to_api),
+        })
         .await?
         .into_inner();
 
@@ -819,44 +1296,130 @@ async fn get_exported(c: Client, asn: u32) -> Result<()> {
 }
 
 async fn list_nbr(asn: u32, c: Client) -> Result<()> {
-    let nbrs = c.read_neighbors(asn).await?;
-    println!("{nbrs:#?}");
+    // Get both numbered and unnumbered neighbors
+    let numbered = c.read_neighbors_v3(asn).await?.into_inner();
+    let unnumbered = c.read_unnumbered_neighbors(asn).await?.into_inner();
+
+    if numbered.is_empty() && unnumbered.is_empty() {
+        println!("No neighbors configured for ASN {}", asn);
+        return Ok(());
+    }
+
+    // Use TabWriter for formatted output
+    let mut tw = TabWriter::new(stdout());
+    writeln!(
+        &mut tw,
+        "{}\t{}\t{}\t{}",
+        "Peer".dimmed(),
+        "ASN".dimmed(),
+        "Group".dimmed(),
+        "Name".dimmed(),
+    )?;
+
+    // Display numbered neighbors
+    for nbr in &numbered {
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}\t{}",
+            nbr.host, nbr.asn, nbr.group, nbr.name,
+        )?;
+    }
+
+    // Display unnumbered neighbors
+    for nbr in &unnumbered {
+        writeln!(
+            &mut tw,
+            "{}\t{}\t{}\t{}",
+            nbr.interface, nbr.asn, nbr.group, nbr.name,
+        )?;
+    }
+
+    tw.flush()?;
     Ok(())
 }
 
 async fn create_nbr(nbr: Neighbor, c: Client) -> Result<()> {
-    c.create_neighbor(&nbr.into()).await?;
+    match nbr.into_api_types()? {
+        ApiNeighborType::Numbered(n) => {
+            c.create_neighbor_v3(&n).await?;
+        }
+        ApiNeighborType::Unnumbered(n) => {
+            c.create_unnumbered_neighbor(&n).await?;
+        }
+    }
     Ok(())
 }
 
-async fn read_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
-    let nbr = c.read_neighbor(&addr, asn).await?.into_inner();
-    println!("{nbr:#?}");
+async fn read_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
+    match parse_peer_type(&peer) {
+        PeerType::Numbered(addr) => {
+            let nbr = c
+                .read_neighbor_v3(asn, &addr.to_string())
+                .await?
+                .into_inner();
+            println!("{nbr:#?}");
+        }
+        PeerType::Unnumbered(interface) => {
+            let nbr = c
+                .read_unnumbered_neighbor(asn, &interface)
+                .await?
+                .into_inner();
+            println!("{nbr:#?}");
+        }
+    }
     Ok(())
 }
 
 async fn update_nbr(nbr: Neighbor, c: Client) -> Result<()> {
-    c.update_neighbor(&nbr.into()).await?;
+    match nbr.into_api_types()? {
+        ApiNeighborType::Numbered(n) => {
+            c.update_neighbor_v3(&n).await?;
+        }
+        ApiNeighborType::Unnumbered(n) => {
+            c.update_unnumbered_neighbor(&n).await?;
+        }
+    }
     Ok(())
 }
 
-async fn delete_nbr(asn: u32, addr: IpAddr, c: Client) -> Result<()> {
-    c.delete_neighbor(&addr, asn).await?;
+async fn delete_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
+    match parse_peer_type(&peer) {
+        PeerType::Numbered(addr) => {
+            c.delete_neighbor_v3(asn, &addr.to_string()).await?;
+        }
+        PeerType::Unnumbered(interface) => {
+            c.delete_unnumbered_neighbor(asn, &interface).await?;
+        }
+    }
     Ok(())
 }
 
 async fn clear_nbr(
     asn: u32,
-    addr: IpAddr,
-    op: NeighborResetOp,
+    peer: String,
+    operation: NeighborOperation,
     c: Client,
 ) -> Result<()> {
-    c.clear_neighbor(&NeighborResetRequest {
-        asn,
-        addr,
-        op: op.into(),
-    })
-    .await?;
+    match parse_peer_type(&peer) {
+        PeerType::Numbered(addr) => {
+            c.clear_neighbor_v2(&NeighborResetRequest {
+                asn,
+                addr,
+                op: operation.into(),
+            })
+            .await?;
+        }
+        PeerType::Unnumbered(interface) => {
+            c.clear_unnumbered_neighbor(
+                &types::UnnumberedNeighborResetRequest {
+                    asn,
+                    interface,
+                    op: operation.into(),
+                },
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
 
@@ -941,7 +1504,7 @@ async fn read_origin6(asn: u32, c: Client) -> Result<()> {
 async fn apply(filename: String, c: Client) -> Result<()> {
     let contents = read_to_string(filename)?;
     let request: types::ApplyRequest = serde_json::from_str(&contents)?;
-    c.bgp_apply(&request).await?;
+    c.bgp_apply_v2(&request).await?;
     Ok(())
 }
 
@@ -1012,7 +1575,7 @@ async fn delete_shp(asn: u32, c: Client) -> Result<()> {
 async fn get_fsm_history(
     c: Client,
     asn: u32,
-    peer: Option<IpAddr>,
+    peer: Option<String>,
     buffer: &str,
     limit_str: &str,
     wide: bool,
@@ -1028,18 +1591,25 @@ async fn get_fsm_history(
         _ => "Major Events",
     };
 
+    // Parse peer filter if provided and convert to API type
+    let peer_id = peer.as_ref().map(|p| {
+        let bgp_peer_id: bgp::session::PeerId =
+            p.parse().expect("PeerId::from_str should always succeed");
+        peer_id_to_api(bgp_peer_id)
+    });
+
     let result = c
-        .fsm_history(&types::FsmHistoryRequest {
+        .fsm_history_v2(&types::FsmHistoryRequest {
             asn,
-            peer,
+            peer: peer_id,
             buffer: buffer_type,
         })
         .await?
         .into_inner();
 
     if result.by_peer.is_empty() {
-        if let Some(peer_addr) = peer {
-            println!("No FSM history found for peer {}", peer_addr);
+        if let Some(peer_str) = peer {
+            println!("No FSM history found for peer {}", peer_str);
         } else {
             println!("No FSM history found for ASN {}", asn);
         }
@@ -1142,7 +1712,7 @@ async fn get_fsm_history(
 async fn get_message_history(
     c: Client,
     asn: u32,
-    peer: IpAddr,
+    peer: String,
     direction: &str,
     limit_str: &str,
     wide: bool,
@@ -1165,10 +1735,16 @@ async fn get_message_history(
         }
     };
 
+    // Parse peer and convert to API type
+    let bgp_peer_id: bgp::session::PeerId = peer
+        .parse()
+        .expect("PeerId::from_str should always succeed");
+    let peer_id = peer_id_to_api(bgp_peer_id);
+
     let result = c
-        .message_history_v2(&types::MessageHistoryRequest {
+        .message_history_v3(&types::MessageHistoryRequest {
             asn,
-            peer: Some(peer),
+            peer: Some(peer_id),
             direction: dir,
         })
         .await?
@@ -1308,5 +1884,52 @@ mod tests {
         assert_eq!(originate6.prefixes.len(), 1);
         assert_eq!(originate6.prefixes[0].value.to_string(), "2001:db8::");
         assert_eq!(originate6.prefixes[0].length, 32);
+    }
+
+    #[test]
+    fn test_parse_peer_type_ipv4() {
+        // Test that IPv4 addresses are detected as numbered peers
+        match parse_peer_type("192.168.1.1") {
+            PeerType::Numbered(addr) => {
+                assert_eq!(addr.to_string(), "192.168.1.1");
+            }
+            PeerType::Unnumbered(_) => panic!("Expected numbered peer"),
+        }
+    }
+
+    #[test]
+    fn test_parse_peer_type_ipv6() {
+        // Test that IPv6 addresses are detected as numbered peers
+        match parse_peer_type("2001:db8::1") {
+            PeerType::Numbered(addr) => {
+                assert_eq!(addr.to_string(), "2001:db8::1");
+            }
+            PeerType::Unnumbered(_) => panic!("Expected numbered peer"),
+        }
+
+        match parse_peer_type("3fff:10::2") {
+            PeerType::Numbered(addr) => {
+                assert_eq!(addr.to_string(), "3fff:10::2");
+            }
+            PeerType::Unnumbered(_) => panic!("Expected numbered peer"),
+        }
+    }
+
+    #[test]
+    fn test_parse_peer_type_interface() {
+        // Test that interface names are detected as unnumbered peers
+        match parse_peer_type("eth0") {
+            PeerType::Unnumbered(iface) => {
+                assert_eq!(iface, "eth0");
+            }
+            PeerType::Numbered(_) => panic!("Expected unnumbered peer"),
+        }
+
+        match parse_peer_type("qsfp0") {
+            PeerType::Unnumbered(iface) => {
+                assert_eq!(iface, "qsfp0");
+            }
+            PeerType::Numbered(_) => panic!("Expected unnumbered peer"),
+        }
     }
 }

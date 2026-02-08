@@ -8,9 +8,15 @@
 //! correctness and consistency of prefix operations (excluding wire format
 //! tests, which are in bgp/src/proptest.rs since they test BgpWireFormat).
 
-use crate::types::{Prefix, Prefix4, Prefix6, StaticRouteKey};
-use proptest::prelude::*;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use crate::{
+    BgpNeighborParameters,
+    types::{
+        BgpNeighborInfo, ImportExportPolicy4, ImportExportPolicy6, Prefix,
+        Prefix4, Prefix6, StaticRouteKey,
+    },
+};
+use proptest::{prelude::*, strategy::Just};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 // Strategy for generating valid IPv4 prefixes
 fn ipv4_prefix_strategy() -> impl Strategy<Value = Prefix4> {
@@ -74,6 +80,126 @@ fn static_route_key_strategy() -> impl Strategy<Value = StaticRouteKey> {
                 rib_priority,
             }
         })
+}
+
+// Strategy for generating valid SocketAddr for BGP neighbor configuration
+fn socket_addr_strategy() -> impl Strategy<Value = SocketAddr> {
+    prop_oneof![
+        (any::<u32>(), any::<u16>()).prop_map(|(addr_bits, port)| {
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::from(addr_bits)), port)
+        }),
+        (any::<u128>(), any::<u16>()).prop_map(|(addr_bits, port)| {
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::from(addr_bits)), port)
+        }),
+    ]
+}
+
+// Strategy for generating IPv4 import/export policies
+fn ipv4_policy_strategy() -> impl Strategy<Value = ImportExportPolicy4> {
+    prop_oneof![
+        Just(ImportExportPolicy4::NoFiltering),
+        // Empty Allow set (tests serialization of empty BTreeSet)
+        Just(ImportExportPolicy4::Allow(std::collections::BTreeSet::new())),
+        // Allow with one IPv4 prefix
+        ipv4_prefix_strategy().prop_map(|prefix| {
+            let mut set = std::collections::BTreeSet::new();
+            set.insert(prefix);
+            ImportExportPolicy4::Allow(set)
+        }),
+        // Allow with multiple IPv4 prefixes
+        prop::collection::vec(ipv4_prefix_strategy(), 1..5).prop_map(
+            |prefixes| {
+                let set: std::collections::BTreeSet<_> =
+                    prefixes.into_iter().collect();
+                ImportExportPolicy4::Allow(set)
+            }
+        ),
+    ]
+}
+
+// Strategy for generating IPv6 import/export policies
+fn ipv6_policy_strategy() -> impl Strategy<Value = ImportExportPolicy6> {
+    prop_oneof![
+        Just(ImportExportPolicy6::NoFiltering),
+        // Empty Allow set (tests serialization of empty BTreeSet)
+        Just(ImportExportPolicy6::Allow(std::collections::BTreeSet::new())),
+        // Allow with one IPv6 prefix
+        ipv6_prefix_strategy().prop_map(|prefix| {
+            let mut set = std::collections::BTreeSet::new();
+            set.insert(prefix);
+            ImportExportPolicy6::Allow(set)
+        }),
+        // Allow with multiple IPv6 prefixes
+        prop::collection::vec(ipv6_prefix_strategy(), 1..5).prop_map(
+            |prefixes| {
+                let set: std::collections::BTreeSet<_> =
+                    prefixes.into_iter().collect();
+                ImportExportPolicy6::Allow(set)
+            }
+        ),
+    ]
+}
+
+// Strategy for generating valid BgpNeighborInfo
+// Focuses on testing critical fields: nexthop4, nexthop6, and policy variants.
+// Uses sensible defaults for non-critical fields (primitives already well-tested by serde).
+fn bgp_neighbor_info_strategy() -> impl Strategy<Value = BgpNeighborInfo> {
+    (
+        any::<u32>(),            // asn (random)
+        any::<String>(), // name (random - tests any JSON-serializable string)
+        socket_addr_strategy(), // host (random)
+        any::<Option<IpAddr>>(), // nexthop4 (random - critical field)
+        any::<Option<IpAddr>>(), // nexthop6 (random - critical field)
+        ipv4_policy_strategy(), // allow_import4 (NoFiltering/Allow variants)
+        ipv4_policy_strategy(), // allow_export4 (NoFiltering/Allow variants)
+        ipv6_policy_strategy(), // allow_import6 (NoFiltering/Allow variants)
+        ipv6_policy_strategy(), // allow_export6 (NoFiltering/Allow variants)
+    )
+        .prop_map(
+            |(
+                asn,
+                name,
+                host,
+                nexthop4,
+                nexthop6,
+                allow_import4,
+                allow_export4,
+                allow_import6,
+                allow_export6,
+            )| {
+                BgpNeighborInfo {
+                    asn,
+                    name,
+                    host,
+                    group: "test".into(),
+                    parameters: BgpNeighborParameters {
+                        hold_time: 90,
+                        idle_hold_time: 60,
+                        delay_open: 0,
+                        connect_retry: 30,
+                        keepalive: 30,
+                        resolution: 1000,
+                        passive: false,
+                        remote_asn: Some(65001),
+                        min_ttl: Some(1),
+                        md5_auth_key: Some("password".to_string()),
+                        multi_exit_discriminator: Some(100),
+                        communities: vec![],
+                        local_pref: Some(100),
+                        enforce_first_as: false,
+                        ipv4_enabled: true,
+                        ipv6_enabled: true,
+                        allow_import4,
+                        allow_export4,
+                        allow_import6,
+                        allow_export6,
+                        nexthop4,
+                        nexthop6,
+                        vlan_id: Some(1),
+                    },
+                }
+            },
+        )
 }
 
 proptest! {
@@ -320,5 +446,77 @@ proptest! {
         if norm1 > norm2 {
             prop_assert_ne!(norm1, norm2, "Greater-than routes should not be equal");
         }
+    }
+
+    /// Property: BgpNeighborInfo survives JSON serialization/deserialization round-trip
+    /// This ensures that the nexthop4 and nexthop6 fields (and all other fields) are
+    /// correctly preserved when encoding to database and retrieving back.
+    #[test]
+    fn prop_bgp_neighbor_info_serialization_roundtrip(neighbor in bgp_neighbor_info_strategy()) {
+        // Serialize to JSON (simulating database storage)
+        let json = serde_json::to_string(&neighbor)
+            .expect("Failed to serialize BgpNeighborInfo to JSON");
+
+        // Deserialize from JSON (simulating database retrieval)
+        let deserialized: BgpNeighborInfo = serde_json::from_str(&json)
+            .expect("Failed to deserialize BgpNeighborInfo from JSON");
+
+        // All fields should match after round-trip
+        prop_assert_eq!(
+            deserialized.asn, neighbor.asn,
+            "ASN should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.name, neighbor.name,
+            "Name should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.host, neighbor.host,
+            "Host should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.parameters.nexthop4, neighbor.parameters.nexthop4,
+            "IPv4 nexthop should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.parameters.nexthop6, neighbor.parameters.nexthop6,
+            "IPv6 nexthop should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.parameters.ipv4_enabled, neighbor.parameters.ipv4_enabled,
+            "IPv4 enabled flag should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.parameters.ipv6_enabled, neighbor.parameters.ipv6_enabled,
+            "IPv6 enabled flag should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.parameters.multi_exit_discriminator, neighbor.parameters.multi_exit_discriminator,
+            "MED should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.parameters.local_pref, neighbor.parameters.local_pref,
+            "Local preference should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.parameters.remote_asn, neighbor.parameters.remote_asn,
+            "Remote ASN should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.parameters.allow_import4, neighbor.parameters.allow_import4,
+            "IPv4 import policy should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.parameters.allow_export4, neighbor.parameters.allow_export4,
+            "IPv4 export policy should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.parameters.allow_import6, neighbor.parameters.allow_import6,
+            "IPv6 import policy should survive serialization round-trip"
+        );
+        prop_assert_eq!(
+            deserialized.parameters.allow_export6, neighbor.parameters.allow_export6,
+            "IPv6 export policy should survive serialization round-trip"
+        );
     }
 }

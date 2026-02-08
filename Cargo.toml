@@ -22,7 +22,9 @@ default-members = [
     "mgd",
     "mg-lower",
     "mg-common",
+    "ndp",
     "xtask",
+    "falcon-lab",
 ]
 
 members = [
@@ -48,11 +50,27 @@ members = [
     "mgd",
     "mg-lower",
     "mg-common",
+    "ndp",
     "xtask",
+    "falcon-lab",
 ]
 
 [workspace.dependencies]
-slog = { version = "2.8.2", features = ["max_level_trace", "release_max_level_debug"] }
+# Local
+mg-api = { path = "mg-api" }
+mg-common = { path = "mg-common" }
+rdb-types = { path = "rdb-types" }
+ndp = { path = "ndp" }
+bgp = { path = "bgp" }
+bfd = { path = "bfd" }
+mg-admin-client = { path = "mg-admin-client" }
+ddm-admin-client = { path = "ddm-admin-client" }
+rdb = { path = "rdb", features = ["clap"] }
+ddm-api = { path = "ddm-api" }
+ddm-types = { path = "ddm-types" }
+
+# External
+slog = { version = "2.7.0", features = ["max_level_trace", "release_max_level_debug"] }
 slog-term = "2.9"
 slog-envlogger = "2.2"
 slog-async = "2.8"
@@ -77,10 +95,11 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" 
 progenitor = "0.11"
 progenitor-client = "0.11"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
-clap = { version = "4.5.54", features = ["derive", "unstable-styles", "env"] }
+clap = { version = "4.5.53", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 colored = "3.0"
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
+libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anstyle = "1.0.13"
 nom = "7.1"
 num_enum = "0.7.5"
@@ -95,15 +114,13 @@ http-body-util = "0.1"
 humantime = "2.1"
 rand = "0.8.5"
 backoff = "0.4"
-mg-api = { path = "mg-api" }
-mg-common = { path = "mg-common" }
-rdb-types = { path = "rdb-types" }
 chrono = { version = "0.4.42", features = ["serde"] }
 oxide-tokio-rt = "0.1.2"
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oxnet = { version = "0.1.4", default-features = false, features = ["schemars", "serde"] }
 omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
+gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
 uuid = { version = "1.8", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
 libc = "0.2"
@@ -112,9 +129,10 @@ rhai = { version = "1", features = ["metadata", "sync"] }
 semver = "1.0"
 proptest = "1.4"
 serial_test = "3.2"
-ddm-api = { path = "ddm-api" }
-ddm-types = { path = "ddm-types" }
-gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
+internet-checksum = "0.2.1"
+network-interface = { git = "https://github.com/oxidecomputer/network-interface", branch = "illumos" }
+natord = "1.0"
+
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
@@ -126,5 +144,5 @@ rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
 
 [workspace.dependencies.dpd-client]
 git = "https://github.com/oxidecomputer/dendrite"
-branch = "main"
+rev = "37992295b5dc708d8f120cee805d67418741b556"
 package = "dpd-client"
