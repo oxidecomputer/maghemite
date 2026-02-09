@@ -4,17 +4,94 @@
 //!
 //! TODO: maybe there can be less boilerplate with Dropshot API traits?
 
+use std::net::IpAddr;
 use std::time::Duration;
 
-use ddm_admin_client::Client as DdmClient;
 use ddm_admin_client::types::{Error as DdmError, *};
-use dpd_client::Client as DpdClient;
-use dpd_client::ClientInfo;
 use dpd_client::types::{Error as DpdError, *};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
+#[cfg(target_os = "illumos")]
+use {
+    ddm_admin_client::Client as DdmClient, dpd_client::Client as DpdClient,
+    dpd_client::ClientInfo,
+};
+
+/// Platform-agnostic route representation mirroring `libnet::route::Route`.
+///
+/// This allows the `SwitchZone` trait and test mocks to compile on platforms
+/// where `libnet` is not available (e.g. macOS).
+#[derive(Debug)]
+pub struct SysRoute {
+    pub dest: IpAddr,
+    pub mask: u32,
+    pub gw: IpAddr,
+    pub delay: u32,
+    pub ifx: Option<String>,
+}
+
+/// Platform-agnostic route error mirroring `libnet::route::Error`.
+#[derive(thiserror::Error, Debug)]
+pub enum SysRouteError {
+    #[error("{0} not implemented")]
+    NotImplemented(String),
+    #[error("system error {0}")]
+    SystemError(String),
+    #[error("bad argument: {0}")]
+    BadArgument(String),
+    #[error("exists")]
+    Exists,
+    #[error("route does not exist")]
+    DoesNotExist,
+    #[error("insufficient resources")]
+    InsufficientResources,
+    #[error("insufficient permissions")]
+    InsufficientPermissions,
+    #[error("io error {0}")]
+    IoError(#[from] std::io::Error),
+}
+
+#[cfg(target_os = "illumos")]
+impl From<libnet::route::Error> for SysRouteError {
+    fn from(e: libnet::route::Error) -> Self {
+        match e {
+            libnet::route::Error::NotImplemented(s) => {
+                SysRouteError::NotImplemented(s)
+            }
+            libnet::route::Error::SystemError(s) => {
+                SysRouteError::SystemError(s)
+            }
+            libnet::route::Error::BadArgument(s) => {
+                SysRouteError::BadArgument(s)
+            }
+            libnet::route::Error::Exists => SysRouteError::Exists,
+            libnet::route::Error::DoesNotExist => SysRouteError::DoesNotExist,
+            libnet::route::Error::InsufficientResources => {
+                SysRouteError::InsufficientResources
+            }
+            libnet::route::Error::InsufficientPermissions => {
+                SysRouteError::InsufficientPermissions
+            }
+            libnet::route::Error::IoError(e) => SysRouteError::IoError(e),
+        }
+    }
+}
+
+#[cfg(target_os = "illumos")]
+impl From<libnet::route::Route> for SysRoute {
+    fn from(r: libnet::route::Route) -> Self {
+        SysRoute {
+            dest: r.dest,
+            mask: r.mask,
+            gw: r.gw,
+            delay: r.delay,
+            ifx: r.ifx,
+        }
+    }
+}
 
 /// This trait wraps the dpd methods mg-lower uses.
-pub(crate) trait Dpd {
+#[allow(async_fn_in_trait)]
+pub trait Dpd {
     async fn route_ipv4_get(
         &self,
         cidr: &Ipv4Net,
@@ -89,12 +166,21 @@ pub(crate) trait Dpd {
         cidr: &'a oxnet::Ipv4Net,
         port_id: &'a PortId,
         link_id: &'a LinkId,
-        tgt_ip: &'a std::net::Ipv4Addr,
+        tgt_ip: &'a IpAddr,
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>;
+
+    async fn route_ipv6_delete_target<'a>(
+        &'a self,
+        cidr: &'a oxnet::Ipv6Net,
+        port_id: &'a PortId,
+        link_id: &'a LinkId,
+        tgt_ip: &'a std::net::Ipv6Addr,
     ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>;
 }
 
 /// This trait wraps the ddmd methods mg-lower uses.
-pub(crate) trait Ddm {
+#[allow(async_fn_in_trait)]
+pub trait Ddm {
     async fn get_originated_tunnel_endpoints(
         &self,
     ) -> Result<
@@ -139,19 +225,21 @@ pub(crate) trait Ddm {
 
 /// This trait wraps the methods that have expectations about switch zone
 /// setup.
-pub(crate) trait SwitchZone {
+pub trait SwitchZone {
     fn get_route(
         &self,
         dst: IpNet,
         timeout: Option<Duration>,
-    ) -> Result<libnet::route::Route, libnet::route::Error>;
+    ) -> Result<SysRoute, SysRouteError>;
 }
 
 /// Production dpd trait that simply passes through calls to a dpd client.
-pub(crate) struct ProductionDpd {
-    pub(crate) client: DpdClient,
+#[cfg(target_os = "illumos")]
+pub struct ProductionDpd {
+    pub client: DpdClient,
 }
 
+#[cfg(target_os = "illumos")]
 impl Dpd for ProductionDpd {
     async fn route_ipv4_get(
         &self,
@@ -253,11 +341,24 @@ impl Dpd for ProductionDpd {
         cidr: &'a oxnet::Ipv4Net,
         port_id: &'a PortId,
         link_id: &'a LinkId,
-        tgt_ip: &'a std::net::Ipv4Addr,
+        tgt_ip: &'a IpAddr,
     ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>
     {
         self.client
             .route_ipv4_delete_target(cidr, port_id, link_id, tgt_ip)
+            .await
+    }
+
+    async fn route_ipv6_delete_target<'a>(
+        &'a self,
+        cidr: &'a oxnet::Ipv6Net,
+        port_id: &'a PortId,
+        link_id: &'a LinkId,
+        tgt_ip: &'a std::net::Ipv6Addr,
+    ) -> Result<dpd_client::ResponseValue<()>, progenitor_client::Error<DpdError>>
+    {
+        self.client
+            .route_ipv6_delete_target(cidr, port_id, link_id, tgt_ip)
             .await
     }
 
@@ -267,10 +368,12 @@ impl Dpd for ProductionDpd {
 }
 
 /// Production ddm trait that simply passes through calls to a ddm client.
-pub(crate) struct ProductionDdm {
-    pub(crate) client: DdmClient,
+#[cfg(target_os = "illumos")]
+pub struct ProductionDdm {
+    pub client: DdmClient,
 }
 
+#[cfg(target_os = "illumos")]
 impl Ddm for ProductionDdm {
     async fn get_originated_tunnel_endpoints(
         &self,
@@ -321,17 +424,20 @@ impl Ddm for ProductionDdm {
     }
 }
 
-/// Production dpd trait that simply passes through calls to underlying os
-/// interfaces such as libnet.
-pub(crate) struct ProductionSwitchZone {}
+/// Production switch zone that uses libnet for route lookups (illumos only).
+#[cfg(target_os = "illumos")]
+pub struct ProductionSwitchZone {}
 
+#[cfg(target_os = "illumos")]
 impl SwitchZone for ProductionSwitchZone {
     fn get_route(
         &self,
         dst: IpNet,
         timeout: Option<Duration>,
-    ) -> Result<libnet::route::Route, libnet::route::Error> {
+    ) -> Result<SysRoute, SysRouteError> {
         libnet::get_route(dst, timeout)
+            .map(SysRoute::from)
+            .map_err(SysRouteError::from)
     }
 }
 
@@ -368,7 +474,7 @@ pub(crate) mod test {
     /// useful for tests.
     pub(crate) struct TestDpd {
         pub(crate) links: Mutex<Vec<Link>>,
-        pub(crate) v4_routes: Mutex<HashMap<Ipv4Net, Vec<Ipv4Route>>>,
+        pub(crate) v4_routes: Mutex<HashMap<Ipv4Net, Vec<Route>>>,
         pub(crate) v6_routes: Mutex<HashMap<Ipv6Net, Vec<Ipv6Route>>>,
         pub(crate) v4_addrs: HashMap<String, Vec<Ipv4Entry>>,
         pub(crate) v6_addrs: HashMap<String, Vec<Ipv6Entry>>,
@@ -421,10 +527,7 @@ pub(crate) mod test {
                 .unwrap()
                 .get(cidr)
                 .cloned()
-                .unwrap_or(Vec::default())
-                .into_iter()
-                .map(Route::V4)
-                .collect();
+                .unwrap_or(Vec::default());
             Ok(dpd_response_ok!(result))
         }
 
@@ -528,13 +631,17 @@ pub(crate) mod test {
             dpd_client::ResponseValue<()>,
             progenitor_client::Error<DpdError>,
         > {
+            let route = match &body.target {
+                RouteTarget::V4(v4) => Route::V4(v4.clone()),
+                RouteTarget::V6(v6) => Route::V6(v6.clone()),
+            };
             let mut routes = self.v4_routes.lock().unwrap();
             match routes.get_mut(&body.cidr) {
                 Some(targets) => {
-                    targets.push(body.target.clone());
+                    targets.push(route);
                 }
                 None => {
-                    routes.insert(body.cidr, vec![body.target.clone()]);
+                    routes.insert(body.cidr, vec![route]);
                 }
             }
             Ok(dpd_response_ok!(()))
@@ -564,12 +671,42 @@ pub(crate) mod test {
             cidr: &'a oxnet::Ipv4Net,
             port_id: &'a PortId,
             link_id: &'a LinkId,
-            tgt_ip: &'a std::net::Ipv4Addr,
+            tgt_ip: &'a IpAddr,
         ) -> Result<
             dpd_client::ResponseValue<()>,
             progenitor_client::Error<DpdError>,
         > {
             let mut routes = self.v4_routes.lock().unwrap();
+            if let Some(targets) = routes.get_mut(cidr) {
+                targets.retain(|x| match (x, tgt_ip) {
+                    (Route::V4(x), IpAddr::V4(ip)) => {
+                        !(x.tgt_ip == *ip
+                            && x.link_id == *link_id
+                            && x.port_id == *port_id)
+                    }
+                    (Route::V6(x), IpAddr::V6(ip)) => {
+                        !(x.tgt_ip == *ip
+                            && x.link_id == *link_id
+                            && x.port_id == *port_id)
+                    }
+                    _ => true,
+                });
+            }
+            routes.retain(|_, v| !v.is_empty());
+            Ok(dpd_response_ok!(()))
+        }
+
+        async fn route_ipv6_delete_target<'a>(
+            &'a self,
+            cidr: &'a oxnet::Ipv6Net,
+            port_id: &'a PortId,
+            link_id: &'a LinkId,
+            tgt_ip: &'a std::net::Ipv6Addr,
+        ) -> Result<
+            dpd_client::ResponseValue<()>,
+            progenitor_client::Error<DpdError>,
+        > {
+            let mut routes = self.v6_routes.lock().unwrap();
             if let Some(targets) = routes.get_mut(cidr) {
                 targets.retain(|x| {
                     !(x.tgt_ip == *tgt_ip
@@ -671,9 +808,9 @@ pub(crate) mod test {
             &self,
             dst: IpNet,
             _timeout: Option<Duration>,
-        ) -> Result<libnet::route::Route, libnet::route::Error> {
+        ) -> Result<SysRoute, SysRouteError> {
             let rt = self.routes.get(&dst);
-            Ok(libnet::route::Route {
+            Ok(SysRoute {
                 dest: dst.addr(),
                 mask: dst.width().into(),
                 gw: rt.map(|x| x.1).unwrap_or(self.default_gw),

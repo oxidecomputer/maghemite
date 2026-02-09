@@ -3,26 +3,40 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::connection::BgpConnection;
-use crate::messages::UpdateMessage;
-use crate::session::{AdminEvent, FsmEvent};
+use crate::session::{
+    AdminEvent, FsmEvent, PeerId, RouteUpdate, RouteUpdate4, RouteUpdate6,
+};
 use crate::{COMPONENT_BGP, MOD_NEIGHBOR};
+use rdb::types::{Ipv4Marker, Ipv6Marker, Prefix4, Prefix6};
 use slog::Logger;
 use std::collections::BTreeMap;
-use std::net::IpAddr;
+use std::marker::PhantomData;
 use std::sync::mpsc::Sender;
 
 const UNIT_FANOUT: &str = "fanout";
 
-pub struct Fanout<Cnx: BgpConnection> {
-    /// Indexed neighbor address
-    egress: BTreeMap<IpAddr, Egress<Cnx>>,
+/// Type aliases for address-family-specific fanouts
+pub type Fanout4<Cnx> = Fanout<Cnx, Ipv4Marker>;
+pub type Fanout6<Cnx> = Fanout<Cnx, Ipv6Marker>;
+
+/// Fanout for distributing routes to peers for a specific address family.
+///
+/// The type parameter `Af` ensures compile-time safety:
+/// - Fanout4 (Fanout<_, Ipv4Marker>) only accepts Prefix4
+/// - Fanout6 (Fanout<_, Ipv6Marker>) only accepts Prefix6
+pub struct Fanout<Cnx: BgpConnection, Af> {
+    /// Indexed by peer identifier (IP address or interface name)
+    egress: BTreeMap<PeerId, Egress<Cnx>>,
+    /// Zero-sized marker for address family type enforcement
+    _af: PhantomData<Af>,
 }
 
 //NOTE necessary as #derive is broken for generic types
-impl<Cnx: BgpConnection> Default for Fanout<Cnx> {
+impl<Cnx: BgpConnection, Af> Default for Fanout<Cnx, Af> {
     fn default() -> Self {
         Self {
             egress: BTreeMap::new(),
+            _af: PhantomData,
         }
     }
 }
@@ -32,28 +46,100 @@ pub struct Egress<Cnx: BgpConnection> {
     pub log: Logger,
 }
 
-impl<Cnx: BgpConnection> Fanout<Cnx> {
-    pub fn send(&self, origin: IpAddr, update: &UpdateMessage) {
-        for (id, e) in &self.egress {
-            if *id == origin {
+// IPv4-specific implementation
+impl<Cnx: BgpConnection> Fanout<Cnx, Ipv4Marker> {
+    /// Announce and/or withdraw IPv4 routes to all peers.
+    pub fn send_all(&self, nlri: Vec<Prefix4>, withdrawn: Vec<Prefix4>) {
+        for egress in self.egress.values() {
+            if !nlri.is_empty() {
+                let announce =
+                    RouteUpdate::V4(RouteUpdate4::Announce(nlri.clone()));
+                egress.send_route_update(announce);
+            }
+            if !withdrawn.is_empty() {
+                let withdraw =
+                    RouteUpdate::V4(RouteUpdate4::Withdraw(withdrawn.clone()));
+                egress.send_route_update(withdraw);
+            }
+        }
+    }
+
+    /// Announce and/or withdraw IPv4 routes to all peers except the origin.
+    pub fn send_except(
+        &self,
+        origin: &PeerId,
+        nlri: Vec<Prefix4>,
+        withdrawn: Vec<Prefix4>,
+    ) {
+        for (peer_id, egress) in &self.egress {
+            if peer_id == origin {
                 continue;
             }
-            e.send(update);
+            if !nlri.is_empty() {
+                let announce =
+                    RouteUpdate::V4(RouteUpdate4::Announce(nlri.clone()));
+                egress.send_route_update(announce);
+            }
+            if !withdrawn.is_empty() {
+                let withdraw =
+                    RouteUpdate::V4(RouteUpdate4::Withdraw(withdrawn.clone()));
+                egress.send_route_update(withdraw);
+            }
+        }
+    }
+}
+
+// IPv6-specific implementation
+impl<Cnx: BgpConnection> Fanout<Cnx, Ipv6Marker> {
+    /// Announce and/or withdraw IPv6 routes to all peers.
+    pub fn send_all(&self, nlri: Vec<Prefix6>, withdrawn: Vec<Prefix6>) {
+        for egress in self.egress.values() {
+            if !nlri.is_empty() {
+                let announce =
+                    RouteUpdate::V6(RouteUpdate6::Announce(nlri.clone()));
+                egress.send_route_update(announce);
+            }
+            if !withdrawn.is_empty() {
+                let withdraw =
+                    RouteUpdate::V6(RouteUpdate6::Withdraw(withdrawn.clone()));
+                egress.send_route_update(withdraw);
+            }
         }
     }
 
-    pub fn send_all(&self, update: &UpdateMessage) {
-        for e in self.egress.values() {
-            e.send(update);
+    /// Announce and/or withdraw IPv6 routes to all peers except the origin.
+    pub fn send_except(
+        &self,
+        origin: &PeerId,
+        nlri: Vec<Prefix6>,
+        withdrawn: Vec<Prefix6>,
+    ) {
+        for (peer_id, egress) in &self.egress {
+            if peer_id == origin {
+                continue;
+            }
+            if !nlri.is_empty() {
+                let announce =
+                    RouteUpdate::V6(RouteUpdate6::Announce(nlri.clone()));
+                egress.send_route_update(announce);
+            }
+            if !withdrawn.is_empty() {
+                let withdraw =
+                    RouteUpdate::V6(RouteUpdate6::Withdraw(withdrawn.clone()));
+                egress.send_route_update(withdraw);
+            }
         }
     }
+}
 
-    pub fn add_egress(&mut self, peer: IpAddr, egress: Egress<Cnx>) {
+// Common methods available for all address families
+impl<Cnx: BgpConnection, Af> Fanout<Cnx, Af> {
+    pub fn add_egress(&mut self, peer: PeerId, egress: Egress<Cnx>) {
         self.egress.insert(peer, egress);
     }
 
-    pub fn remove_egress(&mut self, peer: IpAddr) {
-        self.egress.remove(&peer);
+    pub fn remove_egress(&mut self, peer: &PeerId) {
+        self.egress.remove(peer);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -62,19 +148,25 @@ impl<Cnx: BgpConnection> Fanout<Cnx> {
 }
 
 impl<Cnx: BgpConnection> Egress<Cnx> {
-    fn send(&self, update: &UpdateMessage) {
-        if let Some(tx) = self.event_tx.as_ref()
-            && let Err(e) =
-                tx.send(FsmEvent::Admin(AdminEvent::Announce(update.clone())))
+    fn send_route_update(&self, route_update: RouteUpdate) {
+        let Some(tx) = self.event_tx.as_ref() else {
+            return;
+        };
+
+        // Capture Display output before send() consumes route_update.
+        let update_desc = format!("{route_update}");
+
+        if let Err(e) =
+            tx.send(FsmEvent::Admin(AdminEvent::Announce(route_update)))
         {
-            slog::error!(self.log,
-                "failed to send update to egress fanout: {e}";
+            slog::error!(
+                self.log,
+                "failed to send route update to egress: {e}";
                 "component" => COMPONENT_BGP,
                 "module" => MOD_NEIGHBOR,
                 "unit" => UNIT_FANOUT,
-                "message" => "update",
-                "message_contents" => format!("{update}"),
-                "error" => format!("{e}")
+                "route_update" => update_desc,
+                "error" => format!("{e}"),
             );
         }
     }

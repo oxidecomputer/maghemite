@@ -7,13 +7,12 @@ use crate::{
     log::dpd_log,
     platform::{Dpd, SwitchZone},
 };
-use dpd_client::{
-    Client as DpdClient,
-    types::{self, LinkState, Route},
-};
+#[cfg(target_os = "illumos")]
+use dpd_client::Client as DpdClient;
+use dpd_client::types::{self, LinkState, Route};
 use oxnet::{IpNet, Ipv4Net, Ipv6Net};
 use rdb::{Path, Prefix};
-use slog::{Logger, warn};
+use slog::Logger;
 use std::{
     collections::{BTreeSet, HashSet},
     hash::Hash,
@@ -42,18 +41,16 @@ impl RouteHash {
         nexthop: IpAddr,
         vlan_id: Option<u16>,
     ) -> Result<Self, &'static str> {
-        match (cidr, nexthop) {
-            (IpNet::V4(_), IpAddr::V4(_)) | (IpNet::V6(_), IpAddr::V6(_)) => {
-                Ok(RouteHash {
-                    cidr,
-                    port_id,
-                    link_id,
-                    nexthop,
-                    vlan_id,
-                })
-            }
-            _ => Err("mismatched subnet and target"),
+        if matches!(cidr, IpNet::V6(_)) && matches!(nexthop, IpAddr::V4(_)) {
+            return Err("mismatched subnet and target");
         }
+        Ok(RouteHash {
+            cidr,
+            port_id,
+            link_id,
+            nexthop,
+            vlan_id,
+        })
     }
 
     pub fn for_prefix_path(
@@ -61,20 +58,15 @@ impl RouteHash {
         prefix: Prefix,
         path: Path,
     ) -> Result<RouteHash, Error> {
-        let (port_id, link_id) = get_port_and_link(sw, path.nexthop)?;
+        let (port_id, link_id) = get_port_and_link(sw, &path)?;
 
-        let rh = RouteHash {
-            cidr: match prefix {
-                Prefix::V4(p) => Ipv4Net::new(p.value, p.length)?.into(),
-                Prefix::V6(p) => Ipv6Net::new(p.value, p.length)?.into(),
-            },
-            port_id,
-            link_id,
-            nexthop: path.nexthop,
-            vlan_id: path.vlan_id,
+        let cidr = match prefix {
+            Prefix::V4(p) => Ipv4Net::new(p.value, p.length)?.into(),
+            Prefix::V6(p) => Ipv6Net::new(p.value, p.length)?.into(),
         };
 
-        Ok(rh)
+        RouteHash::new(cidr, port_id, link_id, path.nexthop, path.vlan_id)
+            .map_err(|e| Error::AddressFamilyMismatch(e.to_string()))
     }
 }
 
@@ -186,13 +178,13 @@ where
                     continue;
                 }
 
-                let target = types::Ipv4Route {
+                let target = types::RouteTarget::V4(types::Ipv4Route {
                     tag,
                     port_id,
                     link_id,
                     tgt_ip,
                     vlan_id,
-                };
+                });
 
                 let update = types::Ipv4RouteUpdate {
                     cidr: c,
@@ -252,8 +244,32 @@ where
                     return Err(e.into());
                 }
             }
+            (IpNet::V4(c), IpAddr::V6(tgt_ip)) => {
+                let target = types::RouteTarget::V6(types::Ipv6Route {
+                    tag,
+                    port_id,
+                    link_id,
+                    tgt_ip,
+                    vlan_id,
+                });
+
+                let update = types::Ipv4RouteUpdate {
+                    cidr: c,
+                    target,
+                    replace: false,
+                };
+                if let Err(e) =
+                    rt.block_on(async { dpd.route_ipv4_add(&update).await })
+                {
+                    dpd_log!(log,
+                        error,
+                        "failed to create route {r:?} {e}";
+                        "error" => format!("{e}")
+                    );
+                    return Err(e.into());
+                }
+            }
             _ => {
-                // XXX: re-evaluate for RFC 8950 (BGP unnumbered) support
                 dpd_log!(log,
                     error,
                     "mismatched address-family for subnet {} and target {}", r.cidr, r.nexthop;
@@ -268,26 +284,51 @@ where
         let port_id = r.port_id.clone();
         let link_id = r.link_id;
 
-        let cidr = match r.cidr {
-            IpNet::V4(cidr) => cidr,
-            IpNet::V6(_) => continue,
-        };
-        let target = match r.nexthop {
-            IpAddr::V4(tgt_ip) => tgt_ip,
-            IpAddr::V6(_) => continue,
-        };
-        if let Err(e) = rt.block_on(async {
-            dpd.route_ipv4_delete_target(&cidr, &port_id, &link_id, &target)
-                .await
-        }) {
-            dpd_log!(log,
-                error,
-                "failed to delete route in ASIC {r:?} via {}: {e}", r.nexthop;
-                "error" => format!("{e}"),
-                "prefix" => format!("r:?"),
-                "nexthop" => format!("{}", r.nexthop)
-            );
-            Err(e)?;
+        match (r.cidr, r.nexthop) {
+            (IpNet::V4(cidr), tgt_ip) => {
+                if let Err(e) = rt.block_on(async {
+                    dpd.route_ipv4_delete_target(
+                        &cidr, &port_id, &link_id, &tgt_ip,
+                    )
+                    .await
+                }) {
+                    dpd_log!(log,
+                        error,
+                        "failed to delete route in ASIC {r:?} via {}: {e}", r.nexthop;
+                        "error" => format!("{e}"),
+                        "prefix" => format!("{}", r.cidr),
+                        "nexthop" => format!("{}", r.nexthop)
+                    );
+                    Err(e)?;
+                }
+            }
+            (IpNet::V6(cidr), IpAddr::V6(tgt_ip)) => {
+                if let Err(e) = rt.block_on(async {
+                    dpd.route_ipv6_delete_target(
+                        &cidr, &port_id, &link_id, &tgt_ip,
+                    )
+                    .await
+                }) {
+                    dpd_log!(log,
+                        error,
+                        "failed to delete route in ASIC {r:?} via {}: {e}", r.nexthop;
+                        "error" => format!("{e}"),
+                        "prefix" => format!("{}", r.cidr),
+                        "nexthop" => format!("{}", r.nexthop)
+                    );
+                    Err(e)?;
+                }
+            }
+            (IpNet::V6(_), IpAddr::V4(_)) => {
+                dpd_log!(log,
+                    error,
+                    "v6-over-v4 routes are not supported: subnet {} target {}",
+                    r.cidr, r.nexthop;
+                    "prefix" => format!("{}", r.cidr),
+                    "nexthop" => format!("{}", r.nexthop)
+                );
+                continue;
+            }
         }
     }
     Ok(())
@@ -359,6 +400,33 @@ fn test_tfport_parser() {
 
 fn get_port_and_link(
     sw: &impl SwitchZone,
+    path: &Path,
+) -> Result<(types::PortId, types::LinkId), Error> {
+    // If path has interface binding (unnumbered peer), use it directly
+    if let IpAddr::V6(nh6) = path.nexthop
+        && nh6.is_unicast_link_local()
+        && let Some(ref iface) = path.nexthop_interface
+    {
+        let (port, link, _vlan) = parse_tfport_name(iface)?;
+        let port_name = format!("qsfp{port}");
+        let port_id = types::Qsfp::try_from(&port_name)
+            .map(types::PortId::Qsfp)
+            .map_err(|e| {
+                Error::Tfport(format!(
+                    "bad port name ifname: {iface}  port name: {port_name}: {e}",
+                ))
+            })?;
+        // TODO breakout considerations
+        let link_id = types::LinkId(link);
+        return Ok((port_id, link_id));
+    }
+
+    // Standard nexthop resolution for numbered peers
+    resolve_port_and_link(sw, path.nexthop)
+}
+
+fn resolve_port_and_link(
+    sw: &impl SwitchZone,
     nexthop: IpAddr,
 ) -> Result<(types::PortId, types::LinkId), Error> {
     let prefix = IpNet::host_net(nexthop);
@@ -412,26 +480,38 @@ pub(crate) fn get_routes_for_prefix(
 
             let mut result: Vec<RouteHash> = Vec::new();
             for r in dpd_routes.iter() {
-                let Route::V4(r) = r else {
-                    warn!(log, "v4 over v6 routes not yet implemented");
-                    continue;
+                let (tag, port_id, link_id, tgt_ip, vlan_id) = match r {
+                    Route::V4(v4) => (
+                        &v4.tag,
+                        v4.port_id.clone(),
+                        v4.link_id,
+                        IpAddr::V4(v4.tgt_ip),
+                        v4.vlan_id,
+                    ),
+                    Route::V6(v6) => (
+                        &v6.tag,
+                        v6.port_id.clone(),
+                        v6.link_id,
+                        IpAddr::V6(v6.tgt_ip),
+                        v6.vlan_id,
+                    ),
                 };
-                if r.tag != MG_LOWER_TAG {
+                if tag != MG_LOWER_TAG {
                     continue;
                 }
                 match RouteHash::new(
                     cidr.into(),
-                    r.port_id.clone(),
-                    r.link_id,
-                    r.tgt_ip.into(),
-                    r.vlan_id,
+                    port_id.clone(),
+                    link_id,
+                    tgt_ip,
+                    vlan_id,
                 ) {
                     Ok(rh) => result.push(rh),
                     Err(e) => {
                         dpd_log!(log,
                             error,
                             "route hash creation failed for {prefix} (port: {}, link: {}, tgt_ip: {}, vlan_id: {:?}): {e}",
-                            r.port_id.clone(), r.link_id, r.tgt_ip, r.vlan_id;
+                            port_id, link_id, tgt_ip, vlan_id;
                             "error" => format!("{e}"),
                             "prefix" => format!("r:?")
                         );
@@ -489,7 +569,8 @@ pub(crate) fn get_routes_for_prefix(
 
 /// Create a new Dendrite/dpd client. The lower half always runs on the same
 /// host/zone as the underlying platform.
-pub(crate) fn new_dpd_client(log: &Logger) -> DpdClient {
+#[cfg(target_os = "illumos")]
+pub fn new_dpd_client(log: &Logger) -> DpdClient {
     let client_state = dpd_client::ClientState {
         tag: MG_LOWER_TAG.into(),
         log: log.clone(),

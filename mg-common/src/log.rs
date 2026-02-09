@@ -3,7 +3,6 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use slog::{Drain, Logger};
-use std::fs::File;
 use std::io::Write;
 
 pub fn init_logger() -> Logger {
@@ -11,7 +10,12 @@ pub fn init_logger() -> Logger {
 }
 
 pub fn init_file_logger(filename: &str) -> Logger {
-    build_logger(File::create(filename).expect("build logger"))
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(filename)
+        .expect("build logger");
+    build_logger(file)
 }
 
 pub fn build_logger<W: Write + Send + 'static>(w: W) -> Logger {

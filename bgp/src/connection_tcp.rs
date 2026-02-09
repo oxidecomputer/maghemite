@@ -12,12 +12,17 @@ use crate::{
     error::Error,
     log::{connection_log, connection_log_lite},
     messages::{
-        ErrorCode, ErrorSubcode, Header, Message, MessageType,
-        NotificationMessage, OpenMessage, RouteRefreshMessage, UpdateMessage,
+        ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode, Message,
+        MessageParseError, MessageType, NotificationMessage,
+        NotificationParseError, NotificationParseErrorReason, OpenErrorSubcode,
+        OpenMessage, OpenParseError, OpenParseErrorReason, RouteRefreshMessage,
+        RouteRefreshParseError, RouteRefreshParseErrorReason, UpdateMessage,
     },
     session::{
-        ConnectionEvent, FsmEvent, SessionEndpoint, SessionEvent, SessionInfo,
+        ConnectionEvent, FsmEvent, PeerId, SessionEndpoint, SessionEvent,
+        SessionInfo,
     },
+    unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
 use slog::Logger;
@@ -25,7 +30,7 @@ use std::{
     collections::BTreeMap,
     io::Read,
     io::Write,
-    net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::atomic::AtomicBool,
     sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
     thread::{JoinHandle, sleep},
@@ -46,7 +51,7 @@ use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;
 #[cfg(target_os = "illumos")]
-use std::collections::HashSet;
+use std::{collections::HashSet, net::IpAddr};
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
@@ -59,12 +64,44 @@ const PFKEY_DURATION: Duration = Duration::from_secs(60 * 2);
 #[cfg(target_os = "illumos")]
 const PFKEY_KEEPALIVE: Duration = Duration::from_secs(60);
 
+/// Error type for recv_msg operations.
+/// Distinguishes between IO errors (connection issues) and parse errors (bad messages).
+enum RecvError {
+    /// IO error (connection closed, timeout, etc.) - recv loop should break
+    Io(std::io::Error),
+    /// Parse error (malformed message) - should send ParseError event to FSM
+    Parse(MessageParseError),
+}
+
 pub struct BgpListenerTcp {
     listener: TcpListener,
+    unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+}
+
+impl BgpListenerTcp {
+    /// Resolve incoming peer address to appropriate PeerId.
+    fn resolve_session_key(&self, peer_addr: SocketAddr) -> PeerId {
+        // Try interface-based routing for IPv6 link-local addresses
+        if let Some(ref mgr) = self.unnumbered_manager
+            && let SocketAddr::V6(v6_addr) = peer_addr
+            && v6_addr.ip().is_unicast_link_local()
+        {
+            let scope_id = v6_addr.scope_id();
+            if let Some(interface) = mgr.get_interface_by_scope(scope_id) {
+                return PeerId::Interface(interface);
+            }
+        }
+
+        // Default to IP-based routing
+        PeerId::Ip(peer_addr.ip())
+    }
 }
 
 impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
-    fn bind<A: ToSocketAddrs>(addr: A) -> Result<Self, Error>
+    fn bind<A: ToSocketAddrs>(
+        addr: A,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    ) -> Result<Self, Error>
     where
         Self: Sized,
     {
@@ -77,14 +114,17 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
             ))?;
         let listener = TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
-        Ok(Self { listener })
+        Ok(Self {
+            listener,
+            unnumbered_manager,
+        })
     }
 
     fn accept(
         &self,
         log: Logger,
-        addr_to_session: Arc<
-            Mutex<BTreeMap<IpAddr, SessionEndpoint<BgpConnectionTcp>>>,
+        peer_to_session: Arc<
+            Mutex<BTreeMap<PeerId, SessionEndpoint<BgpConnectionTcp>>>,
         >,
         timeout: Duration,
     ) -> Result<BgpConnectionTcp, Error> {
@@ -103,8 +143,11 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                     let mut local = conn.local_addr()?;
                     local.set_ip(local.ip().to_canonical());
 
+                    // Resolve peer address to appropriate PeerId (IP or Interface)
+                    let key = self.resolve_session_key(peer);
+
                     // Check if we have a session for this peer
-                    match lock!(addr_to_session).get(&ip) {
+                    match lock!(peer_to_session).get(&key) {
                         Some(session_endpoint) => {
                             let config = lock!(session_endpoint.config);
                             return BgpConnectionTcp::with_conn(
@@ -609,18 +652,63 @@ impl BgpConnectionTcp {
                                 break;
                             }
                         }
-                        Err(e) => {
-                            connection_log_lite!(l, info,
-                                "recv_msg error (peer: {peer}, conn_id: {}): {e}",
-                                conn_id.short();
-                                "direction" => direction,
-                                "connection" => format!("{conn:?}"),
-                                "connection_peer" => format!("{peer}"),
-                                "connection_id" => conn_id.short(),
-                                "error" => format!("{e}")
-                            );
-                            // Break the loop on connection errors to prevent zombie threads
-                            // that continue trying to read from closed connections
+                        Err(recv_err) => {
+                            match recv_err {
+                                RecvError::Io(e) => {
+                                    connection_log_lite!(l, info,
+                                        "recv_msg IO error (peer: {peer}, conn_id: {}): {e}",
+                                        conn_id.short();
+                                        "direction" => direction,
+                                        "connection" => format!("{conn:?}"),
+                                        "connection_peer" => format!("{peer}"),
+                                        "connection_id" => conn_id.short(),
+                                        "error" => format!("{e}")
+                                    );
+                                    // Notify session runner that the TCP
+                                    // connection failed. Skip if a shutdown
+                                    // signal arrived while trying to get a
+                                    // new message.
+                                    if !dropped.load(Ordering::Relaxed)
+                                        && let Err(e) = event_tx.send(FsmEvent::Connection(
+                                            ConnectionEvent::TcpConnectionFails(conn_id),
+                                        ))
+                                    {
+                                        connection_log_lite!(l, warn,
+                                            "error sending TcpConnectionFails event to {peer}: {e}";
+                                            "direction" => direction,
+                                            "connection" => format!("{conn:?}"),
+                                            "connection_peer" => format!("{peer}"),
+                                            "connection_id" => conn_id.short(),
+                                            "error" => format!("{e}")
+                                        );
+                                    }
+                                }
+                                RecvError::Parse(parse_err) => {
+                                    connection_log_lite!(l, error,
+                                        "recv_msg parse error (peer: {peer}, conn_id: {}): {parse_err}",
+                                        conn_id.short();
+                                        "direction" => direction,
+                                        "connection" => format!("{conn:?}"),
+                                        "connection_peer" => format!("{peer}"),
+                                        "connection_id" => conn_id.short(),
+                                        "error" => format!("{parse_err}")
+                                    );
+                                    // Notify FSM about fatal
+                                    // (notification-worthy) parse errors.
+                                    if let Err(e) = event_tx.send(FsmEvent::Connection(
+                                        ConnectionEvent::ParseError { conn_id, error: parse_err },
+                                    )) {
+                                        connection_log_lite!(l, warn,
+                                            "error sending parse error event to {peer}: {e}";
+                                            "direction" => direction,
+                                            "connection" => format!("{conn:?}"),
+                                            "connection_peer" => format!("{peer}"),
+                                            "connection_id" => conn_id.short(),
+                                            "error" => format!("{e}")
+                                        );
+                                    }
+                                }
+                            }
                             break;
                         }
                     }
@@ -685,12 +773,12 @@ impl BgpConnectionTcp {
         dropped: Arc<AtomicBool>,
         log: &Logger,
         direction: ConnectionDirection,
-    ) -> std::io::Result<Message> {
-        use crate::messages::OpenErrorSubcode;
-        let hdr = Self::recv_header(stream, dropped.clone())?;
+    ) -> Result<Message, RecvError> {
+        let hdr = Self::recv_header(stream, dropped.clone())
+            .map_err(RecvError::Io)?;
 
         let mut msgbuf = vec![0u8; usize::from(hdr.length) - Header::WIRE_SIZE];
-        stream.read_exact(&mut msgbuf)?;
+        stream.read_exact(&mut msgbuf).map_err(RecvError::Io)?;
 
         let msg = match hdr.typ {
             MessageType::Open => match OpenMessage::from_wire(&msgbuf) {
@@ -698,20 +786,42 @@ impl BgpConnectionTcp {
                 Err(e) => {
                     connection_log_lite!(log,
                         error,
-                        "open message error: {e}";
+                        "OPEN parse error: {e}";
                         "direction" => direction,
                         "connection" => format!("{stream:?}"),
                         "error" => format!("{e}")
                     );
 
-                    let subcode = match e {
-                        Error::UnsupportedCapability(_) => {
-                            OpenErrorSubcode::UnsupportedCapability
-                        }
-                        _ => OpenErrorSubcode::Unspecific,
+                    let (subcode, reason) = match e {
+                        Error::UnsupportedCapability(cap) => (
+                            OpenErrorSubcode::UnsupportedCapability,
+                            OpenParseErrorReason::Other {
+                                detail: format!(
+                                    "unsupported capability: {:?}",
+                                    cap
+                                ),
+                            },
+                        ),
+                        Error::BadBgpIdentifier(id) => (
+                            OpenErrorSubcode::BadBgpIdentifier,
+                            OpenParseErrorReason::BadBgpIdentifier { id },
+                        ),
+                        Error::BadVersion(ver) => (
+                            OpenErrorSubcode::UnsupportedVersionNumber,
+                            OpenParseErrorReason::InvalidVersion {
+                                version: ver,
+                            },
+                        ),
+                        _ => (
+                            OpenErrorSubcode::Unspecific,
+                            OpenParseErrorReason::Other {
+                                detail: e.to_string(),
+                            },
+                        ),
                     };
 
-                    if let Err(e) = Self::send_notification(
+                    // Still send NOTIFICATION for OPEN errors (required by RFC)
+                    if let Err(notify_err) = Self::send_notification(
                         stream,
                         log,
                         direction,
@@ -721,39 +831,113 @@ impl BgpConnectionTcp {
                     ) {
                         connection_log_lite!(log,
                             error,
-                            "error sending notification: {e}";
+                            "error sending notification: {notify_err}";
                             "direction" => direction,
                             "connection" => format!("{stream:?}"),
-                            "error" => format!("{e}")
+                            "error" => format!("{notify_err}")
                         );
                     }
-                    return Err(std::io::Error::other("open message error"));
+
+                    return Err(RecvError::Parse(MessageParseError::Open(
+                        OpenParseError {
+                            error_code: ErrorCode::Open,
+                            error_subcode: ErrorSubcode::Open(subcode),
+                            reason,
+                        },
+                    )));
                 }
             },
             MessageType::Update => match UpdateMessage::from_wire(&msgbuf) {
                 Ok(m) => m.into(),
-                Err(_) => {
-                    return Err(std::io::Error::other("update message error"));
+                Err(update_err) => {
+                    connection_log_lite!(log,
+                        error,
+                        "UPDATE parse error: {}", update_err;
+                        "direction" => direction,
+                        "connection" => format!("{stream:?}"),
+                        "error" => format!("{update_err}")
+                    );
+                    return Err(RecvError::Parse(MessageParseError::Update(
+                        update_err,
+                    )));
                 }
             },
             MessageType::Notification => {
                 match NotificationMessage::from_wire(&msgbuf) {
                     Ok(m) => m.into(),
-                    Err(_) => {
-                        return Err(std::io::Error::other(
-                            "notification message error",
-                        ));
+                    Err(e) => {
+                        connection_log_lite!(log,
+                            error,
+                            "NOTIFICATION parse error: {e}";
+                            "direction" => direction,
+                            "connection" => format!("{stream:?}"),
+                            "error" => format!("{e}")
+                        );
+                        return Err(RecvError::Parse(MessageParseError::Notification(
+                            NotificationParseError {
+                                error_code: ErrorCode::Header,
+                                error_subcode: ErrorSubcode::Header(
+                                    crate::messages::HeaderErrorSubcode::BadMessageType,
+                                ),
+                                reason: NotificationParseErrorReason::Other {
+                                    detail: e.to_string(),
+                                },
+                            },
+                        )));
                     }
                 }
             }
-            MessageType::KeepAlive => return Ok(Message::KeepAlive),
+            MessageType::KeepAlive => {
+                // RFC 4271 §4.4: KEEPALIVE must be exactly 19 bytes (16-byte header + 0-byte body)
+                if !msgbuf.is_empty() {
+                    connection_log_lite!(log,
+                        error,
+                        "KEEPALIVE parse error: message body not empty";
+                        "direction" => direction,
+                        "connection" => format!("{stream:?}"),
+                        "body_length" => msgbuf.len()
+                    );
+                    return Err(RecvError::Parse(
+                        MessageParseError::Notification(
+                            NotificationParseError {
+                                error_code: ErrorCode::Header,
+                                error_subcode: ErrorSubcode::Header(
+                                    HeaderErrorSubcode::BadMessageLength,
+                                ),
+                                reason: NotificationParseErrorReason::Other {
+                                    detail: format!(
+                                        "KEEPALIVE message must have zero body, got {} bytes",
+                                        msgbuf.len()
+                                    ),
+                                },
+                            },
+                        ),
+                    ));
+                }
+                return Ok(Message::KeepAlive);
+            }
             MessageType::RouteRefresh => {
                 match RouteRefreshMessage::from_wire(&msgbuf) {
                     Ok(m) => m.into(),
-                    Err(_) => {
-                        return Err(std::io::Error::other(
-                            "route refresh message error",
-                        ));
+                    Err(e) => {
+                        connection_log_lite!(log,
+                            error,
+                            "ROUTE_REFRESH parse error: {e}";
+                            "direction" => direction,
+                            "connection" => format!("{stream:?}"),
+                            "error" => format!("{e}")
+                        );
+                        return Err(RecvError::Parse(MessageParseError::RouteRefresh(
+                            RouteRefreshParseError {
+                                error_code: ErrorCode::Header,
+                                error_subcode: ErrorSubcode::Header(
+                                    crate::messages::HeaderErrorSubcode::BadMessageType,
+                                ),
+                                reason: RouteRefreshParseErrorReason::Other {
+                                    detail: e.to_string(),
+                                },
+                            },
+                        )));
                     }
                 }
             }

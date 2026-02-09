@@ -21,6 +21,7 @@ itertools.workspace = true
 oxnet.workspace = true
 uuid.workspace = true
 rand.workspace = true
+clap = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "illumos")'.dependencies]
 libnet = { workspace = true, optional = true }
