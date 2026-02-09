@@ -664,7 +664,7 @@ impl Db {
         match rib_in.get(prefix) {
             // rib-in has paths worth evaluating for loc-rib
             Some(paths) => {
-                match bestpaths(paths, fanout.get() as usize) {
+                match bestpaths(paths, fanout.get().into()) {
                     // bestpath found at least 1 path for loc-rib
                     Some(bp) => {
                         rib_loc.insert(*prefix, bp.clone());
@@ -701,7 +701,7 @@ impl Db {
         match rib_in.get(prefix) {
             // rib-in has paths worth evaluating for loc-rib
             Some(paths) => {
-                match bestpaths(paths, fanout.get() as usize) {
+                match bestpaths(paths, fanout.get().into()) {
                     // bestpath found at least 1 path for loc-rib
                     Some(bp) => {
                         rib_loc.insert(*prefix, bp.clone());
@@ -747,7 +747,7 @@ impl Db {
                         prefix,
                         paths,
                         &mut rib4_loc,
-                        fanout.get() as usize,
+                        fanout.get().into(),
                     );
                 }
             }
@@ -763,7 +763,7 @@ impl Db {
                         prefix,
                         paths,
                         &mut rib6_loc,
-                        fanout.get() as usize,
+                        fanout.get().into(),
                     );
                 }
             }
@@ -1031,7 +1031,7 @@ impl Db {
                         p4,
                         paths,
                         &mut rib4_loc,
-                        fanout.get() as usize,
+                        fanout.get().into(),
                     );
                 }
             }
@@ -1058,7 +1058,7 @@ impl Db {
                         p6,
                         paths,
                         &mut rib6_loc,
-                        fanout.get() as usize,
+                        fanout.get().into(),
                     );
                 }
             }
