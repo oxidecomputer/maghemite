@@ -382,6 +382,13 @@ impl MgAdminApi for MgAdminApiImpl {
         bgp_admin::get_exported_v2(ctx, request).await
     }
 
+    async fn get_exported_v3(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<ExportedSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, Vec<Prefix>>>, HttpError> {
+        bgp_admin::get_exported_v3(ctx, request).await
+    }
+
     async fn get_imported(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
