@@ -1011,6 +1011,68 @@ pub async fn get_exported_v2(
     Ok(HttpResponseOk(exported))
 }
 
+// Fixed version: uses String keys from PeerId Display for JSON compatibility
+pub async fn get_exported_v3(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<ExportedSelector>,
+) -> Result<HttpResponseOk<HashMap<String, Vec<Prefix>>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    let r = get_router!(ctx, rq.asn)?.clone();
+
+    // Determine which address families to process
+    let process_ipv4 = rq.afi.is_none() || rq.afi == Some(Afi::Ipv4);
+    let process_ipv6 = rq.afi.is_none() || rq.afi == Some(Afi::Ipv6);
+
+    // Only query originated prefixes for requested address families
+    let orig4 = if process_ipv4 {
+        r.db.get_origin4().map_err(|e| {
+            HttpError::for_internal_error(format!("error getting origin4: {e}"))
+        })?
+    } else {
+        Vec::new()
+    };
+    let orig6 = if process_ipv6 {
+        r.db.get_origin6().map_err(|e| {
+            HttpError::for_internal_error(format!("error getting origin6: {e}"))
+        })?
+    } else {
+        Vec::new()
+    };
+
+    let mut exported = HashMap::new();
+
+    if let Some(ref peer_filter) = rq.peer {
+        // Specific peer requested - look it up directly
+        if let Some(session) = r.get_session(peer_filter.clone())
+            && let Some((peer_key, routes)) = helpers::get_exported(
+                &session,
+                &orig4,
+                &orig6,
+                process_ipv4,
+                process_ipv6,
+            )
+        {
+            exported.insert(peer_key.to_string(), routes);
+        }
+    } else {
+        // No peer filter - iterate all sessions
+        for session in lock!(r.sessions).values() {
+            if let Some((peer_key, routes)) = helpers::get_exported(
+                session,
+                &orig4,
+                &orig6,
+                process_ipv4,
+                process_ipv6,
+            ) {
+                exported.insert(peer_key.to_string(), routes);
+            }
+        }
+    }
+
+    Ok(HttpResponseOk(exported))
+}
+
 // Pre-UNNUMBERED versions (BgpPathProperties.peer is IpAddr)
 pub async fn get_imported_v1(
     ctx: RequestContext<Arc<HandlerContext>>,

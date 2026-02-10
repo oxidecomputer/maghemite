@@ -43,6 +43,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (6, EXPORTED_FIX),
     (5, UNNUMBERED),
     (4, MP_BGP),
     (3, SWITCH_IDENTIFIERS),
@@ -349,11 +350,19 @@ pub trait MgAdminApi {
     ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError>;
 
     // Supports IPv4/IPv6, filtering by peer/AFI, and unnumbered peers
-    #[endpoint { method = GET, path = "/bgp/status/exported", versions = VERSION_UNNUMBERED.. }]
+    // NOTE: broken — PeerId enum can't serialize as JSON object key
+    #[endpoint { method = GET, path = "/bgp/status/exported", versions = VERSION_UNNUMBERED..VERSION_EXPORTED_FIX }]
     async fn get_exported_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<ExportedSelector>,
     ) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError>;
+
+    // Fixed: uses String keys from PeerId Display (e.g. "192.0.2.1" or "tfportqsfp0_0")
+    #[endpoint { method = GET, path = "/bgp/status/exported", versions = VERSION_EXPORTED_FIX.. }]
+    async fn get_exported_v3(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<ExportedSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, Vec<Prefix>>>, HttpError>;
 
     // imported moved under /rib/status in VERSION_IPV6_BASIC
     #[endpoint { method = GET, path = "/bgp/status/imported", versions = ..VERSION_IPV6_BASIC }]

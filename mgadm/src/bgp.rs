@@ -1283,7 +1283,7 @@ async fn get_exported(
     });
 
     let exported = c
-        .get_exported_v2(&types::ExportedSelector {
+        .get_exported_v3(&types::ExportedSelector {
             asn,
             peer: peer_id,
             afi: afi.map(afi_to_api),
