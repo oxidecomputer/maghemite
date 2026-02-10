@@ -143,6 +143,25 @@ pub struct Ipv4UnicastConfig {
     pub export_policy: ImportExportPolicy4,
 }
 
+impl Ipv4UnicastConfig {
+    fn new(
+        enabled: bool,
+        nexthop: Option<IpAddr>,
+        import_policy: ImportExportPolicy4,
+        export_policy: ImportExportPolicy4,
+    ) -> Option<Self> {
+        if enabled {
+            Some(Self {
+                nexthop,
+                import_policy,
+                export_policy,
+            })
+        } else {
+            None
+        }
+    }
+}
+
 /// Per-address-family configuration for IPv6 Unicast
 #[derive(
     Debug, Default, Clone, Deserialize, Serialize, JsonSchema, PartialEq,
@@ -151,6 +170,25 @@ pub struct Ipv6UnicastConfig {
     pub nexthop: Option<IpAddr>,
     pub import_policy: ImportExportPolicy6,
     pub export_policy: ImportExportPolicy6,
+}
+
+impl Ipv6UnicastConfig {
+    fn new(
+        enabled: bool,
+        nexthop: Option<IpAddr>,
+        import_policy: ImportExportPolicy6,
+        export_policy: ImportExportPolicy6,
+    ) -> Option<Self> {
+        if enabled {
+            Some(Self {
+                nexthop,
+                import_policy,
+                export_policy,
+            })
+        } else {
+            None
+        }
+    }
 }
 
 /// Neighbor configuration with explicit per-address-family enablement (v3 API)
@@ -340,8 +378,18 @@ impl UnnumberedNeighbor {
                 local_pref: rq.parameters.local_pref,
                 enforce_first_as: rq.parameters.enforce_first_as,
                 vlan_id: rq.parameters.vlan_id,
-                ipv4_unicast: None,
-                ipv6_unicast: None,
+                ipv4_unicast: Ipv4UnicastConfig::new(
+                    rq.parameters.ipv4_enabled,
+                    rq.parameters.nexthop4,
+                    rq.parameters.allow_import4.clone(),
+                    rq.parameters.allow_export4.clone(),
+                ),
+                ipv6_unicast: Ipv6UnicastConfig::new(
+                    rq.parameters.ipv6_enabled,
+                    rq.parameters.nexthop6,
+                    rq.parameters.allow_import6.clone(),
+                    rq.parameters.allow_export6.clone(),
+                ),
                 deterministic_collision_resolution: false,
                 idle_hold_jitter: None,
                 connect_retry_jitter: Some(JitterRange {
@@ -373,27 +421,6 @@ impl Neighbor {
     }
 
     pub fn from_rdb_neighbor_info(asn: u32, rq: &rdb::BgpNeighborInfo) -> Self {
-        // Use explicit enablement flags from the database
-        let ipv4_unicast = if rq.parameters.ipv4_enabled {
-            Some(Ipv4UnicastConfig {
-                nexthop: rq.parameters.nexthop4,
-                import_policy: rq.parameters.allow_import4.clone(),
-                export_policy: rq.parameters.allow_export4.clone(),
-            })
-        } else {
-            None
-        };
-
-        let ipv6_unicast = if rq.parameters.ipv6_enabled {
-            Some(Ipv6UnicastConfig {
-                nexthop: rq.parameters.nexthop6,
-                import_policy: rq.parameters.allow_import6.clone(),
-                export_policy: rq.parameters.allow_export6.clone(),
-            })
-        } else {
-            None
-        };
-
         Self {
             asn,
             name: rq.name.clone(),
@@ -416,8 +443,18 @@ impl Neighbor {
                 communities: rq.parameters.communities.clone(),
                 local_pref: rq.parameters.local_pref,
                 enforce_first_as: rq.parameters.enforce_first_as,
-                ipv4_unicast,
-                ipv6_unicast,
+                ipv4_unicast: Ipv4UnicastConfig::new(
+                    rq.parameters.ipv4_enabled,
+                    rq.parameters.nexthop4,
+                    rq.parameters.allow_import4.clone(),
+                    rq.parameters.allow_export4.clone(),
+                ),
+                ipv6_unicast: Ipv6UnicastConfig::new(
+                    rq.parameters.ipv6_enabled,
+                    rq.parameters.nexthop6,
+                    rq.parameters.allow_import6.clone(),
+                    rq.parameters.allow_export6.clone(),
+                ),
                 vlan_id: rq.parameters.vlan_id,
                 connect_retry_jitter: Some(JitterRange {
                     min: 0.75,
