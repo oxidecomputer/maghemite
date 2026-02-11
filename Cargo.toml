@@ -111,7 +111,6 @@ camino = "1.2.2"
 ciborium = "0.2.2"
 http = "1.4.0"
 http-body-util = "0.1"
-humantime = "2.1"
 rand = "0.8.5"
 backoff = "0.4"
 chrono = { version = "0.4.42", features = ["serde"] }

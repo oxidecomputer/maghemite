@@ -22,7 +22,6 @@ oxide-tokio-rt.workspace = true
 oximeter.workspace = true
 oximeter-producer.workspace = true
 chrono.workspace = true
-humantime.workspace = true
 omicron-common.workspace = true
 hostname.workspace = true
 uuid.workspace = true

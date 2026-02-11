@@ -590,13 +590,13 @@ fn convert_ndp_peer_to_api(state: &NdpPeerState) -> NdpPeer {
         let time_since_expiry = elapsed_since_when
             .checked_sub(effective_lifetime)
             .unwrap_or(Duration::ZERO);
-        Some(format!("{}", humantime::format_duration(time_since_expiry)))
+        Some(mg_common::format_duration_human(time_since_expiry))
     } else {
         // Calculate time until expiry
         let time_until = effective_lifetime
             .checked_sub(elapsed_since_when)
             .unwrap_or(Duration::ZERO);
-        Some(format!("{}", humantime::format_duration(time_until)))
+        Some(mg_common::format_duration_human(time_until))
     };
 
     NdpPeer {
