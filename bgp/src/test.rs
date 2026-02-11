@@ -1790,6 +1790,8 @@ fn unnumbered_peering_helper(
     Arc<Router<BgpConnectionChannel>>,
     Arc<UnnumberedManagerMock>,
     Vec<Arc<SessionRunner<BgpConnectionChannel>>>,
+    Vec<Arc<Dispatcher<BgpConnectionChannel>>>,
+    Vec<Arc<Dispatcher<BgpConnectionChannel>>>,
 ) {
     let log = init_file_logger(&format!("{}.log", test_name));
 
@@ -2022,7 +2024,16 @@ fn unnumbered_peering_helper(
             .expect("start session2");
     }
 
-    (router1, mock_ndp1, sessions1, router2, mock_ndp2, sessions2)
+    (
+        router1,
+        mock_ndp1,
+        sessions1,
+        router2,
+        mock_ndp2,
+        sessions2,
+        dispatchers1,
+        dispatchers2,
+    )
 }
 
 /// Test: Session survives NDP neighbor changes and reconnects via new neighbor after reset.
@@ -2035,12 +2046,21 @@ fn unnumbered_peering_helper(
 /// - After AdminEvent::Reset, session reconnects using new NDP neighbor
 #[test]
 fn test_unnumbered_session_survives_peer_change() {
-    let (router1, mock_ndp1, sessions1, router2, _mock_ndp2, sessions2) =
-        unnumbered_peering_helper(
-            "unnumbered_peer_change",
-            vec![("eth0".to_string(), 2)],
-            RouteExchange::Ipv4 { nexthop: None },
-        );
+    let scope_id = next_scope_id();
+    let (
+        router1,
+        mock_ndp1,
+        sessions1,
+        router2,
+        _mock_ndp2,
+        sessions2,
+        disps1,
+        disps2,
+    ) = unnumbered_peering_helper(
+        "unnumbered_peer_change",
+        vec![("eth0".to_string(), scope_id)],
+        RouteExchange::Ipv4 { nexthop: None },
+    );
 
     let session1 = &sessions1[0];
     let session2 = &sessions2[0];
@@ -2063,7 +2083,7 @@ fn test_unnumbered_session_survives_peer_change() {
         "fe80::2".parse().unwrap(),
         TEST_BGP_PORT,
         0,
-        2,
+        scope_id,
     ));
     assert_eq!(session1.get_peer_socket_addr(), Some(peer2_addr));
 
@@ -2072,8 +2092,12 @@ fn test_unnumbered_session_survives_peer_change() {
     mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
 
     // Router 1's query now returns the new peer
-    let new_peer_addr =
-        SocketAddr::V6(SocketAddrV6::new(new_peer_ip, TEST_BGP_PORT, 0, 2));
+    let new_peer_addr = SocketAddr::V6(SocketAddrV6::new(
+        new_peer_ip,
+        TEST_BGP_PORT,
+        0,
+        scope_id,
+    ));
     wait_for!(session1.get_peer_socket_addr() == Some(new_peer_addr));
 
     // CRITICAL: Session must stay Established (NDP change doesn't affect FSM)
@@ -2103,6 +2127,12 @@ fn test_unnumbered_session_survives_peer_change() {
     // Clean up
     router1.shutdown();
     router2.shutdown();
+    for d in &disps1 {
+        d.shutdown();
+    }
+    for d in &disps2 {
+        d.shutdown();
+    }
 }
 
 /// Test: Session handles peer expiry and rediscovery.
@@ -2115,12 +2145,21 @@ fn test_unnumbered_session_survives_peer_change() {
 /// - Session remains Established throughout
 #[test]
 fn test_unnumbered_peer_expiry_and_rediscovery() {
-    let (router1, mock_ndp1, sessions1, router2, _mock_ndp2, sessions2) =
-        unnumbered_peering_helper(
-            "unnumbered_expiry",
-            vec![("eth0".to_string(), 2)],
-            RouteExchange::Ipv4 { nexthop: None },
-        );
+    let scope_id = next_scope_id();
+    let (
+        router1,
+        mock_ndp1,
+        sessions1,
+        router2,
+        _mock_ndp2,
+        sessions2,
+        disps1,
+        disps2,
+    ) = unnumbered_peering_helper(
+        "unnumbered_expiry",
+        vec![("eth0".to_string(), scope_id)],
+        RouteExchange::Ipv4 { nexthop: None },
+    );
 
     let session1 = &sessions1[0];
     let session2 = &sessions2[0];
@@ -2158,7 +2197,7 @@ fn test_unnumbered_peer_expiry_and_rediscovery() {
 
     // Router 1's query returns the peer again
     let peer2_addr =
-        SocketAddr::V6(SocketAddrV6::new(peer2_ip, TEST_BGP_PORT, 0, 2));
+        SocketAddr::V6(SocketAddrV6::new(peer2_ip, TEST_BGP_PORT, 0, scope_id));
     wait_for!(session1.get_peer_socket_addr() == Some(peer2_addr));
 
     // Sessions should still be Established
@@ -2168,6 +2207,12 @@ fn test_unnumbered_peer_expiry_and_rediscovery() {
     // Clean up
     router1.shutdown();
     router2.shutdown();
+    for d in &disps1 {
+        d.shutdown();
+    }
+    for d in &disps2 {
+        d.shutdown();
+    }
 }
 
 /// Test: Multiple unnumbered sessions on different interfaces work independently.
@@ -2179,12 +2224,25 @@ fn test_unnumbered_peer_expiry_and_rediscovery() {
 /// - Both sessions stay Established when eth0's NDP changes
 #[test]
 fn test_multiple_unnumbered_sessions() {
-    let (router1, mock_ndp1, sessions1, router2, _mock_ndp2, sessions2) =
-        unnumbered_peering_helper(
-            "multiple_unnumbered",
-            vec![("eth0".to_string(), 2), ("eth1".to_string(), 3)],
-            RouteExchange::Ipv4 { nexthop: None },
-        );
+    let scope_eth0 = next_scope_id();
+    let scope_eth1 = next_scope_id();
+    let (
+        router1,
+        mock_ndp1,
+        sessions1,
+        router2,
+        _mock_ndp2,
+        sessions2,
+        disps1,
+        disps2,
+    ) = unnumbered_peering_helper(
+        "multiple_unnumbered",
+        vec![
+            ("eth0".to_string(), scope_eth0),
+            ("eth1".to_string(), scope_eth1),
+        ],
+        RouteExchange::Ipv4 { nexthop: None },
+    );
 
     let session1_eth0 = &sessions1[0];
     let session1_eth1 = &sessions1[1];
@@ -2200,8 +2258,12 @@ fn test_multiple_unnumbered_sessions() {
     // Change Router 1's eth0 NDP neighbor
     let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
     mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
-    let new_peer =
-        SocketAddr::V6(SocketAddrV6::new(new_peer_ip, TEST_BGP_PORT, 0, 2));
+    let new_peer = SocketAddr::V6(SocketAddrV6::new(
+        new_peer_ip,
+        TEST_BGP_PORT,
+        0,
+        scope_eth0,
+    ));
     wait_for!(session1_eth0.get_peer_socket_addr() == Some(new_peer));
 
     // CRITICAL: All sessions must stay Established
@@ -2231,7 +2293,7 @@ fn test_multiple_unnumbered_sessions() {
         "fe80::2".parse().unwrap(),
         TEST_BGP_PORT,
         0,
-        3,
+        scope_eth1,
     ));
     assert_eq!(
         session1_eth1.get_peer_socket_addr(),
@@ -2242,6 +2304,12 @@ fn test_multiple_unnumbered_sessions() {
     // Clean up
     router1.shutdown();
     router2.shutdown();
+    for d in &disps1 {
+        d.shutdown();
+    }
+    for d in &disps2 {
+        d.shutdown();
+    }
 }
 
 /// Test: Same link-local address on multiple interfaces.
@@ -2276,12 +2344,25 @@ fn test_multiple_unnumbered_sessions() {
 /// each interface's scope_id correctly identifies which physical link to use.
 #[test]
 fn test_same_linklocal_multiple_interfaces() {
-    let (router1, mock_ndp1, sessions1, router2, _mock_ndp2, sessions2) =
-        unnumbered_peering_helper(
-            "same_linklocal",
-            vec![("eth0".to_string(), 2), ("eth1".to_string(), 3)],
-            RouteExchange::Ipv4 { nexthop: None },
-        );
+    let scope_eth0 = next_scope_id();
+    let scope_eth1 = next_scope_id();
+    let (
+        router1,
+        mock_ndp1,
+        sessions1,
+        router2,
+        _mock_ndp2,
+        sessions2,
+        disps1,
+        disps2,
+    ) = unnumbered_peering_helper(
+        "same_linklocal",
+        vec![
+            ("eth0".to_string(), scope_eth0),
+            ("eth1".to_string(), scope_eth1),
+        ],
+        RouteExchange::Ipv4 { nexthop: None },
+    );
 
     // The helper already discovers fe80::2 on both interfaces of mock_ndp1.
     // The point of this test is to verify that the same peer IP (fe80::2) on
@@ -2293,13 +2374,13 @@ fn test_same_linklocal_multiple_interfaces() {
         peer_ip,
         TEST_BGP_PORT,
         0,
-        2, // scope_id 2 for eth0
+        scope_eth0,
     ));
     let peer_eth1 = SocketAddr::V6(SocketAddrV6::new(
         peer_ip, // SAME IP as eth0
         TEST_BGP_PORT,
         0,
-        3, // scope_id 3 for eth1
+        scope_eth1,
     ));
 
     let session1_eth0 = &sessions1[0];
@@ -2351,11 +2432,15 @@ fn test_same_linklocal_multiple_interfaces() {
     // Verify they're truly independent: change eth0's peer
     let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
     mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
-    let new_peer_eth0 =
-        SocketAddr::V6(SocketAddrV6::new(new_peer_ip, TEST_BGP_PORT, 0, 2));
+    let new_peer_eth0 = SocketAddr::V6(SocketAddrV6::new(
+        new_peer_ip,
+        TEST_BGP_PORT,
+        0,
+        scope_eth0,
+    ));
     wait_for!(session1_eth0.get_peer_socket_addr() == Some(new_peer_eth0));
 
-    // eth1 should still see fe80::2 with scope 3
+    // eth1 should still see fe80::2 with its own scope_id
     assert_eq!(
         session1_eth1.get_peer_socket_addr(),
         Some(peer_eth1),
@@ -2371,6 +2456,12 @@ fn test_same_linklocal_multiple_interfaces() {
     // Clean up
     router1.shutdown();
     router2.shutdown();
+    for d in &disps1 {
+        d.shutdown();
+    }
+    for d in &disps2 {
+        d.shutdown();
+    }
 }
 
 // =========================================================================
@@ -3740,7 +3831,7 @@ fn test_unnumbered_interface_lifecycle() {
     let mock_ndp1 = UnnumberedManagerMock::new();
     let mock_ndp2 = UnnumberedManagerMock::new();
 
-    let scope_id = 2u32;
+    let scope_id = next_scope_id();
 
     // ONLY configure interface mapping - do NOT add to system yet
     mock_ndp1.configure_interface("eth0".to_string(), scope_id);
