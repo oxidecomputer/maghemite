@@ -71,6 +71,8 @@ enum RecvError {
     Io(std::io::Error),
     /// Parse error (malformed message) - should send ParseError event to FSM
     Parse(MessageParseError),
+    /// The recv loop is shutting down (dropped flag was set)
+    Shutdown,
 }
 
 pub struct BgpListenerTcp {
@@ -664,15 +666,9 @@ impl BgpConnectionTcp {
                                         "connection_id" => conn_id.short(),
                                         "error" => format!("{e}")
                                     );
-                                    // Notify session runner that the TCP
-                                    // connection failed. Skip if a shutdown
-                                    // signal arrived while trying to get a
-                                    // new message.
-                                    if !dropped.load(Ordering::Relaxed)
-                                        && let Err(e) = event_tx.send(FsmEvent::Connection(
-                                            ConnectionEvent::TcpConnectionFails(conn_id),
-                                        ))
-                                    {
+                                    if let Err(e) = event_tx.send(FsmEvent::Connection(
+                                        ConnectionEvent::TcpConnectionFails(conn_id),
+                                    )) {
                                         connection_log_lite!(l, warn,
                                             "error sending TcpConnectionFails event to {peer}: {e}";
                                             "direction" => direction,
@@ -683,6 +679,7 @@ impl BgpConnectionTcp {
                                         );
                                     }
                                 }
+                                RecvError::Shutdown => {}
                                 RecvError::Parse(parse_err) => {
                                     connection_log_lite!(l, error,
                                         "recv_msg parse error (peer: {peer}, conn_id: {}): {parse_err}",
@@ -728,36 +725,31 @@ impl BgpConnectionTcp {
     fn recv_header(
         stream: &mut TcpStream,
         dropped: Arc<AtomicBool>,
-    ) -> std::io::Result<Header> {
+    ) -> Result<Header, RecvError> {
         let mut buf = [0u8; Header::WIRE_SIZE];
         let mut i = 0;
         loop {
             if dropped.load(Ordering::Relaxed) {
-                return Err(std::io::Error::other("shutting down"));
+                return Err(RecvError::Shutdown);
             }
-            let n = match stream.read(&mut buf[i..]) {
-                Ok(n) => Ok(n),
-                Err(e) => {
-                    if e.kind() == std::io::ErrorKind::WouldBlock {
-                        // This condition happens due to the read timeout that
-                        // is set on the TcpStream object on connect being hit.
-                        // This is a normal condition and we just jump back to
-                        // the beginning of the loop, check the shutdown flag
-                        // and carry on reading if there is no shutdown.
-                        continue;
-                    } else {
-                        Err(e)
-                    }
+            match stream.read(&mut buf[i..]) {
+                Ok(0) => {
+                    return Err(RecvError::Io(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "peer closed connection",
+                    )));
                 }
-            }?;
-            // Check for EOF (peer closed connection)
-            if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "peer closed connection",
-                ));
+                Ok(n) => i += n,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // This condition happens due to the read timeout that
+                    // is set on the TcpStream object on connect being hit.
+                    // This is a normal condition and we just jump back to
+                    // the beginning of the loop, check the shutdown flag
+                    // and carry on reading if there is no shutdown.
+                    continue;
+                }
+                Err(e) => return Err(RecvError::Io(e)),
             }
-            i += n;
             if i < Header::WIRE_SIZE {
                 continue;
             }
@@ -774,11 +766,29 @@ impl BgpConnectionTcp {
         log: &Logger,
         direction: ConnectionDirection,
     ) -> Result<Message, RecvError> {
-        let hdr = Self::recv_header(stream, dropped.clone())
-            .map_err(RecvError::Io)?;
+        let hdr = Self::recv_header(stream, dropped.clone())?;
 
-        let mut msgbuf = vec![0u8; usize::from(hdr.length) - Header::WIRE_SIZE];
-        stream.read_exact(&mut msgbuf).map_err(RecvError::Io)?;
+        let msg_len = usize::from(hdr.length) - Header::WIRE_SIZE;
+        let mut msgbuf = vec![0u8; msg_len];
+        let mut i = 0;
+        while i < msg_len {
+            if dropped.load(Ordering::Relaxed) {
+                return Err(RecvError::Shutdown);
+            }
+            match stream.read(&mut msgbuf[i..]) {
+                Ok(0) => {
+                    return Err(RecvError::Io(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "peer closed connection",
+                    )));
+                }
+                Ok(n) => i += n,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    continue;
+                }
+                Err(e) => return Err(RecvError::Io(e)),
+            }
+        }
 
         let msg = match hdr.typ {
             MessageType::Open => match OpenMessage::from_wire(&msgbuf) {
