@@ -83,6 +83,7 @@ impl std::fmt::Display for Network {
 /// A listener that can listen for messages on our simulated network.
 struct Listener {
     rx: Receiver<(SocketAddr, Endpoint<Message>)>,
+    addr: SocketAddr,
 }
 
 impl Listener {
@@ -94,6 +95,12 @@ impl Listener {
             RecvTimeoutError::Timeout => Error::Timeout,
             RecvTimeoutError::Disconnected => Error::Disconnected,
         })
+    }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        NET.unbind(&self.addr);
     }
 }
 
@@ -112,7 +119,12 @@ impl Network {
     fn bind(&self, sa: SocketAddr) -> Listener {
         let (tx, rx) = mpsc_channel();
         lock!(self.endpoints).insert(sa, tx);
-        Listener { rx }
+        Listener { rx, addr: sa }
+    }
+
+    /// Remove a bound address from the network.
+    fn unbind(&self, addr: &SocketAddr) {
+        lock!(self.endpoints).remove(addr);
     }
 
     /// Send a copy of the provided endpoint to the endpoint identified by the
