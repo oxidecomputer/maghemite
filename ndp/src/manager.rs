@@ -15,7 +15,7 @@ use slog::{Logger, error};
 use socket2::Socket;
 use std::mem::MaybeUninit;
 use std::net::Ipv6Addr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{Builder, sleep};
 use std::time::{Duration, Instant};
@@ -50,7 +50,12 @@ impl NdpManager {
         let mut interfaces = write_lock!(self.interfaces);
         // Dont create a manager thread for interfaces that are already
         // being managed.
-        if interfaces.iter().any(|x| x.inner.ifx == ifx) {
+        if let Some(iface_mgr) = interfaces.iter().find(|x| x.inner.ifx == ifx)
+        {
+            iface_mgr
+                .inner
+                .router_lifetime
+                .store(router_lifetime, Ordering::Relaxed);
             return Ok(());
         }
 
@@ -136,7 +141,10 @@ impl NdpManager {
 
                 InterfaceAdvertisementInfo {
                     interface: iface_mgr.inner.ifx.clone(),
-                    router_lifetime: iface_mgr.inner.router_lifetime,
+                    router_lifetime: iface_mgr
+                        .inner
+                        .router_lifetime
+                        .load(Ordering::Relaxed),
                     discovered_peer,
                     thread_state: Some(iface_mgr.thread_state()),
                 }
@@ -176,7 +184,7 @@ pub struct InterfaceNdpManager {
 struct InterfaceNdpManagerInner {
     ifx: Ipv6NetworkInterface,
     neighbor_router: Arc<Mutex<Option<ReceivedAdvertisement>>>,
-    router_lifetime: u16,
+    router_lifetime: Arc<AtomicU16>,
     log: Logger,
 }
 
@@ -224,7 +232,7 @@ impl InterfaceNdpManager {
         let inner = InterfaceNdpManagerInner {
             ifx,
             neighbor_router: Arc::new(Mutex::new(None)),
-            router_lifetime,
+            router_lifetime: Arc::new(AtomicU16::new(router_lifetime)),
             log,
         };
 
@@ -320,7 +328,7 @@ impl InterfaceNdpManagerInner {
                 self.ifx.ip,
                 None,
                 self.ifx.index,
-                self.router_lifetime,
+                self.router_lifetime.load(Ordering::Relaxed),
                 &self.log,
             );
             send_rs(&sk, self.ifx.ip, None, self.ifx.index, &self.log);
@@ -362,7 +370,7 @@ impl InterfaceNdpManagerInner {
             self.ifx.ip,
             Some(src),
             self.ifx.index,
-            self.router_lifetime,
+            self.router_lifetime.load(Ordering::Relaxed),
             &self.log,
         );
     }

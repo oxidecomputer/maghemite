@@ -15,7 +15,6 @@ slog-term.workspace = true
 slog-async.workspace = true
 slog-envlogger.workspace = true
 colored.workspace = true
-humantime.workspace = true
 serde_json.workspace = true
 oxnet.workspace = true
 tabwriter.workspace = true

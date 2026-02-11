@@ -1049,11 +1049,8 @@ async fn get_neighbors(
     Ok(())
 }
 
-/// Format a Duration as decimal seconds (e.g., "4.300s", "0.100s", "10.000s")
-fn format_duration_decimal(d: Duration) -> String {
-    let secs = d.as_secs();
-    let millis = d.subsec_millis();
-    format!("{}.{:03}s", secs, millis)
+fn format_duration_human(d: Duration) -> String {
+    mg_common::format_duration_human(d)
 }
 
 fn display_neighbors_summary(
@@ -1079,11 +1076,11 @@ fn display_neighbors_summary(
             addr,
             info.asn,
             info.fsm_state,
-            humantime::Duration::from(info.fsm_state_duration),
-            humantime::Duration::from(info.timers.hold.configured),
-            humantime::Duration::from(info.timers.hold.negotiated),
-            humantime::Duration::from(info.timers.keepalive.configured),
-            humantime::Duration::from(info.timers.keepalive.negotiated),
+            format_duration_human(info.fsm_state_duration),
+            format_duration_human(info.timers.hold.configured),
+            format_duration_human(info.timers.hold.negotiated),
+            format_duration_human(info.timers.keepalive.configured),
+            format_duration_human(info.timers.keepalive.negotiated),
         )
         .unwrap();
     }
@@ -1109,7 +1106,7 @@ fn display_neighbors_detail(
         println!("  FSM State: {:?}", info.fsm_state);
         println!(
             "  FSM State Duration: {}",
-            humantime::Duration::from(info.fsm_state_duration)
+            format_duration_human(info.fsm_state_duration)
         );
         if let Some(asn) = info.asn {
             println!("  Peer ASN: {}", asn);
@@ -1140,20 +1137,20 @@ fn display_neighbors_detail(
         println!("\n{}", "Timers:".bold());
         println!(
             "  Hold Time: configured={}, negotiated={}, remaining={}",
-            format_duration_decimal(info.timers.hold.configured),
-            format_duration_decimal(info.timers.hold.negotiated),
-            format_duration_decimal(info.timers.hold.remaining),
+            format_duration_human(info.timers.hold.configured),
+            format_duration_human(info.timers.hold.negotiated),
+            format_duration_human(info.timers.hold.remaining),
         );
         println!(
             "  Keepalive: configured={}, negotiated={}, remaining={}",
-            format_duration_decimal(info.timers.keepalive.configured),
-            format_duration_decimal(info.timers.keepalive.negotiated),
-            format_duration_decimal(info.timers.keepalive.remaining),
+            format_duration_human(info.timers.keepalive.configured),
+            format_duration_human(info.timers.keepalive.negotiated),
+            format_duration_human(info.timers.keepalive.remaining),
         );
         println!(
             "  Connect Retry: configured={}, remaining={}",
-            format_duration_decimal(info.timers.connect_retry.configured),
-            format_duration_decimal(info.timers.connect_retry.remaining),
+            format_duration_human(info.timers.connect_retry.configured),
+            format_duration_human(info.timers.connect_retry.remaining),
         );
         match &info.timers.connect_retry_jitter {
             Some(jitter) => {
@@ -1163,8 +1160,8 @@ fn display_neighbors_detail(
         }
         println!(
             "  Idle Hold: configured={}, remaining={}",
-            format_duration_decimal(info.timers.idle_hold.configured),
-            format_duration_decimal(info.timers.idle_hold.remaining),
+            format_duration_human(info.timers.idle_hold.configured),
+            format_duration_human(info.timers.idle_hold.remaining),
         );
         match &info.timers.idle_hold_jitter {
             Some(jitter) => {
@@ -1174,8 +1171,8 @@ fn display_neighbors_detail(
         }
         println!(
             "  Delay Open: configured={}, remaining={}",
-            format_duration_decimal(info.timers.delay_open.configured),
-            format_duration_decimal(info.timers.delay_open.remaining),
+            format_duration_human(info.timers.delay_open.configured),
+            format_duration_human(info.timers.delay_open.remaining),
         );
 
         if !info.received_capabilities.is_empty() {

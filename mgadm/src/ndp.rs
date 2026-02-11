@@ -37,9 +37,9 @@ pub enum StatusCmd {
 
     /// Show detailed state for a specific interface
     Interface {
+        interface: String,
         #[clap(env)]
         asn: u32,
-        interface: String,
     },
 }
 
