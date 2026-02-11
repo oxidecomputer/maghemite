@@ -536,6 +536,8 @@ impl BgpConnectionTcp {
         direction: ConnectionDirection,
         config: &SessionInfo,
     ) -> Result<Self, Error> {
+        conn.set_nodelay(true)?;
+
         let id = ConnectionId::new(source, peer);
 
         let dropped = Arc::new(AtomicBool::new(false));
