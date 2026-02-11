@@ -103,6 +103,13 @@ impl Prefix4 {
         self_masked == other_masked
     }
 
+    /// Wire size of this prefix: 1 byte for the length field plus the
+    /// minimum number of bytes needed to hold `length` bits.
+    pub fn wire_len(&self) -> usize {
+        // prefix-length byte + ceil(length / 8) address bytes
+        1 + usize::from(self.length).div_ceil(8)
+    }
+
     /// Check if a prefix contains a subnet that is valid for use in the RIB.
     /// Currently this only checks if the prefix overlaps with Loopback
     /// (127.0.0.0/8) or Multicast (224.0.0.0/4) address space. We deliberately
@@ -229,6 +236,13 @@ impl Prefix6 {
         let other_masked = other.value.to_bits() & mask;
 
         self_masked == other_masked
+    }
+
+    /// Wire size of this prefix: 1 byte for the length field plus the
+    /// minimum number of bytes needed to hold `length` bits.
+    pub fn wire_len(&self) -> usize {
+        // prefix-length byte + ceil(length / 8) address bytes
+        1 + usize::from(self.length).div_ceil(8)
     }
 
     /// Check if a prefix contains a subnet that is valid for use in the RIB.

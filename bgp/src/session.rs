@@ -13,10 +13,10 @@ use crate::{
     log::{collision_log, session_log, session_log_lite},
     messages::{
         AddPathElement, Afi, BgpNexthop, Capability, CeaseErrorSubcode,
-        Community, ErrorCode, ErrorSubcode, Message, MessageKind,
-        MessageParseError, MpReachNlri, MpUnreachNlri, NotificationMessage,
-        OpenErrorSubcode, OpenMessage, PathAttributeValue, RouteRefreshMessage,
-        Safi, UpdateMessage,
+        Community, ErrorCode, ErrorSubcode, Header, MAX_MESSAGE_SIZE, Message,
+        MessageKind, MessageParseError, MpReachNlri, MpUnreachNlri,
+        NotificationMessage, OpenErrorSubcode, OpenMessage, PathAttribute,
+        PathAttributeValue, RouteRefreshMessage, Safi, UpdateMessage,
     },
     params::{
         BgpCapability, BgpPeerParameters, BgpPeerParametersV1,
@@ -7570,154 +7570,192 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         )
     }
 
-    /// Add peer-specific path attributes to an UPDATE message.
-    /// This adds MED, LOCAL_PREF, and Communities based on session configuration.
-    fn enrich_update(&self, update: &mut UpdateMessage) -> Result<(), Error> {
-        let session = lock!(self.session);
-
-        // Add MED if configured
-        if let Some(med) = session.multi_exit_discriminator {
-            update
-                .path_attributes
-                .push(PathAttributeValue::MultiExitDisc(med).into());
+    /// Filter IPv4 prefixes by session export policy. Returns the filtered vec.
+    fn filter_v4_exports(
+        prefixes: Vec<Prefix4>,
+        session: &SessionInfo,
+    ) -> Vec<Prefix4> {
+        if let Some(config4) = &session.ipv4_unicast
+            && let ImportExportPolicy4::Allow(ref policy) =
+                config4.export_policy
+        {
+            prefixes
+                .into_iter()
+                .filter(|p| policy.contains(p))
+                .collect()
+        } else {
+            prefixes
         }
+    }
 
-        // Add LOCAL_PREF for iBGP
+    /// Filter IPv6 prefixes by session export policy. Returns the filtered vec.
+    fn filter_v6_exports(
+        prefixes: Vec<Prefix6>,
+        session: &SessionInfo,
+    ) -> Vec<Prefix6> {
+        if let Some(config6) = &session.ipv6_unicast
+            && let ImportExportPolicy6::Allow(ref policy) =
+                config6.export_policy
+        {
+            prefixes
+                .into_iter()
+                .filter(|p| policy.contains(p))
+                .collect()
+        } else {
+            prefixes
+        }
+    }
+
+    /// Build the full path-attribute list for an announce skeleton.
+    ///
+    /// Combines router base attributes (Origin, AS_PATH), the nexthop
+    /// attribute, and session-specific enrichment (MED, LOCAL_PREF,
+    /// Communities).
+    fn announcement_attrs(
+        &self,
+        nexthop_attr: PathAttribute,
+    ) -> Vec<PathAttribute> {
+        let mut attrs = self.router.base_attributes();
+        attrs.push(nexthop_attr);
+
+        let session = lock!(self.session);
+        if let Some(med) = session.multi_exit_discriminator {
+            attrs.push(PathAttributeValue::MultiExitDisc(med).into());
+        }
         if self.is_ibgp().unwrap_or(false) {
             let local_pref = session.local_pref.unwrap_or(0);
-            update
-                .path_attributes
-                .push(PathAttributeValue::LocalPref(local_pref).into());
+            attrs.push(PathAttributeValue::LocalPref(local_pref).into());
         }
-
-        // Add communities
         let communities: Vec<Community> = session
             .communities
             .clone()
             .into_iter()
             .map(Community::from)
             .collect();
-
         if !communities.is_empty() {
-            update
-                .path_attributes
-                .push(PathAttributeValue::Communities(communities).into());
+            attrs.push(PathAttributeValue::Communities(communities).into());
         }
-
-        Ok(())
+        attrs
     }
 
-    /// Apply export policy filtering to UPDATE message.
-    /// Filters NLRI based on per-AF export policy configuration.
-    fn apply_export_policy(
+    /// Apply shaper policy and send an UPDATE message to peer.
+    fn send_shaped(
         &self,
-        update: &mut UpdateMessage,
+        update: UpdateMessage,
+        pc: &PeerConnection<Cnx>,
+        shaper_application: &ShaperApplication,
     ) -> Result<(), Error> {
-        let session = lock!(self.session);
-
-        // Filter traditional NLRI field (IPv4) using IPv4 export policy
-        if let Some(config4) = &session.ipv4_unicast
-            && let ImportExportPolicy4::Allow(ref policy4) =
-                config4.export_policy
-        {
-            update.nlri.retain(|p| policy4.contains(p));
-        }
-
-        // Filter MP_REACH_NLRI using the appropriate per-AF policy
-        if let Some(reach) = update.mp_reach_mut() {
-            match reach {
-                MpReachNlri::Ipv4Unicast(reach4) => {
-                    if let Some(config4) = &session.ipv4_unicast
-                        && let ImportExportPolicy4::Allow(ref policy4) =
-                            config4.export_policy
-                    {
-                        reach4.nlri.retain(|p| policy4.contains(p));
-                    }
-                }
-                MpReachNlri::Ipv6Unicast(reach6) => {
-                    if let Some(config6) = &session.ipv6_unicast
-                        && let ImportExportPolicy6::Allow(ref policy6) =
-                            config6.export_policy
-                    {
-                        reach6.nlri.retain(|p| policy6.contains(p));
-                    }
-                }
+        let shaped = match self.shape_update(update, shaper_application)? {
+            ShaperResult::Emit(msg) => msg,
+            ShaperResult::Drop => {
+                session_log!(
+                    self,
+                    debug,
+                    pc.conn,
+                    "update dropped by shaper policy";
+                );
+                return Ok(());
             }
-        }
-
-        Ok(())
+        };
+        self.send_update_message(shaped, pc)
     }
 
-    /// Build and send a peer-specific UPDATE message.
-    ///
-    /// This constructs UPDATE messages from type-safe routes and handles:
-    /// - Peer-specific next-hop derivation
-    /// - AFI-specific encoding (Traditional for IPv4, MP-BGP for IPv6)
-    /// - Addition of session-specific attributes (MED, LOCAL_PREF, Communities)
-    /// - Export policy filtering
-    /// - Shaper policy application
-    ///
-    /// # Arguments
-    /// * `route_update` - Type-safe route update (V4 or V6)
-    /// * `pc` - Peer connection (provides next-hop and enrichment context)
-    /// * `shaper_application` - How to apply export shaper policy
     fn send_update(
         &self,
         route_update: RouteUpdate,
         pc: &PeerConnection<Cnx>,
         shaper_application: &ShaperApplication,
     ) -> Result<(), Error> {
-        // XXX: Handle more originated routes than can fit in a single Update
-
-        // Early exit if nothing to send
         if route_update.is_empty() {
             return Ok(());
         }
 
-        // Build the UpdateMessage based on variant. RFC 7606 compliance:
-        // Each RouteUpdate is either an announcement OR withdrawal, never both.
-        let mut update = match route_update {
+        let max_body = MAX_MESSAGE_SIZE - Header::WIRE_SIZE;
+
+        match route_update {
             RouteUpdate::V4(RouteUpdate4::Announce(nlri)) => {
-                match self.derive_nexthop(Afi::Ipv4, pc)? {
-                    BgpNexthop::Ipv4(nh4) => {
-                        let mut path_attributes = self.router.base_attributes();
-                        path_attributes
-                            .push(PathAttributeValue::NextHop(nh4).into());
+                let session = lock!(self.session);
+                let nlri = Self::filter_v4_exports(nlri, &session);
+                drop(session);
 
-                        UpdateMessage {
-                            withdrawn: vec![],
-                            path_attributes,
-                            nlri,
-                            ..Default::default()
-                        }
-                    }
-                    nh6 @ BgpNexthop::Ipv6Single(_)
-                    | nh6 @ BgpNexthop::Ipv6Double(_) => {
-                        let mut path_attrs = self.router.base_attributes();
-                        let reach = MpReachNlri::ipv4_unicast(nh6, nlri);
-                        path_attrs.push(
-                            PathAttributeValue::MpReachNlri(reach).into(),
-                        );
-
-                        UpdateMessage {
-                            withdrawn: vec![],
-                            path_attributes: path_attrs,
-                            nlri: vec![],
-                            ..Default::default()
-                        }
-                    }
+                if nlri.is_empty() {
+                    session_log!(
+                        self,
+                        debug,
+                        pc.conn,
+                        "update completely filtered by export policy";
+                    );
+                    return Ok(());
                 }
+
+                let (skeleton, stamp) =
+                    match self.derive_nexthop(Afi::Ipv4, pc)? {
+                        BgpNexthop::Ipv4(nh4) => {
+                            let attrs = self.announcement_attrs(
+                                PathAttributeValue::NextHop(nh4).into(),
+                            );
+                            let skeleton = UpdateMessage {
+                                path_attributes: attrs,
+                                ..Default::default()
+                            };
+                            (
+                                skeleton,
+                                UpdateMessage::set_nlri
+                                    as fn(&mut UpdateMessage, Vec<Prefix4>),
+                            )
+                        }
+                        nh6 => {
+                            // ENHE: IPv4 prefixes via MP_REACH_NLRI
+                            // with IPv6 nexthop.
+                            let attrs = self.announcement_attrs(
+                                PathAttributeValue::MpReachNlri(
+                                    MpReachNlri::ipv4_unicast(nh6, vec![]),
+                                )
+                                .into(),
+                            );
+                            let skeleton = UpdateMessage {
+                                path_attributes: attrs,
+                                ..Default::default()
+                            };
+                            (
+                                skeleton,
+                                UpdateMessage::set_mp_reach_ipv4_nlri
+                                    as fn(&mut UpdateMessage, Vec<Prefix4>),
+                            )
+                        }
+                    };
+                skeleton.chunk_and_send(
+                    nlri,
+                    stamp,
+                    Prefix4::wire_len,
+                    max_body,
+                    |msg| self.send_shaped(msg, pc, shaper_application),
+                )?;
             }
             RouteUpdate::V4(RouteUpdate4::Withdraw(withdrawn)) => {
-                // Traditional withdrawals don't need path attributes
-                UpdateMessage {
+                UpdateMessage::default().chunk_and_send(
                     withdrawn,
-                    path_attributes: vec![],
-                    nlri: vec![],
-                    ..Default::default()
-                }
+                    UpdateMessage::set_withdrawn,
+                    Prefix4::wire_len,
+                    max_body,
+                    |msg| self.send_shaped(msg, pc, shaper_application),
+                )?;
             }
             RouteUpdate::V6(RouteUpdate6::Announce(nlri)) => {
+                let session = lock!(self.session);
+                let nlri = Self::filter_v6_exports(nlri, &session);
+                drop(session);
+
+                if nlri.is_empty() {
+                    session_log!(
+                        self,
+                        debug,
+                        pc.conn,
+                        "update completely filtered by export policy";
+                    );
+                    return Ok(());
+                }
+
                 let nh6 = self.derive_nexthop(Afi::Ipv6, pc)?;
                 if matches!(nh6, BgpNexthop::Ipv4(_)) {
                     return Err(Error::InvalidAddress(
@@ -7725,76 +7763,45 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     ));
                 }
 
-                let mut path_attrs = self.router.base_attributes();
-                let reach = MpReachNlri::ipv6_unicast(nh6, nlri);
-                path_attrs.push(PathAttributeValue::MpReachNlri(reach).into());
-
-                UpdateMessage {
-                    withdrawn: vec![],
-                    path_attributes: path_attrs,
-                    nlri: vec![],
+                let attrs = self.announcement_attrs(
+                    PathAttributeValue::MpReachNlri(MpReachNlri::ipv6_unicast(
+                        nh6,
+                        vec![],
+                    ))
+                    .into(),
+                );
+                let skeleton = UpdateMessage {
+                    path_attributes: attrs,
                     ..Default::default()
-                }
+                };
+                skeleton.chunk_and_send(
+                    nlri,
+                    UpdateMessage::set_mp_reach_ipv6_nlri,
+                    Prefix6::wire_len,
+                    max_body,
+                    |msg| self.send_shaped(msg, pc, shaper_application),
+                )?;
             }
             RouteUpdate::V6(RouteUpdate6::Withdraw(withdrawn)) => {
-                // MP_UNREACH_NLRI for IPv6 withdrawals
-                let unreach = MpUnreachNlri::ipv6_unicast(withdrawn);
-                let path_attrs =
-                    vec![PathAttributeValue::MpUnreachNlri(unreach).into()];
-
-                UpdateMessage {
-                    withdrawn: vec![],
-                    path_attributes: path_attrs,
-                    nlri: vec![],
+                let skeleton = UpdateMessage {
+                    path_attributes: vec![
+                        PathAttributeValue::MpUnreachNlri(
+                            MpUnreachNlri::ipv6_unicast(vec![]),
+                        )
+                        .into(),
+                    ],
                     ..Default::default()
-                }
+                };
+                skeleton.chunk_and_send(
+                    withdrawn,
+                    UpdateMessage::set_mp_unreach_ipv6_withdrawn,
+                    Prefix6::wire_len,
+                    max_body,
+                    |msg| self.send_shaped(msg, pc, shaper_application),
+                )?;
             }
-        };
-
-        // 3. Add peer-specific enrichments
-        self.enrich_update(&mut update)?;
-
-        // 4. Apply export policy filtering
-        self.apply_export_policy(&mut update)?;
-
-        // Check if update was completely filtered out
-        let has_content = !update.nlri.is_empty()
-            || !update.withdrawn.is_empty()
-            || update.path_attributes.iter().any(|a| {
-                matches!(
-                    a.value,
-                    PathAttributeValue::MpReachNlri(_)
-                        | PathAttributeValue::MpUnreachNlri(_)
-                )
-            });
-
-        if !has_content {
-            session_log!(
-                self,
-                debug,
-                pc.conn,
-                "update completely filtered by export policy";
-            );
-            return Ok(());
         }
-
-        // 5. Apply shaper policy
-        let shaped_update =
-            match self.shape_update(update, shaper_application)? {
-                ShaperResult::Emit(msg) => msg,
-                ShaperResult::Drop => {
-                    session_log!(
-                        self,
-                        debug,
-                        pc.conn,
-                        "update dropped by shaper policy";
-                    );
-                    return Ok(());
-                }
-            };
-
-        // 6. Send the message
-        self.send_update_message(shaped_update, pc)
+        Ok(())
     }
 
     /// Send a pre-constructed UPDATE message to peer.
