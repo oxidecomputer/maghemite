@@ -834,12 +834,100 @@ pub struct UpdateMessage {
 }
 
 impl UpdateMessage {
+    /// Size of the Withdrawn Routes Length field (u16) in the UPDATE body.
+    pub const WITHDRAWN_LEN_SIZE: usize = 2;
+    /// Size of the Total Path Attribute Length field (u16) in the UPDATE body.
+    pub const PATH_ATTRS_LEN_SIZE: usize = 2;
+
     /// Returns true if a TreatAsWithdraw error occurred during parsing.
     /// When true, all NLRI (v4 + v6) should be processed as withdrawals.
     pub fn treat_as_withdraw(&self) -> bool {
         self.errors.iter().any(|(_, action)| {
             matches!(action, AttributeAction::TreatAsWithdraw)
         })
+    }
+
+    /// Set the traditional IPv4 withdrawn routes field.
+    pub fn set_withdrawn(&mut self, withdrawn: Vec<Prefix4>) {
+        self.withdrawn = withdrawn;
+    }
+
+    /// Replace the NLRI inside an existing MpReachNlri::Ipv4Unicast
+    /// attribute, preserving the nexthop.
+    pub fn set_mp_reach_ipv4_nlri(&mut self, nlri: Vec<Prefix4>) {
+        for attr in &mut self.path_attributes {
+            if let PathAttributeValue::MpReachNlri(MpReachNlri::Ipv4Unicast(
+                ref mut inner,
+            )) = attr.value
+            {
+                inner.nlri = nlri;
+                return;
+            }
+        }
+    }
+
+    /// Replace the NLRI inside an existing MpReachNlri::Ipv6Unicast
+    /// attribute, preserving the nexthop.
+    pub fn set_mp_reach_ipv6_nlri(&mut self, nlri: Vec<Prefix6>) {
+        for attr in &mut self.path_attributes {
+            if let PathAttributeValue::MpReachNlri(MpReachNlri::Ipv6Unicast(
+                ref mut inner,
+            )) = attr.value
+            {
+                inner.nlri = nlri;
+                return;
+            }
+        }
+    }
+
+    /// Replace the withdrawn routes inside an existing
+    /// MpUnreachNlri::Ipv6Unicast attribute.
+    pub fn set_mp_unreach_ipv6_withdrawn(&mut self, withdrawn: Vec<Prefix6>) {
+        for attr in &mut self.path_attributes {
+            if let PathAttributeValue::MpUnreachNlri(
+                MpUnreachNlri::Ipv6Unicast(ref mut inner),
+            ) = attr.value
+            {
+                inner.withdrawn = withdrawn;
+                return;
+            }
+        }
+    }
+
+    /// Clone this message once per chunk of prefixes, stamping each
+    /// chunk in via `stamp`, then pass to `send`.
+    pub fn chunk_and_send<P>(
+        &self,
+        prefixes: Vec<P>,
+        stamp: fn(&mut Self, Vec<P>),
+        wire_len_fn: fn(&P) -> usize,
+        max_body: usize,
+        send: impl Fn(Self) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let available = max_body.saturating_sub(self.wire_len());
+        for chunk in split_prefixes_by_size(prefixes, available, wire_len_fn) {
+            let mut msg = self.clone();
+            stamp(&mut msg, chunk);
+            send(msg)?;
+        }
+        Ok(())
+    }
+
+    /// Wire size of the UPDATE body (not including the message header).
+    pub fn wire_len(&self) -> usize {
+        let withdrawn: usize =
+            self.withdrawn.iter().map(Prefix4::wire_len).sum();
+        let path_attrs: usize = self
+            .path_attributes
+            .iter()
+            .map(PathAttribute::wire_len)
+            .sum();
+        let nlri: usize = self.nlri.iter().map(Prefix4::wire_len).sum();
+        Self::WITHDRAWN_LEN_SIZE
+            + withdrawn
+            + Self::PATH_ATTRS_LEN_SIZE
+            + path_attrs
+            + nlri
     }
 
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
@@ -1720,6 +1808,38 @@ impl UpdateMessage {
     }
 }
 
+/// Split a vec of prefixes into chunks where each chunk's total wire
+/// size fits within `available` bytes.
+pub fn split_prefixes_by_size<P>(
+    prefixes: Vec<P>,
+    available: usize,
+    wire_len: fn(&P) -> usize,
+) -> Vec<Vec<P>> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+    let mut current_size = 0usize;
+
+    for prefix in prefixes {
+        let size = wire_len(&prefix);
+        if current_size + size > available && !current.is_empty() {
+            chunks.push(std::mem::take(&mut current));
+            current_size = 0;
+        }
+        current_size += size;
+        current.push(prefix);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
+}
+
+/// Compute the total wire size of a slice of path attributes.
+pub fn path_attrs_wire_len(attrs: &[PathAttribute]) -> usize {
+    attrs.iter().map(PathAttribute::wire_len).sum()
+}
+
 impl Display for UpdateMessage {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let w_str = self
@@ -1777,6 +1897,11 @@ impl From<PathAttributeValue> for PathAttribute {
                 path_attribute_flags::OPTIONAL
                     | path_attribute_flags::TRANSITIVE
             }
+            PathAttributeValue::MpReachNlri(_)
+            | PathAttributeValue::MpUnreachNlri(_) => {
+                path_attribute_flags::OPTIONAL
+                    | path_attribute_flags::EXTENDED_LENGTH
+            }
             _ => path_attribute_flags::OPTIONAL,
         };
         Self {
@@ -1790,6 +1915,17 @@ impl From<PathAttributeValue> for PathAttribute {
 }
 
 impl PathAttribute {
+    /// Wire size: flags(1) + type_code(1) + length(1 or 2) + value.
+    pub fn wire_len(&self) -> usize {
+        let length_field =
+            match self.typ.flags & path_attribute_flags::EXTENDED_LENGTH {
+                0 => 1, // standard: 1-byte length
+                _ => 2, // extended: 2-byte length
+            };
+        // flags (u8) + type-code (u8) + length + value
+        2 + length_field + self.value.wire_len()
+    }
+
     pub fn to_wire(&self, extended_length: bool) -> Result<Vec<u8>, Error> {
         let mut buf = self.typ.to_wire();
         let val = &self.value.to_wire()?;
@@ -2203,6 +2339,25 @@ pub enum PathAttributeValue {
 }
 
 impl PathAttributeValue {
+    /// Wire size of the attribute value (not including the attribute header).
+    pub fn wire_len(&self) -> usize {
+        match self {
+            Self::Origin(_) => 1, // 1-byte origin code
+            Self::AsPath(segments) | Self::As4Path(segments) => {
+                segments.iter().map(As4PathSegment::wire_len).sum()
+            }
+            Self::NextHop(_) => 4,       // IPv4 address
+            Self::MultiExitDisc(_) => 4, // u32
+            Self::LocalPref(_) => 4,     // u32
+            Self::Aggregator(_) => 6,    // 2-byte ASN + 4-byte IPv4
+            Self::As4Aggregator(_) => 8, // 4-byte ASN + 4-byte IPv4
+            Self::Communities(c) => 4 * c.len(), // 4 bytes per community
+            Self::AtomicAggregate => 0,  // presence-only, no value
+            Self::MpReachNlri(mp) => mp.wire_len(),
+            Self::MpUnreachNlri(mp) => mp.wire_len(),
+        }
+    }
+
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         match self {
             Self::Origin(x) => Ok(vec![(*x).into()]),
@@ -2624,6 +2779,12 @@ pub struct As4PathSegment {
 }
 
 impl As4PathSegment {
+    /// Wire size: 1 (type) + 1 (count) + 4 * count (AS numbers).
+    pub fn wire_len(&self) -> usize {
+        // type (u8) + count (u8) + 4 bytes per AS number
+        2 + 4 * self.value.len()
+    }
+
     pub fn to_wire(&self) -> Result<Vec<u8>, Error> {
         if self.value.len() > u8::MAX as usize {
             return Err(Error::TooLarge("AS4 path segment".into()));
@@ -3092,6 +3253,21 @@ impl MpReachNlri {
         })
     }
 
+    /// Wire size: AFI(2) + SAFI(1) + NH_len(1) + NH + reserved(1) + NLRI.
+    pub fn wire_len(&self) -> usize {
+        let nh_len = usize::from(self.nexthop().byte_len());
+        let nlri_len: usize = match self {
+            Self::Ipv4Unicast(inner) => {
+                inner.nlri.iter().map(Prefix4::wire_len).sum()
+            }
+            Self::Ipv6Unicast(inner) => {
+                inner.nlri.iter().map(Prefix6::wire_len).sum()
+            }
+        };
+        // AFI (u16) + SAFI (u8) + NH-len (u8) + nexthop + reserved (u8) + NLRI
+        2 + 1 + 1 + nh_len + 1 + nlri_len
+    }
+
     /// Serialize to wire format.
     pub fn to_wire(&self) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -3357,6 +3533,20 @@ impl MpUnreachNlri {
     /// Create an IPv6 Unicast MP_UNREACH_NLRI.
     pub fn ipv6_unicast(withdrawn: Vec<Prefix6>) -> Self {
         Self::Ipv6Unicast(MpUnreachIpv6Unicast { withdrawn })
+    }
+
+    /// Wire size: AFI(2) + SAFI(1) + withdrawn prefixes.
+    pub fn wire_len(&self) -> usize {
+        let withdrawn_len: usize = match self {
+            Self::Ipv4Unicast(inner) => {
+                inner.withdrawn.iter().map(Prefix4::wire_len).sum()
+            }
+            Self::Ipv6Unicast(inner) => {
+                inner.withdrawn.iter().map(Prefix6::wire_len).sum()
+            }
+        };
+        // AFI (u16) + SAFI (u8) + withdrawn
+        2 + 1 + withdrawn_len
     }
 
     /// Serialize to wire format.

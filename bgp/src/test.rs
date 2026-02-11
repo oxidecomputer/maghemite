@@ -21,10 +21,12 @@ use lazy_static::lazy_static;
 use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
-use rdb::{Asn, ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4};
+use rdb::{
+    Asn, ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4, Prefix6,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -60,6 +62,36 @@ const CONNECT_RETRY_VERIFICATION: Duration =
 /// exchanged properly and the session doesn't timeout.
 const ESTABLISHED_VERIFICATION: Duration =
     Duration::from_secs(TEST_HOLD_TIME_SECS + 2);
+
+/// Number of routes to originate in update tests. Sized to require multiple
+/// BGP UPDATE messages (each capped at MAX_MESSAGE_SIZE = 4096 bytes),
+/// exercising the chunk_and_send splitting and the incremental recv_msg
+/// body-read loop.
+const TEST_ROUTE_COUNT: usize = 4096;
+
+/// Generate `count` unique IPv4 /24 prefixes: 10.0.0.0/24 .. 10.x.y.0/24
+fn generate_test_prefixes_v4(count: usize) -> Vec<Prefix> {
+    (0..count as u32)
+        .map(|i| {
+            Prefix::V4(Prefix4 {
+                value: Ipv4Addr::new(10, (i >> 8) as u8, (i & 0xFF) as u8, 0),
+                length: 24,
+            })
+        })
+        .collect()
+}
+
+/// Generate `count` unique IPv6 /48 prefixes: 3fff:db8:0::/48 .. 3fff:db8:N::/48
+fn generate_test_prefixes_v6(count: usize) -> Vec<Prefix> {
+    (0..count as u32)
+        .map(|i| {
+            Prefix::V6(Prefix6 {
+                value: Ipv6Addr::new(0x3fff, 0x0db8, i as u16, 0, 0, 0, 0, 0),
+                length: 48,
+            })
+        })
+        .collect()
+}
 
 // XXX: add an iBGP option for the tests
 // XXX: Add test impl of BgpConnection (and Clock?) for FSM tests.
@@ -618,13 +650,14 @@ fn basic_peering_helper<
 
 // This test does the following:
 // 1. Sets up a basic pair of routers
-// 2. Configures r1 to originate prefix(es) based on route_exchange
+// 2. Configures r1 to originate TEST_ROUTE_COUNT prefixes based on route_exchange
 // 3. Brings up a BGP session between r1 and r2
 // 4. Ensures the BGP FSM moves into Established on both r1 and r2
-// 5. Ensures r2 has succesfully received and installed the prefix(es)
-// 6. Shuts down r1
-// 7. Ensures the BGP FSM moves out of Established on both r1 and r2
-// 8. Ensures r2 has successfully uninstalled the implicitly withdrawn prefix(es)
+// 5. Ensures r2 has received all TEST_ROUTE_COUNT prefixes
+// 6. Verifies path attributes (origin_as, as_path, stale) on every received route
+// 7. Shuts down r1
+// 8. Ensures the BGP FSM moves out of Established on both r1 and r2
+// 9. Ensures r2 has successfully uninstalled all implicitly withdrawn prefixes
 fn basic_update_helper<
     Cnx: BgpConnection + 'static,
     Listener: BgpListener<Cnx> + 'static,
@@ -702,20 +735,56 @@ fn basic_update_helper<
         RouteExchange::Ipv4 {
             nexthop: initial_nexthop,
         } => {
-            // IPv4-only: originate and verify IPv4 prefix
+            let prefixes_v4 = generate_test_prefixes_v4(TEST_ROUTE_COUNT);
+
             r1.router
-                .create_origin4(vec![cidr!("1.2.3.0/24")])
+                .create_origin4(prefixes_v4.clone())
                 .expect("originate IPv4");
 
-            let prefix_rdb = Prefix::V4(cidr!("1.2.3.0/24"));
-            wait_for!(!r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
+            // Wait for all routes to arrive at R2
+            wait_for!(
+                prefixes_v4
+                    .iter()
+                    .filter(|p| {
+                        !r2.router.db.get_prefix_paths(p).is_empty()
+                    })
+                    .count()
+                    == TEST_ROUTE_COUNT,
+                "all IPv4 routes should arrive at R2"
+            );
 
-            // Verify initial nexthop if one was configured and test override change
-            let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
-            assert_eq!(paths.len(), 1);
+            // Verify attributes on every received route
+            for prefix in &prefixes_v4 {
+                let paths = r2.router.db.get_prefix_paths(prefix);
+                assert_eq!(paths.len(), 1, "{prefix:?}: expected 1 path");
+                let path = &paths[0];
+
+                if let Some(expected_nh) = initial_nexthop {
+                    assert_eq!(
+                        path.nexthop, expected_nh,
+                        "{prefix:?}: nexthop mismatch"
+                    );
+                }
+
+                let bgp = path.bgp.as_ref().unwrap_or_else(|| {
+                    panic!("{prefix:?}: missing BGP properties")
+                });
+                assert_eq!(
+                    bgp.origin_as, 4200000001,
+                    "{prefix:?}: origin_as mismatch"
+                );
+                assert_eq!(
+                    bgp.as_path,
+                    vec![4200000001u32],
+                    "{prefix:?}: as_path mismatch"
+                );
+                assert!(
+                    bgp.stale.is_none(),
+                    "{prefix:?}: route should not be stale"
+                );
+            }
+
             if let Some(initial_nh) = initial_nexthop {
-                assert_eq!(paths[0].nexthop, initial_nh);
-
                 // Test nexthop override change
                 let new_nexthop = match initial_nh {
                     IpAddr::V4(_) => ip!("10.255.255.254"),
@@ -746,39 +815,82 @@ fn basic_update_helper<
                     .update_session(peer_config, session_info)
                     .expect("update nexthop");
 
-                // Verify nexthop change is reflected in re-advertised route
+                // Verify all routes reflect the new nexthop
                 wait_for!(
-                    {
-                        let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
-                        !paths.is_empty() && paths[0].nexthop == new_nexthop
-                    },
-                    "nexthop should be updated"
+                    prefixes_v4.iter().all(|p| {
+                        let paths = r2.router.db.get_prefix_paths(p);
+                        paths.len() == 1 && paths[0].nexthop == new_nexthop
+                    }),
+                    "all routes should have updated nexthop"
                 );
             }
 
-            // Shut down r1 and verify withdrawal
+            // Shut down r1 and verify withdrawal of all routes
             r1.shutdown();
             wait_for_neq!(r1_session.state(), FsmStateKind::Established);
             wait_for_neq!(r2_session.state(), FsmStateKind::Established);
-            wait_for!(r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
+            wait_for!(
+                prefixes_v4.iter().all(|p| r2
+                    .router
+                    .db
+                    .get_prefix_paths(p)
+                    .is_empty()),
+                "all IPv4 routes should be withdrawn"
+            );
         }
         RouteExchange::Ipv6 {
             nexthop: initial_nexthop,
         } => {
-            // IPv6-only: originate and verify IPv6 prefix
+            let prefixes_v6 = generate_test_prefixes_v6(TEST_ROUTE_COUNT);
+
             r1.router
-                .create_origin6(vec![cidr!("3fff:db8::/32")])
+                .create_origin6(prefixes_v6.clone())
                 .expect("originate IPv6");
 
-            let prefix_rdb = Prefix::V6(cidr!("3fff:db8::/32"));
-            wait_for!(!r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
+            // Wait for all routes to arrive at R2
+            wait_for!(
+                prefixes_v6
+                    .iter()
+                    .filter(|p| {
+                        !r2.router.db.get_prefix_paths(p).is_empty()
+                    })
+                    .count()
+                    == TEST_ROUTE_COUNT,
+                "all IPv6 routes should arrive at R2"
+            );
 
-            // Verify initial nexthop if one was configured and test override change
-            let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
-            assert_eq!(paths.len(), 1);
+            // Verify attributes on every received route
+            for prefix in &prefixes_v6 {
+                let paths = r2.router.db.get_prefix_paths(prefix);
+                assert_eq!(paths.len(), 1, "{prefix:?}: expected 1 path");
+                let path = &paths[0];
+
+                if let Some(expected_nh) = initial_nexthop {
+                    assert_eq!(
+                        path.nexthop, expected_nh,
+                        "{prefix:?}: nexthop mismatch"
+                    );
+                }
+
+                let bgp = path.bgp.as_ref().unwrap_or_else(|| {
+                    panic!("{prefix:?}: missing BGP properties")
+                });
+                assert_eq!(
+                    bgp.origin_as, 4200000001,
+                    "{prefix:?}: origin_as mismatch"
+                );
+                assert_eq!(
+                    bgp.as_path,
+                    vec![4200000001u32],
+                    "{prefix:?}: as_path mismatch"
+                );
+                assert!(
+                    bgp.stale.is_none(),
+                    "{prefix:?}: route should not be stale"
+                );
+            }
+
             if let Some(initial_nh) = initial_nexthop {
-                assert_eq!(paths[0].nexthop, initial_nh);
-
                 // Test nexthop override change
                 let new_nexthop = match initial_nh {
                     IpAddr::V6(_) => ip!("3fff:ffff:ffff:ffff::ffff:fffe"),
@@ -809,51 +921,123 @@ fn basic_update_helper<
                     .update_session(peer_config, session_info)
                     .expect("update nexthop");
 
-                // Verify nexthop change is reflected in re-advertised route
+                // Verify all routes reflect the new nexthop
                 wait_for!(
-                    {
-                        let paths = r2.router.db.get_prefix_paths(&prefix_rdb);
-                        !paths.is_empty() && paths[0].nexthop == new_nexthop
-                    },
-                    "nexthop should be updated"
+                    prefixes_v6.iter().all(|p| {
+                        let paths = r2.router.db.get_prefix_paths(p);
+                        paths.len() == 1 && paths[0].nexthop == new_nexthop
+                    }),
+                    "all routes should have updated nexthop"
                 );
             }
 
-            // Shut down r1 and verify withdrawal
+            // Shut down r1 and verify withdrawal of all routes
             r1.shutdown();
             wait_for_neq!(r1_session.state(), FsmStateKind::Established);
             wait_for_neq!(r2_session.state(), FsmStateKind::Established);
-            wait_for!(r2.router.db.get_prefix_paths(&prefix_rdb).is_empty());
+            wait_for!(
+                prefixes_v6.iter().all(|p| r2
+                    .router
+                    .db
+                    .get_prefix_paths(p)
+                    .is_empty()),
+                "all IPv6 routes should be withdrawn"
+            );
         }
         RouteExchange::DualStack {
             ipv4_nexthop,
             ipv6_nexthop,
         } => {
-            // Dual-stack: originate and verify both IPv4 and IPv6 prefixes
+            let prefixes_v4 = generate_test_prefixes_v4(TEST_ROUTE_COUNT);
+            let prefixes_v6 = generate_test_prefixes_v6(TEST_ROUTE_COUNT);
+
             r1.router
-                .create_origin4(vec![cidr!("1.2.3.0/24")])
+                .create_origin4(prefixes_v4.clone())
                 .expect("originate IPv4");
             r1.router
-                .create_origin6(vec![cidr!("3fff:db8::/32")])
+                .create_origin6(prefixes_v6.clone())
                 .expect("originate IPv6");
 
-            let prefix4_rdb = Prefix::V4(cidr!("1.2.3.0/24"));
-            let prefix6_rdb = Prefix::V6(cidr!("3fff:db8::/32"));
+            // Wait for all IPv4 and IPv6 routes to arrive at R2
+            wait_for!(
+                {
+                    let v4_count = prefixes_v4
+                        .iter()
+                        .filter(|p| {
+                            !r2.router.db.get_prefix_paths(p).is_empty()
+                        })
+                        .count();
+                    let v6_count = prefixes_v6
+                        .iter()
+                        .filter(|p| {
+                            !r2.router.db.get_prefix_paths(p).is_empty()
+                        })
+                        .count();
+                    v4_count == TEST_ROUTE_COUNT && v6_count == TEST_ROUTE_COUNT
+                },
+                "all dual-stack routes should arrive at R2"
+            );
 
-            wait_for!(!r2.router.db.get_prefix_paths(&prefix4_rdb).is_empty());
-            wait_for!(!r2.router.db.get_prefix_paths(&prefix6_rdb).is_empty());
+            // Verify attributes on every received IPv4 route
+            for prefix in &prefixes_v4 {
+                let paths = r2.router.db.get_prefix_paths(prefix);
+                assert_eq!(paths.len(), 1, "{prefix:?}: expected 1 path");
+                let path = &paths[0];
 
-            // Verify initial nexthops if configured
-            let paths4 = r2.router.db.get_prefix_paths(&prefix4_rdb);
-            assert_eq!(paths4.len(), 1);
-            if let Some(expected_nexthop) = ipv4_nexthop {
-                assert_eq!(paths4[0].nexthop, expected_nexthop);
+                if let Some(expected_nh) = ipv4_nexthop {
+                    assert_eq!(
+                        path.nexthop, expected_nh,
+                        "{prefix:?}: nexthop mismatch"
+                    );
+                }
+
+                let bgp = path.bgp.as_ref().unwrap_or_else(|| {
+                    panic!("{prefix:?}: missing BGP properties")
+                });
+                assert_eq!(
+                    bgp.origin_as, 4200000001,
+                    "{prefix:?}: origin_as mismatch"
+                );
+                assert_eq!(
+                    bgp.as_path,
+                    vec![4200000001u32],
+                    "{prefix:?}: as_path mismatch"
+                );
+                assert!(
+                    bgp.stale.is_none(),
+                    "{prefix:?}: route should not be stale"
+                );
             }
 
-            let paths6 = r2.router.db.get_prefix_paths(&prefix6_rdb);
-            assert_eq!(paths6.len(), 1);
-            if let Some(expected_nexthop) = ipv6_nexthop {
-                assert_eq!(paths6[0].nexthop, expected_nexthop);
+            // Verify attributes on every received IPv6 route
+            for prefix in &prefixes_v6 {
+                let paths = r2.router.db.get_prefix_paths(prefix);
+                assert_eq!(paths.len(), 1, "{prefix:?}: expected 1 path");
+                let path = &paths[0];
+
+                if let Some(expected_nh) = ipv6_nexthop {
+                    assert_eq!(
+                        path.nexthop, expected_nh,
+                        "{prefix:?}: nexthop mismatch"
+                    );
+                }
+
+                let bgp = path.bgp.as_ref().unwrap_or_else(|| {
+                    panic!("{prefix:?}: missing BGP properties")
+                });
+                assert_eq!(
+                    bgp.origin_as, 4200000001,
+                    "{prefix:?}: origin_as mismatch"
+                );
+                assert_eq!(
+                    bgp.as_path,
+                    vec![4200000001u32],
+                    "{prefix:?}: as_path mismatch"
+                );
+                assert!(
+                    bgp.stale.is_none(),
+                    "{prefix:?}: route should not be stale"
+                );
             }
 
             // Test nexthop override changes if any were configured
@@ -893,37 +1077,49 @@ fn basic_update_helper<
                     .update_session(peer_config, session_info)
                     .expect("update nexthop");
 
-                // Verify IPv4 nexthop change if applicable
+                // Verify all IPv4 routes reflect the new nexthop
                 if let Some(new_nh) = new_ipv4_nexthop {
                     wait_for!(
-                        {
-                            let paths =
-                                r2.router.db.get_prefix_paths(&prefix4_rdb);
-                            !paths.is_empty() && paths[0].nexthop == new_nh
-                        },
-                        "IPv4 nexthop should be updated"
+                        prefixes_v4.iter().all(|p| {
+                            let paths = r2.router.db.get_prefix_paths(p);
+                            paths.len() == 1 && paths[0].nexthop == new_nh
+                        }),
+                        "all IPv4 routes should have updated nexthop"
                     );
                 }
 
-                // Verify IPv6 nexthop change if applicable
+                // Verify all IPv6 routes reflect the new nexthop
                 if let Some(new_nh) = new_ipv6_nexthop {
                     wait_for!(
-                        {
-                            let paths =
-                                r2.router.db.get_prefix_paths(&prefix6_rdb);
-                            !paths.is_empty() && paths[0].nexthop == new_nh
-                        },
-                        "IPv6 nexthop should be updated"
+                        prefixes_v6.iter().all(|p| {
+                            let paths = r2.router.db.get_prefix_paths(p);
+                            paths.len() == 1 && paths[0].nexthop == new_nh
+                        }),
+                        "all IPv6 routes should have updated nexthop"
                     );
                 }
             }
 
-            // Shut down r1 and verify withdrawal of both
+            // Shut down r1 and verify withdrawal of all routes
             r1.shutdown();
             wait_for_neq!(r1_session.state(), FsmStateKind::Established);
             wait_for_neq!(r2_session.state(), FsmStateKind::Established);
-            wait_for!(r2.router.db.get_prefix_paths(&prefix4_rdb).is_empty());
-            wait_for!(r2.router.db.get_prefix_paths(&prefix6_rdb).is_empty());
+            wait_for!(
+                prefixes_v4.iter().all(|p| r2
+                    .router
+                    .db
+                    .get_prefix_paths(p)
+                    .is_empty()),
+                "all IPv4 routes should be withdrawn"
+            );
+            wait_for!(
+                prefixes_v6.iter().all(|p| r2
+                    .router
+                    .db
+                    .get_prefix_paths(p)
+                    .is_empty()),
+                "all IPv6 routes should be withdrawn"
+            );
         }
     }
 

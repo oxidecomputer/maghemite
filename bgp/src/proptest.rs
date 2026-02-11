@@ -13,10 +13,11 @@
 //! - RFC 7606 compliance (attribute deduplication, MP-BGP ordering)
 
 use crate::messages::{
-    As4PathSegment, AsPathType, BgpNexthop, BgpWireFormat, Ipv6DoubleNexthop,
-    MpReachNlri, MpUnreachNlri, PathAttribute, PathAttributeType,
-    PathAttributeTypeCode, PathAttributeValue, PathOrigin, UpdateMessage,
-    path_attribute_flags,
+    As4PathSegment, AsPathType, BgpNexthop, BgpWireFormat, Header,
+    Ipv6DoubleNexthop, MAX_MESSAGE_SIZE, MpReachNlri, MpUnreachNlri,
+    PathAttribute, PathAttributeType, PathAttributeTypeCode,
+    PathAttributeValue, PathOrigin, UpdateMessage, path_attribute_flags,
+    path_attrs_wire_len, split_prefixes_by_size,
 };
 use proptest::prelude::*;
 use rdb::types::{Prefix4, Prefix6};
@@ -248,6 +249,37 @@ fn update_strategy() -> impl Strategy<Value = UpdateMessage> {
         update_mp_reach_strategy(),
         update_mp_unreach_strategy(),
     ]
+}
+
+// =============================================================================
+// Large-Prefix Strategies (for split_prefixes_by_size tests)
+// =============================================================================
+
+/// Strategy for generating enough IPv4 /24 prefixes to require chunking.
+/// Each /24 prefix is 4 bytes on the wire. The max UPDATE body is 4077
+/// bytes; with minimal overhead (~29 bytes) roughly 1012 prefixes fit,
+/// so 1100+ always forces a split.
+fn large_ipv4_prefixes_strategy() -> impl Strategy<Value = Vec<Prefix4>> {
+    (1100u32..1500).prop_flat_map(|count| {
+        Just(
+            (0..count)
+                .map(|i| Prefix4::new(Ipv4Addr::from(i << 8), 24))
+                .collect(),
+        )
+    })
+}
+
+/// Strategy for generating enough IPv6 /48 prefixes to require chunking.
+/// Each /48 prefix is 7 bytes on the wire. With ~29 bytes overhead
+/// roughly 578 prefixes fit, so 600+ always forces a split.
+fn large_ipv6_prefixes_strategy() -> impl Strategy<Value = Vec<Prefix6>> {
+    (600u32..800).prop_flat_map(|count| {
+        Just(
+            (0..count as u128)
+                .map(|i| Prefix6::new(Ipv6Addr::from(i << 80), 48))
+                .collect(),
+        )
+    })
 }
 
 // =============================================================================
@@ -806,6 +838,177 @@ proptest! {
         prop_assert_eq!(
             traditional_effective_withdrawn, mp_bgp_effective_withdrawn,
             "Withdrawn prefixes should be equivalent regardless of encoding"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // split_prefixes_by_size Tests
+    // -------------------------------------------------------------------------
+
+    /// Property: IPv4 split preserves all prefixes across chunks.
+    #[test]
+    fn prop_v4_split_preserves_all_prefixes(
+        prefixes in large_ipv4_prefixes_strategy()
+    ) {
+        let max_body = MAX_MESSAGE_SIZE - Header::WIRE_SIZE;
+        let skeleton = UpdateMessage {
+            path_attributes: vec![
+                PathAttributeValue::NextHop(Ipv4Addr::UNSPECIFIED).into(),
+            ],
+            ..Default::default()
+        };
+        let available = max_body.saturating_sub(skeleton.wire_len());
+        let original_count = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix4::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, original_count);
+    }
+
+    /// Property: IPv6 split preserves all prefixes across chunks.
+    #[test]
+    fn prop_v6_split_preserves_all_prefixes(
+        prefixes in large_ipv6_prefixes_strategy()
+    ) {
+        let max_body = MAX_MESSAGE_SIZE - Header::WIRE_SIZE;
+        let skeleton = UpdateMessage {
+            path_attributes: vec![
+                PathAttributeValue::MpReachNlri(
+                    MpReachNlri::ipv6_unicast(
+                        BgpNexthop::Ipv6Single(Ipv6Addr::UNSPECIFIED),
+                        vec![],
+                    ),
+                ).into(),
+            ],
+            ..Default::default()
+        };
+        let available = max_body.saturating_sub(skeleton.wire_len());
+        let original_count = prefixes.len();
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix6::wire_len);
+        prop_assert!(chunks.len() >= 2, "expected 2+ chunks, got {}", chunks.len());
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        prop_assert_eq!(total, original_count);
+    }
+
+    /// Property: Every IPv4 chunk fits within available space.
+    #[test]
+    fn prop_v4_all_chunks_within_available(
+        prefixes in large_ipv4_prefixes_strategy()
+    ) {
+        let max_body = MAX_MESSAGE_SIZE - Header::WIRE_SIZE;
+        let skeleton = UpdateMessage {
+            path_attributes: vec![
+                PathAttributeValue::NextHop(Ipv4Addr::UNSPECIFIED).into(),
+            ],
+            ..Default::default()
+        };
+        let available = max_body.saturating_sub(skeleton.wire_len());
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix4::wire_len);
+        for (i, chunk) in chunks.iter().enumerate() {
+            let size: usize = chunk.iter().map(Prefix4::wire_len).sum();
+            prop_assert!(
+                size <= available,
+                "chunk {i} is {size} bytes, max is {available}",
+            );
+        }
+    }
+
+    /// Property: Every IPv6 chunk fits within available space.
+    #[test]
+    fn prop_v6_all_chunks_within_available(
+        prefixes in large_ipv6_prefixes_strategy()
+    ) {
+        let max_body = MAX_MESSAGE_SIZE - Header::WIRE_SIZE;
+        let skeleton = UpdateMessage {
+            path_attributes: vec![
+                PathAttributeValue::MpReachNlri(
+                    MpReachNlri::ipv6_unicast(
+                        BgpNexthop::Ipv6Single(Ipv6Addr::UNSPECIFIED),
+                        vec![],
+                    ),
+                ).into(),
+            ],
+            ..Default::default()
+        };
+        let available = max_body.saturating_sub(skeleton.wire_len());
+        let chunks = split_prefixes_by_size(prefixes, available, Prefix6::wire_len);
+        for (i, chunk) in chunks.iter().enumerate() {
+            let size: usize = chunk.iter().map(Prefix6::wire_len).sum();
+            prop_assert!(
+                size <= available,
+                "chunk {i} is {size} bytes, max is {available}",
+            );
+        }
+    }
+
+    /// Property: Small IPv4 prefix vecs produce exactly 1 chunk.
+    #[test]
+    fn prop_small_v4_produces_single_chunk(
+        prefixes in ipv4_prefixes_strategy()
+    ) {
+        let max_body = MAX_MESSAGE_SIZE - Header::WIRE_SIZE;
+        let skeleton = UpdateMessage {
+            path_attributes: vec![
+                PathAttributeValue::NextHop(Ipv4Addr::UNSPECIFIED).into(),
+            ],
+            ..Default::default()
+        };
+        let available = max_body.saturating_sub(skeleton.wire_len());
+        let chunks = split_prefixes_by_size(prefixes.clone(), available, Prefix4::wire_len);
+        if !prefixes.is_empty() {
+            prop_assert_eq!(chunks.len(), 1, "small prefix vec should not be split");
+        }
+    }
+
+    /// Property: Small IPv6 prefix vecs produce exactly 1 chunk.
+    #[test]
+    fn prop_small_v6_produces_single_chunk(
+        prefixes in ipv6_prefixes_strategy()
+    ) {
+        let max_body = MAX_MESSAGE_SIZE - Header::WIRE_SIZE;
+        let skeleton = UpdateMessage {
+            path_attributes: vec![
+                PathAttributeValue::MpReachNlri(
+                    MpReachNlri::ipv6_unicast(
+                        BgpNexthop::Ipv6Single(Ipv6Addr::UNSPECIFIED),
+                        vec![],
+                    ),
+                ).into(),
+            ],
+            ..Default::default()
+        };
+        let available = max_body.saturating_sub(skeleton.wire_len());
+        let chunks = split_prefixes_by_size(prefixes.clone(), available, Prefix6::wire_len);
+        if !prefixes.is_empty() {
+            prop_assert_eq!(chunks.len(), 1, "small prefix vec should not be split");
+        }
+    }
+
+    /// Property: Empty prefix vec produces no chunks.
+    #[test]
+    fn prop_empty_produces_no_chunks(_dummy in 0u8..1u8) {
+        let chunks = split_prefixes_by_size(Vec::<Prefix4>::new(), 4000, Prefix4::wire_len);
+        prop_assert_eq!(chunks.len(), 0, "empty vec should produce 0 chunks");
+    }
+
+    /// Property: path_attrs_wire_len matches sum of individual wire_len.
+    #[test]
+    fn prop_path_attrs_wire_len_consistent(
+        attrs in distinct_traditional_attrs_strategy()
+    ) {
+        let expected: usize = attrs.iter().map(PathAttribute::wire_len).sum();
+        prop_assert_eq!(path_attrs_wire_len(&attrs), expected);
+    }
+
+    /// Property: wire_len() matches the actual to_wire() output length.
+    #[test]
+    fn prop_wire_len_matches_to_wire(update in update_strategy()) {
+        let expected = update.wire_len();
+        let wire = update.to_wire().expect("should encode");
+        prop_assert_eq!(
+            wire.len(), expected,
+            "wire_len() = {} but to_wire() produced {} bytes",
+            expected, wire.len()
         );
     }
 }
