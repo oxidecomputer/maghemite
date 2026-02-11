@@ -12,10 +12,11 @@ use crate::{
     error::Error,
     log::{connection_log, connection_log_lite},
     messages::{
-        ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode, Message,
-        MessageParseError, MessageType, NotificationMessage,
-        NotificationParseError, NotificationParseErrorReason, OpenErrorSubcode,
-        OpenMessage, OpenParseError, OpenParseErrorReason, RouteRefreshMessage,
+        ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode, HeaderParseError,
+        MAX_MESSAGE_SIZE, Message, MessageParseError, MessageType,
+        NotificationMessage, NotificationParseError,
+        NotificationParseErrorReason, OpenErrorSubcode, OpenMessage,
+        OpenParseError, OpenParseErrorReason, RouteRefreshMessage,
         RouteRefreshParseError, RouteRefreshParseErrorReason, UpdateMessage,
     },
     session::{
@@ -769,6 +770,30 @@ impl BgpConnectionTcp {
         direction: ConnectionDirection,
     ) -> Result<Message, RecvError> {
         let hdr = Self::recv_header(stream, dropped.clone())?;
+
+        // RFC 4271 §4.1: length must be between 19 and 4096
+        if usize::from(hdr.length) < Header::WIRE_SIZE {
+            return Err(RecvError::Parse(MessageParseError::Header(
+                HeaderParseError {
+                    error_code: ErrorCode::Header,
+                    error_subcode: ErrorSubcode::Header(
+                        HeaderErrorSubcode::BadMessageLength,
+                    ),
+                    length: hdr.length,
+                },
+            )));
+        }
+        if usize::from(hdr.length) > MAX_MESSAGE_SIZE {
+            return Err(RecvError::Parse(MessageParseError::Header(
+                HeaderParseError {
+                    error_code: ErrorCode::Header,
+                    error_subcode: ErrorSubcode::Header(
+                        HeaderErrorSubcode::BadMessageLength,
+                    ),
+                    length: hdr.length,
+                },
+            )));
+        }
 
         let msg_len = usize::from(hdr.length) - Header::WIRE_SIZE;
         let mut msgbuf = vec![0u8; msg_len];

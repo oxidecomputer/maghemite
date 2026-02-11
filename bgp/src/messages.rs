@@ -5583,12 +5583,31 @@ impl Display for RouteRefreshParseError {
     }
 }
 
+/// A header-level parse error (e.g. bad message length per RFC 4271 §4.1).
+#[derive(Debug, Clone)]
+pub struct HeaderParseError {
+    pub error_code: ErrorCode,
+    pub error_subcode: ErrorSubcode,
+    pub length: u16,
+}
+
+impl Display for HeaderParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}/{}: bad message length {}",
+            self.error_code, self.error_subcode, self.length
+        )
+    }
+}
+
 /// Wrapper enum identifying which message type caused a fatal parse error.
 ///
 /// Used by the connection layer to send `ConnectionEvent::ParseError` to the
 /// session FSM. All variants represent fatal errors requiring session reset.
 #[derive(Debug, Clone)]
 pub enum MessageParseError {
+    Header(HeaderParseError),
     Update(UpdateParseError),
     Open(OpenParseError),
     Notification(NotificationParseError),
@@ -5599,6 +5618,7 @@ impl MessageParseError {
     /// Returns a human-readable description of the error for logging/history.
     pub fn description(&self) -> String {
         match self {
+            Self::Header(e) => format!("HEADER: {}", e),
             Self::Update(e) => format!("UPDATE: {}", e),
             Self::Open(e) => format!("OPEN: {}", e),
             Self::Notification(e) => format!("NOTIFICATION: {}", e),
@@ -5609,6 +5629,7 @@ impl MessageParseError {
     /// Returns the error codes for sending a NOTIFICATION message.
     pub fn error_codes(&self) -> (ErrorCode, ErrorSubcode) {
         match self {
+            Self::Header(e) => (e.error_code, e.error_subcode),
             Self::Update(e) => (e.error_code, e.error_subcode),
             Self::Open(e) => (e.error_code, e.error_subcode),
             Self::Notification(e) => (e.error_code, e.error_subcode),
@@ -5619,6 +5640,7 @@ impl MessageParseError {
     /// Returns the message type that caused the error.
     pub fn message_type(&self) -> &'static str {
         match self {
+            Self::Header(_) => "HEADER",
             Self::Update(_) => "UPDATE",
             Self::Open(_) => "OPEN",
             Self::Notification(_) => "NOTIFICATION",
@@ -8880,6 +8902,86 @@ mod tests {
                 )),
                 "Should have AttributeLengthError for AGGREGATOR"
             );
+        }
+    }
+
+    mod header_tests {
+        use crate::messages::{Header, MessageType};
+
+        #[test]
+        fn new_rejects_length_too_small() {
+            let result = Header::new(18, MessageType::KeepAlive);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn new_rejects_length_too_large() {
+            let result = Header::new(4097, MessageType::Update);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn new_accepts_minimum_length() {
+            let hdr = Header::new(19, MessageType::KeepAlive).unwrap();
+            assert_eq!(hdr.length, 19);
+        }
+
+        #[test]
+        fn new_accepts_maximum_length() {
+            let hdr = Header::new(4096, MessageType::Update).unwrap();
+            assert_eq!(hdr.length, 4096);
+        }
+
+        #[test]
+        fn roundtrip_keepalive_header() {
+            let hdr = Header::new(19, MessageType::KeepAlive).unwrap();
+            let wire = hdr.to_wire();
+            assert_eq!(wire.len(), Header::WIRE_SIZE);
+            let parsed = Header::from_wire(&wire).unwrap();
+            assert_eq!(parsed.length, 19);
+            assert_eq!(parsed.typ, MessageType::KeepAlive);
+        }
+
+        #[test]
+        fn roundtrip_max_length_header() {
+            let hdr = Header::new(4096, MessageType::Update).unwrap();
+            let wire = hdr.to_wire();
+            let parsed = Header::from_wire(&wire).unwrap();
+            assert_eq!(parsed.length, 4096);
+            assert_eq!(parsed.typ, MessageType::Update);
+        }
+
+        // Header::from_wire intentionally does not validate length
+        // bounds. Length validation is performed by the connection
+        // layer (recv_msg) so it can send an appropriate NOTIFICATION.
+        #[test]
+        fn from_wire_parses_oversized_length() {
+            let hdr = Header {
+                length: 8192,
+                typ: MessageType::Update,
+            };
+            let wire = hdr.to_wire();
+            let parsed = Header::from_wire(&wire).unwrap();
+            assert_eq!(parsed.length, 8192);
+        }
+
+        #[test]
+        fn from_wire_parses_undersized_length() {
+            let hdr = Header {
+                length: 10,
+                typ: MessageType::KeepAlive,
+            };
+            let wire = hdr.to_wire();
+            let parsed = Header::from_wire(&wire).unwrap();
+            assert_eq!(parsed.length, 10);
+        }
+
+        #[test]
+        fn from_wire_rejects_bad_marker() {
+            let hdr = Header::new(19, MessageType::KeepAlive).unwrap();
+            let mut wire = hdr.to_wire();
+            wire[0] = 0x00; // corrupt marker
+            assert!(Header::from_wire(&wire).is_err());
         }
     }
 }
