@@ -5251,6 +5251,10 @@
             "type": "string",
             "format": "ip"
           },
+          "nexthop_interface": {
+            "nullable": true,
+            "type": "string"
+          },
           "prefix": {
             "$ref": "#/components/schemas/Prefix4"
           },
@@ -5292,6 +5296,10 @@
           "nexthop": {
             "type": "string",
             "format": "ip"
+          },
+          "nexthop_interface": {
+            "nullable": true,
+            "type": "string"
           },
           "prefix": {
             "$ref": "#/components/schemas/Prefix6"

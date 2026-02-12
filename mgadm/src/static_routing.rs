@@ -25,6 +25,8 @@ pub struct StaticRoute4 {
     pub destination: Ipv4Net,
     pub nexthop: IpAddr,
     #[clap(long)]
+    pub nexthop_interface: Option<String>,
+    #[clap(long)]
     pub vlan_id: Option<u16>,
     #[clap(long, default_value_t = DEFAULT_RIB_PRIORITY_STATIC)]
     pub rib_priority: u8,
@@ -34,6 +36,8 @@ pub struct StaticRoute4 {
 pub struct StaticRoute6 {
     pub destination: Ipv6Net,
     pub nexthop: IpAddr,
+    #[clap(long)]
+    pub nexthop_interface: Option<String>,
     #[clap(long)]
     pub vlan_id: Option<u16>,
     #[clap(long, default_value_t = DEFAULT_RIB_PRIORITY_STATIC)]
@@ -55,6 +59,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                             route.destination.width(),
                         ),
                         nexthop: route.nexthop,
+                        nexthop_interface: route.nexthop_interface,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,
                     }],
@@ -71,6 +76,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                             route.destination.width(),
                         ),
                         nexthop: route.nexthop,
+                        nexthop_interface: route.nexthop_interface,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,
                     }],
@@ -91,6 +97,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                             length: route.destination.width(),
                         },
                         nexthop: route.nexthop,
+                        nexthop_interface: route.nexthop_interface,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,
                     }],
@@ -107,6 +114,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
                             length: route.destination.width(),
                         },
                         nexthop: route.nexthop,
+                        nexthop_interface: route.nexthop_interface,
                         vlan_id: route.vlan_id,
                         rib_priority: route.rib_priority,
                     }],
@@ -130,6 +138,7 @@ mod tests {
         let route4 = StaticRoute4 {
             destination: Ipv4Net::from_str("192.168.0.0/16").unwrap(),
             nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap()),
+            nexthop_interface: None,
             vlan_id: Some(100),
             rib_priority: 50,
         };
@@ -140,6 +149,7 @@ mod tests {
                 route4.destination.width(),
             ),
             nexthop: route4.nexthop,
+            nexthop_interface: route4.nexthop_interface,
             vlan_id: route4.vlan_id,
             rib_priority: route4.rib_priority,
         };
@@ -157,6 +167,7 @@ mod tests {
         let route6 = StaticRoute6 {
             destination: Ipv6Net::from_str("fd00::/8").unwrap(),
             nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
+            nexthop_interface: None,
             vlan_id: Some(300),
             rib_priority: 75,
         };
@@ -167,6 +178,7 @@ mod tests {
                 route6.destination.width(),
             ),
             nexthop: route6.nexthop,
+            nexthop_interface: route6.nexthop_interface,
             vlan_id: route6.vlan_id,
             rib_priority: route6.rib_priority,
         };
@@ -184,6 +196,7 @@ mod tests {
         let route4_v6nh = StaticRoute4 {
             destination: Ipv4Net::from_str("10.0.0.0/8").unwrap(),
             nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
+            nexthop_interface: None,
             vlan_id: None,
             rib_priority: 50,
         };
@@ -194,6 +207,7 @@ mod tests {
                 route4_v6nh.destination.width(),
             ),
             nexthop: route4_v6nh.nexthop,
+            nexthop_interface: route4_v6nh.nexthop_interface,
             vlan_id: route4_v6nh.vlan_id,
             rib_priority: route4_v6nh.rib_priority,
         };
@@ -207,6 +221,7 @@ mod tests {
         let route6_v4nh = StaticRoute6 {
             destination: Ipv6Net::from_str("2001:db8::/32").unwrap(),
             nexthop: IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap()),
+            nexthop_interface: None,
             vlan_id: Some(42),
             rib_priority: 50,
         };
@@ -217,6 +232,7 @@ mod tests {
                 route6_v4nh.destination.width(),
             ),
             nexthop: route6_v4nh.nexthop,
+            nexthop_interface: route6_v4nh.nexthop_interface,
             vlan_id: route6_v4nh.vlan_id,
             rib_priority: route6_v4nh.rib_priority,
         };

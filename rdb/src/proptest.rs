@@ -71,15 +71,19 @@ fn static_route_key_strategy() -> impl Strategy<Value = StaticRouteKey> {
         ],
         any::<Option<u16>>(),
         any::<u8>(),
+        proptest::option::of("[a-z]{1,8}"),
     )
-        .prop_map(|(prefix, nexthop, vlan_id, rib_priority)| {
-            StaticRouteKey {
-                prefix,
-                nexthop,
-                vlan_id,
-                rib_priority,
-            }
-        })
+        .prop_map(
+            |(prefix, nexthop, vlan_id, rib_priority, nexthop_interface)| {
+                StaticRouteKey {
+                    prefix,
+                    nexthop,
+                    vlan_id,
+                    rib_priority,
+                    nexthop_interface,
+                }
+            },
+        )
 }
 
 // Strategy for generating valid SocketAddr for BGP neighbor configuration
@@ -317,7 +321,7 @@ proptest! {
         let mut once = route;
         once.prefix.unset_host_bits();
 
-        let mut twice = once;
+        let mut twice = once.clone();
         twice.prefix.unset_host_bits();
 
         prop_assert_eq!(
@@ -363,7 +367,7 @@ proptest! {
     /// Property: Normalization preserves nexthop, vlan_id, and rib_priority
     #[test]
     fn prop_static_route_key_normalization_preserves_fields(route in static_route_key_strategy()) {
-        let mut normalized = route;
+        let mut normalized = route.clone();
         normalized.prefix.unset_host_bits();
 
         prop_assert_eq!(
@@ -397,6 +401,7 @@ proptest! {
             nexthop: IpAddr::V4(Ipv4Addr::from(nexthop)),
             vlan_id,
             rib_priority,
+            nexthop_interface: None,
         };
 
         let route2 = StaticRouteKey {
@@ -404,12 +409,13 @@ proptest! {
             nexthop: IpAddr::V4(Ipv4Addr::from(nexthop)),
             vlan_id,
             rib_priority,
+            nexthop_interface: None,
         };
 
-        let mut norm1 = route1;
+        let mut norm1 = route1.clone();
         norm1.prefix.unset_host_bits();
 
-        let mut norm2 = route2;
+        let mut norm2 = route2.clone();
         norm2.prefix.unset_host_bits();
 
         // If the normalized prefixes are the same, the entire routes should be equal
@@ -425,10 +431,10 @@ proptest! {
     /// (normalized routes can be safely used in BTreeSet)
     #[test]
     fn prop_static_route_key_ord_consistency(route1 in static_route_key_strategy(), route2 in static_route_key_strategy()) {
-        let mut norm1 = route1;
+        let mut norm1 = route1.clone();
         norm1.prefix.unset_host_bits();
 
-        let mut norm2 = route2;
+        let mut norm2 = route2.clone();
         norm2.prefix.unset_host_bits();
 
         // If two normalized routes are equal, their ordering should be Equal
@@ -441,10 +447,10 @@ proptest! {
 
         // Ordering should be consistent with equality
         if norm1 < norm2 {
-            prop_assert_ne!(norm1, norm2, "Less-than routes should not be equal");
+            prop_assert_ne!(&norm1, &norm2, "Less-than routes should not be equal");
         }
         if norm1 > norm2 {
-            prop_assert_ne!(norm1, norm2, "Greater-than routes should not be equal");
+            prop_assert_ne!(&norm1, &norm2, "Greater-than routes should not be equal");
         }
     }
 
