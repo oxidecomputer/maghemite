@@ -5,6 +5,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use mg_admin_client::{Client, types};
+use mg_common::println_nopipe;
 use oxnet::{Ipv4Net, Ipv6Net};
 use rdb::{DEFAULT_RIB_PRIORITY_STATIC, Prefix4, Prefix6};
 use std::net::IpAddr;
@@ -43,7 +44,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
     match command {
         Commands::GetV4Routes => {
             let routes = client.static_list_v4_routes_v2().await?;
-            println!("{:#?}", routes);
+            println_nopipe!("{:#?}", routes);
         }
         Commands::AddV4Route(route) => {
             let arg = types::AddStaticRoute4Request {
@@ -79,7 +80,7 @@ pub async fn commands(command: Commands, client: Client) -> Result<()> {
         }
         Commands::GetV6Routes => {
             let routes = client.static_list_v6_routes_v2().await?;
-            println!("{:#?}", routes);
+            println_nopipe!("{:#?}", routes);
         }
         Commands::AddV6Route(route) => {
             let arg = types::AddStaticRoute6Request {
