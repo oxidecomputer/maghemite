@@ -71,6 +71,7 @@ progenitor::generate_api!(
 use colored::*;
 use mg_api_types_versions::latest::rdb::prefix::Prefix;
 use mg_api_types_versions::latest::rdb::rib::{AddressFamily, ProtocolFilter};
+use mg_common::{eprintln_nopipe, println_nopipe};
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
 use tabwriter::TabWriter;
@@ -94,7 +95,7 @@ pub fn print_rib(
         let pfx: Prefix = match prefix.parse() {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("failed to parse prefix [{prefix}]: {e}");
+                eprintln_nopipe!("failed to parse prefix [{prefix}]: {e}");
                 continue;
             }
         };
@@ -173,8 +174,8 @@ fn print_static_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
         }
     }
 
-    println!("{}", title.dimmed());
-    println!("{}", "=".repeat(title.len()).dimmed());
+    println_nopipe!("{}", title.dimmed());
+    println_nopipe!("{}", "=".repeat(title.len()).dimmed());
     tw.flush().unwrap();
 }
 
@@ -227,7 +228,7 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
         }
     }
 
-    println!("{}", title.dimmed());
-    println!("{}", "=".repeat(title.len()).dimmed());
+    println_nopipe!("{}", title.dimmed());
+    println_nopipe!("{}", "=".repeat(title.len()).dimmed());
     tw.flush().unwrap();
 }

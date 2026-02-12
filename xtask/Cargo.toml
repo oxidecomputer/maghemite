@@ -6,4 +6,5 @@ edition = "2024"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+mg-common.workspace = true
 tokio.workspace = true

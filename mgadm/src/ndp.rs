@@ -6,6 +6,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use colored::Colorize;
 use mg_admin_client::Client;
+use mg_common::println_nopipe;
 use std::io::{Write, stdout};
 use tabwriter::TabWriter;
 
@@ -59,9 +60,9 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
 async fn ndp_manager_status(asn: u32, c: Client) -> Result<()> {
     let state = c.get_ndp_manager_state(asn).await?.into_inner();
 
-    println!("NDP Manager State (ASN {})", asn);
-    println!("{}", "=".repeat(60));
-    println!();
+    println_nopipe!("NDP Manager State (ASN {})", asn);
+    println_nopipe!("{}", "=".repeat(60));
+    println_nopipe!();
 
     // Monitor thread status
     let monitor_status = if state.monitor_thread_running {
@@ -69,33 +70,34 @@ async fn ndp_manager_status(asn: u32, c: Client) -> Result<()> {
     } else {
         "Stopped".red()
     };
-    println!("Monitor Thread: {}", monitor_status);
-    println!();
+    println_nopipe!("Monitor Thread: {}", monitor_status);
+    println_nopipe!();
 
     // Pending interfaces
-    println!(
+    println_nopipe!(
         "Pending Interfaces (configured, waiting for system): {}",
         state.pending_interfaces.len()
     );
     if state.pending_interfaces.is_empty() {
-        println!("  (none)");
+        println_nopipe!("  (none)");
     } else {
         for pending in &state.pending_interfaces {
-            println!(
+            println_nopipe!(
                 "  {} (router_lifetime: {}s)",
-                pending.interface, pending.router_lifetime
+                pending.interface,
+                pending.router_lifetime
             );
         }
     }
-    println!();
+    println_nopipe!();
 
     // Active interfaces
-    println!("Active Interfaces: {}", state.active_interfaces.len());
+    println_nopipe!("Active Interfaces: {}", state.active_interfaces.len());
     if state.active_interfaces.is_empty() {
-        println!("  (none)");
+        println_nopipe!("  (none)");
     } else {
         for iface in &state.active_interfaces {
-            println!("  {}", iface);
+            println_nopipe!("  {}", iface);
         }
     }
 
@@ -106,7 +108,7 @@ async fn ndp_interfaces(asn: u32, c: Client) -> Result<()> {
     let interfaces = c.get_ndp_interfaces(asn).await?.into_inner();
 
     if interfaces.is_empty() {
-        println!("No NDP-managed interfaces found for ASN {}", asn);
+        println_nopipe!("No NDP-managed interfaces found for ASN {}", asn);
         return Ok(());
     }
 
@@ -181,22 +183,22 @@ async fn ndp_interface_detail(
         .await?
         .into_inner();
 
-    println!("NDP State: {}", interface);
-    println!("{}", "=".repeat(60));
-    println!();
+    println_nopipe!("NDP State: {}", interface);
+    println_nopipe!("{}", "=".repeat(60));
+    println_nopipe!();
 
-    println!("Interface Information:");
-    println!("  Name: {}", detail.interface);
-    println!("  Local Address: {}", detail.local_address);
-    println!("  Scope ID: {}", detail.scope_id);
-    println!(
+    println_nopipe!("Interface Information:");
+    println_nopipe!("  Name: {}", detail.interface);
+    println_nopipe!("  Local Address: {}", detail.local_address);
+    println_nopipe!("  Scope ID: {}", detail.scope_id);
+    println_nopipe!(
         "  Router Lifetime (advertised): {}s",
         detail.router_lifetime
     );
-    println!();
+    println_nopipe!();
 
     // Thread state
-    println!("Thread State:");
+    println_nopipe!("Thread State:");
     if let Some(ts) = &detail.thread_state {
         let tx_status = if ts.tx_running {
             "Running".green()
@@ -208,41 +210,41 @@ async fn ndp_interface_detail(
         } else {
             "Stopped".red()
         };
-        println!("  TX Loop: {}", tx_status);
-        println!("  RX Loop: {}", rx_status);
+        println_nopipe!("  TX Loop: {}", tx_status);
+        println_nopipe!("  RX Loop: {}", rx_status);
     } else {
-        println!("  TX Loop: {}", "Unknown".dimmed());
-        println!("  RX Loop: {}", "Unknown".dimmed());
+        println_nopipe!("  TX Loop: {}", "Unknown".dimmed());
+        println_nopipe!("  RX Loop: {}", "Unknown".dimmed());
     }
-    println!();
+    println_nopipe!();
 
     if let Some(peer) = detail.discovered_peer {
         if peer.expired {
-            println!("{}", "Discovered Peer (EXPIRED):".red());
+            println_nopipe!("{}", "Discovered Peer (EXPIRED):".red());
         } else {
-            println!("Discovered Peer:");
+            println_nopipe!("Discovered Peer:");
         }
 
-        println!("  Address: {}", peer.address);
-        println!("  Discovered At: {}", peer.discovered_at);
-        println!("  Last Advertisement: {}", peer.last_advertisement);
-        println!("  Router Lifetime: {}s", peer.router_lifetime);
-        println!("  Reachable Time: {}ms", peer.reachable_time);
-        println!("  Retrans Timer: {}ms", peer.retrans_timer);
+        println_nopipe!("  Address: {}", peer.address);
+        println_nopipe!("  Discovered At: {}", peer.discovered_at);
+        println_nopipe!("  Last Advertisement: {}", peer.last_advertisement);
+        println_nopipe!("  Router Lifetime: {}s", peer.router_lifetime);
+        println_nopipe!("  Reachable Time: {}ms", peer.reachable_time);
+        println_nopipe!("  Retrans Timer: {}ms", peer.retrans_timer);
 
         if peer.expired {
-            println!("  Expired: {}", "Yes".red());
+            println_nopipe!("  Expired: {}", "Yes".red());
             if let Some(time_since) = peer.time_until_expiry {
-                println!("  Time Since Expiry: {}", time_since);
+                println_nopipe!("  Time Since Expiry: {}", time_since);
             }
         } else {
-            println!("  Expired: {}", "No".green());
+            println_nopipe!("  Expired: {}", "No".green());
             if let Some(time_until) = peer.time_until_expiry {
-                println!("  Time Until Expiry: {}", time_until);
+                println_nopipe!("  Time Until Expiry: {}", time_until);
             }
         }
     } else {
-        println!("Discovered Peer: None");
+        println_nopipe!("Discovered Peer: None");
     }
 
     Ok(())

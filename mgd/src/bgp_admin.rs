@@ -2622,7 +2622,7 @@ mod tests {
     use mg_api_types_versions::v1::bgp::config::{
         ApplyRequest, BgpPeerConfig, BgpPeerParameters,
     };
-    use mg_common::stats::MgLowerStats;
+    use mg_common::{println_nopipe, stats::MgLowerStats};
     use rdb::test::get_test_db;
     #[cfg(all(feature = "mg-lower", target_os = "illumos"))]
     use std::net::Ipv6Addr;
@@ -2645,7 +2645,7 @@ mod tests {
             remove_dir_all(&tmpdir).unwrap();
         }
         create_dir_all(&tmpdir).unwrap();
-        println!("tmpdir is {tmpdir}");
+        println_nopipe!("tmpdir is {tmpdir}");
         let log =
             mg_common::log::init_file_logger("apply_remove_entire_group.log");
 
