@@ -1581,6 +1581,10 @@ async fn do_bgp_apply(
         .set_origin4(rq.originate.clone().into_iter().collect())
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
+    get_router!(ctx, rq.asn)?
+        .set_origin6(rq.originate.clone().into_iter().collect())
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
     Ok(HttpResponseUpdatedNoContent())
 }
 
