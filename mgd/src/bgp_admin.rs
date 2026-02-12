@@ -2167,6 +2167,10 @@ pub(crate) mod helpers {
             "params" => format!("{rq:#?}")
         );
 
+        // Validate that at least one AF is enabled
+        rq.validate_address_families()
+            .map_err(Error::InvalidRequest)?;
+
         let (event_tx, event_rx) = channel();
         let info = SessionInfo::from(&rq.parameters);
 
