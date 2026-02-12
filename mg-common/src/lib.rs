@@ -39,6 +39,64 @@ pub fn format_duration_human(d: Duration) -> String {
     }
 }
 
+/// Like `println!`, but silently exits on broken pipe (EPIPE) instead of
+/// panicking. Other I/O errors still panic.
+#[macro_export]
+macro_rules! println_nopipe {
+    () => {
+        {
+            use std::io::Write;
+            let r = writeln!(std::io::stdout());
+            match r {
+                Ok(_) => {},
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                    std::process::exit(0);
+                },
+                Err(e) => panic!("failed printing to stdout: {e}"),
+            }
+        }
+    };
+    ($($arg:tt)*) => {
+        {
+            use std::io::Write;
+            let r = writeln!(std::io::stdout(), $($arg)*);
+            match r {
+                Ok(_) => {},
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                    std::process::exit(0);
+                },
+                Err(e) => panic!("failed printing to stdout: {e}"),
+            }
+        }
+    };
+}
+
+/// Like `print!`, but silently exits on broken pipe (EPIPE) instead of
+/// panicking. Other I/O errors still panic.
+#[macro_export]
+macro_rules! print_nopipe {
+    ($($arg:tt)*) => {
+        {
+            use std::io::Write;
+            let r = write!(std::io::stdout(), $($arg)*);
+            match r {
+                Ok(_) => {},
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                    std::process::exit(0);
+                },
+                Err(e) => panic!("failed printing to stdout: {e}"),
+            }
+        }
+    };
+}
+
+/// Returns `true` if the root cause of `err` is a broken pipe (EPIPE).
+pub fn is_broken_pipe(err: &anyhow::Error) -> bool {
+    err.root_cause()
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe)
+}
+
 #[macro_export]
 macro_rules! lock {
     ($mtx:expr) => {

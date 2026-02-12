@@ -90,7 +90,15 @@ struct Peer {
 }
 
 fn main() -> Result<()> {
-    oxide_tokio_rt::run(run())
+    match oxide_tokio_rt::run(run()) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            if mg_common::is_broken_pipe(&e) {
+                std::process::exit(0);
+            }
+            Err(e)
+        }
+    }
 }
 
 async fn run() -> Result<()> {

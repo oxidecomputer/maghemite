@@ -13,6 +13,7 @@ use mg_admin_client::{
         Ipv6UnicastConfig, NeighborResetRequest,
     },
 };
+use mg_common::{print_nopipe, println_nopipe};
 use rdb::types::{PeerId, Prefix4, Prefix6};
 use std::{
     fs::read_to_string,
@@ -982,7 +983,7 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
 
 async fn read_routers(c: Client) -> Result<()> {
     let routers = c.read_routers().await?.into_inner();
-    println!("{routers:#?}");
+    println_nopipe!("{routers:#?}");
     Ok(())
 }
 
@@ -1010,7 +1011,7 @@ async fn update_router(cfg: RouterConfig, c: Client) -> Result<()> {
 
 async fn read_router(asn: u32, c: Client) -> Result<()> {
     let response = c.read_router(asn).await?;
-    println!("{response:#?}");
+    println_nopipe!("{response:#?}");
     Ok(())
 }
 
@@ -1066,8 +1067,7 @@ fn display_neighbors_summary(
         "State Duration".dimmed(),
         "Hold".dimmed(),
         "Keepalive".dimmed(),
-    )
-    .unwrap();
+    )?;
 
     for (addr, info) in neighbors.iter() {
         writeln!(
@@ -1081,10 +1081,9 @@ fn display_neighbors_summary(
             format_duration_human(info.timers.hold.negotiated),
             format_duration_human(info.timers.keepalive.configured),
             format_duration_human(info.timers.keepalive.negotiated),
-        )
-        .unwrap();
+        )?;
     }
-    tw.flush().unwrap();
+    tw.flush()?;
     Ok(())
 }
 
@@ -1093,174 +1092,211 @@ fn display_neighbors_detail(
 ) -> Result<()> {
     for (i, (addr, info)) in neighbors.iter().enumerate() {
         if i > 0 {
-            println!();
+            println_nopipe!();
         }
 
-        println!("{}", "=".repeat(80));
-        println!("{}", format!("Neighbor: {}", addr).bold());
-        println!("{}", "=".repeat(80));
+        println_nopipe!("{}", "=".repeat(80));
+        println_nopipe!("{}", format!("Neighbor: {}", addr).bold());
+        println_nopipe!("{}", "=".repeat(80));
 
-        println!("\n{}", "Basic Information:".bold());
-        println!("  Name: {}", info.name);
-        println!("  Peer Group: {}", info.peer_group);
-        println!("  FSM State: {:?}", info.fsm_state);
-        println!(
+        println_nopipe!("\n{}", "Basic Information:".bold());
+        println_nopipe!("  Name: {}", info.name);
+        println_nopipe!("  Peer Group: {}", info.peer_group);
+        println_nopipe!("  FSM State: {:?}", info.fsm_state);
+        println_nopipe!(
             "  FSM State Duration: {}",
             format_duration_human(info.fsm_state_duration)
         );
         if let Some(asn) = info.asn {
-            println!("  Peer ASN: {}", asn);
+            println_nopipe!("  Peer ASN: {}", asn);
         }
         if let Some(id) = info.id {
-            println!("  Peer Router ID: {}", Ipv4Addr::from(id));
+            println_nopipe!("  Peer Router ID: {}", Ipv4Addr::from(id));
         }
 
-        println!("\n{}", "Connection:".bold());
-        println!("  Local: {}:{}", info.local_ip, info.local_tcp_port);
-        println!("  Remote: {}:{}", info.remote_ip, info.remote_tcp_port);
+        println_nopipe!("\n{}", "Connection:".bold());
+        println_nopipe!("  Local: {}:{}", info.local_ip, info.local_tcp_port);
+        println_nopipe!(
+            "  Remote: {}:{}",
+            info.remote_ip,
+            info.remote_tcp_port
+        );
 
-        println!("\n{}", "Address Families:".bold());
-        println!("  IPv4 Unicast:");
-        println!("    Import Policy: {:?}", info.ipv4_unicast.import_policy);
-        println!("    Export Policy: {:?}", info.ipv4_unicast.export_policy);
+        println_nopipe!("\n{}", "Address Families:".bold());
+        println_nopipe!("  IPv4 Unicast:");
+        println_nopipe!(
+            "    Import Policy: {:?}",
+            info.ipv4_unicast.import_policy
+        );
+        println_nopipe!(
+            "    Export Policy: {:?}",
+            info.ipv4_unicast.export_policy
+        );
         if let Some(nh) = info.ipv4_unicast.nexthop {
-            println!("    Nexthop: {}", nh);
+            println_nopipe!("    Nexthop: {}", nh);
         }
 
-        println!("  IPv6 Unicast:");
-        println!("    Import Policy: {:?}", info.ipv6_unicast.import_policy);
-        println!("    Export Policy: {:?}", info.ipv6_unicast.export_policy);
+        println_nopipe!("  IPv6 Unicast:");
+        println_nopipe!(
+            "    Import Policy: {:?}",
+            info.ipv6_unicast.import_policy
+        );
+        println_nopipe!(
+            "    Export Policy: {:?}",
+            info.ipv6_unicast.export_policy
+        );
         if let Some(nh) = info.ipv6_unicast.nexthop {
-            println!("    Nexthop: {}", nh);
+            println_nopipe!("    Nexthop: {}", nh);
         }
 
-        println!("\n{}", "Timers:".bold());
-        println!(
+        println_nopipe!("\n{}", "Timers:".bold());
+        println_nopipe!(
             "  Hold Time: configured={}, negotiated={}, remaining={}",
             format_duration_human(info.timers.hold.configured),
             format_duration_human(info.timers.hold.negotiated),
             format_duration_human(info.timers.hold.remaining),
         );
-        println!(
+        println_nopipe!(
             "  Keepalive: configured={}, negotiated={}, remaining={}",
             format_duration_human(info.timers.keepalive.configured),
             format_duration_human(info.timers.keepalive.negotiated),
             format_duration_human(info.timers.keepalive.remaining),
         );
-        println!(
+        println_nopipe!(
             "  Connect Retry: configured={}, remaining={}",
             format_duration_human(info.timers.connect_retry.configured),
             format_duration_human(info.timers.connect_retry.remaining),
         );
         match &info.timers.connect_retry_jitter {
             Some(jitter) => {
-                println!("    Jitter: {}-{}", jitter.min, jitter.max)
+                println_nopipe!("    Jitter: {}-{}", jitter.min, jitter.max)
             }
-            None => println!("    Jitter: none"),
+            None => println_nopipe!("    Jitter: none"),
         }
-        println!(
+        println_nopipe!(
             "  Idle Hold: configured={}, remaining={}",
             format_duration_human(info.timers.idle_hold.configured),
             format_duration_human(info.timers.idle_hold.remaining),
         );
         match &info.timers.idle_hold_jitter {
             Some(jitter) => {
-                println!("    Jitter: {}-{}", jitter.min, jitter.max)
+                println_nopipe!("    Jitter: {}-{}", jitter.min, jitter.max)
             }
-            None => println!("    Jitter: none"),
+            None => println_nopipe!("    Jitter: none"),
         }
-        println!(
+        println_nopipe!(
             "  Delay Open: configured={}, remaining={}",
             format_duration_human(info.timers.delay_open.configured),
             format_duration_human(info.timers.delay_open.remaining),
         );
 
         if !info.received_capabilities.is_empty() {
-            println!("\n{}", "Received Capabilities:".bold());
+            println_nopipe!("\n{}", "Received Capabilities:".bold());
             for cap in &info.received_capabilities {
-                println!("  {:?}", cap);
+                println_nopipe!("  {:?}", cap);
             }
         }
 
-        println!("\n{}", "Counters:".bold());
-        println!("  Prefixes:");
-        println!("    Advertised: {}", info.counters.prefixes_advertised);
-        println!("    Imported: {}", info.counters.prefixes_imported);
+        println_nopipe!("\n{}", "Counters:".bold());
+        println_nopipe!("  Prefixes:");
+        println_nopipe!(
+            "    Advertised: {}",
+            info.counters.prefixes_advertised
+        );
+        println_nopipe!("    Imported: {}", info.counters.prefixes_imported);
 
-        println!("  Messages Sent:");
-        println!("    Opens: {}", info.counters.opens_sent);
-        println!("    Updates: {}", info.counters.updates_sent);
-        println!("    Keepalives: {}", info.counters.keepalives_sent);
-        println!("    Route Refresh: {}", info.counters.route_refresh_sent);
-        println!("    Notifications: {}", info.counters.notifications_sent);
+        println_nopipe!("  Messages Sent:");
+        println_nopipe!("    Opens: {}", info.counters.opens_sent);
+        println_nopipe!("    Updates: {}", info.counters.updates_sent);
+        println_nopipe!("    Keepalives: {}", info.counters.keepalives_sent);
+        println_nopipe!(
+            "    Route Refresh: {}",
+            info.counters.route_refresh_sent
+        );
+        println_nopipe!(
+            "    Notifications: {}",
+            info.counters.notifications_sent
+        );
 
-        println!("  Messages Received:");
-        println!("    Opens: {}", info.counters.opens_received);
-        println!("    Updates: {}", info.counters.updates_received);
-        println!("    Keepalives: {}", info.counters.keepalives_received);
-        println!(
+        println_nopipe!("  Messages Received:");
+        println_nopipe!("    Opens: {}", info.counters.opens_received);
+        println_nopipe!("    Updates: {}", info.counters.updates_received);
+        println_nopipe!(
+            "    Keepalives: {}",
+            info.counters.keepalives_received
+        );
+        println_nopipe!(
             "    Route Refresh: {}",
             info.counters.route_refresh_received
         );
-        println!(
+        println_nopipe!(
             "    Notifications: {}",
             info.counters.notifications_received
         );
 
-        println!("  FSM Transitions:");
-        println!(
+        println_nopipe!("  FSM Transitions:");
+        println_nopipe!(
             "    To Established: {}",
             info.counters.transitions_to_established
         );
-        println!("    To Idle: {}", info.counters.transitions_to_idle);
-        println!("    To Connect: {}", info.counters.transitions_to_connect);
+        println_nopipe!("    To Idle: {}", info.counters.transitions_to_idle);
+        println_nopipe!(
+            "    To Connect: {}",
+            info.counters.transitions_to_connect
+        );
 
-        println!("  Connections:");
-        println!(
+        println_nopipe!("  Connections:");
+        println_nopipe!(
             "    Active Accepted: {}",
             info.counters.active_connections_accepted
         );
-        println!(
+        println_nopipe!(
             "    Active Declined: {}",
             info.counters.active_connections_declined
         );
-        println!(
+        println_nopipe!(
             "    Passive Accepted: {}",
             info.counters.passive_connections_accepted
         );
-        println!(
+        println_nopipe!(
             "    Passive Declined: {}",
             info.counters.passive_connections_declined
         );
-        println!(
+        println_nopipe!(
             "    Connection Retries: {}",
             info.counters.connection_retries
         );
 
         // Error Counters
-        println!("\n{}", "Error Counters:".bold());
-        println!(
+        println_nopipe!("\n{}", "Error Counters:".bold());
+        println_nopipe!(
             "  TCP Connection Failures: {}",
             info.counters.tcp_connection_failure
         );
-        println!("  MD5 Auth Failures: {}", info.counters.md5_auth_failures);
-        println!(
+        println_nopipe!(
+            "  MD5 Auth Failures: {}",
+            info.counters.md5_auth_failures
+        );
+        println_nopipe!(
             "  Hold Timer Expirations: {}",
             info.counters.hold_timer_expirations
         );
-        println!(
+        println_nopipe!(
             "  Update Nexthop Missing: {}",
             info.counters.update_nexhop_missing
         );
-        println!(
+        println_nopipe!(
             "  Open Handle Failures: {}",
             info.counters.open_handle_failures
         );
-        println!(
+        println_nopipe!(
             "  Notification Send Failures: {}",
             info.counters.notification_send_failure
         );
-        println!("  Connector Panics: {}", info.counters.connector_panics);
+        println_nopipe!(
+            "  Connector Panics: {}",
+            info.counters.connector_panics
+        );
     }
 
     Ok(())
@@ -1288,7 +1324,7 @@ async fn get_exported(
         .await?
         .into_inner();
 
-    println!("{exported:#?}");
+    println_nopipe!("{exported:#?}");
     Ok(())
 }
 
@@ -1298,7 +1334,7 @@ async fn list_nbr(asn: u32, c: Client) -> Result<()> {
     let unnumbered = c.read_unnumbered_neighbors(asn).await?.into_inner();
 
     if numbered.is_empty() && unnumbered.is_empty() {
-        println!("No neighbors configured for ASN {}", asn);
+        println_nopipe!("No neighbors configured for ASN {}", asn);
         return Ok(());
     }
 
@@ -1354,14 +1390,14 @@ async fn read_nbr(asn: u32, peer: String, c: Client) -> Result<()> {
                 .read_neighbor_v3(asn, &addr.to_string())
                 .await?
                 .into_inner();
-            println!("{nbr:#?}");
+            println_nopipe!("{nbr:#?}");
         }
         PeerType::Unnumbered(interface) => {
             let nbr = c
                 .read_unnumbered_neighbor(asn, &interface)
                 .await?
                 .into_inner();
-            println!("{nbr:#?}");
+            println_nopipe!("{nbr:#?}");
         }
     }
     Ok(())
@@ -1455,7 +1491,7 @@ async fn delete_origin4(asn: u32, c: Client) -> Result<()> {
 
 async fn read_origin4(asn: u32, c: Client) -> Result<()> {
     let o4 = c.read_origin4(asn).await?;
-    println!("{o4:#?}");
+    println_nopipe!("{o4:#?}");
     Ok(())
 }
 
@@ -1494,7 +1530,7 @@ async fn delete_origin6(asn: u32, c: Client) -> Result<()> {
 
 async fn read_origin6(asn: u32, c: Client) -> Result<()> {
     let o6 = c.read_origin6(asn).await?;
-    println!("{o6:#?}");
+    println_nopipe!("{o6:#?}");
     Ok(())
 }
 
@@ -1518,7 +1554,7 @@ async fn create_chk(filename: String, asn: u32, c: Client) -> Result<()> {
 
 async fn read_chk(asn: u32, c: Client) -> Result<()> {
     let result = c.read_checker(asn).await?;
-    print!("{result:#?}");
+    print_nopipe!("{result:#?}");
     Ok(())
 }
 
@@ -1550,7 +1586,7 @@ async fn create_shp(filename: String, asn: u32, c: Client) -> Result<()> {
 
 async fn read_shp(asn: u32, c: Client) -> Result<()> {
     let result = c.read_shaper(asn).await?;
-    print!("{result:#?}");
+    print_nopipe!("{result:#?}");
     Ok(())
 }
 
@@ -1606,9 +1642,9 @@ async fn get_fsm_history(
 
     if result.by_peer.is_empty() {
         if let Some(peer_str) = peer {
-            println!("No FSM history found for peer {}", peer_str);
+            println_nopipe!("No FSM history found for peer {}", peer_str);
         } else {
-            println!("No FSM history found for ASN {}", asn);
+            println_nopipe!("No FSM history found for ASN {}", asn);
         }
         return Ok(());
     }
@@ -1627,7 +1663,7 @@ async fn get_fsm_history(
     // Display FSM history in tabular format
     for (peer_addr, events) in result.by_peer.iter() {
         if events.is_empty() {
-            println!(
+            println_nopipe!(
                 "\n{}",
                 format!(
                     "FSM Event History - Peer: {} - {} (empty)",
@@ -1638,7 +1674,7 @@ async fn get_fsm_history(
             continue;
         }
 
-        println!(
+        println_nopipe!(
             "\n{}",
             format!(
                 "FSM Event History - Peer: {} - {}",
@@ -1646,8 +1682,8 @@ async fn get_fsm_history(
             )
             .dimmed()
         );
-        println!("{}", "=".repeat(100).dimmed());
-        println!(
+        println_nopipe!("{}", "=".repeat(100).dimmed());
+        println_nopipe!(
             "Showing {} of {} events\n",
             events.len().min(limit),
             events.len()
@@ -1696,7 +1732,7 @@ async fn get_fsm_history(
         tw.flush()?;
 
         if events.len() > limit {
-            println!(
+            println_nopipe!(
                 "\n... ({} more events not shown, use --limit all to see everything)",
                 events.len() - limit
             );
@@ -1748,7 +1784,11 @@ async fn get_message_history(
         .into_inner();
 
     if result.by_peer.is_empty() {
-        println!("No message history found for ASN {} peer {}", asn, peer);
+        println_nopipe!(
+            "No message history found for ASN {} peer {}",
+            asn,
+            peer
+        );
         return Ok(());
     }
 
@@ -1787,12 +1827,12 @@ async fn get_message_history(
         all_messages.iter().rev().take(limit).collect::<Vec<_>>();
     let total_count = all_messages.len();
 
-    println!(
+    println_nopipe!(
         "\n{}",
         format!("BGP Message History - Peer: {}", peer).dimmed()
     );
-    println!("{}", "=".repeat(80).dimmed());
-    println!(
+    println_nopipe!("{}", "=".repeat(80).dimmed());
+    println_nopipe!(
         "Showing {} of {} messages ({} RX, {} TX)\n",
         messages_to_show.len(),
         total_count,
@@ -1820,7 +1860,7 @@ async fn get_message_history(
             msg_content
         };
 
-        println!(
+        println_nopipe!(
             "{} {} [{}] {}",
             ts_str.to_string().dimmed(),
             if *direction == "RX" {
