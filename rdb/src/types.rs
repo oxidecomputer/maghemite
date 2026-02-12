@@ -150,7 +150,7 @@ impl From<StaticRouteKey> for Path {
     fn from(value: StaticRouteKey) -> Self {
         Self {
             nexthop: value.nexthop,
-            nexthop_interface: None, // Static routes don't use interface binding
+            nexthop_interface: value.nexthop_interface,
             vlan_id: value.vlan_id,
             rib_priority: value.rib_priority,
             shutdown: false,
@@ -251,7 +251,6 @@ impl Ord for BgpPathProperties {
 }
 
 #[derive(
-    Copy,
     Clone,
     PartialEq,
     Eq,
@@ -265,6 +264,7 @@ impl Ord for BgpPathProperties {
 pub struct StaticRouteKey {
     pub prefix: Prefix,
     pub nexthop: IpAddr,
+    pub nexthop_interface: Option<String>,
     pub vlan_id: Option<u16>,
     pub rib_priority: u8,
 }
@@ -273,9 +273,10 @@ impl Display for StaticRouteKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "[prefix={}, nexthop={}, vlan_id={}, rib_priority={}]",
+            "[prefix={}, nexthop={}, nexthop_interface={}, vlan_id={}, rib_priority={}]",
             self.prefix,
             self.nexthop,
+            self.nexthop_interface.as_deref().unwrap_or("none"),
             self.vlan_id.unwrap_or(0),
             self.rib_priority
         )

@@ -952,6 +952,7 @@ impl From<StaticRoute4V1> for StaticRouteKey {
         StaticRouteKey {
             prefix: val.prefix.into(),
             nexthop: val.nexthop.into(),
+            nexthop_interface: None,
             vlan_id: val.vlan_id,
             rib_priority: val.rib_priority,
         }
@@ -990,6 +991,7 @@ impl From<StaticRoute6V1> for StaticRouteKey {
         StaticRouteKey {
             prefix: val.prefix.into(),
             nexthop: val.nexthop.into(),
+            nexthop_interface: None,
             vlan_id: val.vlan_id,
             rib_priority: val.rib_priority,
         }
@@ -1019,6 +1021,7 @@ pub struct StaticRoute4List {
 pub struct StaticRoute4 {
     pub prefix: Prefix4,
     pub nexthop: IpAddr,
+    pub nexthop_interface: Option<String>,
     pub vlan_id: Option<u16>,
     pub rib_priority: u8,
 }
@@ -1028,6 +1031,7 @@ impl From<StaticRoute4> for StaticRouteKey {
         StaticRouteKey {
             prefix: val.prefix.into(),
             nexthop: val.nexthop,
+            nexthop_interface: val.nexthop_interface,
             vlan_id: val.vlan_id,
             rib_priority: val.rib_priority,
         }
@@ -1053,6 +1057,7 @@ pub struct StaticRoute6List {
 pub struct StaticRoute6 {
     pub prefix: Prefix6,
     pub nexthop: IpAddr,
+    pub nexthop_interface: Option<String>,
     pub vlan_id: Option<u16>,
     pub rib_priority: u8,
 }
@@ -1062,6 +1067,7 @@ impl From<StaticRoute6> for StaticRouteKey {
         StaticRouteKey {
             prefix: val.prefix.into(),
             nexthop: val.nexthop,
+            nexthop_interface: val.nexthop_interface,
             vlan_id: val.vlan_id,
             rib_priority: val.rib_priority,
         }

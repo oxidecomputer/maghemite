@@ -101,6 +101,7 @@ impl Drop for TestDb {
 ///     StaticRouteKey {
 ///         prefix: Prefix::V4(Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 24)),
 ///         nexthop: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+///         nexthop_interface: None,
 ///         vlan_id: None,
 ///         rib_priority: 0,
 ///     },
