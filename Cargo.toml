@@ -89,7 +89,7 @@ serde_repr = "0.1"
 anyhow = "1.0.100"
 hyper = "1.8.1"
 hyper-util = { version = "0.1", features = ["full"] }
-serde_json = "1.0.148"
+serde_json = "1.0.149"
 percent-encoding = "2.3.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
 progenitor = "0.11"
