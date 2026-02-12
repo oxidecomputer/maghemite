@@ -6,7 +6,7 @@
       "url": "https://oxide.computer",
       "email": "api@oxide.computer"
     },
-    "version": "4.0.0"
+    "version": "7.0.0"
   },
   "paths": {
     "/bfd/peers": {
@@ -96,12 +96,38 @@
     },
     "/bgp/clear/neighbor": {
       "post": {
-        "operationId": "clear_neighbor",
+        "operationId": "clear_neighbor_v2",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/NeighborResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/clear/unnumbered-neighbor": {
+      "post": {
+        "operationId": "clear_unnumbered_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnnumberedNeighborResetRequest"
               }
             }
           },
@@ -232,50 +258,8 @@
       }
     },
     "/bgp/config/neighbor": {
-      "get": {
-        "operationId": "read_neighbor",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "addr",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "ip"
-            }
-          },
-          {
-            "in": "query",
-            "name": "asn",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "successful operation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Neighbor"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "$ref": "#/components/responses/Error"
-          },
-          "5XX": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
       "put": {
-        "operationId": "create_neighbor",
+        "operationId": "create_neighbor_v3",
         "requestBody": {
           "content": {
             "application/json": {
@@ -299,7 +283,7 @@
         }
       },
       "post": {
-        "operationId": "update_neighbor",
+        "operationId": "update_neighbor_v3",
         "requestBody": {
           "content": {
             "application/json": {
@@ -321,27 +305,71 @@
             "$ref": "#/components/responses/Error"
           }
         }
-      },
-      "delete": {
-        "operationId": "delete_neighbor",
+      }
+    },
+    "/bgp/config/neighbor/{asn}/{peer}": {
+      "get": {
+        "operationId": "read_neighbor_v3",
         "parameters": [
           {
-            "in": "query",
-            "name": "addr",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "ip"
-            }
-          },
-          {
-            "in": "query",
+            "in": "path",
             "name": "asn",
             "required": true,
             "schema": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
+            }
+          },
+          {
+            "in": "path",
+            "name": "peer",
+            "description": "Peer identifier as a string.\n\n- For numbered peers: IP address (e.g., \"192.0.2.1\" or \"2001:db8::1\") - For unnumbered peers: Interface name (e.g., \"eth0\" or \"cxgbe0\")\n\nServer parses as IP address first; if parsing fails, treats as interface name. Uses PeerId::from_str() for type-safe conversion.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Neighbor"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_neighbor_v3",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asn",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          {
+            "in": "path",
+            "name": "peer",
+            "description": "Peer identifier as a string.\n\n- For numbered peers: IP address (e.g., \"192.0.2.1\" or \"2001:db8::1\") - For unnumbered peers: Interface name (e.g., \"eth0\" or \"cxgbe0\")\n\nServer parses as IP address first; if parsing fails, treats as interface name. Uses PeerId::from_str() for type-safe conversion.",
+            "required": true,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -358,12 +386,12 @@
         }
       }
     },
-    "/bgp/config/neighbors": {
+    "/bgp/config/neighbors/{asn}": {
       "get": {
-        "operationId": "read_neighbors",
+        "operationId": "read_neighbors_v3",
         "parameters": [
           {
-            "in": "query",
+            "in": "path",
             "name": "asn",
             "description": "ASN of the router to get imported prefixes from.",
             "required": true,
@@ -869,9 +897,174 @@
         }
       }
     },
+    "/bgp/config/unnumbered-neighbor": {
+      "get": {
+        "operationId": "read_unnumbered_neighbor",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          {
+            "in": "query",
+            "name": "interface",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnnumberedNeighbor"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "create_unnumbered_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnnumberedNeighbor"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "update_unnumbered_neighbor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnnumberedNeighbor"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "resource updated"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_unnumbered_neighbor",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          {
+            "in": "query",
+            "name": "interface",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "successful deletion"
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bgp/config/unnumbered-neighbors": {
+      "get": {
+        "operationId": "read_unnumbered_neighbors",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_UnnumberedNeighbor",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UnnumberedNeighbor"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bgp/history/fsm": {
       "get": {
-        "operationId": "fsm_history",
+        "operationId": "fsm_history_v2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -904,7 +1097,7 @@
     },
     "/bgp/history/message": {
       "get": {
-        "operationId": "message_history_v2",
+        "operationId": "message_history_v3",
         "requestBody": {
           "content": {
             "application/json": {
@@ -937,7 +1130,7 @@
     },
     "/bgp/omicron/apply": {
       "post": {
-        "operationId": "bgp_apply",
+        "operationId": "bgp_apply_v2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -963,12 +1156,12 @@
     },
     "/bgp/status/exported": {
       "get": {
-        "operationId": "get_exported",
+        "operationId": "get_exported_v3",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AsnSelector"
+                "$ref": "#/components/schemas/ExportedSelector"
               }
             }
           },
@@ -1003,7 +1196,7 @@
     },
     "/bgp/status/neighbors": {
       "get": {
-        "operationId": "get_neighbors_v2",
+        "operationId": "get_neighbors_v4",
         "parameters": [
           {
             "in": "query",
@@ -1244,6 +1437,127 @@
         }
       }
     },
+    "/ndp/interface": {
+      "get": {
+        "operationId": "get_ndp_interface_detail",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          {
+            "in": "query",
+            "name": "interface",
+            "description": "Interface name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NdpInterface"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/ndp/interfaces": {
+      "get": {
+        "operationId": "get_ndp_interfaces",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Array_of_NdpInterface",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NdpInterface"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/ndp/manager": {
+      "get": {
+        "operationId": "get_ndp_manager_state",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "asn",
+            "description": "ASN of the router to get imported prefixes from.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NdpManagerState"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/rib/config/bestpath/fanout": {
       "get": {
         "operationId": "read_rib_bestpath_fanout",
@@ -1293,7 +1607,7 @@
     },
     "/rib/status/imported": {
       "get": {
-        "operationId": "get_rib_imported",
+        "operationId": "get_rib_imported_v2",
         "parameters": [
           {
             "in": "query",
@@ -1334,7 +1648,7 @@
     },
     "/rib/status/selected": {
       "get": {
-        "operationId": "get_rib_selected",
+        "operationId": "get_rib_selected_v2",
         "parameters": [
           {
             "in": "query",
@@ -1688,8 +2002,67 @@
           "routes"
         ]
       },
+      "Afi": {
+        "description": "Address families supported by Maghemite BGP.",
+        "oneOf": [
+          {
+            "description": "Internet protocol version 4",
+            "type": "string",
+            "enum": [
+              "Ipv4"
+            ]
+          },
+          {
+            "description": "Internet protocol version 6",
+            "type": "string",
+            "enum": [
+              "Ipv6"
+            ]
+          }
+        ]
+      },
+      "AfiSafi": {
+        "type": "object",
+        "properties": {
+          "afi": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "safi": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "afi",
+          "safi"
+        ]
+      },
+      "Aggregator": {
+        "description": "AGGREGATOR path attribute (RFC 4271 §5.1.8)\n\nThe AGGREGATOR attribute is an optional transitive attribute that contains the AS number and IP address of the last BGP speaker that formed the aggregate route.",
+        "type": "object",
+        "properties": {
+          "address": {
+            "description": "IP address of the BGP speaker that formed the aggregate",
+            "type": "string",
+            "format": "ipv4"
+          },
+          "asn": {
+            "description": "Autonomous System Number that formed the aggregate (2-octet)",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "address",
+          "asn"
+        ]
+      },
       "ApplyRequest": {
-        "description": "Apply changes to an ASN.",
+        "description": "Apply changes to an ASN (current version with per-AF policies).",
         "type": "object",
         "properties": {
           "asn": {
@@ -1708,14 +2081,14 @@
             ]
           },
           "originate": {
-            "description": "Complete set of prefixes to originate. Any active prefixes not in this list will be removed. All prefixes in this list are ensured to be in the originating set.",
+            "description": "Complete set of prefixes to originate.",
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix4"
+              "$ref": "#/components/schemas/Prefix"
             }
           },
           "peers": {
-            "description": "Lists of peers indexed by peer group. Set's within a peer group key are a total set. For example, the value\n\n```text {\"foo\": [a, b, d]} ``` Means that the peer group \"foo\" only contains the peers `a`, `b` and `d`. If there is a peer `c` currently in the peer group \"foo\", it will be removed.",
+            "description": "Lists of peers indexed by peer group.",
             "type": "object",
             "additionalProperties": {
               "type": "array",
@@ -1732,12 +2105,44 @@
                 "$ref": "#/components/schemas/ShaperSource"
               }
             ]
+          },
+          "unnumbered_peers": {
+            "description": "Lists of unnumbered peers indexed by peer group.",
+            "default": {},
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/UnnumberedBgpPeerConfig"
+              }
+            }
           }
         },
         "required": [
           "asn",
           "originate",
           "peers"
+        ]
+      },
+      "As4Aggregator": {
+        "description": "AS4_AGGREGATOR path attribute (RFC 6793)\n\nThe AS4_AGGREGATOR attribute is an optional transitive attribute with the same semantics as AGGREGATOR, but carries a 4-octet AS number instead of 2-octet.",
+        "type": "object",
+        "properties": {
+          "address": {
+            "description": "IP address of the BGP speaker that formed the aggregate",
+            "type": "string",
+            "format": "ipv4"
+          },
+          "asn": {
+            "description": "Autonomous System Number that formed the aggregate (4-octet)",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "address",
+          "asn"
         ]
       },
       "As4PathSegment": {
@@ -1777,20 +2182,6 @@
               "as_sequence"
             ]
           }
-        ]
-      },
-      "AsnSelector": {
-        "type": "object",
-        "properties": {
-          "asn": {
-            "description": "ASN of the router to get imported prefixes from.",
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "asn"
         ]
       },
       "BestpathFanoutRequest": {
@@ -1911,6 +2302,122 @@
           }
         ]
       },
+      "BgpCapability": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "RouteRefresh"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "MultiprotocolExtensions": {
+                "$ref": "#/components/schemas/AfiSafi"
+              }
+            },
+            "required": [
+              "MultiprotocolExtensions"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "FourOctetAsn": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "FourOctetAsn"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "AddPath": {
+                "type": "object",
+                "properties": {
+                  "elements": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/AfiSafi"
+                    }
+                  }
+                },
+                "required": [
+                  "elements"
+                ]
+              }
+            },
+            "required": [
+              "AddPath"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Unknown": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "Unknown"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "BgpNexthop": {
+        "description": "A BGP next-hop address in one of three formats: IPv4, IPv6 single, or IPv6 double.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "Ipv4": {
+                "type": "string",
+                "format": "ipv4"
+              }
+            },
+            "required": [
+              "Ipv4"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Ipv6Single": {
+                "type": "string",
+                "format": "ipv6"
+              }
+            },
+            "required": [
+              "Ipv6Single"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Ipv6Double": {
+                "$ref": "#/components/schemas/Ipv6DoubleNexthop"
+              }
+            },
+            "required": [
+              "Ipv6Double"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
       "BgpPathProperties": {
         "type": "object",
         "properties": {
@@ -1945,8 +2452,7 @@
             "minimum": 0
           },
           "peer": {
-            "type": "string",
-            "format": "ip"
+            "$ref": "#/components/schemas/PeerId"
           },
           "stale": {
             "nullable": true,
@@ -1964,12 +2470,6 @@
       "BgpPeerConfig": {
         "type": "object",
         "properties": {
-          "allow_export": {
-            "$ref": "#/components/schemas/ImportExportPolicy"
-          },
-          "allow_import": {
-            "$ref": "#/components/schemas/ImportExportPolicy"
-          },
           "communities": {
             "type": "array",
             "items": {
@@ -1983,10 +2483,23 @@
             "format": "uint64",
             "minimum": 0
           },
+          "connect_retry_jitter": {
+            "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
           "delay_open": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
+            "type": "boolean"
           },
           "enforce_first_as": {
             "type": "boolean"
@@ -1999,10 +2512,37 @@
           "host": {
             "type": "string"
           },
+          "idle_hold_jitter": {
+            "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
           "idle_hold_time": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "ipv4_unicast": {
+            "nullable": true,
+            "description": "IPv4 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv4UnicastConfig"
+              }
+            ]
+          },
+          "ipv6_unicast": {
+            "nullable": true,
+            "description": "IPv6 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv6UnicastConfig"
+              }
+            ]
           },
           "keepalive": {
             "type": "integer",
@@ -2056,11 +2596,10 @@
           }
         },
         "required": [
-          "allow_export",
-          "allow_import",
           "communities",
           "connect_retry",
           "delay_open",
+          "deterministic_collision_resolution",
           "enforce_first_as",
           "hold_time",
           "host",
@@ -2143,7 +2682,7 @@
             "additionalProperties": false
           },
           {
-            "description": "Multiple nexthop encoding capability as defined in RFC 8950. Note this capability is not yet implemented.",
+            "description": "Multiple nexthop encoding capability as defined in RFC 8950.",
             "type": "object",
             "properties": {
               "extended_next_hop_encoding": {
@@ -2646,11 +3185,15 @@
           },
           "negotiated": {
             "$ref": "#/components/schemas/Duration"
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/Duration"
           }
         },
         "required": [
           "configured",
-          "negotiated"
+          "negotiated",
+          "remaining"
         ]
       },
       "Error": {
@@ -2765,6 +3308,38 @@
           }
         ]
       },
+      "ExportedSelector": {
+        "type": "object",
+        "properties": {
+          "afi": {
+            "nullable": true,
+            "description": "Optional address family filter (None = all negotiated families)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Afi"
+              }
+            ]
+          },
+          "asn": {
+            "description": "ASN of the router to get exported prefixes from.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "peer": {
+            "nullable": true,
+            "description": "Optional peer filter using PeerId enum",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PeerId"
+              }
+            ]
+          }
+        },
+        "required": [
+          "asn"
+        ]
+      },
       "FsmEventBuffer": {
         "oneOf": [
           {
@@ -2854,6 +3429,7 @@
         ]
       },
       "FsmHistoryRequest": {
+        "description": "Unified FSM history request supporting both numbered and unnumbered peers",
         "type": "object",
         "properties": {
           "asn": {
@@ -2873,9 +3449,12 @@
           },
           "peer": {
             "nullable": true,
-            "description": "Optional peer filter - if None, returns history for all peers",
-            "type": "string",
-            "format": "ip"
+            "description": "Optional peer filter using PeerId enum JSON format: {\"ip\": \"192.0.2.1\"} or {\"interface\": \"eth0\"}",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PeerId"
+              }
+            ]
           }
         },
         "required": [
@@ -2883,10 +3462,11 @@
         ]
       },
       "FsmHistoryResponse": {
+        "description": "Unified FSM history response with string keys from PeerId Display Keys will be \"192.0.2.1\" or \"eth0\" format",
         "type": "object",
         "properties": {
           "by_peer": {
-            "description": "Events organized by peer address Each peer's value contains only the events from the requested buffer",
+            "description": "Events organized by peer identifier Each peer's value contains only the events from the requested buffer",
             "type": "object",
             "additionalProperties": {
               "type": "array",
@@ -2932,7 +3512,7 @@
             ]
           },
           {
-            "description": "Waiting for keepaliave or notification from peer.",
+            "description": "Waiting for keepalive or notification from peer.",
             "type": "string",
             "enum": [
               "OpenConfirm"
@@ -2971,7 +3551,8 @@
           "bad_message_type"
         ]
       },
-      "ImportExportPolicy": {
+      "ImportExportPolicy4": {
+        "description": "Import/Export policy for IPv4 prefixes only.",
         "oneOf": [
           {
             "type": "string",
@@ -2985,7 +3566,7 @@
               "Allow": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/Prefix"
+                  "$ref": "#/components/schemas/Prefix4"
                 },
                 "uniqueItems": true
               }
@@ -2995,6 +3576,115 @@
             ],
             "additionalProperties": false
           }
+        ]
+      },
+      "ImportExportPolicy6": {
+        "description": "Import/Export policy for IPv6 prefixes only.",
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "NoFiltering"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "Allow": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Prefix6"
+                },
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "Allow"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Ipv4UnicastConfig": {
+        "description": "Per-address-family configuration for IPv4 Unicast",
+        "type": "object",
+        "properties": {
+          "export_policy": {
+            "$ref": "#/components/schemas/ImportExportPolicy4"
+          },
+          "import_policy": {
+            "$ref": "#/components/schemas/ImportExportPolicy4"
+          },
+          "nexthop": {
+            "nullable": true,
+            "type": "string",
+            "format": "ip"
+          }
+        },
+        "required": [
+          "export_policy",
+          "import_policy"
+        ]
+      },
+      "Ipv6DoubleNexthop": {
+        "description": "IPv6 double nexthop: global unicast address + link-local address. Per RFC 2545, when advertising IPv6 routes, both addresses may be present.",
+        "type": "object",
+        "properties": {
+          "global": {
+            "description": "Global unicast address",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "link_local": {
+            "description": "Link-local address",
+            "type": "string",
+            "format": "ipv6"
+          }
+        },
+        "required": [
+          "global",
+          "link_local"
+        ]
+      },
+      "Ipv6UnicastConfig": {
+        "description": "Per-address-family configuration for IPv6 Unicast",
+        "type": "object",
+        "properties": {
+          "export_policy": {
+            "$ref": "#/components/schemas/ImportExportPolicy6"
+          },
+          "import_policy": {
+            "$ref": "#/components/schemas/ImportExportPolicy6"
+          },
+          "nexthop": {
+            "nullable": true,
+            "type": "string",
+            "format": "ip"
+          }
+        },
+        "required": [
+          "export_policy",
+          "import_policy"
+        ]
+      },
+      "JitterRange": {
+        "description": "Jitter range with minimum and maximum multiplier values. When applied to a timer, the timer duration is multiplied by a random value within [min, max] to help break synchronization patterns.",
+        "type": "object",
+        "properties": {
+          "max": {
+            "description": "Maximum jitter multiplier (typically 1.0 or similar)",
+            "type": "number",
+            "format": "double"
+          },
+          "min": {
+            "description": "Minimum jitter multiplier (typically 0.75 or similar)",
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "max",
+          "min"
         ]
       },
       "Message": {
@@ -3139,6 +3829,7 @@
         ]
       },
       "MessageHistoryRequest": {
+        "description": "Unified message history request supporting both numbered and unnumbered peers",
         "type": "object",
         "properties": {
           "asn": {
@@ -3158,9 +3849,12 @@
           },
           "peer": {
             "nullable": true,
-            "description": "Optional peer filter - if None, returns history for all peers",
-            "type": "string",
-            "format": "ip"
+            "description": "Optional peer filter using PeerId enum JSON format: {\"ip\": \"192.0.2.1\"} or {\"interface\": \"eth0\"}",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PeerId"
+              }
+            ]
           }
         },
         "required": [
@@ -3168,6 +3862,7 @@
         ]
       },
       "MessageHistoryResponse": {
+        "description": "Unified message history response with string keys from PeerId Display Keys will be \"192.0.2.1\" or \"eth0\" format",
         "type": "object",
         "properties": {
           "by_peer": {
@@ -3179,6 +3874,138 @@
         },
         "required": [
           "by_peer"
+        ]
+      },
+      "MpReachNlri": {
+        "description": "MP_REACH_NLRI path attribute\n\nEach variant represents a specific AFI+SAFI combination, providing compile-time guarantees about the address family of routes being announced.\n\n```text 3.  Multiprotocol Reachable NLRI - MP_REACH_NLRI (Type Code 14):\n\nThis is an optional non-transitive attribute that can be used for the following purposes:\n\n(a) to advertise a feasible route to a peer\n\n(b) to permit a router to advertise the Network Layer address of the router that should be used as the next hop to the destinations listed in the Network Layer Reachability Information field of the MP_NLRI attribute.\n\nThe attribute is encoded as shown below:\n\n+---------------------------------------------------------+ | Address Family Identifier (2 octets)                    | +---------------------------------------------------------+ ```",
+        "oneOf": [
+          {
+            "description": "IPv4 Unicast routes (AFI=1, SAFI=1)",
+            "type": "object",
+            "properties": {
+              "afi_safi": {
+                "type": "string",
+                "enum": [
+                  "ipv4_unicast"
+                ]
+              },
+              "nexthop": {
+                "description": "Next-hop for IPv4 routes.\n\nCurrently must be `BgpNexthop::Ipv4`, but will support IPv6 nexthops when extended next-hop capability (RFC 8950) is implemented.",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/BgpNexthop"
+                  }
+                ]
+              },
+              "nlri": {
+                "description": "IPv4 prefixes being announced",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Prefix4"
+                }
+              },
+              "reserved": {
+                "description": "Reserved byte from RFC 4760 §3 (historically \"Number of SNPAs\" in RFC 2858). MUST be 0 per RFC 4760, but MUST be ignored by receiver. Stored for validation logging in session layer. This field is positioned before NLRI to match the wire format encoding.",
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "afi_safi",
+              "nexthop",
+              "nlri",
+              "reserved"
+            ]
+          },
+          {
+            "description": "IPv6 Unicast routes (AFI=2, SAFI=1)",
+            "type": "object",
+            "properties": {
+              "afi_safi": {
+                "type": "string",
+                "enum": [
+                  "ipv6_unicast"
+                ]
+              },
+              "nexthop": {
+                "description": "Next-hop for IPv6 routes.\n\nCan be `BgpNexthop::Ipv6Single` (16 bytes) or `BgpNexthop::Ipv6Double` (32 bytes with link-local address).",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/BgpNexthop"
+                  }
+                ]
+              },
+              "nlri": {
+                "description": "IPv6 prefixes being announced",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Prefix6"
+                }
+              },
+              "reserved": {
+                "description": "Reserved byte from RFC 4760 §3 (historically \"Number of SNPAs\" in RFC 2858). MUST be 0 per RFC 4760, but MUST be ignored by receiver. Stored for validation logging in session layer. This field is positioned before NLRI to match the wire format encoding.",
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "afi_safi",
+              "nexthop",
+              "nlri",
+              "reserved"
+            ]
+          }
+        ]
+      },
+      "MpUnreachNlri": {
+        "description": "MP_UNREACH_NLRI path attribute\n\nEach variant represents a specific AFI+SAFI combination, providing compile-time guarantees about the address family of routes being withdrawn.\n\n```text 4.  Multiprotocol Unreachable NLRI - MP_UNREACH_NLRI (Type Code 15):\n\nThis is an optional non-transitive attribute that can be used for the purpose of withdrawing multiple unfeasible routes from service.\n\nThe attribute is encoded as shown below:\n\n+---------------------------------------------------------+ | Address Family Identifier (2 octets)                    | +---------------------------------------------------------+ | Subsequent Address Family Identifier (1 octet)          | +---------------------------------------------------------+ | Withdrawn Routes (variable)                             | +---------------------------------------------------------+ ```",
+        "oneOf": [
+          {
+            "description": "IPv4 Unicast routes being withdrawn (AFI=1, SAFI=1)",
+            "type": "object",
+            "properties": {
+              "afi_safi": {
+                "type": "string",
+                "enum": [
+                  "ipv4_unicast"
+                ]
+              },
+              "withdrawn": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Prefix4"
+                }
+              }
+            },
+            "required": [
+              "afi_safi",
+              "withdrawn"
+            ]
+          },
+          {
+            "description": "IPv6 Unicast routes being withdrawn (AFI=2, SAFI=1)",
+            "type": "object",
+            "properties": {
+              "afi_safi": {
+                "type": "string",
+                "enum": [
+                  "ipv6_unicast"
+                ]
+              },
+              "withdrawn": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Prefix6"
+                }
+              }
+            },
+            "required": [
+              "afi_safi",
+              "withdrawn"
+            ]
+          }
         ]
       },
       "MribAddStaticRequest": {
@@ -3412,15 +4239,183 @@
           }
         ]
       },
-      "Neighbor": {
+      "NdpInterface": {
+        "description": "NDP state for an interface",
         "type": "object",
         "properties": {
-          "allow_export": {
-            "$ref": "#/components/schemas/ImportExportPolicy"
+          "discovered_peer": {
+            "nullable": true,
+            "description": "Information about discovered peer (if any, including expired)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NdpPeer"
+              }
+            ]
           },
-          "allow_import": {
-            "$ref": "#/components/schemas/ImportExportPolicy"
+          "interface": {
+            "description": "Interface name (e.g., \"qsfp0\")",
+            "type": "string"
           },
+          "local_address": {
+            "description": "Local IPv6 link-local address",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "router_lifetime": {
+            "description": "Router lifetime advertised by this router (seconds)",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "scope_id": {
+            "description": "IPv6 scope ID (interface index)",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "thread_state": {
+            "nullable": true,
+            "description": "Thread state for rx/tx loops (None if interface not active in NDP)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NdpThreadState"
+              }
+            ]
+          }
+        },
+        "required": [
+          "interface",
+          "local_address",
+          "router_lifetime",
+          "scope_id"
+        ]
+      },
+      "NdpManagerState": {
+        "description": "NDP manager state showing overall health and interface status",
+        "type": "object",
+        "properties": {
+          "active_interfaces": {
+            "description": "Interfaces currently active in NDP (available on system)",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "monitor_thread_running": {
+            "description": "Whether the interface monitor thread is running",
+            "type": "boolean"
+          },
+          "pending_interfaces": {
+            "description": "Interfaces configured but not yet available on the system",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NdpPendingInterface"
+            }
+          }
+        },
+        "required": [
+          "active_interfaces",
+          "monitor_thread_running",
+          "pending_interfaces"
+        ]
+      },
+      "NdpPeer": {
+        "description": "Information about a discovered NDP peer",
+        "type": "object",
+        "properties": {
+          "address": {
+            "description": "Peer IPv6 address",
+            "type": "string",
+            "format": "ipv6"
+          },
+          "discovered_at": {
+            "description": "When the peer was first discovered (ISO 8601 timestamp)",
+            "type": "string"
+          },
+          "expired": {
+            "description": "Whether the peer entry has expired",
+            "type": "boolean"
+          },
+          "last_advertisement": {
+            "description": "When the most recent Router Advertisement was received (ISO 8601 timestamp)",
+            "type": "string"
+          },
+          "reachable_time": {
+            "description": "Reachable time from RA (milliseconds)",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "retrans_timer": {
+            "description": "Retransmit timer from RA (milliseconds)",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "router_lifetime": {
+            "description": "Router lifetime from RA (seconds)",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "time_until_expiry": {
+            "nullable": true,
+            "description": "Time until expiry (human-readable), or None if already expired",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address",
+          "discovered_at",
+          "expired",
+          "last_advertisement",
+          "reachable_time",
+          "retrans_timer",
+          "router_lifetime"
+        ]
+      },
+      "NdpPendingInterface": {
+        "description": "Information about a pending NDP interface",
+        "type": "object",
+        "properties": {
+          "interface": {
+            "description": "Interface name",
+            "type": "string"
+          },
+          "router_lifetime": {
+            "description": "Configured router lifetime (seconds)",
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "interface",
+          "router_lifetime"
+        ]
+      },
+      "NdpThreadState": {
+        "description": "Thread state for NDP rx/tx loops on an interface",
+        "type": "object",
+        "properties": {
+          "rx_running": {
+            "description": "Whether the RX loop thread is running",
+            "type": "boolean"
+          },
+          "tx_running": {
+            "description": "Whether the TX loop thread is running",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rx_running",
+          "tx_running"
+        ]
+      },
+      "Neighbor": {
+        "description": "Neighbor configuration with explicit per-address-family enablement (v3 API)",
+        "type": "object",
+        "properties": {
           "asn": {
             "type": "integer",
             "format": "uint32",
@@ -3439,10 +4434,23 @@
             "format": "uint64",
             "minimum": 0
           },
+          "connect_retry_jitter": {
+            "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
           "delay_open": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
+            "type": "boolean"
           },
           "enforce_first_as": {
             "type": "boolean"
@@ -3458,10 +4466,37 @@
           "host": {
             "type": "string"
           },
+          "idle_hold_jitter": {
+            "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
           "idle_hold_time": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "ipv4_unicast": {
+            "nullable": true,
+            "description": "IPv4 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv4UnicastConfig"
+              }
+            ]
+          },
+          "ipv6_unicast": {
+            "nullable": true,
+            "description": "IPv6 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv6UnicastConfig"
+              }
+            ]
           },
           "keepalive": {
             "type": "integer",
@@ -3515,12 +4550,11 @@
           }
         },
         "required": [
-          "allow_export",
-          "allow_import",
           "asn",
           "communities",
           "connect_retry",
           "delay_open",
+          "deterministic_collision_resolution",
           "enforce_first_as",
           "group",
           "hold_time",
@@ -3533,11 +4567,51 @@
         ]
       },
       "NeighborResetOp": {
-        "type": "string",
-        "enum": [
-          "Hard",
-          "SoftInbound",
-          "SoftOutbound"
+        "description": "V2 API neighbor reset operations with per-AF support",
+        "oneOf": [
+          {
+            "description": "Hard reset - closes TCP connection and restarts session",
+            "type": "string",
+            "enum": [
+              "Hard"
+            ]
+          },
+          {
+            "description": "Soft inbound reset - sends route refresh for specified AF(s) None means all negotiated AFs",
+            "type": "object",
+            "properties": {
+              "SoftInbound": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Afi"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "SoftInbound"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Soft outbound reset - re-advertises routes for specified AF(s) None means all negotiated AFs",
+            "type": "object",
+            "properties": {
+              "SoftOutbound": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Afi"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "SoftOutbound"
+            ],
+            "additionalProperties": false
+          }
         ]
       },
       "NeighborResetRequest": {
@@ -3802,6 +4876,11 @@
             "type": "string",
             "format": "ip"
           },
+          "nexthop_interface": {
+            "nullable": true,
+            "description": "Interface binding for nexthop resolution.\n\nThis field is only populated for BGP unnumbered sessions where the nexthop is a link-local IPv6 address. For numbered peers, this is always None.\n\nAdded in API version 5.0.0 (UNNUMBERED).",
+            "type": "string"
+          },
           "rib_priority": {
             "type": "integer",
             "format": "uint8",
@@ -3886,6 +4965,7 @@
               "atomic_aggregate",
               "aggregator",
               "communities",
+              "mp_unreach_nlri",
               "as4_aggregator"
             ]
           },
@@ -3894,6 +4974,13 @@
             "type": "string",
             "enum": [
               "origin"
+            ]
+          },
+          {
+            "description": "RFC 4760",
+            "type": "string",
+            "enum": [
+              "mp_reach_nlri"
             ]
           },
           {
@@ -3938,12 +5025,12 @@
             "additionalProperties": false
           },
           {
-            "description": "The nexthop associated with a path",
+            "description": "The nexthop associated with a path (IPv4 only for traditional BGP)",
             "type": "object",
             "properties": {
               "next_hop": {
                 "type": "string",
-                "format": "ip"
+                "format": "ipv4"
               }
             },
             "required": [
@@ -3982,18 +5069,11 @@
             "additionalProperties": false
           },
           {
-            "description": "This attribute is included in routes that are formed by aggregation.",
+            "description": "AGGREGATOR: AS number and IP address of the last aggregating BGP speaker (2-octet ASN)",
             "type": "object",
             "properties": {
               "aggregator": {
-                "type": "array",
-                "items": {
-                  "type": "integer",
-                  "format": "uint8",
-                  "minimum": 0
-                },
-                "minItems": 6,
-                "maxItems": 6
+                "$ref": "#/components/schemas/Aggregator"
               }
             },
             "required": [
@@ -4018,6 +5098,13 @@
             "additionalProperties": false
           },
           {
+            "description": "Indicates this route was formed via aggregation (RFC 4271 §5.1.7)",
+            "type": "string",
+            "enum": [
+              "atomic_aggregate"
+            ]
+          },
+          {
             "description": "The 4-byte encoded AS set associated with a path",
             "type": "object",
             "properties": {
@@ -4034,22 +5121,41 @@
             "additionalProperties": false
           },
           {
-            "description": "This attribute is included in routes that are formed by aggregation.",
+            "description": "AS4_AGGREGATOR: AS number and IP address of the last aggregating BGP speaker (4-octet ASN)",
             "type": "object",
             "properties": {
               "as4_aggregator": {
-                "type": "array",
-                "items": {
-                  "type": "integer",
-                  "format": "uint8",
-                  "minimum": 0
-                },
-                "minItems": 8,
-                "maxItems": 8
+                "$ref": "#/components/schemas/As4Aggregator"
               }
             },
             "required": [
               "as4_aggregator"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Carries reachable MP-BGP NLRI and Next-hop (advertisement).",
+            "type": "object",
+            "properties": {
+              "mp_reach_nlri": {
+                "$ref": "#/components/schemas/MpReachNlri"
+              }
+            },
+            "required": [
+              "mp_reach_nlri"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Carries unreachable MP-BGP NLRI (withdrawal).",
+            "type": "object",
+            "properties": {
+              "mp_unreach_nlri": {
+                "$ref": "#/components/schemas/MpUnreachNlri"
+              }
+            },
+            "required": [
+              "mp_unreach_nlri"
             ],
             "additionalProperties": false
           }
@@ -4081,6 +5187,304 @@
           }
         ]
       },
+      "PeerCounters": {
+        "description": "Session-level counters that persist across connection changes These serve as aggregate counters across all connections for the session",
+        "type": "object",
+        "properties": {
+          "active_connections_accepted": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "active_connections_declined": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "connection_retries": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "connector_panics": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "hold_timer_expirations": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "idle_hold_timer_expirations": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "keepalive_send_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "keepalives_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "keepalives_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "md5_auth_failures": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "notification_send_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "notifications_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "notifications_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "open_handle_failures": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "open_send_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "opens_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "opens_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "passive_connections_accepted": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "passive_connections_declined": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "prefixes_advertised": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "prefixes_imported": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "route_refresh_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "route_refresh_send_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "route_refresh_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "tcp_connection_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_active": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_connect": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_connection_collision": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_established": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_idle": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_open_confirm": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_open_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transitions_to_session_setup": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unexpected_keepalive_message": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unexpected_notification_message": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unexpected_open_message": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unexpected_route_refresh_message": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unexpected_update_message": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unnegotiated_address_family": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "update_nexhop_missing": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "update_send_failure": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_received": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "updates_sent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "active_connections_accepted",
+          "active_connections_declined",
+          "connection_retries",
+          "connector_panics",
+          "hold_timer_expirations",
+          "idle_hold_timer_expirations",
+          "keepalive_send_failure",
+          "keepalives_received",
+          "keepalives_sent",
+          "md5_auth_failures",
+          "notification_send_failure",
+          "notifications_received",
+          "notifications_sent",
+          "open_handle_failures",
+          "open_send_failure",
+          "opens_received",
+          "opens_sent",
+          "passive_connections_accepted",
+          "passive_connections_declined",
+          "prefixes_advertised",
+          "prefixes_imported",
+          "route_refresh_received",
+          "route_refresh_send_failure",
+          "route_refresh_sent",
+          "tcp_connection_failure",
+          "transitions_to_active",
+          "transitions_to_connect",
+          "transitions_to_connection_collision",
+          "transitions_to_established",
+          "transitions_to_idle",
+          "transitions_to_open_confirm",
+          "transitions_to_open_sent",
+          "transitions_to_session_setup",
+          "unexpected_keepalive_message",
+          "unexpected_notification_message",
+          "unexpected_open_message",
+          "unexpected_route_refresh_message",
+          "unexpected_update_message",
+          "unnegotiated_address_family",
+          "update_nexhop_missing",
+          "update_send_failure",
+          "updates_received",
+          "updates_sent"
+        ]
+      },
+      "PeerId": {
+        "description": "Identifies a BGP peer for session management and route tracking.\n\nBGP peers can be identified in two ways: - **Numbered**: Traditional BGP peering using explicit IP addresses - **Unnumbered**: Modern peering using interface names with link-local addresses\n\n# Unnumbered Peering\n\nUnnumbered BGP uses interface names as stable identifiers instead of IP addresses. This is important because: - Link-local IPv6 addresses are discovered dynamically via NDP - Multiple interfaces may have peers with the same link-local address (e.g., fe80::1 on eth0 and fe80::1 on eth1) - Scope ID (interface index) disambiguates link-local addresses, but is not stable across reboots - Interface names provide stable, unambiguous peer identification\n\n# Route Tracking\n\nThis type is used in [`BgpPathProperties`](crate::BgpPathProperties) to track which peer advertised a route. Using `PeerId` instead of `IpAddr` ensures: - Unnumbered peers are properly distinguished even if they share link-local IPs - Route cleanup correctly removes only the routes from the intended peer - No cross-contamination when multiple unnumbered sessions exist\n\n# Examples\n\n``` use rdb_types::PeerId; use std::net::IpAddr;\n\n// Numbered peer let numbered = PeerId::Ip(\"192.0.2.1\".parse::<IpAddr>().unwrap());\n\n// Unnumbered peer let unnumbered = PeerId::Interface(\"eth0\".to_string()); ```",
+        "oneOf": [
+          {
+            "description": "Numbered peer identified by IP address\n\nUsed for traditional BGP sessions where peers are configured with explicit IP addresses (either IPv4 or IPv6 global unicast).",
+            "type": "object",
+            "properties": {
+              "Ip": {
+                "type": "string",
+                "format": "ip"
+              }
+            },
+            "required": [
+              "Ip"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Unnumbered peer identified by interface name\n\nUsed for unnumbered BGP sessions where peers are discovered via NDP on a specific interface. The interface name (e.g., \"eth0\") provides stable identification even though the peer's link-local address may be dynamic or shared with other interfaces.",
+            "type": "object",
+            "properties": {
+              "Interface": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "Interface"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
       "PeerInfo": {
         "type": "object",
         "properties": {
@@ -4090,36 +5494,117 @@
             "format": "uint32",
             "minimum": 0
           },
-          "duration_millis": {
+          "counters": {
+            "$ref": "#/components/schemas/PeerCounters"
+          },
+          "fsm_state": {
+            "$ref": "#/components/schemas/FsmStateKind"
+          },
+          "fsm_state_duration": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "id": {
+            "nullable": true,
             "type": "integer",
-            "format": "uint64",
+            "format": "uint32",
             "minimum": 0
           },
-          "state": {
-            "$ref": "#/components/schemas/FsmStateKind"
+          "ipv4_unicast": {
+            "$ref": "#/components/schemas/Ipv4UnicastConfig"
+          },
+          "ipv6_unicast": {
+            "$ref": "#/components/schemas/Ipv6UnicastConfig"
+          },
+          "local_ip": {
+            "type": "string",
+            "format": "ip"
+          },
+          "local_tcp_port": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "peer_group": {
+            "type": "string"
+          },
+          "received_capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BgpCapability"
+            }
+          },
+          "remote_ip": {
+            "type": "string",
+            "format": "ip"
+          },
+          "remote_tcp_port": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
           },
           "timers": {
             "$ref": "#/components/schemas/PeerTimers"
           }
         },
         "required": [
-          "duration_millis",
-          "state",
+          "counters",
+          "fsm_state",
+          "fsm_state_duration",
+          "ipv4_unicast",
+          "ipv6_unicast",
+          "local_ip",
+          "local_tcp_port",
+          "name",
+          "peer_group",
+          "received_capabilities",
+          "remote_ip",
+          "remote_tcp_port",
           "timers"
         ]
       },
       "PeerTimers": {
         "type": "object",
         "properties": {
+          "connect_retry": {
+            "$ref": "#/components/schemas/StaticTimerInfo"
+          },
+          "connect_retry_jitter": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
+          "delay_open": {
+            "$ref": "#/components/schemas/StaticTimerInfo"
+          },
           "hold": {
             "$ref": "#/components/schemas/DynamicTimerInfo"
+          },
+          "idle_hold": {
+            "$ref": "#/components/schemas/StaticTimerInfo"
+          },
+          "idle_hold_jitter": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
           },
           "keepalive": {
             "$ref": "#/components/schemas/DynamicTimerInfo"
           }
         },
         "required": [
+          "connect_retry",
+          "delay_open",
           "hold",
+          "idle_hold",
           "keepalive"
         ]
       },
@@ -4389,6 +5874,22 @@
           "list"
         ]
       },
+      "StaticTimerInfo": {
+        "description": "Timer information for static (non-negotiated) timers",
+        "type": "object",
+        "properties": {
+          "configured": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/Duration"
+          }
+        },
+        "required": [
+          "configured",
+          "remaining"
+        ]
+      },
       "SwitchIdentifiers": {
         "description": "Identifiers for a switch.",
         "type": "object",
@@ -4401,6 +5902,335 @@
             "minimum": 0
           }
         }
+      },
+      "UnnumberedBgpPeerConfig": {
+        "type": "object",
+        "properties": {
+          "communities": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "connect_retry": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "connect_retry_jitter": {
+            "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
+          "delay_open": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
+            "type": "boolean"
+          },
+          "enforce_first_as": {
+            "type": "boolean"
+          },
+          "hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "idle_hold_jitter": {
+            "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
+          "idle_hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "interface": {
+            "type": "string"
+          },
+          "ipv4_unicast": {
+            "nullable": true,
+            "description": "IPv4 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv4UnicastConfig"
+              }
+            ]
+          },
+          "ipv6_unicast": {
+            "nullable": true,
+            "description": "IPv6 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv6UnicastConfig"
+              }
+            ]
+          },
+          "keepalive": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "local_pref": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "md5_auth_key": {
+            "nullable": true,
+            "type": "string"
+          },
+          "min_ttl": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "multi_exit_discriminator": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "passive": {
+            "type": "boolean"
+          },
+          "remote_asn": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "resolution": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "router_lifetime": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "communities",
+          "connect_retry",
+          "delay_open",
+          "deterministic_collision_resolution",
+          "enforce_first_as",
+          "hold_time",
+          "idle_hold_time",
+          "interface",
+          "keepalive",
+          "name",
+          "passive",
+          "resolution",
+          "router_lifetime"
+        ]
+      },
+      "UnnumberedNeighbor": {
+        "type": "object",
+        "properties": {
+          "act_as_a_default_ipv6_router": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          },
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "communities": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "connect_retry": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "connect_retry_jitter": {
+            "nullable": true,
+            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
+          "delay_open": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "deterministic_collision_resolution": {
+            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
+            "type": "boolean"
+          },
+          "enforce_first_as": {
+            "type": "boolean"
+          },
+          "group": {
+            "type": "string"
+          },
+          "hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "idle_hold_jitter": {
+            "nullable": true,
+            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JitterRange"
+              }
+            ]
+          },
+          "idle_hold_time": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "interface": {
+            "type": "string"
+          },
+          "ipv4_unicast": {
+            "nullable": true,
+            "description": "IPv4 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv4UnicastConfig"
+              }
+            ]
+          },
+          "ipv6_unicast": {
+            "nullable": true,
+            "description": "IPv6 Unicast address family configuration (None = disabled)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Ipv6UnicastConfig"
+              }
+            ]
+          },
+          "keepalive": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "local_pref": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "md5_auth_key": {
+            "nullable": true,
+            "type": "string"
+          },
+          "min_ttl": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0
+          },
+          "multi_exit_discriminator": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "passive": {
+            "type": "boolean"
+          },
+          "remote_asn": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "resolution": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "vlan_id": {
+            "nullable": true,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "act_as_a_default_ipv6_router",
+          "asn",
+          "communities",
+          "connect_retry",
+          "delay_open",
+          "deterministic_collision_resolution",
+          "enforce_first_as",
+          "group",
+          "hold_time",
+          "idle_hold_time",
+          "interface",
+          "keepalive",
+          "name",
+          "passive",
+          "resolution"
+        ]
+      },
+      "UnnumberedNeighborResetRequest": {
+        "type": "object",
+        "properties": {
+          "asn": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "interface": {
+            "type": "string"
+          },
+          "op": {
+            "$ref": "#/components/schemas/NeighborResetOp"
+          }
+        },
+        "required": [
+          "asn",
+          "interface",
+          "op"
+        ]
       },
       "UpdateErrorSubcode": {
         "description": "Update message error subcode types",
@@ -4427,7 +6257,7 @@
           "nlri": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix"
+              "$ref": "#/components/schemas/Prefix4"
             }
           },
           "path_attributes": {
@@ -4439,7 +6269,7 @@
           "withdrawn": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Prefix"
+              "$ref": "#/components/schemas/Prefix4"
             }
           }
         },

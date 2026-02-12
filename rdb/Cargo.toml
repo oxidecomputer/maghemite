@@ -20,6 +20,7 @@ oxnet.workspace = true
 rdb-types = { workspace = true, features = ["clap"] }
 poptrie.workspace = true
 omicron-common.workspace = true
+ndp.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

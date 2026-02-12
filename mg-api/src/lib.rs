@@ -10,11 +10,13 @@ use std::{
 
 use bfd::BfdPeerState;
 use bgp::{
+    messages::Afi,
     params::{
-        ApplyRequest, CheckerSource, Neighbor, NeighborResetOp, Origin4,
-        Origin6, PeerInfo, PeerInfoV1, Router, ShaperSource,
+        ApplyRequest, ApplyRequestV1, CheckerSource, Neighbor, NeighborResetOp,
+        NeighborResetOpV1, NeighborV1, Origin4, Origin6, PeerInfo, PeerInfoV1,
+        PeerInfoV2, Router, ShaperSource, UnnumberedNeighbor,
     },
-    session::{FsmEventRecord, MessageHistory, MessageHistoryV1},
+    session::{FsmEventRecord, MessageHistory, MessageHistoryV1, PeerId},
 };
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
@@ -22,7 +24,8 @@ use dropshot::{
 };
 use dropshot_api_manager_types::api_versions;
 use rdb::{
-    BfdPeerConfig, Path as RdbPath, Prefix, Prefix4, Prefix6, StaticRouteKey,
+    BfdPeerConfig, Path as RdbPath, PathV1, Prefix, Prefix4, Prefix6,
+    StaticRouteKey,
     types::{AddressFamily, MulticastRoute, MulticastRouteKey, ProtocolFilter},
 };
 use schemars::JsonSchema;
@@ -40,7 +43,10 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
-    (4, MULTICAST_SUPPORT),
+    (7, MULTICAST_SUPPORT),
+    (6, RIB_EXPORTED_STRING_KEY),
+    (5, UNNUMBERED),
+    (4, MP_BGP),
     (3, SWITCH_IDENTIFIERS),
     (2, IPV6_BASIC),
     (1, INITIAL),
@@ -114,41 +120,180 @@ pub trait MgAdminApi {
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbors" }]
+    // V1/V2 API - legacy Neighbor type with combined import/export policies
+
+    // Neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
+    async fn create_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborV1>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
+    async fn read_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<NeighborSelectorV1>,
+    ) -> Result<HttpResponseOk<NeighborV1>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = ..VERSION_MP_BGP }]
     async fn read_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<NeighborV1>>, HttpError>;
+
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
+    async fn update_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborV1>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor", versions = ..VERSION_MP_BGP }]
+    async fn delete_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<NeighborSelectorV1>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    // V3 API - new Neighbor type with explicit per-AF configuration (numbered peers only)
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    async fn create_neighbor_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    async fn read_neighbor_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<NeighborSelectorV1>,
+    ) -> Result<HttpResponseOk<Neighbor>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    async fn read_neighbors_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError>;
 
-    #[endpoint { method = PUT, path = "/bgp/config/neighbor" }]
-    async fn create_neighbor(
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    async fn update_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbor" }]
-    async fn read_neighbor(
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    async fn delete_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelector>,
-    ) -> Result<HttpResponseOk<Neighbor>, HttpError>;
-
-    #[endpoint { method = POST, path = "/bgp/config/neighbor" }]
-    async fn update_neighbor(
-        rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Neighbor>,
-    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
-
-    #[endpoint { method = DELETE, path = "/bgp/config/neighbor" }]
-    async fn delete_neighbor(
-        rqctx: RequestContext<Self::Context>,
-        request: Query<NeighborSelector>,
+        request: Query<NeighborSelectorV1>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = POST, path = "/bgp/clear/neighbor" }]
+    // Unified API (VERSION_UNNUMBERED..) - supports both numbered and unnumbered neighbors
+    // Uses PeerId in path parameters with FromStr for type-safe parsing
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED.. }]
+    async fn create_neighbor_v3(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED.. }]
+    async fn read_neighbor_v3(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<NeighborSelector>,
+    ) -> Result<HttpResponseOk<Neighbor>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_UNNUMBERED.. }]
+    async fn read_neighbors_v3(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError>;
+
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED.. }]
+    async fn update_neighbor_v3(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<Neighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED.. }]
+    async fn delete_neighbor_v3(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<NeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    // V1/V2 API clear neighbor (backwards compatibility w/ IPv4 only support)
+    #[endpoint { method = POST, path = "/bgp/clear/neighbor", versions = ..VERSION_MP_BGP }]
     async fn clear_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborResetRequestV1>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // V3 API clear neighbor with per-AF support
+    #[endpoint { method = POST, path = "/bgp/clear/neighbor", versions = VERSION_MP_BGP.. }]
+    async fn clear_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<NeighborResetRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/unnumbered-neighbors",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn read_unnumbered_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<UnnumberedNeighbor>>, HttpError>;
+
+    #[endpoint {
+        method = PUT,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn create_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn read_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseOk<UnnumberedNeighbor>, HttpError>;
+
+    #[endpoint {
+        method = POST,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn update_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighbor>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = DELETE,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn delete_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    #[endpoint {
+        method = POST,
+        path = "/bgp/clear/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..,
+    }]
+    async fn clear_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighborResetRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // IPv4 origin ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     #[endpoint { method = PUT, path = "/bgp/config/origin4" }]
     async fn create_origin4(
@@ -198,36 +343,66 @@ pub trait MgAdminApi {
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/exported" }]
+    // Old exported endpoint - IPv4 only, no filtering
+    #[endpoint { method = GET, path = "/bgp/status/exported", versions = ..VERSION_UNNUMBERED }]
     async fn get_exported(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, Vec<Prefix>>>, HttpError>;
+
+    // Supports IPv4/IPv6, filtering by peer/AFI, and unnumbered peers
+    // NOTE: broken — PeerId enum can't serialize as JSON object key
+    #[endpoint { method = GET, path = "/bgp/status/exported", versions = VERSION_UNNUMBERED..VERSION_RIB_EXPORTED_STRING_KEY }]
+    async fn get_exported_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<ExportedSelector>,
+    ) -> Result<HttpResponseOk<HashMap<PeerId, Vec<Prefix>>>, HttpError>;
+
+    // Fixed: uses String keys from PeerId Display (e.g. "192.0.2.1" or "tfportqsfp0_0")
+    #[endpoint { method = GET, path = "/bgp/status/exported", versions = VERSION_RIB_EXPORTED_STRING_KEY.. }]
+    async fn get_exported_v3(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<ExportedSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, Vec<Prefix>>>, HttpError>;
 
     // imported moved under /rib/status in VERSION_IPV6_BASIC
     #[endpoint { method = GET, path = "/bgp/status/imported", versions = ..VERSION_IPV6_BASIC }]
     async fn get_imported(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError>;
+    ) -> Result<HttpResponseOk<RibV1>, HttpError>;
 
     // exported moved under /rib/status in VERSION_IPV6_BASIC
     #[endpoint { method = GET, path = "/bgp/status/selected", versions = ..VERSION_IPV6_BASIC }]
     async fn get_selected(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<AsnSelector>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError>;
+    ) -> Result<HttpResponseOk<RibV1>, HttpError>;
 
-    // imported moved under /rib/status in VERSION_IPV6_BASIC
-    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_IPV6_BASIC.. }]
+    // Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED): BgpPathProperties.peer is IpAddr
+    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
     async fn get_rib_imported(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<RibV1>, HttpError>;
+
+    // Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED): BgpPathProperties.peer is IpAddr
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
+    async fn get_rib_selected(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<RibV1>, HttpError>;
+
+    // VERSION_UNNUMBERED+: BgpPathProperties.peer is PeerId enum
+    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_UNNUMBERED.. }]
+    async fn get_rib_imported_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
     ) -> Result<HttpResponseOk<Rib>, HttpError>;
 
-    // exported moved under /rib/status in VERSION_IPV6_BASIC
-    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_IPV6_BASIC.. }]
-    async fn get_rib_selected(
+    // VERSION_UNNUMBERED+: BgpPathProperties.peer is PeerId enum
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_UNNUMBERED.. }]
+    async fn get_rib_selected_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
     ) -> Result<HttpResponseOk<Rib>, HttpError>;
@@ -238,14 +413,34 @@ pub trait MgAdminApi {
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV1>>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC.. }]
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_IPV6_BASIC..VERSION_MP_BGP }]
     async fn get_neighbors_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV2>>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
+    async fn get_neighbors_v3(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError>;
 
-    #[endpoint { method = POST, path = "/bgp/omicron/apply" }]
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_UNNUMBERED.. }]
+    async fn get_neighbors_v4(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError>;
+
+    // V1/V2 API - ApplyRequestV1 with combined import/export policies
+    #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = ..VERSION_MP_BGP }]
     async fn bgp_apply(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<ApplyRequestV1>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // V3 API - ApplyRequest with per-AF policies
+    #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = VERSION_MP_BGP.. }]
+    async fn bgp_apply_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
@@ -256,14 +451,26 @@ pub trait MgAdminApi {
         request: TypedBody<MessageHistoryRequestV1>,
     ) -> Result<HttpResponseOk<MessageHistoryResponseV1>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_IPV6_BASIC.. }]
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
     async fn message_history_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MessageHistoryRequestV4>,
+    ) -> Result<HttpResponseOk<MessageHistoryResponseV4>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_UNNUMBERED.. }]
+    async fn message_history_v3(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/history/fsm", versions = VERSION_IPV6_BASIC.. }]
+    #[endpoint { method = GET, path = "/bgp/history/fsm", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
     async fn fsm_history(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<FsmHistoryRequestV4>,
+    ) -> Result<HttpResponseOk<FsmHistoryResponseV4>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/history/fsm", versions = VERSION_UNNUMBERED.. }]
+    async fn fsm_history_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<FsmHistoryRequest>,
     ) -> Result<HttpResponseOk<FsmHistoryResponse>, HttpError>;
@@ -379,6 +586,24 @@ pub trait MgAdminApi {
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<SwitchIdentifiers>, HttpError>;
 
+    #[endpoint { method = GET, path = "/ndp/manager", versions = VERSION_UNNUMBERED.. }]
+    async fn get_ndp_manager_state(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<NdpManagerState>, HttpError>;
+
+    #[endpoint { method = GET, path = "/ndp/interfaces", versions = VERSION_UNNUMBERED.. }]
+    async fn get_ndp_interfaces(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<NdpInterface>>, HttpError>;
+
+    #[endpoint { method = GET, path = "/ndp/interface", versions = VERSION_UNNUMBERED.. }]
+    async fn get_ndp_interface_detail(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<NdpInterfaceSelector>,
+    ) -> Result<HttpResponseOk<NdpInterface>, HttpError>;
+
     // ========================= MRIB: Multicast ==============================
     //
     // Multicast routing is API-driven with Omicron as the source of truth.
@@ -475,21 +700,124 @@ pub struct AsnSelector {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ExportedSelector {
+    /// ASN of the router to get exported prefixes from.
+    pub asn: u32,
+    /// Optional peer filter using PeerId enum
+    pub peer: Option<PeerId>,
+    /// Optional address family filter (None = all negotiated families)
+    pub afi: Option<Afi>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DeleteRouterRequest {
     /// Autonomous system number for the router to remove
     pub asn: u32,
 }
 
+// ============================================================================
+// Archived API Types (Pre-VERSION_UNNUMBERED)
+// ============================================================================
+
+/// V1 API NeighborSelector (numbered peers only)
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[schemars(rename = "NeighborSelector")]
+pub struct NeighborSelectorV1 {
+    pub asn: u32,
+    pub addr: IpAddr,
+}
+
+// ============================================================================
+// Current API Types (VERSION_UNNUMBERED and later)
+// ============================================================================
+
+/// V1 Rib with PathV1
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[schemars(rename = "Rib")]
+pub struct RibV1(BTreeMap<String, BTreeSet<PathV1>>);
+
+impl From<rdb::db::Rib> for RibV1 {
+    fn from(value: rdb::db::Rib) -> Self {
+        RibV1(
+            value
+                .into_iter()
+                .map(|(k, v)| {
+                    let paths_v1: BTreeSet<PathV1> =
+                        v.into_iter().map(PathV1::from).collect();
+                    (k.to_string(), paths_v1)
+                })
+                .collect(),
+        )
+    }
+}
+
+/// Unified neighbor selector supporting both numbered and unnumbered peers
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct NeighborSelector {
     pub asn: u32,
+    /// Peer identifier as a string.
+    ///
+    /// - For numbered peers: IP address (e.g., "192.0.2.1" or "2001:db8::1")
+    /// - For unnumbered peers: Interface name (e.g., "eth0" or "cxgbe0")
+    ///
+    /// Server parses as IP address first; if parsing fails, treats as interface name.
+    /// Uses PeerId::from_str() for type-safe conversion.
+    pub peer: String,
+}
+
+impl NeighborSelector {
+    /// Convert peer string to PeerId using FromStr implementation.
+    /// Tries to parse as IP first, otherwise treats as interface name.
+    pub fn to_peer_id(&self) -> bgp::session::PeerId {
+        self.peer.parse().expect("PeerId::from_str never fails")
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[schemars(rename = "NeighborResetRequest")]
+pub struct NeighborResetRequestV1 {
+    pub asn: u32,
     pub addr: IpAddr,
+    pub op: NeighborResetOpV1,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct UnnumberedNeighborSelector {
+    pub asn: u32,
+    pub interface: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct NeighborResetRequest {
     pub asn: u32,
     pub addr: IpAddr,
+    pub op: NeighborResetOp,
+}
+
+impl std::fmt::Display for NeighborResetRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "neighbor {} asn {} op {:?}",
+            self.addr, self.asn, self.op
+        )
+    }
+}
+
+impl From<NeighborResetRequestV1> for NeighborResetRequest {
+    fn from(req: NeighborResetRequestV1) -> Self {
+        Self {
+            asn: req.asn,
+            addr: req.addr,
+            op: req.op.into(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct UnnumberedNeighborResetRequest {
+    pub asn: u32,
+    pub interface: String,
     pub op: NeighborResetOp,
 }
 
@@ -518,20 +846,41 @@ pub enum MessageDirection {
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
-pub struct MessageHistoryRequest {
+#[schemars(rename = "MessageHistoryRequest")]
+pub struct MessageHistoryRequestV4 {
     /// ASN of the BGP router
     pub asn: u32,
-
     /// Optional peer filter - if None, returns history for all peers
     pub peer: Option<IpAddr>,
-
     /// Optional direction filter - if None, returns both sent and received
     pub direction: Option<MessageDirection>,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]
-pub struct MessageHistoryResponse {
+#[schemars(rename = "MessageHistoryResponse")]
+pub struct MessageHistoryResponseV4 {
     pub by_peer: HashMap<IpAddr, MessageHistory>,
+}
+
+/// Unified message history request supporting both numbered and unnumbered peers
+#[derive(Debug, Deserialize, JsonSchema, Clone)]
+pub struct MessageHistoryRequest {
+    /// ASN of the BGP router
+    pub asn: u32,
+
+    /// Optional peer filter using PeerId enum
+    /// JSON format: {"ip": "192.0.2.1"} or {"interface": "eth0"}
+    pub peer: Option<bgp::session::PeerId>,
+
+    /// Optional direction filter - if None, returns both sent and received
+    pub direction: Option<MessageDirection>,
+}
+
+/// Unified message history response with string keys from PeerId Display
+/// Keys will be "192.0.2.1" or "eth0" format
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct MessageHistoryResponse {
+    pub by_peer: HashMap<String, MessageHistory>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
@@ -544,22 +893,44 @@ pub enum FsmEventBuffer {
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
-pub struct FsmHistoryRequest {
+#[schemars(rename = "FsmHistoryRequest")]
+pub struct FsmHistoryRequestV4 {
     /// ASN of the BGP router
     pub asn: u32,
-
     /// Optional peer filter - if None, returns history for all peers
     pub peer: Option<IpAddr>,
-
     /// Which buffer to retrieve - if None, returns major buffer
     pub buffer: Option<FsmEventBuffer>,
 }
 
 #[derive(Debug, Serialize, JsonSchema, Clone)]
-pub struct FsmHistoryResponse {
-    /// Events organized by peer address
-    /// Each peer's value contains only the events from the requested buffer
+#[schemars(rename = "FsmHistoryResponse")]
+pub struct FsmHistoryResponseV4 {
+    /// Events organized by peer address Each peer's value contains only the events from the requested buffer
     pub by_peer: HashMap<IpAddr, Vec<FsmEventRecord>>,
+}
+
+/// Unified FSM history request supporting both numbered and unnumbered peers
+#[derive(Debug, Deserialize, JsonSchema, Clone)]
+pub struct FsmHistoryRequest {
+    /// ASN of the BGP router
+    pub asn: u32,
+
+    /// Optional peer filter using PeerId enum
+    /// JSON format: {"ip": "192.0.2.1"} or {"interface": "eth0"}
+    pub peer: Option<bgp::session::PeerId>,
+
+    /// Which buffer to retrieve - if None, returns major buffer
+    pub buffer: Option<FsmEventBuffer>,
+}
+
+/// Unified FSM history response with string keys from PeerId Display
+/// Keys will be "192.0.2.1" or "eth0" format
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct FsmHistoryResponse {
+    /// Events organized by peer identifier
+    /// Each peer's value contains only the events from the requested buffer
+    pub by_peer: HashMap<String, Vec<FsmEventRecord>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -781,4 +1152,80 @@ pub fn filter_rib_by_protocol(
             filtered
         }
     }
+}
+
+/// Selector for NDP interface queries
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct NdpInterfaceSelector {
+    /// ASN of the router
+    pub asn: u32,
+    /// Interface name
+    pub interface: String,
+}
+
+/// NDP manager state showing overall health and interface status
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct NdpManagerState {
+    /// Whether the interface monitor thread is running
+    pub monitor_thread_running: bool,
+    /// Interfaces configured but not yet available on the system
+    pub pending_interfaces: Vec<NdpPendingInterface>,
+    /// Interfaces currently active in NDP (available on system)
+    pub active_interfaces: Vec<String>,
+}
+
+/// Information about a pending NDP interface
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct NdpPendingInterface {
+    /// Interface name
+    pub interface: String,
+    /// Configured router lifetime (seconds)
+    pub router_lifetime: u16,
+}
+
+/// Thread state for NDP rx/tx loops on an interface
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct NdpThreadState {
+    /// Whether the TX loop thread is running
+    pub tx_running: bool,
+    /// Whether the RX loop thread is running
+    pub rx_running: bool,
+}
+
+/// NDP state for an interface
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct NdpInterface {
+    /// Interface name (e.g., "qsfp0")
+    pub interface: String,
+    /// Local IPv6 link-local address
+    pub local_address: Ipv6Addr,
+    /// IPv6 scope ID (interface index)
+    pub scope_id: u32,
+    /// Router lifetime advertised by this router (seconds)
+    pub router_lifetime: u16,
+    /// Information about discovered peer (if any, including expired)
+    pub discovered_peer: Option<NdpPeer>,
+    /// Thread state for rx/tx loops (None if interface not active in NDP)
+    pub thread_state: Option<NdpThreadState>,
+}
+
+/// Information about a discovered NDP peer
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct NdpPeer {
+    /// Peer IPv6 address
+    pub address: Ipv6Addr,
+    /// When the peer was first discovered (ISO 8601 timestamp)
+    pub discovered_at: String,
+    /// When the most recent Router Advertisement was received (ISO 8601 timestamp)
+    pub last_advertisement: String,
+    /// Router lifetime from RA (seconds)
+    pub router_lifetime: u16,
+    /// Reachable time from RA (milliseconds)
+    pub reachable_time: u32,
+    /// Retransmit timer from RA (milliseconds)
+    pub retrans_timer: u32,
+    /// Whether the peer entry has expired
+    pub expired: bool,
+    /// Time until expiry (human-readable), or None if already expired
+    pub time_until_expiry: Option<String>,
 }

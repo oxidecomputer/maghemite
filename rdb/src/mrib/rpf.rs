@@ -721,6 +721,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
         let path2 = Path {
             nexthop: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)),
@@ -728,6 +729,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
         paths.insert(path1);
         paths.insert(path2);
@@ -751,6 +753,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
         paths.insert(path);
         rib4_inner.insert(prefix, paths);
@@ -781,6 +784,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
         paths.insert(path);
         rib4_inner.insert(prefix, paths.clone());
@@ -823,6 +827,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
         // Shutdown path
         let shutdown_path = Path {
@@ -831,6 +836,7 @@ mod tests {
             shutdown: true,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
         paths.insert(active_path);
         paths.insert(shutdown_path);
@@ -878,6 +884,7 @@ mod tests {
             shutdown: true,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
         paths.insert(shutdown_path);
         rib4_inner.insert(prefix, paths);
@@ -919,6 +926,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
 
         // BGP route (priority 20)
@@ -929,6 +937,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
 
         let mut paths = BTreeSet::new();
@@ -975,6 +984,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
         paths.insert(path);
         rib6_inner.insert(prefix, paths);
@@ -1006,6 +1016,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
         paths.insert(path);
         rib6_inner.insert(prefix, paths.clone());
@@ -1050,6 +1061,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         });
         rib4_inner.insert(prefix_24, paths1);
 
@@ -1063,6 +1075,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         });
         rib4_inner.insert(prefix_25, paths2);
 
@@ -1119,6 +1132,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
         let path2 = Path {
             nexthop: nexthop2,
@@ -1126,6 +1140,7 @@ mod tests {
             shutdown: false,
             bgp: None,
             vlan_id: None,
+            nexthop_interface: None,
         };
 
         let mut paths = BTreeSet::new();
@@ -1145,6 +1160,116 @@ mod tests {
         assert!(
             result == Some(nexthop1) || result == Some(nexthop2),
             "expected one of the ECMP nexthops"
+        );
+    }
+
+    #[test]
+    fn test_rpf_v6_with_nexthop_interface() {
+        // RPF with link-local nexthops and interface binding
+        // (BGP unnumbered underlay for multicast).
+        //
+        // This verifies both linear scan and poptrie paths return the correct
+        // nexthop.
+        let mut rib6_inner: Rib6 = BTreeMap::new();
+        let prefix: Prefix6 = "2001:db8:1::/48".parse().unwrap();
+
+        let nexthop = IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1));
+        let path = Path {
+            nexthop,
+            rib_priority: 1,
+            shutdown: false,
+            bgp: None,
+            vlan_id: None,
+            nexthop_interface: Some("qsfp0".to_string()),
+        };
+
+        let mut paths = BTreeSet::new();
+        paths.insert(path);
+        rib6_inner.insert(prefix, paths);
+
+        let log = init_file_logger("rpf_v6_interface.log");
+        let rpf_table = RpfTable::new(log);
+        let rib4_loc = empty_rib4();
+        let rib6_loc = Arc::new(Mutex::new(rib6_inner));
+
+        let source =
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 100));
+
+        // Linear scan
+        assert_eq!(
+            rpf_table.lookup(source, &rib4_loc, &rib6_loc, 1),
+            Some(nexthop),
+        );
+
+        // Poptrie
+        rpf_table.trigger_rebuild_v6(Arc::clone(&rib6_loc), None);
+        wait_for!(
+            rpf_table.cache_v6.read().unwrap().is_some(),
+            DEFAULT_INTERVAL_MS,
+            TEST_WAIT_ITERATIONS,
+            "poptrie v6 rebuild timed out"
+        );
+
+        assert_eq!(
+            rpf_table.lookup(source, &rib4_loc, &rib6_loc, 1),
+            Some(nexthop),
+        );
+    }
+
+    #[test]
+    fn test_rpf_v6_lpm() {
+        const NEXTHOP1: IpAddr =
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0xff, 0, 0, 0, 0, 1));
+        const NEXTHOP2: IpAddr =
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0xff, 0, 0, 0, 0, 2));
+
+        let mut rib6_inner: Rib6 = BTreeMap::new();
+
+        // Less specific: 2001:db8::/32 -> NEXTHOP1
+        let prefix_32: Prefix6 = "2001:db8::/32".parse().unwrap();
+        let mut paths1 = BTreeSet::new();
+        paths1.insert(Path {
+            nexthop: NEXTHOP1,
+            rib_priority: 1,
+            shutdown: false,
+            bgp: None,
+            vlan_id: None,
+            nexthop_interface: None,
+        });
+        rib6_inner.insert(prefix_32, paths1);
+
+        // More specific: 2001:db8:1::/48 -> NEXTHOP2
+        let prefix_48: Prefix6 = "2001:db8:1::/48".parse().unwrap();
+        let mut paths2 = BTreeSet::new();
+        paths2.insert(Path {
+            nexthop: NEXTHOP2,
+            rib_priority: 1,
+            shutdown: false,
+            bgp: None,
+            vlan_id: None,
+            nexthop_interface: None,
+        });
+        rib6_inner.insert(prefix_48, paths2);
+
+        let log = init_file_logger("rpf_v6_lpm.log");
+        let rpf_table = RpfTable::new(log);
+        let rib4_loc = empty_rib4();
+        let rib6_loc = Arc::new(Mutex::new(rib6_inner));
+
+        // Source in /48 should match more specific route
+        let source_in_48 =
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 50));
+        assert_eq!(
+            rpf_table.lookup(source_in_48, &rib4_loc, &rib6_loc, 1),
+            Some(NEXTHOP2)
+        );
+
+        // Source in /32 but not /48 should match less specific route
+        let source_in_32 =
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 2, 0, 0, 0, 0, 50));
+        assert_eq!(
+            rpf_table.lookup(source_in_32, &rib4_loc, &rib6_loc, 1),
+            Some(NEXTHOP1)
         );
     }
 }

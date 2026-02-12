@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::log::ddm_log;
+#[cfg(target_os = "illumos")]
 use ddm_admin_client::Client;
 use ddm_admin_client::types::TunnelOrigin;
 use oxnet::Ipv6Net;
@@ -106,6 +107,7 @@ pub(crate) fn remove_tunnel_routes<'a, I: Iterator<Item = &'a TunnelOrigin>>(
     }
 }
 
-pub(crate) fn new_ddm_client(log: &Logger) -> Client {
+#[cfg(target_os = "illumos")]
+pub fn new_ddm_client(log: &Logger) -> Client {
     Client::new("http://localhost:8000", log.clone())
 }

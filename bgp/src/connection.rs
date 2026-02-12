@@ -6,14 +6,15 @@ use crate::{
     clock::ConnectionClock,
     error::Error,
     messages::Message,
-    session::{FsmEvent, SessionEndpoint, SessionInfo},
+    session::{FsmEvent, PeerId, SessionEndpoint, SessionInfo},
+    unnumbered::UnnumberedManager,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::{
     collections::BTreeMap,
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    net::{SocketAddr, ToSocketAddrs},
     sync::{Arc, Mutex, mpsc::Sender},
     thread::JoinHandle,
     time::Duration,
@@ -118,18 +119,25 @@ impl ConnectionId {
 /// Implementors of this trait listen to and accept inbound BGP connections.
 pub trait BgpListener<Cnx: BgpConnection> {
     /// Bind to an address and listen for connections.
-    fn bind<A: ToSocketAddrs>(addr: A) -> Result<Self, Error>
+    ///
+    /// # Arguments
+    /// * `addr` - The address to bind to
+    /// * `unnumbered_manager` - Optional unnumbered manager for resolving scope_id -> interface
+    fn bind<A: ToSocketAddrs>(
+        addr: A,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    ) -> Result<Self, Error>
     where
         Self: Sized;
 
     /// Accept a connection. This Listener is non-blocking, so the timeout
     /// is used as a sleep between accept attempts. This function may be called
     /// multiple times, returning a new connection each time. Policy application
-    /// is handled by the Dispatcher after the addr_to_session lookup.
+    /// is handled by the Dispatcher after the peer_to_session lookup.
     fn accept(
         &self,
         log: Logger,
-        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
+        peer_to_session: Arc<Mutex<BTreeMap<PeerId, SessionEndpoint<Cnx>>>>,
         timeout: Duration,
     ) -> Result<Cnx, Error>;
 

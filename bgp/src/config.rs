@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PeerConfig {
     pub name: String,
+    pub group: String,
     pub host: SocketAddr,
     pub hold_time: u64,
     pub idle_hold_time: u64,
