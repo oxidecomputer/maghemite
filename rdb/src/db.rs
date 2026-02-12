@@ -2451,6 +2451,84 @@ mod test {
         assert!("192.168.1.0/abc".parse::<Prefix4>().is_err());
     }
 
+    // Regression test for https://github.com/oxidecomputer/maghemite/issues/528
+    //
+    // Static routes with the same prefix and nexthop but different vlan_ids
+    // must coexist in both persistent storage and the in-memory RIB.
+    #[test]
+    fn test_static_routes_same_nexthop_different_vlans() {
+        let db = get_test_db();
+        let prefix4 =
+            Prefix4::new(Ipv4Addr::from_str("172.20.0.0").unwrap(), 24);
+        let nexthop =
+            IpAddr::V4(Ipv4Addr::from_str("10.0.0.1").unwrap());
+
+        let route_vlan100 = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop,
+            vlan_id: Some(100),
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        let route_vlan200 = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop,
+            vlan_id: Some(200),
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        let route_no_vlan = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+
+        // Add all three routes
+        db.add_static_routes(&[route_vlan100, route_vlan200, route_no_vlan])
+            .unwrap();
+
+        // Verify persistent storage has all three
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert_eq!(
+            routes.len(),
+            3,
+            "persistent store should contain all three routes, got: {routes:?}"
+        );
+
+        // Verify in-memory RIB has all three paths for this prefix
+        let prefix = Prefix::V4(prefix4);
+        let rib_paths = db.get_prefix_paths(&prefix);
+        assert_eq!(
+            rib_paths.len(),
+            3,
+            "in-memory RIB should contain all three paths, got: {rib_paths:?}"
+        );
+
+        // Verify each path has the correct vlan_id
+        let vlan_ids: Vec<Option<u16>> =
+            rib_paths.iter().map(|p| p.vlan_id).collect();
+        assert!(
+            vlan_ids.contains(&Some(100)),
+            "should contain vlan 100"
+        );
+        assert!(
+            vlan_ids.contains(&Some(200)),
+            "should contain vlan 200"
+        );
+        assert!(vlan_ids.contains(&None), "should contain no-vlan route");
+
+        // Verify removal of one route leaves the other two
+        db.remove_static_routes(&[route_vlan100]).unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert_eq!(routes.len(), 2);
+        let rib_paths = db.get_prefix_paths(&prefix);
+        assert_eq!(rib_paths.len(), 2);
+
+        db.remove_static_routes(&[route_vlan200, route_no_vlan])
+            .unwrap();
+        let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
+        assert!(routes.is_empty());
+    }
+
     #[test]
     fn test_prefix6_from_str() {
         let prefix_str = "2001:db8::/32";

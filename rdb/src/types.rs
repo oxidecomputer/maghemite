@@ -130,6 +130,12 @@ impl Ord for Path {
         if self.nexthop != other.nexthop {
             return self.nexthop.cmp(&other.nexthop);
         }
+        if self.vlan_id != other.vlan_id {
+            return self.vlan_id.cmp(&other.vlan_id);
+        }
+        if self.nexthop_interface != other.nexthop_interface {
+            return self.nexthop_interface.cmp(&other.nexthop_interface);
+        }
         if self.shutdown != other.shutdown {
             return self.shutdown.cmp(&other.shutdown);
         }
