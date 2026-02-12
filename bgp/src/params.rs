@@ -205,12 +205,14 @@ pub struct Neighbor {
 impl Neighbor {
     /// Validate that at least one address family is enabled
     pub fn validate_address_families(&self) -> Result<(), String> {
-        if self.parameters.ipv4_unicast.is_none()
-            && self.parameters.ipv6_unicast.is_none()
-        {
-            return Err("at least one address family must be enabled".into());
-        }
-        Ok(())
+        self.parameters.validate_address_families()
+    }
+}
+
+impl UnnumberedNeighbor {
+    /// Validate that at least one address family is enabled
+    pub fn validate_address_families(&self) -> Result<(), String> {
+        self.parameters.validate_address_families()
     }
 }
 
@@ -919,6 +921,16 @@ pub struct BgpPeerParameters {
     /// is multiplied by a random value within the (min, max) range supplied.
     /// Useful to help break repeated synchronization of connection collisions.
     pub connect_retry_jitter: Option<JitterRange>,
+}
+
+impl BgpPeerParameters {
+    /// Validate that at least one address family is enabled
+    pub fn validate_address_families(&self) -> Result<(), String> {
+        if self.ipv4_unicast.is_none() && self.ipv6_unicast.is_none() {
+            return Err("at least one address family must be enabled".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
