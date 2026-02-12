@@ -43,6 +43,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (7, EXTENDED_NH_STATIC),
     (6, RIB_EXPORTED_STRING_KEY),
     (5, UNNUMBERED),
     (4, MP_BGP),
@@ -545,38 +546,73 @@ pub trait MgAdminApi {
         request: TypedBody<BestpathFanoutRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = PUT, path = "/static/route4" }]
+    // V1 static route endpoints (pre-EXTENDED_NH_STATIC): typed nexthop per AF
+    #[endpoint { method = PUT, path = "/static/route4", versions = ..VERSION_EXTENDED_NH_STATIC }]
     async fn static_add_v4_route(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<AddStaticRoute4Request>,
+        request: TypedBody<AddStaticRoute4V1Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = DELETE, path = "/static/route4" }]
+    #[endpoint { method = DELETE, path = "/static/route4", versions = ..VERSION_EXTENDED_NH_STATIC }]
     async fn static_remove_v4_route(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<DeleteStaticRoute4Request>,
+        request: TypedBody<DeleteStaticRoute4V1Request>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = GET, path = "/static/route4" }]
+    #[endpoint { method = GET, path = "/static/route4", versions = ..VERSION_EXTENDED_NH_STATIC }]
     async fn static_list_v4_routes(
         rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
 
-    // IPv6 static routes introduced in VERSION_IPV6_BASIC
-    #[endpoint { method = PUT, path = "/static/route6", versions = VERSION_IPV6_BASIC.. }]
+    #[endpoint { method = PUT, path = "/static/route6", versions = VERSION_IPV6_BASIC..VERSION_EXTENDED_NH_STATIC }]
     async fn static_add_v6_route(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<AddStaticRoute6V1Request>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = DELETE, path = "/static/route6", versions = VERSION_IPV6_BASIC..VERSION_EXTENDED_NH_STATIC }]
+    async fn static_remove_v6_route(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<DeleteStaticRoute6V1Request>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    #[endpoint { method = GET, path = "/static/route6", versions = VERSION_IPV6_BASIC..VERSION_EXTENDED_NH_STATIC }]
+    async fn static_list_v6_routes(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
+
+    // V2 static route endpoints (VERSION_EXTENDED_NH_STATIC+): IpAddr nexthop
+    #[endpoint { method = PUT, path = "/static/route4", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn static_add_v4_route_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<AddStaticRoute4Request>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = DELETE, path = "/static/route4", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn static_remove_v4_route_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<DeleteStaticRoute4Request>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    #[endpoint { method = GET, path = "/static/route4", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn static_list_v4_routes_v2(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
+
+    #[endpoint { method = PUT, path = "/static/route6", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn static_add_v6_route_v2(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<AddStaticRoute6Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = DELETE, path = "/static/route6", versions = VERSION_IPV6_BASIC.. }]
-    async fn static_remove_v6_route(
+    #[endpoint { method = DELETE, path = "/static/route6", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn static_remove_v6_route_v2(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<DeleteStaticRoute6Request>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = GET, path = "/static/route6", versions = VERSION_IPV6_BASIC.. }]
-    async fn static_list_v6_routes(
+    #[endpoint { method = GET, path = "/static/route6", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn static_list_v6_routes_v2(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
 
@@ -880,6 +916,90 @@ pub struct BestpathFanoutResponse {
 
 pub type GetRibResult = BTreeMap<String, BTreeSet<rdb::Path>>;
 
+// ============================================================================
+// Archived Static Route Types (Pre-VERSION_EXTENDED_NH_STATIC)
+// ============================================================================
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "AddStaticRoute4Request")]
+pub struct AddStaticRoute4V1Request {
+    pub routes: StaticRoute4V1List,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "DeleteStaticRoute4Request")]
+pub struct DeleteStaticRoute4V1Request {
+    pub routes: StaticRoute4V1List,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "StaticRoute4List")]
+pub struct StaticRoute4V1List {
+    pub list: Vec<StaticRoute4V1>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "StaticRoute4")]
+pub struct StaticRoute4V1 {
+    pub prefix: Prefix4,
+    pub nexthop: Ipv4Addr,
+    pub vlan_id: Option<u16>,
+    pub rib_priority: u8,
+}
+
+impl From<StaticRoute4V1> for StaticRouteKey {
+    fn from(val: StaticRoute4V1) -> Self {
+        StaticRouteKey {
+            prefix: val.prefix.into(),
+            nexthop: val.nexthop.into(),
+            vlan_id: val.vlan_id,
+            rib_priority: val.rib_priority,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "AddStaticRoute6Request")]
+pub struct AddStaticRoute6V1Request {
+    pub routes: StaticRoute6V1List,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "DeleteStaticRoute6Request")]
+pub struct DeleteStaticRoute6V1Request {
+    pub routes: StaticRoute6V1List,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "StaticRoute6List")]
+pub struct StaticRoute6V1List {
+    pub list: Vec<StaticRoute6V1>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "StaticRoute6")]
+pub struct StaticRoute6V1 {
+    pub prefix: Prefix6,
+    pub nexthop: Ipv6Addr,
+    pub vlan_id: Option<u16>,
+    pub rib_priority: u8,
+}
+
+impl From<StaticRoute6V1> for StaticRouteKey {
+    fn from(val: StaticRoute6V1) -> Self {
+        StaticRouteKey {
+            prefix: val.prefix.into(),
+            nexthop: val.nexthop.into(),
+            vlan_id: val.vlan_id,
+            rib_priority: val.rib_priority,
+        }
+    }
+}
+
+// ============================================================================
+// Current Static Route Types (VERSION_EXTENDED_NH_STATIC and later)
+// ============================================================================
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct AddStaticRoute4Request {
     pub routes: StaticRoute4List,
@@ -898,7 +1018,7 @@ pub struct StaticRoute4List {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct StaticRoute4 {
     pub prefix: Prefix4,
-    pub nexthop: Ipv4Addr,
+    pub nexthop: IpAddr,
     pub vlan_id: Option<u16>,
     pub rib_priority: u8,
 }
@@ -907,7 +1027,7 @@ impl From<StaticRoute4> for StaticRouteKey {
     fn from(val: StaticRoute4) -> Self {
         StaticRouteKey {
             prefix: val.prefix.into(),
-            nexthop: val.nexthop.into(),
+            nexthop: val.nexthop,
             vlan_id: val.vlan_id,
             rib_priority: val.rib_priority,
         }
@@ -932,7 +1052,7 @@ pub struct StaticRoute6List {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct StaticRoute6 {
     pub prefix: Prefix6,
-    pub nexthop: Ipv6Addr,
+    pub nexthop: IpAddr,
     pub vlan_id: Option<u16>,
     pub rib_priority: u8,
 }
@@ -941,7 +1061,7 @@ impl From<StaticRoute6> for StaticRouteKey {
     fn from(val: StaticRoute6) -> Self {
         StaticRouteKey {
             prefix: val.prefix.into(),
-            nexthop: val.nexthop.into(),
+            nexthop: val.nexthop,
             vlan_id: val.vlan_id,
             rib_priority: val.rib_priority,
         }
