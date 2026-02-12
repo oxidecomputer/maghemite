@@ -235,12 +235,13 @@ pub fn new_rhai_engine() -> Engine {
 
     #[cfg(debug_assertions)]
     {
-        println!("Functions registered:");
+        use mg_common::println_nopipe;
+        println_nopipe!("Functions registered:");
         engine
             .gen_fn_signatures(false)
             .into_iter()
-            .for_each(|func| println!("{func}"));
-        println!();
+            .for_each(|func| println_nopipe!("{func}"));
+        println_nopipe!();
     }
 
     engine

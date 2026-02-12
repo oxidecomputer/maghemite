@@ -8,6 +8,7 @@ zone = { git = "https://github.com/oxidecomputer/zone" }
 ddm-admin-client = { path = "../ddm-admin-client" }
 
 anyhow.workspace = true
+mg-common.workspace = true
 slog.workspace = true
 slog-term.workspace = true
 slog-envlogger.workspace = true

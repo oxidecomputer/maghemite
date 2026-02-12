@@ -15,6 +15,7 @@ progenitor.workspace = true
 schemars.workspace = true
 chrono.workspace = true
 uuid.workspace = true
+mg-common.workspace = true
 rdb-types.workspace = true
 tabwriter.workspace = true
 colored.workspace = true

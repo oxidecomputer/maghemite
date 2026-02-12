@@ -5949,7 +5949,7 @@ impl From<PathAttribute> for Option<PathAttributeV1> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mg_common::{cidr, ip, parse};
+    use mg_common::{cidr, ip, parse, println_nopipe};
     use pretty_assertions::assert_eq;
     use pretty_hex::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
@@ -6004,7 +6004,7 @@ mod tests {
         };
 
         let buf = h0.to_wire();
-        println!("buf: {}", buf.hex_dump());
+        println_nopipe!("buf: {}", buf.hex_dump());
 
         assert_eq!(
             buf,
@@ -6025,7 +6025,7 @@ mod tests {
         let om0 = OpenMessage::new4(395849, 0x1234, 0xaabbccdd, false);
 
         let buf = om0.to_wire().expect("open message to wire");
-        println!("buf: {}", buf.hex_dump());
+        println_nopipe!("buf: {}", buf.hex_dump());
 
         let om1 = OpenMessage::from_wire(&buf).expect("open message from wire");
         assert_eq!(om0, om1);
@@ -6036,7 +6036,7 @@ mod tests {
         let om0 = OpenMessage::new4(395849, 0x1234, 0xaabbccdd, true);
 
         let buf = om0.to_wire().expect("open message to wire");
-        println!("buf: {}", buf.hex_dump());
+        println_nopipe!("buf: {}", buf.hex_dump());
 
         let om1 = OpenMessage::from_wire(&buf).expect("open message from wire");
         assert_eq!(om0, om1);
@@ -6085,7 +6085,7 @@ mod tests {
         };
 
         let buf = um0.to_wire().expect("update message to wire");
-        println!("buf: {}", buf.hex_dump());
+        println_nopipe!("buf: {}", buf.hex_dump());
 
         let um1 =
             UpdateMessage::from_wire(&buf).expect("update message from wire");

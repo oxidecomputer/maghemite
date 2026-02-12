@@ -125,12 +125,12 @@ impl<Cnx: BgpConnection + 'static> TestRouter<Cnx> {
         let d = self.dispatcher.clone();
         let listen_addr = self.dispatcher.listen_addr().to_string();
         let listen_addr_for_log = listen_addr.clone();
-        eprintln!("Spawning Dispatcher thread for {}", listen_addr);
+        eprintln_nopipe!("Spawning Dispatcher thread for {}", listen_addr);
         Builder::new()
             .name(format!("bgp-listener-{}", listen_addr))
             .spawn(move || {
                 d.run::<Listener>();
-                eprintln!(
+                eprintln_nopipe!(
                     "Dispatcher thread for {} exiting",
                     listen_addr_for_log
                 );
@@ -352,12 +352,12 @@ where
         let d = dispatcher.clone();
         let listen_addr = dispatcher.listen_addr().to_string();
         let listen_addr_for_log = listen_addr.clone();
-        eprintln!("Spawning Dispatcher thread for {}", listen_addr);
+        eprintln_nopipe!("Spawning Dispatcher thread for {}", listen_addr);
         Builder::new()
             .name(format!("bgp-listener-{}", listen_addr))
             .spawn(move || {
                 d.run::<Listener>();
-                eprintln!(
+                eprintln_nopipe!(
                     "Dispatcher thread for {} exiting",
                     listen_addr_for_log
                 );
@@ -604,7 +604,7 @@ fn basic_peering_helper<
     wait_for_eq!(
         {
             let state = r1_session.state();
-            println!("r1_session.state(): {state}");
+            println_nopipe!("r1_session.state(): {state}");
             state
         },
         FsmStateKind::Established,
@@ -1219,7 +1219,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
             let count = mg_common::test::count_threads_with_prefix("bgp-")
                 .expect("couldn't collect thread count");
             if count > 0 {
-                eprintln!(
+                eprintln_nopipe!(
                     "Waiting for baseline to stabilize (current: {count})"
                 );
             }
@@ -1228,7 +1228,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
         "Baseline BGP thread count should reach 0"
     );
     let baseline = 0;
-    eprintln!("=== Baseline BGP thread count: {baseline} ===");
+    eprintln_nopipe!("=== Baseline BGP thread count: {baseline} ===");
 
     let r1_peer_config = PeerConfig {
         name: "r2".into(),
@@ -1304,7 +1304,7 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
 
     let after_establish = mg_common::test::count_threads_with_prefix("bgp-")
         .expect("couldn't collect thread count");
-    eprintln!(
+    eprintln_nopipe!(
         "=== After establishment BGP thread count: {after_establish} (baseline: {baseline}, delta: +{}) ===",
         after_establish - baseline
     );
@@ -1349,18 +1349,18 @@ fn test_neighbor_thread_lifecycle_no_leaks() {
                 mg_common::test::count_threads_with_prefix("bgp-")
                     .expect("couldn't get bgp thread count");
             if after_shutdown != baseline {
-                eprintln!(
+                eprintln_nopipe!(
                     "BGP thread count after shutdown ({after_shutdown} != baseline {baseline})"
                 );
 
                 // Dump detailed thread stacks
                 match mg_common::test::dump_thread_stacks() {
                     Ok(stacks) => {
-                        eprintln!("=== Thread stack traces ===");
-                        eprintln!("{stacks}");
+                        eprintln_nopipe!("=== Thread stack traces ===");
+                        eprintln_nopipe!("{stacks}");
                     }
                     Err(e) => {
-                        eprintln!("Could not dump thread stacks: {e}");
+                        eprintln_nopipe!("Could not dump thread stacks: {e}");
                     }
                 }
             }
@@ -2063,12 +2063,18 @@ fn test_unnumbered_session_survives_peer_change() {
 
     // Debug: check what's happening
     sleep(Duration::from_secs(5));
-    eprintln!("Session1 state: {:?}", session1.state());
-    eprintln!("Session2 state: {:?}", session2.state());
-    eprintln!("Session1 peer addr: {:?}", session1.get_peer_socket_addr());
-    eprintln!("Session2 peer addr: {:?}", session2.get_peer_socket_addr());
-    eprintln!("Session1 is_unnumbered: {}", session1.is_unnumbered());
-    eprintln!("Session2 is_unnumbered: {}", session2.is_unnumbered());
+    eprintln_nopipe!("Session1 state: {:?}", session1.state());
+    eprintln_nopipe!("Session2 state: {:?}", session2.state());
+    eprintln_nopipe!(
+        "Session1 peer addr: {:?}",
+        session1.get_peer_socket_addr()
+    );
+    eprintln_nopipe!(
+        "Session2 peer addr: {:?}",
+        session2.get_peer_socket_addr()
+    );
+    eprintln_nopipe!("Session1 is_unnumbered: {}", session1.is_unnumbered());
+    eprintln_nopipe!("Session2 is_unnumbered: {}", session2.is_unnumbered());
 
     // Wait for both sessions to reach Established
     wait_for_eq!(session1.state(), FsmStateKind::Established);

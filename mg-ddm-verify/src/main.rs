@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use ddm_types::exchange::PathVector;
+use mg_common::{eprintln_nopipe, println_nopipe};
 use oxnet::Ipv6Net;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -78,9 +79,11 @@ async fn run() -> Result<()> {
             for prefix in advertised_prefixes {
                 if !other_sled_prefixes.iter().any(|x| x.destination == *prefix)
                 {
-                    eprintln!(
+                    eprintln_nopipe!(
                         "sled {} advertised {:?} but {} didn't receive it!",
-                        sled, prefix, other_sled,
+                        sled,
+                        prefix,
+                        other_sled,
                     );
                     missed_direction
                         .entry(sled.to_string())
@@ -92,10 +95,10 @@ async fn run() -> Result<()> {
     }
 
     // show all missed directions
-    println!("missed directions:");
+    println_nopipe!("missed directions:");
     for (source, dests) in &missed_direction {
         for dest in dests {
-            println!(" {} -> {}", source, dest);
+            println_nopipe!(" {} -> {}", source, dest);
         }
     }
 

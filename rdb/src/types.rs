@@ -186,13 +186,10 @@ impl From<BgpPathProperties> for BgpPathPropertiesV1 {
             // Convert PeerId to IpAddr - only Ip variant is valid for V1 API
             peer: match value.peer {
                 PeerId::Ip(ip) => ip,
-                PeerId::Interface(iface) => {
-                    // This shouldn't happen in pre-UNNUMBERED versions
-                    // Log warning and use unspecified address as fallback
-                    eprintln!(
-                        "Warning: Interface peer '{}' in V1 API context",
-                        iface
-                    );
+                PeerId::Interface(_) => {
+                    // This shouldn't happen in pre-UNNUMBERED versions; fall
+                    // back to the unspecified address so V1 clients see
+                    // something well-formed.
                     IpAddr::V6(Ipv6Addr::UNSPECIFIED)
                 }
             },
