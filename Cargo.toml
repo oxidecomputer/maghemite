@@ -75,7 +75,7 @@ slog-term = "2.9"
 slog-envlogger = "2.2"
 slog-async = "2.8"
 slog-bunyan = "2.5"
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.228", features = ["derive"] }
 hostname = "0.3"
