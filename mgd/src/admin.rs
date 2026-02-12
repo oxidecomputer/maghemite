@@ -590,16 +590,17 @@ impl MgAdminApi for MgAdminApiImpl {
         rib_admin::update_rib_bestpath_fanout(rqctx, request).await
     }
 
+    // V1 static route methods (pre-EXTENDED_NH_STATIC)
     async fn static_add_v4_route(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<AddStaticRoute4Request>,
+        request: TypedBody<AddStaticRoute4V1Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         static_admin::static_add_v4_route(ctx, request).await
     }
 
     async fn static_remove_v4_route(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<DeleteStaticRoute4Request>,
+        request: TypedBody<DeleteStaticRoute4V1Request>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         static_admin::static_remove_v4_route(ctx, request).await
     }
@@ -612,19 +613,60 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn static_add_v6_route(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<AddStaticRoute6Request>,
+        request: TypedBody<AddStaticRoute6V1Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
         static_admin::static_add_v6_route(ctx, request).await
     }
 
     async fn static_remove_v6_route(
         ctx: RequestContext<Self::Context>,
-        request: TypedBody<DeleteStaticRoute6Request>,
+        request: TypedBody<DeleteStaticRoute6V1Request>,
     ) -> Result<HttpResponseDeleted, HttpError> {
         static_admin::static_remove_v6_route(ctx, request).await
     }
 
     async fn static_list_v6_routes(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
+        static_admin::static_list_v6_routes(ctx).await
+    }
+
+    // V2 static route methods (VERSION_EXTENDED_NH_STATIC+)
+    async fn static_add_v4_route_v2(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<AddStaticRoute4Request>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        static_admin::static_add_v4_route_v2(ctx, request).await
+    }
+
+    async fn static_remove_v4_route_v2(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<DeleteStaticRoute4Request>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        static_admin::static_remove_v4_route_v2(ctx, request).await
+    }
+
+    async fn static_list_v4_routes_v2(
+        ctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
+        static_admin::static_list_v4_routes(ctx).await
+    }
+
+    async fn static_add_v6_route_v2(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<AddStaticRoute6Request>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+        static_admin::static_add_v6_route_v2(ctx, request).await
+    }
+
+    async fn static_remove_v6_route_v2(
+        ctx: RequestContext<Self::Context>,
+        request: TypedBody<DeleteStaticRoute6Request>,
+    ) -> Result<HttpResponseDeleted, HttpError> {
+        static_admin::static_remove_v6_route_v2(ctx, request).await
+    }
+
+    async fn static_list_v6_routes_v2(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError> {
         static_admin::static_list_v6_routes(ctx).await
