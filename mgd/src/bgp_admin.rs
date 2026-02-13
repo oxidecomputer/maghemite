@@ -784,17 +784,25 @@ pub async fn read_origin4(
 ) -> Result<HttpResponseOk<Origin4>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let mut originated = get_router!(ctx, rq.asn)?
+    let originated = get_router!(ctx, rq.asn)?
         .db
-        .get_origin4()
+        .get_origin(Some(AddressFamily::Ipv4))
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
+    let mut prefixes: Vec<Prefix4> = originated
+        .into_iter()
+        .filter_map(|p| match p {
+            Prefix::V4(p4) => Some(p4),
+            _ => None,
+        })
+        .collect();
+
     // stable output order for clients
-    originated.sort();
+    prefixes.sort();
 
     Ok(HttpResponseOk(Origin4 {
         asn: rq.asn,
-        prefixes: originated,
+        prefixes,
     }))
 }
 
@@ -856,17 +864,25 @@ pub async fn read_origin6(
 ) -> Result<HttpResponseOk<Origin6>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
-    let mut originated = get_router!(ctx, rq.asn)?
+    let originated = get_router!(ctx, rq.asn)?
         .db
-        .get_origin6()
+        .get_origin(Some(AddressFamily::Ipv6))
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
+    let mut prefixes: Vec<Prefix6> = originated
+        .into_iter()
+        .filter_map(|p| match p {
+            Prefix::V6(p6) => Some(p6),
+            _ => None,
+        })
+        .collect();
+
     // stable output order for clients
-    originated.sort();
+    prefixes.sort();
 
     Ok(HttpResponseOk(Origin6 {
         asn: rq.asn,
-        prefixes: originated,
+        prefixes,
     }))
 }
 
@@ -911,7 +927,7 @@ pub async fn get_exported(
     let rq = request.into_inner();
     let ctx = ctx.context();
     let r = get_router!(ctx, rq.asn)?.clone();
-    let orig4 = r.db.get_origin4().map_err(|e| {
+    let orig4 = r.db.get_origin(Some(AddressFamily::Ipv4)).map_err(|e| {
         HttpError::for_internal_error(format!("error getting origin: {e}"))
     })?;
     let neighs = r.db.get_bgp_neighbors().map_err(|e| {
@@ -933,8 +949,7 @@ pub async fn get_exported(
             continue;
         }
 
-        let mut orig_routes: Vec<Prefix> =
-            orig4.clone().iter().map(|p| Prefix::from(*p)).collect();
+        let mut orig_routes: Vec<Prefix> = orig4.clone();
 
         // Combine per-AF export policies into legacy format for filtering
         let allow_export = ImportExportPolicyV1::from_per_af_policies(
@@ -967,10 +982,10 @@ pub async fn get_exported_v2(
     let r = get_router!(ctx, rq.asn)?.clone();
 
     // Get originated prefixes for both address families
-    let orig4 = r.db.get_origin4().map_err(|e| {
+    let orig4 = r.db.get_origin(Some(AddressFamily::Ipv4)).map_err(|e| {
         HttpError::for_internal_error(format!("error getting origin4: {e}"))
     })?;
-    let orig6 = r.db.get_origin6().map_err(|e| {
+    let orig6 = r.db.get_origin(Some(AddressFamily::Ipv6)).map_err(|e| {
         HttpError::for_internal_error(format!("error getting origin6: {e}"))
     })?;
 
@@ -1026,14 +1041,14 @@ pub async fn get_exported_v3(
 
     // Only query originated prefixes for requested address families
     let orig4 = if process_ipv4 {
-        r.db.get_origin4().map_err(|e| {
+        r.db.get_origin(Some(AddressFamily::Ipv4)).map_err(|e| {
             HttpError::for_internal_error(format!("error getting origin4: {e}"))
         })?
     } else {
         Vec::new()
     };
     let orig6 = if process_ipv6 {
-        r.db.get_origin6().map_err(|e| {
+        r.db.get_origin(Some(AddressFamily::Ipv6)).map_err(|e| {
             HttpError::for_internal_error(format!("error getting origin6: {e}"))
         })?
     } else {
@@ -1932,7 +1947,7 @@ pub(crate) mod helpers {
     ) -> Result<HttpResponseDeleted, Error> {
         bgp_log!(ctx.log, info, "remove neighbor (addr {addr}, asn {asn})");
 
-        ctx.db.remove_bgp_prefixes_from_peer(&PeerId::Ip(addr));
+        ctx.db.remove_all_prefixes_from_bgp_peer(&PeerId::Ip(addr));
         ctx.db.remove_bgp_neighbor(addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 
@@ -2559,8 +2574,8 @@ pub(crate) mod helpers {
     /// Returns None if the peer is not Established or has no routes to export.
     pub(crate) fn get_exported<Cnx: BgpConnection>(
         session: &SessionRunner<Cnx>,
-        orig4: &[Prefix4],
-        orig6: &[Prefix6],
+        orig4: &[Prefix],
+        orig6: &[Prefix],
         process_ipv4: bool,
         process_ipv6: bool,
     ) -> Option<(PeerId, Vec<Prefix>)> {
@@ -2593,8 +2608,7 @@ pub(crate) mod helpers {
             && ipv4_negotiated
             && let Some(ref ipv4_config) = session_info.ipv4_unicast
         {
-            let mut v4_routes: Vec<Prefix> =
-                orig4.iter().map(|p| rdb::Prefix::from(*p)).collect();
+            let mut v4_routes: Vec<Prefix> = orig4.to_vec();
 
             // Apply export policy
             match &ipv4_config.export_policy {
@@ -2619,8 +2633,7 @@ pub(crate) mod helpers {
             && ipv6_negotiated
             && let Some(ref ipv6_config) = session_info.ipv6_unicast
         {
-            let mut v6_routes: Vec<Prefix> =
-                orig6.iter().map(|p| rdb::Prefix::from(*p)).collect();
+            let mut v6_routes: Vec<Prefix> = orig6.to_vec();
 
             // Apply export policy
             match &ipv6_config.export_policy {

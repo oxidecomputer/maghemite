@@ -20,7 +20,7 @@ use crate::{
     unnumbered::UnnumberedManager,
 };
 use mg_common::{lock, read_lock, write_lock};
-use rdb::{Asn, Db, Prefix4, Prefix6};
+use rdb::{AddressFamily, Asn, Db, Prefix4, Prefix6};
 use rhai::AST;
 use slog::Logger;
 use std::{
@@ -465,45 +465,44 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn create_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        let prefix4: Vec<Prefix4> = prefixes
-            .iter()
-            .cloned()
-            .filter_map(|x| match x {
-                Prefix::V4(p4) => Some(p4),
-                Prefix::V6(_) => None,
-            })
-            .collect();
-        self.db.create_origin4(&prefix4)?;
+        self.db.create_origin(AddressFamily::Ipv4, &prefixes)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
+            let prefix4: Vec<Prefix4> = prefixes
+                .into_iter()
+                .filter_map(|x| match x {
+                    Prefix::V4(p4) => Some(p4),
+                    _ => None,
+                })
+                .collect();
             self.announce_origin4(prefix4);
         }
         Ok(())
     }
 
     pub fn set_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        let origin4 = self.db.get_origin4()?;
-        let current: BTreeSet<&Prefix4> = origin4.iter().collect();
+        let current = self.db.get_origin(Some(AddressFamily::Ipv4))?;
+        let current_set: BTreeSet<&Prefix> = current.iter().collect();
+        let new_set: BTreeSet<&Prefix> = prefixes.iter().collect();
 
-        let prefix4: Vec<Prefix4> = prefixes
-            .iter()
-            .cloned()
-            .filter_map(|x| match x {
-                Prefix::V4(p4) => Some(p4),
-                Prefix::V6(_) => None,
+        let to_withdraw: Vec<Prefix4> = current_set
+            .difference(&new_set)
+            .filter_map(|p| match p {
+                Prefix::V4(p4) => Some(*p4),
+                _ => None,
             })
             .collect();
 
-        let new: BTreeSet<&Prefix4> = prefix4.iter().collect();
+        let to_announce: Vec<Prefix4> = new_set
+            .difference(&current_set)
+            .filter_map(|p| match p {
+                Prefix::V4(p4) => Some(*p4),
+                _ => None,
+            })
+            .collect();
 
-        let to_withdraw: Vec<Prefix4> =
-            current.difference(&new).map(|x| **x).collect();
-
-        let to_announce: Vec<Prefix4> =
-            new.difference(&current).map(|x| **x).collect();
-
-        self.db.set_origin4(&prefix4)?;
+        self.db.set_origin(AddressFamily::Ipv4, &prefixes)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
@@ -514,13 +513,20 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn clear_origin4(&self) -> Result<(), Error> {
-        let current = self.db.get_origin4()?;
+        let current = self.db.get_origin(Some(AddressFamily::Ipv4))?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
-            self.withdraw_origin4(current);
+            let current4: Vec<Prefix4> = current
+                .into_iter()
+                .filter_map(|p| match p {
+                    Prefix::V4(p4) => Some(p4),
+                    _ => None,
+                })
+                .collect();
+            self.withdraw_origin4(current4);
         }
-        self.db.clear_origin4()?;
+        self.db.clear_origin(AddressFamily::Ipv4)?;
         Ok(())
     }
 
@@ -569,45 +575,44 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn create_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        let prefix6: Vec<Prefix6> = prefixes
-            .iter()
-            .cloned()
-            .filter_map(|x| match x {
-                Prefix::V6(p6) => Some(p6),
-                Prefix::V4(_) => None,
-            })
-            .collect();
-        self.db.create_origin6(&prefix6)?;
+        self.db.create_origin(AddressFamily::Ipv6, &prefixes)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
+            let prefix6: Vec<Prefix6> = prefixes
+                .into_iter()
+                .filter_map(|x| match x {
+                    Prefix::V6(p6) => Some(p6),
+                    _ => None,
+                })
+                .collect();
             self.announce_origin6(prefix6);
         }
         Ok(())
     }
 
     pub fn set_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        let origin6 = self.db.get_origin6()?;
-        let current: BTreeSet<&Prefix6> = origin6.iter().collect();
+        let current = self.db.get_origin(Some(AddressFamily::Ipv6))?;
+        let current_set: BTreeSet<&Prefix> = current.iter().collect();
+        let new_set: BTreeSet<&Prefix> = prefixes.iter().collect();
 
-        let prefix6: Vec<Prefix6> = prefixes
-            .iter()
-            .cloned()
-            .filter_map(|x| match x {
-                Prefix::V6(p6) => Some(p6),
-                Prefix::V4(_) => None,
+        let to_withdraw: Vec<Prefix6> = current_set
+            .difference(&new_set)
+            .filter_map(|p| match p {
+                Prefix::V6(p6) => Some(*p6),
+                _ => None,
             })
             .collect();
 
-        let new: BTreeSet<&Prefix6> = prefix6.iter().collect();
+        let to_announce: Vec<Prefix6> = new_set
+            .difference(&current_set)
+            .filter_map(|p| match p {
+                Prefix::V6(p6) => Some(*p6),
+                _ => None,
+            })
+            .collect();
 
-        let to_withdraw: Vec<Prefix6> =
-            current.difference(&new).map(|x| **x).collect();
-
-        let to_announce: Vec<Prefix6> =
-            new.difference(&current).map(|x| **x).collect();
-
-        self.db.set_origin6(&prefix6)?;
+        self.db.set_origin(AddressFamily::Ipv6, &prefixes)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
@@ -618,13 +623,20 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     pub fn clear_origin6(&self) -> Result<(), Error> {
-        let current = self.db.get_origin6()?;
+        let current = self.db.get_origin(Some(AddressFamily::Ipv6))?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
-            self.withdraw_origin6(current);
+            let current6: Vec<Prefix6> = current
+                .into_iter()
+                .filter_map(|p| match p {
+                    Prefix::V6(p6) => Some(p6),
+                    _ => None,
+                })
+                .collect();
+            self.withdraw_origin6(current6);
         }
-        self.db.clear_origin6()?;
+        self.db.clear_origin(AddressFamily::Ipv6)?;
         Ok(())
     }
 
@@ -737,7 +749,15 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     fn announce_all(&self) -> Result<(), Error> {
-        let originated4 = self.db.get_origin4()?;
+        let originated4: Vec<Prefix4> = self
+            .db
+            .get_origin(Some(AddressFamily::Ipv4))?
+            .into_iter()
+            .filter_map(|p| match p {
+                Prefix::V4(p4) => Some(p4),
+                _ => None,
+            })
+            .collect();
 
         if !originated4.is_empty() {
             slog::debug!(
@@ -750,8 +770,15 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
             read_lock!(self.fanout4).send_all(originated4, vec![]);
         }
 
-        // Also announce IPv6 originated routes
-        let originated6 = self.db.get_origin6()?;
+        let originated6: Vec<Prefix6> = self
+            .db
+            .get_origin(Some(AddressFamily::Ipv6))?
+            .into_iter()
+            .filter_map(|p| match p {
+                Prefix::V6(p6) => Some(p6),
+                _ => None,
+            })
+            .collect();
 
         if !originated6.is_empty() {
             slog::debug!(

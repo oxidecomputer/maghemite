@@ -171,74 +171,52 @@ impl Db {
         }
     }
 
-    fn loc_rib4(&self) -> Rib4 {
-        lock!(self.rib4_loc).clone()
-    }
-
-    fn loc_rib6(&self) -> Rib6 {
-        lock!(self.rib6_loc).clone()
-    }
-
     pub fn loc_rib(&self, af: Option<AddressFamily>) -> Rib {
         match af {
-            Some(AddressFamily::Ipv4) => self
-                .loc_rib4()
-                .into_iter()
-                .map(|(p4, paths)| (Prefix::from(p4), paths))
+            Some(AddressFamily::Ipv4) => lock!(self.rib4_loc)
+                .iter()
+                .map(|(p4, paths)| (Prefix::from(*p4), paths.clone()))
                 .collect(),
 
-            Some(AddressFamily::Ipv6) => self
-                .loc_rib6()
-                .into_iter()
-                .map(|(p6, paths)| (Prefix::from(p6), paths))
+            Some(AddressFamily::Ipv6) => lock!(self.rib6_loc)
+                .iter()
+                .map(|(p6, paths)| (Prefix::from(*p6), paths.clone()))
                 .collect(),
 
             None => {
-                let mut rib: Rib = self
-                    .loc_rib4()
-                    .into_iter()
-                    .map(|(p4, paths)| (Prefix::from(p4), paths))
+                let mut rib: Rib = lock!(self.rib4_loc)
+                    .iter()
+                    .map(|(p4, paths)| (Prefix::from(*p4), paths.clone()))
                     .collect();
                 rib.extend(
-                    self.loc_rib6()
-                        .into_iter()
-                        .map(|(p6, paths)| (Prefix::from(p6), paths)),
+                    lock!(self.rib6_loc)
+                        .iter()
+                        .map(|(p6, paths)| (Prefix::from(*p6), paths.clone())),
                 );
                 rib
             }
         }
     }
 
-    fn full_rib4(&self) -> Rib4 {
-        lock!(self.rib4_in).clone()
-    }
-
-    fn full_rib6(&self) -> Rib6 {
-        lock!(self.rib6_in).clone()
-    }
-
     pub fn full_rib(&self, af: Option<AddressFamily>) -> Rib {
         match af {
-            Some(AddressFamily::Ipv4) => self
-                .full_rib4()
-                .into_iter()
-                .map(|(p4, paths)| (Prefix::from(p4), paths))
+            Some(AddressFamily::Ipv4) => lock!(self.rib4_in)
+                .iter()
+                .map(|(p4, paths)| (Prefix::from(*p4), paths.clone()))
                 .collect(),
-            Some(AddressFamily::Ipv6) => self
-                .full_rib6()
-                .into_iter()
-                .map(|(p6, paths)| (Prefix::from(p6), paths))
+            Some(AddressFamily::Ipv6) => lock!(self.rib6_in)
+                .iter()
+                .map(|(p6, paths)| (Prefix::from(*p6), paths.clone()))
                 .collect(),
             None => {
-                let mut rib: Rib = self
-                    .full_rib4()
-                    .into_iter()
-                    .map(|(p4, paths)| (Prefix::from(p4), paths))
+                let mut rib: Rib = lock!(self.rib4_in)
+                    .iter()
+                    .map(|(p4, paths)| (Prefix::from(*p4), paths.clone()))
                     .collect();
                 rib.extend(
-                    self.full_rib6()
-                        .into_iter()
-                        .map(|(p6, paths)| (Prefix::from(p6), paths)),
+                    lock!(self.rib6_in)
+                        .iter()
+                        .map(|(p6, paths)| (Prefix::from(*p6), paths.clone())),
                 );
                 rib
             }
@@ -482,39 +460,11 @@ impl Db {
         Ok(result)
     }
 
-    pub fn create_origin4(&self, ps: &[Prefix4]) -> Result<(), Error> {
-        rdb_log!(self, info,
-            "create origin4: {ps:?}";
-            "unit" => UNIT_PERSISTENT
-        );
-
-        let current = self.get_origin4()?;
-        if !current.is_empty() {
-            return Err(Error::Conflict("origin already exists".to_string()));
-        }
-
-        self.set_origin4(ps)
-    }
-
-    pub fn set_origin4(&self, ps: &[Prefix4]) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
-        tree.clear()?;
-        for p in ps.iter() {
-            tree.insert(p.db_key(), "")?;
-        }
-        tree.flush()?;
-        Ok(())
-    }
-
-    pub fn clear_origin4(&self) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
-        tree.clear()?;
-        tree.flush()?;
-        Ok(())
-    }
-
-    pub fn get_origin4(&self) -> Result<Vec<Prefix4>, Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN4)?;
+    fn get_origin_tree<P: PrefixDbKey>(
+        &self,
+        tree_name: &str,
+    ) -> Result<Vec<P>, Error> {
+        let tree = self.persistent.open_tree(tree_name)?;
         let result = tree
             .scan_prefix(vec![])
             .filter_map(|item| {
@@ -530,7 +480,7 @@ impl Db {
                         return None;
                     }
                 };
-                Some(match Prefix4::from_db_key(&key) {
+                Some(match P::from_db_key(&key) {
                     Ok(item) => item,
                     Err(ref e) => {
                         rdb_log!(
@@ -547,17 +497,12 @@ impl Db {
         Ok(result)
     }
 
-    pub fn create_origin6(&self, ps: &[Prefix6]) -> Result<(), Error> {
-        let current = self.get_origin6()?;
-        if !current.is_empty() {
-            return Err(Error::Conflict("origin already exists".to_string()));
-        }
-
-        self.set_origin6(ps)
-    }
-
-    pub fn set_origin6(&self, ps: &[Prefix6]) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
+    fn set_origin_tree<P: PrefixDbKey>(
+        &self,
+        tree_name: &str,
+        ps: &[P],
+    ) -> Result<(), Error> {
+        let tree = self.persistent.open_tree(tree_name)?;
         tree.clear()?;
         for p in ps.iter() {
             tree.insert(p.db_key(), "")?;
@@ -566,45 +511,109 @@ impl Db {
         Ok(())
     }
 
-    pub fn clear_origin6(&self) -> Result<(), Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
+    fn create_origin_tree<P: PrefixDbKey>(
+        &self,
+        tree_name: &str,
+        ps: &[P],
+    ) -> Result<(), Error> {
+        let current: Vec<P> = self.get_origin_tree(tree_name)?;
+        if !current.is_empty() {
+            return Err(Error::Conflict("origin already exists".to_string()));
+        }
+        self.set_origin_tree(tree_name, ps)
+    }
+
+    pub fn get_origin(
+        &self,
+        af: Option<AddressFamily>,
+    ) -> Result<Vec<Prefix>, Error> {
+        match af {
+            Some(AddressFamily::Ipv4) => {
+                let ps: Vec<Prefix4> = self.get_origin_tree(BGP_ORIGIN4)?;
+                Ok(ps.into_iter().map(Prefix::from).collect())
+            }
+            Some(AddressFamily::Ipv6) => {
+                let ps: Vec<Prefix6> = self.get_origin_tree(BGP_ORIGIN6)?;
+                Ok(ps.into_iter().map(Prefix::from).collect())
+            }
+            None => {
+                let p4: Vec<Prefix4> = self.get_origin_tree(BGP_ORIGIN4)?;
+                let p6: Vec<Prefix6> = self.get_origin_tree(BGP_ORIGIN6)?;
+                let mut result: Vec<Prefix> =
+                    p4.into_iter().map(Prefix::from).collect();
+                result.extend(p6.into_iter().map(Prefix::from));
+                Ok(result)
+            }
+        }
+    }
+
+    pub fn set_origin(
+        &self,
+        af: AddressFamily,
+        ps: &[Prefix],
+    ) -> Result<(), Error> {
+        match af {
+            AddressFamily::Ipv4 => {
+                let p4: Vec<Prefix4> = ps
+                    .iter()
+                    .filter_map(|p| match p {
+                        Prefix::V4(p4) => Some(*p4),
+                        _ => None,
+                    })
+                    .collect();
+                self.set_origin_tree(BGP_ORIGIN4, &p4)
+            }
+            AddressFamily::Ipv6 => {
+                let p6: Vec<Prefix6> = ps
+                    .iter()
+                    .filter_map(|p| match p {
+                        Prefix::V6(p6) => Some(*p6),
+                        _ => None,
+                    })
+                    .collect();
+                self.set_origin_tree(BGP_ORIGIN6, &p6)
+            }
+        }
+    }
+
+    pub fn create_origin(
+        &self,
+        af: AddressFamily,
+        ps: &[Prefix],
+    ) -> Result<(), Error> {
+        match af {
+            AddressFamily::Ipv4 => {
+                let p4: Vec<Prefix4> = ps
+                    .iter()
+                    .filter_map(|p| match p {
+                        Prefix::V4(p4) => Some(*p4),
+                        _ => None,
+                    })
+                    .collect();
+                self.create_origin_tree(BGP_ORIGIN4, &p4)
+            }
+            AddressFamily::Ipv6 => {
+                let p6: Vec<Prefix6> = ps
+                    .iter()
+                    .filter_map(|p| match p {
+                        Prefix::V6(p6) => Some(*p6),
+                        _ => None,
+                    })
+                    .collect();
+                self.create_origin_tree(BGP_ORIGIN6, &p6)
+            }
+        }
+    }
+
+    pub fn clear_origin(&self, af: AddressFamily) -> Result<(), Error> {
+        let tree_name = match af {
+            AddressFamily::Ipv4 => BGP_ORIGIN4,
+            AddressFamily::Ipv6 => BGP_ORIGIN6,
+        };
+        let tree = self.persistent.open_tree(tree_name)?;
         tree.clear()?;
         tree.flush()?;
         Ok(())
-    }
-
-    pub fn get_origin6(&self) -> Result<Vec<Prefix6>, Error> {
-        let tree = self.persistent.open_tree(BGP_ORIGIN6)?;
-        let result = tree
-            .scan_prefix(vec![])
-            .filter_map(|item| {
-                let (key, _value) = match item {
-                    Ok(item) => item,
-                    Err(ref e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error fetching bgp origin entry {item:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                };
-                Some(match Prefix6::from_db_key(&key) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        rdb_log!(
-                            self,
-                            error,
-                            "error parsing bgp origin entry value {key:?}: {e}";
-                            "unit" => UNIT_PERSISTENT
-                        );
-                        return None;
-                    }
-                })
-            })
-            .collect();
-        Ok(result)
     }
 
     pub fn get_prefix_paths(&self, prefix: &Prefix) -> Vec<Path> {
@@ -645,11 +654,11 @@ impl Db {
         }
     }
 
-    pub fn update_rib4_loc(
+    fn recompute_rib_loc<P: Ord + Copy>(
         &self,
-        rib_in: &Rib4,
-        rib_loc: &mut Rib4,
-        prefix: &Prefix4,
+        rib_in: &BTreeMap<P, BTreeSet<Path>>,
+        rib_loc: &mut BTreeMap<P, BTreeSet<Path>>,
+        prefix: &P,
     ) {
         let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
             rdb_log!(
@@ -662,57 +671,14 @@ impl Db {
         });
 
         match rib_in.get(prefix) {
-            // rib-in has paths worth evaluating for loc-rib
             Some(paths) => {
-                match bestpaths(paths, fanout.get().into()) {
-                    // bestpath found at least 1 path for loc-rib
-                    Some(bp) => {
-                        rib_loc.insert(*prefix, bp.clone());
-                    }
-                    // bestpath found no suitable paths
-                    None => {
-                        rib_loc.remove(prefix);
-                    }
-                }
+                Self::update_rib_loc(
+                    prefix,
+                    paths,
+                    rib_loc,
+                    fanout.get().into(),
+                );
             }
-            // rib-in has no worthy paths
-            None => {
-                rib_loc.remove(prefix);
-            }
-        }
-    }
-
-    pub fn update_rib6_loc(
-        &self,
-        rib_in: &Rib6,
-        rib_loc: &mut Rib6,
-        prefix: &Prefix6,
-    ) {
-        let fanout = self.get_bestpath_fanout().unwrap_or_else(|e| {
-            rdb_log!(
-                self,
-                error,
-                "failed to get bestpath fanout: {e}";
-                "unit" => UNIT_PERSISTENT
-            );
-            NonZeroU8::new(DEFAULT_BESTPATH_FANOUT).unwrap()
-        });
-
-        match rib_in.get(prefix) {
-            // rib-in has paths worth evaluating for loc-rib
-            Some(paths) => {
-                match bestpaths(paths, fanout.get().into()) {
-                    // bestpath found at least 1 path for loc-rib
-                    Some(bp) => {
-                        rib_loc.insert(*prefix, bp.clone());
-                    }
-                    // bestpath found no suitable paths
-                    None => {
-                        rib_loc.remove(prefix);
-                    }
-                }
-            }
-            // rib-in has no worthy paths
             None => {
                 rib_loc.remove(prefix);
             }
@@ -722,7 +688,7 @@ impl Db {
     // generic helper function to kick off a bestpath run for some
     // subset of prefixes in rib_in. the caller chooses which prefixes
     // bestpath is run against via the bestpath_needed closure
-    pub fn trigger_bestpath_when<F>(&self, bestpath_needed: F)
+    fn trigger_bestpath_when<F>(&self, bestpath_needed: F)
     where
         F: Fn(&Prefix, &BTreeSet<Path>) -> bool,
     {
@@ -786,40 +752,22 @@ impl Db {
         }
     }
 
-    fn add_prefix4_path(
+    fn insert_prefix_path<P: Ord + Copy>(
         &self,
-        p4: &Prefix4,
+        prefix: &P,
         path: &Path,
-        rib_in: &mut Rib4,
-        rib_loc: &mut Rib4,
+        rib_in: &mut BTreeMap<P, BTreeSet<Path>>,
+        rib_loc: &mut BTreeMap<P, BTreeSet<Path>>,
     ) {
-        match rib_in.get_mut(p4) {
+        match rib_in.get_mut(prefix) {
             Some(paths) => {
                 paths.replace(path.clone());
             }
             None => {
-                rib_in.insert(*p4, BTreeSet::from([path.clone()]));
+                rib_in.insert(*prefix, BTreeSet::from([path.clone()]));
             }
         }
-        self.update_rib4_loc(rib_in, rib_loc, p4);
-    }
-
-    fn add_prefix6_path(
-        &self,
-        p6: &Prefix6,
-        path: &Path,
-        rib_in: &mut Rib6,
-        rib_loc: &mut Rib6,
-    ) {
-        match rib_in.get_mut(p6) {
-            Some(paths) => {
-                paths.replace(path.clone());
-            }
-            None => {
-                rib_in.insert(*p6, BTreeSet::from([path.clone()]));
-            }
-        }
-        self.update_rib6_loc(rib_in, rib_loc, p6);
+        self.recompute_rib_loc(rib_in, rib_loc, prefix);
     }
 
     pub fn add_prefix_path(&self, prefix: &Prefix, path: &Path) {
@@ -827,12 +775,12 @@ impl Db {
             Prefix::V4(p4) => {
                 let mut rib_in = lock!(self.rib4_in);
                 let mut rib_loc = lock!(self.rib4_loc);
-                self.add_prefix4_path(p4, path, &mut rib_in, &mut rib_loc);
+                self.insert_prefix_path(p4, path, &mut *rib_in, &mut *rib_loc);
             }
             Prefix::V6(p6) => {
                 let mut rib_in = lock!(self.rib6_in);
                 let mut rib_loc = lock!(self.rib6_loc);
-                self.add_prefix6_path(p6, path, &mut rib_in, &mut rib_loc);
+                self.insert_prefix_path(p6, path, &mut *rib_in, &mut *rib_loc);
             }
         };
     }
@@ -882,12 +830,12 @@ impl Db {
             },
         );
 
-        {
+        if !routes4.is_empty() {
             let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
             self.add_static_routes_to_tree(tree, &routes4, &mut pcn)?;
         }
 
-        {
+        if !routes6.is_empty() {
             let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
             self.add_static_routes_to_tree(tree, &routes6, &mut pcn)?;
         }
@@ -968,31 +916,21 @@ impl Db {
         }
     }
 
-    pub fn get_static4_count(&self) -> Result<usize, Error> {
-        let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
+    pub fn get_static_count(&self, af: AddressFamily) -> Result<usize, Error> {
+        let tree_name = match af {
+            AddressFamily::Ipv4 => STATIC4_ROUTES,
+            AddressFamily::Ipv6 => STATIC6_ROUTES,
+        };
+        let tree = self.persistent.open_tree(tree_name)?;
         Ok(tree.len())
     }
 
-    pub fn get_static_nexthop4_count(&self) -> Result<usize, Error> {
-        let entries = self.get_static(Some(AddressFamily::Ipv4))?;
-        let mut nexthops = BTreeSet::new();
-        for e in entries {
-            nexthops.insert(e.nexthop);
-        }
-        Ok(nexthops.len())
-    }
-
-    pub fn get_static6_count(&self) -> Result<usize, Error> {
-        let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-        Ok(tree.len())
-    }
-
-    pub fn get_static_nexthop6_count(&self) -> Result<usize, Error> {
-        let entries = self.get_static(Some(AddressFamily::Ipv6))?;
-        let mut nexthops = BTreeSet::new();
-        for e in entries {
-            nexthops.insert(e.nexthop);
-        }
+    pub fn get_static_nexthop_count(
+        &self,
+        af: AddressFamily,
+    ) -> Result<usize, Error> {
+        let entries = self.get_static(Some(af))?;
+        let nexthops: BTreeSet<_> = entries.iter().map(|e| e.nexthop).collect();
         Ok(nexthops.len())
     }
 
@@ -1068,105 +1006,39 @@ impl Db {
         self.notify(pcn);
     }
 
-    fn remove_prefix4_path<F>(
+    fn remove_prefix_path<P, F>(
         &self,
-        prefix: &Prefix4,
+        prefix: &P,
         prefix_cmp: F,
-        rib_in: &mut Rib4,
-        rib_loc: &mut Rib4,
-    ) where
-        F: Fn(&Path) -> bool,
-    {
-        if let Some(paths) = rib_in.get_mut(prefix) {
-            paths.retain(|p| !prefix_cmp(p));
-            if paths.is_empty() {
-                rib_in.remove(prefix);
-            }
-        }
-
-        self.update_rib4_loc(rib_in, rib_loc, prefix);
-    }
-
-    fn remove_prefix6_path<F>(
-        &self,
-        prefix: &Prefix6,
-        prefix_cmp: F,
-        rib_in: &mut Rib6,
-        rib_loc: &mut Rib6,
-    ) where
-        F: Fn(&Path) -> bool,
-    {
-        if let Some(paths) = rib_in.get_mut(prefix) {
-            paths.retain(|p| !prefix_cmp(p));
-            if paths.is_empty() {
-                rib_in.remove(prefix);
-            }
-        }
-
-        self.update_rib6_loc(rib_in, rib_loc, prefix);
-    }
-
-    fn remove_prefix_path<F>(&self, prefix: &Prefix, prefix_cmp: F)
+        rib_in: &mut BTreeMap<P, BTreeSet<Path>>,
+        rib_loc: &mut BTreeMap<P, BTreeSet<Path>>,
+    ) -> bool
     where
+        P: Ord + Copy,
         F: Fn(&Path) -> bool,
     {
-        match prefix {
-            Prefix::V4(p4) => {
-                let mut rib_in = lock!(self.rib4_in);
-                let mut rib_loc = lock!(self.rib4_loc);
-                self.remove_prefix4_path(
-                    p4,
-                    prefix_cmp,
-                    &mut rib_in,
-                    &mut rib_loc,
-                );
+        let changed = if let Some(paths) = rib_in.get_mut(prefix) {
+            let before = paths.len();
+            paths.retain(|p| !prefix_cmp(p));
+            let changed = paths.len() != before;
+            if paths.is_empty() {
+                rib_in.remove(prefix);
             }
-            Prefix::V6(p6) => {
-                let mut rib_in = lock!(self.rib6_in);
-                let mut rib_loc = lock!(self.rib6_loc);
-                self.remove_prefix6_path(
-                    p6,
-                    prefix_cmp,
-                    &mut rib_in,
-                    &mut rib_loc,
-                );
-            }
-        }
+            changed
+        } else {
+            false
+        };
+
+        self.recompute_rib_loc(rib_in, rib_loc, prefix);
+        changed
     }
 
-    fn remove_path_for_prefixes4<F>(
-        &self,
-        prefixes: &[Prefix4],
-        prefix_cmp: F,
-        rib_in: &mut Rib4,
-        rib_loc: &mut Rib4,
-    ) where
-        F: Fn(&Path) -> bool,
-    {
-        for prefix in prefixes.iter() {
-            self.remove_prefix4_path(prefix, &prefix_cmp, rib_in, rib_loc);
-        }
-    }
-
-    fn remove_path_for_prefixes6<F>(
-        &self,
-        prefixes: &[Prefix6],
-        prefix_cmp: F,
-        rib_in: &mut Rib6,
-        rib_loc: &mut Rib6,
-    ) where
-        F: Fn(&Path) -> bool,
-    {
-        for prefix in prefixes.iter() {
-            self.remove_prefix6_path(prefix, &prefix_cmp, rib_in, rib_loc);
-        }
-    }
-
-    pub fn remove_path_for_prefixes<F>(
+    fn remove_path_for_prefixes<F>(
         &self,
         prefixes: &[Prefix],
         prefix_cmp: F,
-    ) where
+    ) -> BTreeSet<Prefix>
+    where
         F: Fn(&Path) -> bool,
     {
         // split prefixes into v4 and v6 groups. this allows us to lock the v4
@@ -1183,42 +1055,56 @@ impl Db {
             },
         );
 
+        let mut changed = BTreeSet::new();
+
         {
             let mut rib_in = lock!(self.rib4_in);
             let mut rib_loc = lock!(self.rib4_loc);
-            self.remove_path_for_prefixes4(
-                &prefixes4,
-                &prefix_cmp,
-                &mut rib_in,
-                &mut rib_loc,
+            changed.extend(
+                prefixes4
+                    .iter()
+                    .filter(|p| {
+                        self.remove_prefix_path(
+                            *p,
+                            &prefix_cmp,
+                            &mut *rib_in,
+                            &mut *rib_loc,
+                        )
+                    })
+                    .map(|p| Prefix::from(*p)),
             );
         }
 
         {
             let mut rib_in = lock!(self.rib6_in);
             let mut rib_loc = lock!(self.rib6_loc);
-            self.remove_path_for_prefixes6(
-                &prefixes6,
-                &prefix_cmp,
-                &mut rib_in,
-                &mut rib_loc,
+            changed.extend(
+                prefixes6
+                    .iter()
+                    .filter(|p| {
+                        self.remove_prefix_path(
+                            *p,
+                            &prefix_cmp,
+                            &mut *rib_in,
+                            &mut *rib_loc,
+                        )
+                    })
+                    .map(|p| Prefix::from(*p)),
             );
         }
+
+        changed
     }
 
-    fn remove_static_routes_from_tree(
-        &self,
+    /// Remove route keys from a sled tree in a single transaction.
+    fn flush_static_route_removals(
         tree: Tree,
         routes: &[StaticRouteKey],
     ) -> Result<(), Error> {
-        let mut pcn = PrefixChangeNotification::default();
-
-        let mut route_keys = Vec::new();
-        for route in routes {
-            let key = serde_json::to_string(route)?;
-            route_keys.push(key);
-            pcn.changed.insert(route.prefix);
-        }
+        let route_keys: Vec<String> = routes
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<_, _>>()?;
 
         tree.transaction(|tx_db| {
             for key in &route_keys {
@@ -1227,14 +1113,6 @@ impl Db {
             Ok(())
         })?;
         tree.flush()?;
-
-        for route in routes {
-            self.remove_prefix_path(&route.prefix, |rib_path: &Path| {
-                rib_path.cmp(&Path::from(route.clone())) == CmpOrdering::Equal
-            });
-        }
-
-        self.notify(pcn);
         Ok(())
     }
 
@@ -1253,83 +1131,146 @@ impl Db {
             },
         );
 
-        {
+        // Persist removals to sled.
+        if !routes4.is_empty() {
             let tree = self.persistent.open_tree(STATIC4_ROUTES)?;
-            self.remove_static_routes_from_tree(tree, &routes4)?;
+            Self::flush_static_route_removals(tree, &routes4)?;
         }
-        {
+        if !routes6.is_empty() {
             let tree = self.persistent.open_tree(STATIC6_ROUTES)?;
-            self.remove_static_routes_from_tree(tree, &routes6)?;
+            Self::flush_static_route_removals(tree, &routes6)?;
+        }
+
+        // Remove from RIBs.
+        let mut pcn = PrefixChangeNotification::default();
+        if !routes4.is_empty() {
+            let mut rib_in = lock!(self.rib4_in);
+            let mut rib_loc = lock!(self.rib4_loc);
+            for route in &routes4 {
+                let Prefix::V4(p4) = &route.prefix else {
+                    continue;
+                };
+                self.remove_prefix_path(
+                    p4,
+                    |rib_path: &Path| {
+                        rib_path.cmp(&Path::from(route.clone()))
+                            == CmpOrdering::Equal
+                    },
+                    &mut *rib_in,
+                    &mut *rib_loc,
+                );
+                pcn.changed.insert(route.prefix);
+            }
+        }
+        if !routes6.is_empty() {
+            let mut rib_in = lock!(self.rib6_in);
+            let mut rib_loc = lock!(self.rib6_loc);
+            for route in &routes6 {
+                let Prefix::V6(p6) = &route.prefix else {
+                    continue;
+                };
+                self.remove_prefix_path(
+                    p6,
+                    |rib_path: &Path| {
+                        rib_path.cmp(&Path::from(route.clone()))
+                            == CmpOrdering::Equal
+                    },
+                    &mut *rib_in,
+                    &mut *rib_loc,
+                );
+                pcn.changed.insert(route.prefix);
+            }
+        }
+        if !pcn.changed.is_empty() {
+            self.notify(pcn);
         }
 
         Ok(())
     }
 
-    // for each route in @prefixes, remove all bgp paths learned from @peer
-    pub fn remove_bgp_prefixes(&self, prefixes: &[Prefix], peer: &PeerId) {
-        let mut pcn = PrefixChangeNotification::default();
-        self.remove_path_for_prefixes(
-            prefixes,
-            |rib_path: &Path| match rib_path.bgp {
-                Some(ref bgp) => bgp.peer == *peer,
-                None => false,
-            },
-        );
-        pcn.changed.extend(prefixes);
-        self.notify(pcn);
+    /// Remove specific BGP prefixes from a peer.
+    /// Used for UPDATE withdrawals.
+    pub fn remove_prefixes_from_bgp_peer(
+        &self,
+        prefixes: &[Prefix],
+        peer: &PeerId,
+    ) {
+        let changed =
+            self.remove_path_for_prefixes(prefixes, |rib_path: &Path| {
+                match rib_path.bgp {
+                    Some(ref bgp) => bgp.peer == *peer,
+                    None => false,
+                }
+            });
+        if !changed.is_empty() {
+            let pcn = PrefixChangeNotification { changed };
+            self.notify(pcn);
+        }
     }
 
-    /// Remove BGP paths from a specific peer that match an additional
-    /// predicate. Used for policy changes like enforce-first-AS that
-    /// need to selectively remove a subset of a peer's paths.
-    pub fn remove_bgp_peer_paths_where<F>(&self, peer: &PeerId, predicate: F)
-    where
-        F: Fn(&BgpPathProperties) -> bool,
-    {
-        let all_prefixes4: Vec<_> = self
-            .full_rib(Some(AddressFamily::Ipv4))
-            .keys()
-            .copied()
-            .collect();
-        let all_prefixes6: Vec<_> = self
-            .full_rib(Some(AddressFamily::Ipv6))
-            .keys()
-            .copied()
-            .collect();
-
-        let mut all_prefixes = Vec::new();
-        all_prefixes.extend(all_prefixes4);
-        all_prefixes.extend(all_prefixes6);
-
-        self.remove_path_for_prefixes(&all_prefixes, |path: &Path| match path
-            .bgp
-        {
-            Some(ref bgp) => bgp.peer == *peer && predicate(bgp),
-            None => false,
-        });
-
-        let mut pcn = PrefixChangeNotification::default();
-        pcn.changed.extend(all_prefixes);
-        self.notify(pcn);
+    /// Remove all BGP paths from a peer.
+    /// Used when a peer is deleted or exits Established state.
+    pub fn remove_all_prefixes_from_bgp_peer(&self, peer: &PeerId) {
+        let all_prefixes: Vec<_> =
+            self.full_rib(None).keys().copied().collect();
+        self.remove_prefixes_from_bgp_peer(&all_prefixes, peer);
     }
 
-    // wrapper for remove_bgp_prefixes to handle the "all routes" corner case.
-    // e.g. when peer is deleted or exits Established state
-    pub fn remove_bgp_prefixes_from_peer(&self, peer: &PeerId) {
-        // TODO(ipv6): call this just for enabled address-families.
-        // no need to walk the full rib for an AF that isn't affected
-        let peer_routes4: Vec<_> = self
-            .full_rib(Some(AddressFamily::Ipv4))
-            .keys()
-            .copied()
-            .collect();
-        let peer_routes6: Vec<_> = self
-            .full_rib(Some(AddressFamily::Ipv6))
-            .keys()
-            .copied()
-            .collect();
-        self.remove_bgp_prefixes(&peer_routes4, peer);
-        self.remove_bgp_prefixes(&peer_routes6, peer);
+    /// Remove BGP paths from a peer that violate the first-AS rule.
+    /// A path violates first-AS when its AS path is empty or when
+    /// the first AS in the path does not match the peer's origin AS.
+    pub fn enforce_first_as(&self, peer: &PeerId) {
+        let all_prefixes: Vec<_> =
+            self.full_rib(None).keys().copied().collect();
+        let changed =
+            self.remove_path_for_prefixes(&all_prefixes, |path: &Path| {
+                match path.bgp {
+                    Some(ref bgp) => {
+                        bgp.peer == *peer
+                            && match bgp.as_path.first() {
+                                Some(&first_as) => first_as != bgp.origin_as,
+                                None => true,
+                            }
+                    }
+                    None => false,
+                }
+            });
+        if !changed.is_empty() {
+            let pcn = PrefixChangeNotification { changed };
+            self.notify(pcn);
+        }
+    }
+
+    /// Mark all paths from a BGP peer as stale in the local RIB
+    /// for the given address family. Used for route refresh.
+    pub fn mark_bgp_peer_stale(&self, peer: PeerId, af: AddressFamily) {
+        let mut mark = |paths: &mut BTreeSet<Path>| {
+            let targets: Vec<Path> = paths
+                .iter()
+                .filter_map(|p| {
+                    if let Some(bgp) = p.bgp.as_ref()
+                        && bgp.peer == peer
+                    {
+                        let mut marked = p.clone();
+                        marked.bgp = Some(bgp.as_stale());
+                        return Some(marked);
+                    }
+                    None
+                })
+                .collect();
+            for t in targets {
+                paths.replace(t);
+            }
+        };
+
+        match af {
+            AddressFamily::Ipv4 => {
+                lock!(self.rib4_loc).values_mut().for_each(&mut mark);
+            }
+            AddressFamily::Ipv6 => {
+                lock!(self.rib6_loc).values_mut().for_each(&mut mark);
+            }
+        }
     }
 
     pub fn generation(&self) -> u64 {
@@ -1389,50 +1330,6 @@ impl Db {
         Ok(())
     }
 
-    pub fn mark_bgp_peer_stale4(&self, peer: PeerId) {
-        let mut rib = lock!(self.rib4_loc);
-        rib.iter_mut().for_each(|(_prefix, path)| {
-            let targets: Vec<Path> = path
-                .iter()
-                .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref()
-                        && bgp.peer == peer
-                    {
-                        let mut marked = p.clone();
-                        marked.bgp = Some(bgp.as_stale());
-                        return Some(marked);
-                    }
-                    None
-                })
-                .collect();
-            for t in targets.into_iter() {
-                path.replace(t);
-            }
-        });
-    }
-
-    pub fn mark_bgp_peer_stale6(&self, peer: PeerId) {
-        let mut rib = lock!(self.rib6_loc);
-        rib.iter_mut().for_each(|(_prefix, path)| {
-            let targets: Vec<Path> = path
-                .iter()
-                .filter_map(|p| {
-                    if let Some(bgp) = p.bgp.as_ref()
-                        && bgp.peer == peer
-                    {
-                        let mut marked = p.clone();
-                        marked.bgp = Some(bgp.as_stale());
-                        return Some(marked);
-                    }
-                    None
-                })
-                .collect();
-            for t in targets.into_iter() {
-                path.replace(t);
-            }
-        });
-    }
-
     pub fn slot(&self) -> Option<u16> {
         match self.slot.read() {
             Ok(v) => *v,
@@ -1446,13 +1343,6 @@ impl Db {
     pub fn set_slot(&mut self, slot: Option<u16>) {
         let mut value = self.slot.write().unwrap();
         *value = slot;
-    }
-
-    pub fn mark_bgp_peer_stale(&self, peer: PeerId, af: AddressFamily) {
-        match af {
-            AddressFamily::Ipv4 => self.mark_bgp_peer_stale4(peer.clone()),
-            AddressFamily::Ipv6 => self.mark_bgp_peer_stale6(peer),
-        }
     }
 }
 
@@ -1736,7 +1626,10 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // withdrawal of p2 via bgp_path1
-        db.remove_bgp_prefixes(&[p2], &bgp_path1.clone().bgp.unwrap().peer);
+        db.remove_prefixes_from_bgp_peer(
+            &[p2],
+            &bgp_path1.clone().bgp.unwrap().peer,
+        );
         // expected current state
         // rib_in:
         // - p0 via bgp_path0, static_path1 (ordered by nexthop IP)
@@ -1758,7 +1651,7 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // yank all routes from bgp_path0, simulating peer shutdown
-        db.remove_bgp_prefixes_from_peer(&bgp_path0.bgp.unwrap().peer);
+        db.remove_all_prefixes_from_bgp_peer(&bgp_path0.bgp.unwrap().peer);
         // expected current state
         // rib_in:
         // - p0 via static_path1
@@ -1780,7 +1673,9 @@ mod test {
 
         // yank all routes from bgp_path2, simulating peer shutdown
         // bgp_path2 should be unaffected, despite also having the same RID
-        db.remove_bgp_prefixes_from_peer(&bgp_path2.clone().bgp.unwrap().peer);
+        db.remove_all_prefixes_from_bgp_peer(
+            &bgp_path2.clone().bgp.unwrap().peer,
+        );
         // expected current state
         // rib_in:
         // - p0 via static_path1
@@ -1800,7 +1695,9 @@ mod test {
 
         // yank all routes from bgp_path1, simulating peer shutdown
         // p0 should be unaffected, still retaining the static path
-        db.remove_bgp_prefixes_from_peer(&bgp_path1.clone().bgp.unwrap().peer);
+        db.remove_all_prefixes_from_bgp_peer(
+            &bgp_path1.clone().bgp.unwrap().peer,
+        );
         // expected current state
         // rib_in:
         // - p0 via static_path1
@@ -2013,13 +1910,13 @@ mod test {
         assert!(all_routes.contains(&route6));
 
         // Test counts
-        assert_eq!(db.get_static4_count().unwrap(), 1);
-        assert_eq!(db.get_static6_count().unwrap(), 1);
+        assert_eq!(db.get_static_count(AddressFamily::Ipv4).unwrap(), 1);
+        assert_eq!(db.get_static_count(AddressFamily::Ipv6).unwrap(), 1);
 
         // Remove routes and verify cleanup
         db.remove_static_routes(&[route4, route6]).unwrap();
-        assert_eq!(db.get_static4_count().unwrap(), 0);
-        assert_eq!(db.get_static6_count().unwrap(), 0);
+        assert_eq!(db.get_static_count(AddressFamily::Ipv4).unwrap(), 0);
+        assert_eq!(db.get_static_count(AddressFamily::Ipv6).unwrap(), 0);
     }
 
     #[test]
@@ -2164,40 +2061,50 @@ mod test {
     fn test_ipv4_origin_crud() {
         let db = get_test_db();
 
-        // Test creating IPv4 origins
-        let prefixes = vec![
-            Prefix4::new(Ipv4Addr::new(192, 168, 1, 0), 24),
-            Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8),
-        ];
+        let p4a = Prefix4::new(Ipv4Addr::new(192, 168, 1, 0), 24);
+        let p4b = Prefix4::new(Ipv4Addr::new(10, 0, 0, 0), 8);
+        let prefixes: Vec<Prefix> = vec![Prefix::from(p4a), Prefix::from(p4b)];
 
-        // Create origin4 - should succeed
-        db.create_origin4(&prefixes).expect("create origin4");
+        // Create - should succeed
+        db.create_origin(AddressFamily::Ipv4, &prefixes)
+            .expect("create origin4");
 
-        // Get origin4 - should return created prefixes
-        let retrieved = db.get_origin4().expect("get origin4");
+        // Get - should return created prefixes
+        let retrieved = db
+            .get_origin(Some(AddressFamily::Ipv4))
+            .expect("get origin4");
         assert_eq!(retrieved.len(), 2);
-        assert!(retrieved.contains(&prefixes[0]));
-        assert!(retrieved.contains(&prefixes[1]));
+        assert!(retrieved.contains(&Prefix::from(p4a)));
+        assert!(retrieved.contains(&Prefix::from(p4b)));
 
         // Try to create again - should fail with conflict
-        assert!(db.create_origin4(&prefixes).is_err());
+        assert!(db.create_origin(AddressFamily::Ipv4, &prefixes).is_err());
 
-        // Update origin4 with different prefixes
-        let new_prefixes = vec![Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12)];
-        db.set_origin4(&new_prefixes).expect("set origin4");
+        // Update with different prefixes
+        let new_p = Prefix4::new(Ipv4Addr::new(172, 16, 0, 0), 12);
+        let new_prefixes = vec![Prefix::from(new_p)];
+        db.set_origin(AddressFamily::Ipv4, &new_prefixes)
+            .expect("set origin4");
 
-        let updated = db.get_origin4().expect("get updated origin4");
+        let updated = db
+            .get_origin(Some(AddressFamily::Ipv4))
+            .expect("get updated origin4");
         assert_eq!(updated.len(), 1);
-        assert_eq!(updated[0], new_prefixes[0]);
+        assert_eq!(updated[0], Prefix::from(new_p));
 
-        // Clear origin4
-        db.clear_origin4().expect("clear origin4");
-        let empty = db.get_origin4().expect("get empty origin4");
+        // Clear
+        db.clear_origin(AddressFamily::Ipv4).expect("clear origin4");
+        let empty = db
+            .get_origin(Some(AddressFamily::Ipv4))
+            .expect("get empty origin4");
         assert!(empty.is_empty());
 
         // Create again after clear - should succeed
-        db.create_origin4(&prefixes).expect("create after clear");
-        let final_result = db.get_origin4().expect("get final origin4");
+        db.create_origin(AddressFamily::Ipv4, &prefixes)
+            .expect("create after clear");
+        let final_result = db
+            .get_origin(Some(AddressFamily::Ipv4))
+            .expect("get final origin4");
         assert_eq!(final_result.len(), 2);
     }
 
@@ -2205,43 +2112,52 @@ mod test {
     fn test_ipv6_origin_crud() {
         let db = get_test_db();
 
-        // Test creating IPv6 origins
-        let prefixes = vec![
-            Prefix6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32),
-            Prefix6::new(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 0), 8),
-        ];
+        let p6a =
+            Prefix6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32);
+        let p6b = Prefix6::new(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 0), 8);
+        let prefixes: Vec<Prefix> = vec![Prefix::from(p6a), Prefix::from(p6b)];
 
-        // Create origin6 - should succeed
-        db.create_origin6(&prefixes).expect("create origin6");
+        // Create - should succeed
+        db.create_origin(AddressFamily::Ipv6, &prefixes)
+            .expect("create origin6");
 
-        // Get origin6 - should return created prefixes
-        let retrieved = db.get_origin6().expect("get origin6");
+        // Get - should return created prefixes
+        let retrieved = db
+            .get_origin(Some(AddressFamily::Ipv6))
+            .expect("get origin6");
         assert_eq!(retrieved.len(), 2);
-        assert!(retrieved.contains(&prefixes[0]));
-        assert!(retrieved.contains(&prefixes[1]));
+        assert!(retrieved.contains(&Prefix::from(p6a)));
+        assert!(retrieved.contains(&Prefix::from(p6b)));
 
         // Try to create again - should fail with conflict
-        assert!(db.create_origin6(&prefixes).is_err());
+        assert!(db.create_origin(AddressFamily::Ipv6, &prefixes).is_err());
 
-        // Update origin6 with different prefixes
-        let new_prefixes = vec![Prefix6::new(
-            Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 0),
-            48,
-        )];
-        db.set_origin6(&new_prefixes).expect("set origin6");
+        // Update with different prefixes
+        let new_p =
+            Prefix6::new(Ipv6Addr::new(0x2001, 0xdb8, 1, 0, 0, 0, 0, 0), 48);
+        let new_prefixes = vec![Prefix::from(new_p)];
+        db.set_origin(AddressFamily::Ipv6, &new_prefixes)
+            .expect("set origin6");
 
-        let updated = db.get_origin6().expect("get updated origin6");
+        let updated = db
+            .get_origin(Some(AddressFamily::Ipv6))
+            .expect("get updated origin6");
         assert_eq!(updated.len(), 1);
-        assert_eq!(updated[0], new_prefixes[0]);
+        assert_eq!(updated[0], Prefix::from(new_p));
 
-        // Clear origin6
-        db.clear_origin6().expect("clear origin6");
-        let empty = db.get_origin6().expect("get empty origin6");
+        // Clear
+        db.clear_origin(AddressFamily::Ipv6).expect("clear origin6");
+        let empty = db
+            .get_origin(Some(AddressFamily::Ipv6))
+            .expect("get empty origin6");
         assert!(empty.is_empty());
 
         // Create again after clear - should succeed
-        db.create_origin6(&prefixes).expect("create after clear");
-        let final_result = db.get_origin6().expect("get final origin6");
+        db.create_origin(AddressFamily::Ipv6, &prefixes)
+            .expect("create after clear");
+        let final_result = db
+            .get_origin(Some(AddressFamily::Ipv6))
+            .expect("get final origin6");
         assert_eq!(final_result.len(), 2);
     }
 
@@ -2599,14 +2515,14 @@ mod test {
     }
 
     #[test]
-    fn test_remove_bgp_peer_paths_where() {
+    fn test_enforce_first_as() {
         use crate::{
             BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PeerId, Prefix,
             Prefix4, Prefix6,
         };
 
         let log = init_file_logger("rib.log");
-        let db = crate::test::get_test_db("remove_bgp_peer_paths_where", log)
+        let db = crate::test::get_test_db("enforce_first_as", log)
             .expect("create db");
 
         let peer_ip = IpAddr::from_str("203.0.113.1").unwrap();
@@ -2683,13 +2599,8 @@ mod test {
         assert_eq!(db.get_prefix_paths(&p4).len(), 2);
         assert_eq!(db.get_prefix_paths(&p6).len(), 1);
 
-        // Remove paths from `peer` where first AS != origin_as
-        db.remove_bgp_peer_paths_where(&peer, |bgp| {
-            match bgp.as_path.first() {
-                Some(&first_as) => first_as != bgp.origin_as,
-                None => true,
-            }
-        });
+        // Remove paths from `peer` that violate first-AS
+        db.enforce_first_as(&peer);
 
         // p4: good_path (passes check) + other_peer_path (different
         // peer) should remain
@@ -2713,16 +2624,15 @@ mod test {
     }
 
     #[test]
-    fn test_remove_bgp_peer_paths_where_empty_as_path() {
+    fn test_enforce_first_as_empty_as_path() {
         use crate::{
             BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PeerId, Prefix,
             Prefix4,
         };
 
         let log = init_file_logger("rib.log");
-        let db =
-            crate::test::get_test_db("remove_bgp_peer_paths_where_empty", log)
-                .expect("create db");
+        let db = crate::test::get_test_db("enforce_first_as_empty", log)
+            .expect("create db");
 
         let peer_ip = IpAddr::from_str("203.0.113.1").unwrap();
         let peer = PeerId::Ip(peer_ip);
@@ -2750,12 +2660,7 @@ mod test {
         db.add_bgp_prefixes(&[prefix], empty_as_path);
         assert_eq!(db.get_prefix_paths(&prefix).len(), 1);
 
-        db.remove_bgp_peer_paths_where(&peer, |bgp| {
-            match bgp.as_path.first() {
-                Some(&first_as) => first_as != bgp.origin_as,
-                None => true, // empty path fails check
-            }
-        });
+        db.enforce_first_as(&peer);
 
         assert!(
             db.get_prefix_paths(&prefix).is_empty(),
@@ -2764,18 +2669,15 @@ mod test {
     }
 
     #[test]
-    fn test_remove_bgp_peer_paths_where_no_match() {
+    fn test_enforce_first_as_no_match() {
         use crate::{
             BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PeerId, Prefix,
             Prefix4,
         };
 
         let log = init_file_logger("rib.log");
-        let db = crate::test::get_test_db(
-            "remove_bgp_peer_paths_where_nomatch",
-            log,
-        )
-        .expect("create db");
+        let db = crate::test::get_test_db("enforce_first_as_nomatch", log)
+            .expect("create db");
 
         let peer_ip = IpAddr::from_str("203.0.113.1").unwrap();
         let peer = PeerId::Ip(peer_ip);
@@ -2802,13 +2704,8 @@ mod test {
         db.add_bgp_prefixes(&[prefix], good_path);
         assert_eq!(db.get_prefix_paths(&prefix).len(), 1);
 
-        // Predicate matches nothing — all paths pass the check
-        db.remove_bgp_peer_paths_where(&peer, |bgp| {
-            match bgp.as_path.first() {
-                Some(&first_as) => first_as != bgp.origin_as,
-                None => true,
-            }
-        });
+        // All paths pass the first-AS check — nothing removed
+        db.enforce_first_as(&peer);
 
         assert_eq!(
             db.get_prefix_paths(&prefix).len(),
