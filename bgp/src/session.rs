@@ -556,6 +556,10 @@ pub enum AdminEvent {
 
     /// Fires when we need to re-send our routes to the peer.
     ReAdvertiseRoutes(Afi),
+
+    /// enforce_first_as was just enabled. Walk the RIB and remove
+    /// paths from this peer that fail the first-AS check.
+    EnforceFirstAsEnabled,
 }
 
 impl AdminEvent {
@@ -579,6 +583,7 @@ impl AdminEvent {
                 Afi::Ipv4 => "re-advertise routes (ipv4 unicast)",
                 Afi::Ipv6 => "re-advertise routes (ipv6 unicast)",
             },
+            AdminEvent::EnforceFirstAsEnabled => "enforce first-as enabled",
         }
     }
 }
@@ -2353,7 +2358,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled => {
                         let title = admin_event.title();
                         session_log_lite!(
                             self,
@@ -2598,7 +2604,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled => {
                         let title = admin_event.title();
                         session_log_lite!(
                             self,
@@ -2958,7 +2965,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled => {
                         let title = admin_event.title();
                         session_log_lite!(
                             self,
@@ -3330,7 +3338,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::ExportPolicyChanged(_)
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled => {
                         let title = admin_event.title();
                         session_log!(
                             self,
@@ -3906,7 +3915,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 | AdminEvent::CheckerChanged(_)
                 | AdminEvent::ManualStart
                 | AdminEvent::SendRouteRefresh(_)
-                | AdminEvent::ReAdvertiseRoutes(_) => {
+                | AdminEvent::ReAdvertiseRoutes(_)
+                | AdminEvent::EnforceFirstAsEnabled => {
                     let title = admin_event.title();
                     session_log!(
                         self,
@@ -4431,7 +4441,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::ManualStart
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled => {
                         let title = admin_event.title();
                         collision_log!(
                             self,
@@ -5281,7 +5292,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     | AdminEvent::CheckerChanged(_)
                     | AdminEvent::ManualStart
                     | AdminEvent::SendRouteRefresh(_)
-                    | AdminEvent::ReAdvertiseRoutes(_) => {
+                    | AdminEvent::ReAdvertiseRoutes(_)
+                    | AdminEvent::EnforceFirstAsEnabled => {
                         let title = admin_event.title();
                         collision_log!(
                             self,
@@ -6456,6 +6468,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 AdminEvent::CheckerChanged(_previous) => {
                     //TODO
+                    FsmState::Established(pc)
+                }
+
+                AdminEvent::EnforceFirstAsEnabled => {
+                    self.db.remove_bgp_peer_paths_where(
+                        &self.peer_id(),
+                        |bgp| match bgp.as_path.first() {
+                            Some(&first_as) => first_as != bgp.origin_as,
+                            None => true,
+                        },
+                    );
                     FsmState::Established(pc)
                 }
 
@@ -8896,11 +8919,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         if current.enforce_first_as != info.enforce_first_as {
+            let was_enabled = current.enforce_first_as;
             current.enforce_first_as = info.enforce_first_as;
-            // XXX: handle more gracefully.
-            //      disabling = send route refresh
-            //      enabling = run rib walker + delete paths failing check
-            reset_needed = true;
+            if !was_enabled {
+                // enabled: walk the RIB and remove paths that
+                // fail the first-AS check.
+                self.event_tx
+                    .send(FsmEvent::Admin(AdminEvent::EnforceFirstAsEnabled))
+                    .map_err(|e| Error::EventSend(e.to_string()))?;
+            } else {
+                // disabled: request a route refresh so the peer
+                // re-advertises routes we previously rejected.
+                refresh_needed4 = true;
+                refresh_needed6 = true;
+            }
         }
 
         if current.vlan_id != info.vlan_id {

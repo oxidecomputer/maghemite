@@ -1279,6 +1279,40 @@ impl Db {
         self.notify(pcn);
     }
 
+    /// Remove BGP paths from a specific peer that match an additional
+    /// predicate. Used for policy changes like enforce-first-AS that
+    /// need to selectively remove a subset of a peer's paths.
+    pub fn remove_bgp_peer_paths_where<F>(&self, peer: &PeerId, predicate: F)
+    where
+        F: Fn(&BgpPathProperties) -> bool,
+    {
+        let all_prefixes4: Vec<_> = self
+            .full_rib(Some(AddressFamily::Ipv4))
+            .keys()
+            .copied()
+            .collect();
+        let all_prefixes6: Vec<_> = self
+            .full_rib(Some(AddressFamily::Ipv6))
+            .keys()
+            .copied()
+            .collect();
+
+        let mut all_prefixes = Vec::new();
+        all_prefixes.extend(all_prefixes4);
+        all_prefixes.extend(all_prefixes6);
+
+        self.remove_path_for_prefixes(&all_prefixes, |path: &Path| match path
+            .bgp
+        {
+            Some(ref bgp) => bgp.peer == *peer && predicate(bgp),
+            None => false,
+        });
+
+        let mut pcn = PrefixChangeNotification::default();
+        pcn.changed.extend(all_prefixes);
+        self.notify(pcn);
+    }
+
     // wrapper for remove_bgp_prefixes to handle the "all routes" corner case.
     // e.g. when peer is deleted or exits Established state
     pub fn remove_bgp_prefixes_from_peer(&self, peer: &PeerId) {
@@ -2562,6 +2596,225 @@ mod test {
             .unwrap();
         let routes = db.get_static(Some(AddressFamily::Ipv4)).unwrap();
         assert!(routes.is_empty());
+    }
+
+    #[test]
+    fn test_remove_bgp_peer_paths_where() {
+        use crate::{
+            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PeerId, Prefix,
+            Prefix4, Prefix6,
+        };
+
+        let log = init_file_logger("rib.log");
+        let db = crate::test::get_test_db("remove_bgp_peer_paths_where", log)
+            .expect("create db");
+
+        let peer_ip = IpAddr::from_str("203.0.113.1").unwrap();
+        let other_ip = IpAddr::from_str("203.0.113.2").unwrap();
+        let peer = PeerId::Ip(peer_ip);
+        let other_peer = PeerId::Ip(other_ip);
+
+        let p4 = Prefix::from("10.0.0.0/24".parse::<Prefix4>().unwrap());
+        let p6 = Prefix::from("2001:db8::/32".parse::<Prefix6>().unwrap());
+
+        // Path where first AS matches origin_as (passes first-AS
+        // check)
+        let good_path = Path {
+            nexthop: peer_ip,
+            nexthop_interface: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 65001,
+                peer: peer.clone(),
+                id: 1,
+                med: None,
+                local_pref: Some(100),
+                as_path: vec![65001, 65002],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        // Path where first AS does NOT match origin_as (fails
+        // first-AS check)
+        let bad_path = Path {
+            nexthop: peer_ip,
+            nexthop_interface: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 65001,
+                peer: peer.clone(),
+                id: 1,
+                med: None,
+                local_pref: Some(100),
+                as_path: vec![65099, 65001],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        // Path from a different peer (should never be removed)
+        let other_peer_path = Path {
+            nexthop: other_ip,
+            nexthop_interface: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 65002,
+                peer: other_peer.clone(),
+                id: 2,
+                med: None,
+                local_pref: Some(100),
+                as_path: vec![65099, 65002],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        // Add paths: good_path on p4, bad_path on p6,
+        // other_peer_path on p4
+        db.add_bgp_prefixes(&[p4], good_path.clone());
+        db.add_bgp_prefixes(&[p6], bad_path.clone());
+        db.add_bgp_prefixes(&[p4], other_peer_path.clone());
+
+        // Verify initial state: p4 has 2 paths, p6 has 1 path
+        assert_eq!(db.get_prefix_paths(&p4).len(), 2);
+        assert_eq!(db.get_prefix_paths(&p6).len(), 1);
+
+        // Remove paths from `peer` where first AS != origin_as
+        db.remove_bgp_peer_paths_where(&peer, |bgp| {
+            match bgp.as_path.first() {
+                Some(&first_as) => first_as != bgp.origin_as,
+                None => true,
+            }
+        });
+
+        // p4: good_path (passes check) + other_peer_path (different
+        // peer) should remain
+        let p4_paths = db.get_prefix_paths(&p4);
+        assert_eq!(
+            p4_paths.len(),
+            2,
+            "good path and other peer path should remain on p4"
+        );
+
+        // p6: bad_path (fails check, same peer) should be removed
+        let p6_paths = db.get_prefix_paths(&p6);
+        assert!(p6_paths.is_empty(), "bad path should be removed from p6");
+
+        // Verify other_peer_path is still there even though it
+        // would fail the predicate — it's from a different peer
+        let has_other = p4_paths
+            .iter()
+            .any(|p| p.bgp.as_ref().unwrap().peer == other_peer);
+        assert!(has_other, "other peer's path should be untouched");
+    }
+
+    #[test]
+    fn test_remove_bgp_peer_paths_where_empty_as_path() {
+        use crate::{
+            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PeerId, Prefix,
+            Prefix4,
+        };
+
+        let log = init_file_logger("rib.log");
+        let db =
+            crate::test::get_test_db("remove_bgp_peer_paths_where_empty", log)
+                .expect("create db");
+
+        let peer_ip = IpAddr::from_str("203.0.113.1").unwrap();
+        let peer = PeerId::Ip(peer_ip);
+        let prefix = Prefix::from("10.0.0.0/24".parse::<Prefix4>().unwrap());
+
+        // Path with empty AS path (should be caught by the
+        // predicate)
+        let empty_as_path = Path {
+            nexthop: peer_ip,
+            nexthop_interface: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 65001,
+                peer: peer.clone(),
+                id: 1,
+                med: None,
+                local_pref: Some(100),
+                as_path: vec![],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        db.add_bgp_prefixes(&[prefix], empty_as_path);
+        assert_eq!(db.get_prefix_paths(&prefix).len(), 1);
+
+        db.remove_bgp_peer_paths_where(&peer, |bgp| {
+            match bgp.as_path.first() {
+                Some(&first_as) => first_as != bgp.origin_as,
+                None => true, // empty path fails check
+            }
+        });
+
+        assert!(
+            db.get_prefix_paths(&prefix).is_empty(),
+            "path with empty AS path should be removed"
+        );
+    }
+
+    #[test]
+    fn test_remove_bgp_peer_paths_where_no_match() {
+        use crate::{
+            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PeerId, Prefix,
+            Prefix4,
+        };
+
+        let log = init_file_logger("rib.log");
+        let db = crate::test::get_test_db(
+            "remove_bgp_peer_paths_where_nomatch",
+            log,
+        )
+        .expect("create db");
+
+        let peer_ip = IpAddr::from_str("203.0.113.1").unwrap();
+        let peer = PeerId::Ip(peer_ip);
+        let prefix = Prefix::from("10.0.0.0/24".parse::<Prefix4>().unwrap());
+
+        // Path that passes the first-AS check
+        let good_path = Path {
+            nexthop: peer_ip,
+            nexthop_interface: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 65001,
+                peer: peer.clone(),
+                id: 1,
+                med: None,
+                local_pref: Some(100),
+                as_path: vec![65001, 65002],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+
+        db.add_bgp_prefixes(&[prefix], good_path);
+        assert_eq!(db.get_prefix_paths(&prefix).len(), 1);
+
+        // Predicate matches nothing — all paths pass the check
+        db.remove_bgp_peer_paths_where(&peer, |bgp| {
+            match bgp.as_path.first() {
+                Some(&first_as) => first_as != bgp.origin_as,
+                None => true,
+            }
+        });
+
+        assert_eq!(
+            db.get_prefix_paths(&prefix).len(),
+            1,
+            "path passing first-AS check should remain"
+        );
     }
 
     #[test]
