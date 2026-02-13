@@ -4344,3 +4344,208 @@ fn test_unnumbered_interface_lifecycle() {
     disp1.shutdown();
     disp2.shutdown();
 }
+
+/// Test that toggling `enforce_first_as` is handled gracefully without
+/// resetting the BGP session.
+///
+/// This test verifies that:
+/// 1. Enabling enforce_first_as keeps the session Established (no reset)
+/// 2. Routes that pass the first-AS check are preserved
+/// 3. Disabling enforce_first_as keeps the session Established
+/// 4. A route refresh is triggered (routes re-arrive after disable)
+#[test]
+fn test_enforce_first_as_graceful_toggle() {
+    let r1_addr: SocketAddr = sockaddr!(&format!("127.0.0.14:{TEST_BGP_PORT}"));
+    let r2_addr: SocketAddr = sockaddr!(&format!("127.0.0.15:{TEST_BGP_PORT}"));
+
+    let _ip_guard = ensure_loop_ips(&[r1_addr.ip(), r2_addr.ip()]);
+
+    let prefix_a = ip!("10.10.0.0/24");
+    let prefix_b = ip!("10.11.0.0/24");
+
+    let r1_peer_config = PeerConfig {
+        name: "r2".into(),
+        group: String::new(),
+        host: r2_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+    let r1_session_info = SessionInfo::from_peer_config(&r1_peer_config);
+
+    let r2_peer_config = PeerConfig {
+        name: "r1".into(),
+        group: String::new(),
+        host: r1_addr,
+        hold_time: 6,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: 1,
+        keepalive: 3,
+        resolution: 100,
+    };
+    // Start with enforce_first_as disabled on r2
+    let r2_session_info = SessionInfo::from_peer_config(&r2_peer_config);
+    assert!(
+        !r2_session_info.enforce_first_as,
+        "enforce_first_as should default to false"
+    );
+
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: r1_session_info,
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r1".to_string(),
+                remote_host: r1_addr,
+                session_info: r2_session_info,
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard2) = test_setup::<
+        BgpConnectionTcp,
+        BgpListenerTcp,
+    >("enforce_first_as", &routers);
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
+
+    let r1_session = r1
+        .router
+        .get_session(r2_addr.ip())
+        .expect("get r1->r2 session");
+    let r2_session = r2
+        .router
+        .get_session(r1_addr.ip())
+        .expect("get r2->r1 session");
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    // Originate routes from r1
+    r1.router
+        .create_origin4(vec![prefix_a, prefix_b])
+        .expect("originate prefixes");
+
+    let prefix_a_rdb = Prefix::V4(cidr!("10.10.0.0/24"));
+    let prefix_b_rdb = Prefix::V4(cidr!("10.11.0.0/24"));
+
+    // Wait for routes to arrive at r2
+    wait_for!(
+        !r2.router.db.get_prefix_paths(&prefix_a_rdb).is_empty()
+            && !r2.router.db.get_prefix_paths(&prefix_b_rdb).is_empty(),
+        "r2 should receive both prefixes"
+    );
+
+    // Verify routes arrived with correct AS path
+    for prefix_rdb in [&prefix_a_rdb, &prefix_b_rdb] {
+        let paths = r2.router.db.get_prefix_paths(prefix_rdb);
+        assert_eq!(paths.len(), 1);
+        let bgp = paths[0].bgp.as_ref().unwrap();
+        assert_eq!(bgp.origin_as, 4200000001);
+        assert_eq!(bgp.as_path, vec![4200000001]);
+    }
+
+    // ===== Enable enforce_first_as on r2 =====
+    // Routes from r1 have as_path[0] == origin_as (4200000001),
+    // so they all pass the first-AS check. No routes should be
+    // removed and the session must stay Established.
+    let r2_info_enabled = {
+        let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+        info.enforce_first_as = true;
+        info
+    };
+    r2.router
+        .update_session(r2_peer_config.clone(), r2_info_enabled)
+        .expect("enable enforce_first_as on r2");
+
+    // Session must stay Established for longer than hold_time
+    // (verifies keepalives continue and no reset occurs).
+    let start = Instant::now();
+    while start.elapsed() < ESTABLISHED_VERIFICATION {
+        assert_eq!(
+            r2_session.state(),
+            FsmStateKind::Established,
+            "session should stay Established after enabling enforce_first_as"
+        );
+        assert_eq!(
+            r1_session.state(),
+            FsmStateKind::Established,
+            "remote session should also stay Established"
+        );
+        sleep(Duration::from_millis(100));
+    }
+
+    // Routes should still be present (they pass the first-AS check)
+    for prefix_rdb in [&prefix_a_rdb, &prefix_b_rdb] {
+        let paths = r2.router.db.get_prefix_paths(prefix_rdb);
+        assert_eq!(
+            paths.len(),
+            1,
+            "routes passing first-AS check should be preserved"
+        );
+    }
+
+    // ===== Disable enforce_first_as on r2 =====
+    // This should trigger a route refresh (routes re-arrive from
+    // peer). Session must stay Established.
+    let r2_info_disabled = {
+        let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+        info.enforce_first_as = false;
+        info
+    };
+    r2.router
+        .update_session(r2_peer_config.clone(), r2_info_disabled)
+        .expect("disable enforce_first_as on r2");
+
+    // Session must stay Established for longer than hold_time
+    let start = Instant::now();
+    while start.elapsed() < ESTABLISHED_VERIFICATION {
+        assert_eq!(
+            r2_session.state(),
+            FsmStateKind::Established,
+            "session should stay Established after disabling enforce_first_as"
+        );
+        assert_eq!(
+            r1_session.state(),
+            FsmStateKind::Established,
+            "remote session should also stay Established"
+        );
+        sleep(Duration::from_millis(100));
+    }
+
+    // Routes should still be present (route refresh re-delivered
+    // them)
+    for prefix_rdb in [&prefix_a_rdb, &prefix_b_rdb] {
+        let paths = r2.router.db.get_prefix_paths(prefix_rdb);
+        assert_eq!(
+            paths.len(),
+            1,
+            "routes should be present after route refresh"
+        );
+        let bgp = paths[0].bgp.as_ref().unwrap();
+        assert_eq!(bgp.origin_as, 4200000001);
+        assert_eq!(bgp.as_path, vec![4200000001]);
+    }
+
+    r1.shutdown();
+    r2.shutdown();
+}
