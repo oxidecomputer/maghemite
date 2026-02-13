@@ -15,7 +15,7 @@ use omicron_common::api::internal::nexus::{ProducerEndpoint, ProducerKind};
 use oximeter::types::{Cumulative, ProducerRegistry};
 use oximeter::{MetricsError, Producer, Sample};
 use oximeter_producer::{ConfigLogging, ConfigLoggingLevel, LogConfig};
-use rdb::Db;
+use rdb::{AddressFamily, Db};
 use slog::Logger;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -686,7 +686,7 @@ impl Stats {
     fn static_stats(&mut self) -> Result<Vec<Sample>, MetricsError> {
         let mut samples = Vec::new();
 
-        match self.db.get_static4_count() {
+        match self.db.get_static_count(AddressFamily::Ipv4) {
             Ok(count) => {
                 samples.push(static_counter!(
                     self.hostname.clone().into(),
@@ -701,7 +701,7 @@ impl Stats {
                 olog!(self.log, warn, "failed to produce static4 count: {e}");
             }
         }
-        match self.db.get_static_nexthop4_count() {
+        match self.db.get_static_nexthop_count(AddressFamily::Ipv4) {
             Ok(count) => {
                 samples.push(static_counter!(
                     self.hostname.clone().into(),

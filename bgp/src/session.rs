@@ -6031,7 +6031,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // Collect the prefixes this router is originating.
         let originated4 = if pc.ipv4_unicast.negotiated() {
-            match self.db.get_origin4() {
+            match self.db.get_origin(Some(AddressFamily::Ipv4)) {
                 Ok(value) => value,
                 Err(e) => {
                     //TODO possible death loop. Should we just panic here?
@@ -6050,7 +6050,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         let originated6 = if pc.ipv6_unicast.negotiated() {
-            match self.db.get_origin6() {
+            match self.db.get_origin(Some(AddressFamily::Ipv6)) {
                 Ok(value) => value,
                 Err(e) => {
                     //TODO possible death loop. Should we just panic here?
@@ -6096,7 +6096,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // is originating.
         if !originated4.is_empty()
             && let Err(e) = self.send_update(
-                RouteUpdate::V4(RouteUpdate4::Announce(originated4)),
+                RouteUpdate::V4(RouteUpdate4::Announce(
+                    originated4
+                        .into_iter()
+                        .filter_map(|p| match p {
+                            Prefix::V4(p4) => Some(p4),
+                            _ => None,
+                        })
+                        .collect(),
+                )),
                 &pc,
                 &ShaperApplication::Current,
             )
@@ -6114,7 +6122,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // Send IPv6 Unicast prefixes using MP-BGP encoding
         if !originated6.is_empty()
             && let Err(e) = self.send_update(
-                RouteUpdate::V6(RouteUpdate6::Announce(originated6)),
+                RouteUpdate::V6(RouteUpdate6::Announce(
+                    originated6
+                        .into_iter()
+                        .filter_map(|p| match p {
+                            Prefix::V6(p6) => Some(p6),
+                            _ => None,
+                        })
+                        .collect(),
+                )),
                 &pc,
                 &ShaperApplication::Current,
             )
@@ -6139,7 +6155,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         sa: &ShaperApplication,
     ) -> anyhow::Result<()> {
         // Get originated IPv4 routes
-        let originated4 = match self.db.get_origin4() {
+        let originated4 = match self.db.get_origin(Some(AddressFamily::Ipv4)) {
             Ok(originated) => originated,
             Err(e) => {
                 anyhow::bail!("failed to get originated IPv4 from db: {e}");
@@ -6147,15 +6163,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         if !originated4.is_empty() {
+            let p4: Vec<Prefix4> = originated4
+                .into_iter()
+                .filter_map(|p| match p {
+                    Prefix::V4(p4) => Some(p4),
+                    _ => None,
+                })
+                .collect();
             self.send_update(
-                RouteUpdate::V4(RouteUpdate4::Announce(originated4)),
+                RouteUpdate::V4(RouteUpdate4::Announce(p4)),
                 pc,
                 sa,
             )?;
         }
 
         // Get originated IPv6 routes
-        let originated6 = match self.db.get_origin6() {
+        let originated6 = match self.db.get_origin(Some(AddressFamily::Ipv6)) {
             Ok(originated) => originated,
             Err(e) => {
                 anyhow::bail!("failed to get originated IPv6 from db: {e}");
@@ -6163,8 +6186,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         if !originated6.is_empty() {
+            let p6: Vec<Prefix6> = originated6
+                .into_iter()
+                .filter_map(|p| match p {
+                    Prefix::V6(p6) => Some(p6),
+                    _ => None,
+                })
+                .collect();
             self.send_update(
-                RouteUpdate::V6(RouteUpdate6::Announce(originated6)),
+                RouteUpdate::V6(RouteUpdate6::Announce(p6)),
                 pc,
                 sa,
             )?;
@@ -6258,7 +6288,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 AdminEvent::ExportPolicyChanged(previous) => {
                     match previous {
                         ImportExportPolicy::V4(previous4) => {
-                            let originated = match self.db.get_origin4() {
+                            let originated = match self
+                                .db
+                                .get_origin(Some(AddressFamily::Ipv4))
+                            {
                                 Ok(value) => value,
                                 Err(e) => {
                                     session_log!(
@@ -6274,7 +6307,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                             // Determine which routes to announce/withdraw based on policy change
                             let session = lock!(self.session);
-                            let originated_before: BTreeSet<Prefix4> =
+                            let originated_before: BTreeSet<Prefix> =
                                 match previous4 {
                                     ImportExportPolicy4::NoFiltering => {
                                         originated.iter().cloned().collect()
@@ -6283,12 +6316,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         originated
                                             .iter()
                                             .cloned()
-                                            .filter(|x| list.contains(x))
+                                            .filter(|x| match x {
+                                                Prefix::V4(p4) => {
+                                                    list.contains(p4)
+                                                }
+                                                _ => false,
+                                            })
                                             .collect()
                                     }
                                 };
 
-                            let originated_after: BTreeSet<Prefix4> =
+                            let originated_after: BTreeSet<Prefix> =
                                 match session
                                     .ipv4_unicast
                                     .as_ref()
@@ -6302,7 +6340,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         originated
                                             .clone()
                                             .into_iter()
-                                            .filter(|x| list.contains(x))
+                                            .filter(|x| match x {
+                                                Prefix::V4(p4) => {
+                                                    list.contains(p4)
+                                                }
+                                                _ => false,
+                                            })
                                             .collect()
                                     }
                                 };
@@ -6310,12 +6353,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                             let to_withdraw: Vec<Prefix4> = originated_before
                                 .difference(&originated_after)
-                                .cloned()
+                                .filter_map(|p| match p {
+                                    Prefix::V4(p4) => Some(*p4),
+                                    _ => None,
+                                })
                                 .collect();
 
                             let to_announce: Vec<Prefix4> = originated_after
                                 .difference(&originated_before)
-                                .cloned()
+                                .filter_map(|p| match p {
+                                    Prefix::V4(p4) => Some(*p4),
+                                    _ => None,
+                                })
                                 .collect();
 
                             // Per RFC 7606, send announcements and withdrawals as
@@ -6361,7 +6410,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             FsmState::Established(pc)
                         }
                         ImportExportPolicy::V6(previous6) => {
-                            let originated = match self.db.get_origin6() {
+                            let originated = match self
+                                .db
+                                .get_origin(Some(AddressFamily::Ipv6))
+                            {
                                 Ok(value) => value,
                                 Err(e) => {
                                     session_log!(
@@ -6377,7 +6429,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                             // Determine which routes to announce/withdraw based on policy change
                             let session = lock!(self.session);
-                            let originated_before: BTreeSet<Prefix6> =
+                            let originated_before: BTreeSet<Prefix> =
                                 match previous6 {
                                     ImportExportPolicy6::NoFiltering => {
                                         originated.iter().cloned().collect()
@@ -6386,12 +6438,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         originated
                                             .iter()
                                             .cloned()
-                                            .filter(|x| list.contains(x))
+                                            .filter(|x| match x {
+                                                Prefix::V6(p6) => {
+                                                    list.contains(p6)
+                                                }
+                                                _ => false,
+                                            })
                                             .collect()
                                     }
                                 };
 
-                            let originated_after: BTreeSet<Prefix6> =
+                            let originated_after: BTreeSet<Prefix> =
                                 match session
                                     .ipv6_unicast
                                     .as_ref()
@@ -6405,7 +6462,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                         originated
                                             .clone()
                                             .into_iter()
-                                            .filter(|x| list.contains(x))
+                                            .filter(|x| match x {
+                                                Prefix::V6(p6) => {
+                                                    list.contains(p6)
+                                                }
+                                                _ => false,
+                                            })
                                             .collect()
                                     }
                                 };
@@ -6413,12 +6475,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                             let to_withdraw: Vec<Prefix6> = originated_before
                                 .difference(&originated_after)
-                                .cloned()
+                                .filter_map(|p| match p {
+                                    Prefix::V6(p6) => Some(*p6),
+                                    _ => None,
+                                })
                                 .collect();
 
                             let to_announce: Vec<Prefix6> = originated_after
                                 .difference(&originated_before)
-                                .cloned()
+                                .filter_map(|p| match p {
+                                    Prefix::V6(p6) => Some(*p6),
+                                    _ => None,
+                                })
                                 .collect();
 
                             // Per RFC 7606, send announcements and withdrawals as
@@ -6472,13 +6540,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 AdminEvent::EnforceFirstAsEnabled => {
-                    self.db.remove_bgp_peer_paths_where(
-                        &self.peer_id(),
-                        |bgp| match bgp.as_path.first() {
-                            Some(&first_as) => first_as != bgp.origin_as,
-                            None => true,
-                        },
-                    );
+                    self.db.enforce_first_as(&self.peer_id());
                     FsmState::Established(pc)
                 }
 
@@ -7900,7 +7962,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         // remove peer prefixes from db
-        self.db.remove_bgp_prefixes_from_peer(&self.peer_id());
+        self.db.remove_all_prefixes_from_bgp_peer(&self.peer_id());
     }
 
     /// Exit the established state into Idle.
@@ -8328,7 +8390,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return Ok(());
         }
 
-        let originated = match self.db.get_origin4() {
+        let originated = match self.db.get_origin(Some(AddressFamily::Ipv4)) {
             Ok(value) => value,
             Err(e) => {
                 session_log!(
@@ -8343,9 +8405,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        if !originated.is_empty() {
+        let originated4: Vec<Prefix4> = originated
+            .into_iter()
+            .filter_map(|p| match p {
+                Prefix::V4(p4) => Some(p4),
+                _ => None,
+            })
+            .collect();
+
+        if !originated4.is_empty() {
             self.send_update(
-                RouteUpdate::V4(RouteUpdate4::Announce(originated)),
+                RouteUpdate::V4(RouteUpdate4::Announce(originated4)),
                 pc,
                 &ShaperApplication::Current,
             )?;
@@ -8361,7 +8431,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return Ok(());
         }
 
-        let originated = match self.db.get_origin6() {
+        let originated = match self.db.get_origin(Some(AddressFamily::Ipv6)) {
             Ok(value) => value,
             Err(e) => {
                 session_log!(
@@ -8376,9 +8446,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        if !originated.is_empty() {
+        let originated6: Vec<Prefix6> = originated
+            .into_iter()
+            .filter_map(|p| match p {
+                Prefix::V6(p6) => Some(p6),
+                _ => None,
+            })
+            .collect();
+
+        if !originated6.is_empty() {
             self.send_update(
-                RouteUpdate::V6(RouteUpdate6::Announce(originated)),
+                RouteUpdate::V6(RouteUpdate6::Announce(originated6)),
                 pc,
                 &ShaperApplication::Current,
             )?;
@@ -8418,7 +8496,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, pc: &PeerConnection<Cnx>) {
-        let originated4 = match self.db.get_origin4() {
+        let originated4 = match self.db.get_origin(Some(AddressFamily::Ipv4)) {
             Ok(value) => value,
             Err(e) => {
                 session_log!(
@@ -8435,19 +8513,22 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let withdrawn: Vec<Prefix> = update
             .withdrawn
             .iter()
-            .filter(|p| !originated4.contains(p) && p.valid_for_rib())
+            .filter(|p| {
+                !originated4.contains(&Prefix::V4(**p)) && p.valid_for_rib()
+            })
             .copied()
             .map(Prefix::V4)
             .collect();
 
-        self.db.remove_bgp_prefixes(&withdrawn, &self.peer_id());
+        self.db
+            .remove_prefixes_from_bgp_peer(&withdrawn, &self.peer_id());
 
         if let Some(nexthop) = update.nexthop4().map(IpAddr::V4) {
             let nlri: Vec<Prefix> = update
                 .nlri
                 .iter()
                 .filter(|p| {
-                    !originated4.contains(p)
+                    !originated4.contains(&Prefix::V4(**p))
                         && p.valid_for_rib()
                         && !self.prefix_via_self(Prefix::V4(**p), nexthop)
                 })
@@ -8517,7 +8598,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .nlri
                         .iter()
                         .filter(|p| {
-                            !originated4.contains(p)
+                            !originated4.contains(&Prefix::V4(**p))
                                 && p.valid_for_rib()
                                 && !self.prefix_via_self(
                                     Prefix::V4(**p),
@@ -8560,7 +8641,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     }
                 }
                 MpReachNlri::Ipv6Unicast(reach6) => {
-                    let originated6 = match self.db.get_origin6() {
+                    let originated6 = match self
+                        .db
+                        .get_origin(Some(AddressFamily::Ipv6))
+                    {
                         Ok(value) => value,
                         Err(e) => {
                             session_log!(
@@ -8601,7 +8685,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .nlri
                         .iter()
                         .filter(|p| {
-                            !originated6.contains(p)
+                            !originated6.contains(&Prefix::V6(**p))
                                 && p.valid_for_rib()
                                 && !self
                                     .prefix_via_self(Prefix::V6(**p), nexthop6)
@@ -8650,17 +8734,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .withdrawn
                         .iter()
                         .filter(|p| {
-                            !originated4.contains(p) && p.valid_for_rib()
+                            !originated4.contains(&Prefix::V4(**p))
+                                && p.valid_for_rib()
                         })
                         .copied()
                         .map(Prefix::V4)
                         .collect();
 
-                    self.db
-                        .remove_bgp_prefixes(&mp_withdrawn4, &self.peer_id());
+                    self.db.remove_prefixes_from_bgp_peer(
+                        &mp_withdrawn4,
+                        &self.peer_id(),
+                    );
                 }
                 MpUnreachNlri::Ipv6Unicast(unreach6) => {
-                    let originated6 = match self.db.get_origin6() {
+                    let originated6 = match self
+                        .db
+                        .get_origin(Some(AddressFamily::Ipv6))
+                    {
                         Ok(value) => value,
                         Err(e) => {
                             session_log!(
@@ -8678,13 +8768,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .withdrawn
                         .iter()
                         .filter(|p| {
-                            !originated6.contains(p) && p.valid_for_rib()
+                            !originated6.contains(&Prefix::V6(**p))
+                                && p.valid_for_rib()
                         })
                         .copied()
                         .map(Prefix::V6)
                         .collect();
 
-                    self.db.remove_bgp_prefixes(&withdrawn6, &self.peer_id());
+                    self.db.remove_prefixes_from_bgp_peer(
+                        &withdrawn6,
+                        &self.peer_id(),
+                    );
                 }
             }
         }
