@@ -17,13 +17,17 @@ use crate::{
         MessageKind, MessageParseError, MpReachNlri, MpUnreachNlri,
         NotificationMessage, OpenErrorSubcode, OpenMessage, PathAttribute,
         PathAttributeValue, RouteRefreshMessage, Safi, UpdateMessage,
+        UpdateParseErrorReason,
     },
     params::{
         BgpCapability, BgpPeerParameters, BgpPeerParametersV1,
         DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
         PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo, TimerConfig,
     },
-    policy::{CheckerResult, ShaperResult},
+    policy::{
+        CheckerResult, ShaperResult, check_incoming_open,
+        check_incoming_update, shape_outgoing_open, shape_outgoing_update,
+    },
     recv_event_loop, recv_event_return,
     router::Router,
     unnumbered::UnnumberedManager,
@@ -1203,6 +1207,7 @@ pub struct SessionCounters {
     pub update_nexhop_missing: AtomicU64,
     pub open_handle_failures: AtomicU64,
     pub unnegotiated_address_family: AtomicU64,
+    pub updates_treated_as_withdraw: AtomicU64,
 
     // Send failure counters
     pub notification_send_failure: AtomicU64,
@@ -7244,7 +7249,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 PeerId::Ip(ip) => ip,
                 PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
             };
-            match crate::policy::check_incoming_open(
+            match check_incoming_open(
                 om.clone(),
                 checker,
                 remote_asn,
@@ -7485,7 +7490,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 PeerId::Ip(ip) => ip,
                 PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
             };
-            match crate::policy::shape_outgoing_open(
+            match shape_outgoing_open(
                 msg.clone(),
                 shaper,
                 peer_as,
@@ -7589,7 +7594,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 PeerId::Ip(ip) => ip,
                 PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
             };
-            Ok(crate::policy::shape_outgoing_update(
+            Ok(shape_outgoing_update(
                 update.clone(),
                 shaper,
                 peer_as,
@@ -7613,7 +7618,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         };
 
         let former = match previous {
-            Some(shaper) => crate::policy::shape_outgoing_update(
+            Some(shaper) => shape_outgoing_update(
                 update.clone(),
                 &shaper,
                 peer_as,
@@ -8151,18 +8156,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         mut update: UpdateMessage,
         pc: &PeerConnection<Cnx>,
     ) {
-        if let Err(e) = self.check_update(&update, pc.asn) {
-            session_log!(
-                self,
-                warn,
-                pc.conn,
-                "update check failed: {e}";
-                "error" => format!("{e}"),
-                "message" => "update",
-                "message_contents" => format!("{update}")
-            );
-            return;
-        }
+        self.check_update(&mut update, pc.asn);
 
         // Filter MP-BGP attributes based on negotiation state.
         // Attributes for unnegotiated AFI/SAFIs are silently removed.
@@ -8187,7 +8181,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 PeerId::Ip(ip) => ip,
                 PeerId::Interface(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
             };
-            match crate::policy::check_incoming_update(
+            match check_incoming_update(
                 update.clone(),
                 checker,
                 pc.asn,
@@ -8292,12 +8286,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     // RFC 4760 §3: Check reserved byte (must be 0, but must be ignored)
                     let reserved = match mp_reach {
-                        crate::messages::MpReachNlri::Ipv4Unicast(inner) => {
-                            inner.reserved
-                        }
-                        crate::messages::MpReachNlri::Ipv6Unicast(inner) => {
-                            inner.reserved
-                        }
+                        MpReachNlri::Ipv4Unicast(inner) => inner.reserved,
+                        MpReachNlri::Ipv6Unicast(inner) => inner.reserved,
                     };
                     if reserved != 0 {
                         session_log!(
@@ -8496,6 +8486,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Update this router's RIB based on an update message from a peer.
     fn update_rib(&self, update: &UpdateMessage, pc: &PeerConnection<Cnx>) {
+        let treat_as_withdraw = update.treat_as_withdraw();
+
         let originated4 = match self.db.get_origin(Some(AddressFamily::Ipv4)) {
             Ok(value) => value,
             Err(e) => {
@@ -8523,7 +8515,33 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         self.db
             .remove_prefixes_from_bgp_peer(&withdrawn, &self.peer_id());
 
-        if let Some(nexthop) = update.nexthop4().map(IpAddr::V4) {
+        if treat_as_withdraw {
+            self.counters
+                .updates_treated_as_withdraw
+                .fetch_add(1, Ordering::Relaxed);
+            session_log!(
+                self,
+                warn,
+                pc.conn,
+                "update marked treat-as-withdraw";
+                "errors" => format!("{:?}", update.errors),
+                "message" => "update",
+                "message_contents" => format!("{update}")
+            );
+            let nlri_as_withdrawn: Vec<Prefix> = update
+                .nlri
+                .iter()
+                .filter(|p| {
+                    !originated4.contains(&Prefix::V4(**p)) && p.valid_for_rib()
+                })
+                .copied()
+                .map(Prefix::V4)
+                .collect();
+            self.db.remove_prefixes_from_bgp_peer(
+                &nlri_as_withdrawn,
+                &self.peer_id(),
+            );
+        } else if let Some(nexthop) = update.nexthop4().map(IpAddr::V4) {
             let nlri: Vec<Prefix> = update
                 .nlri
                 .iter()
@@ -8582,62 +8600,80 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Some(reach) = update.mp_reach() {
             match reach {
                 MpReachNlri::Ipv4Unicast(reach4) => {
-                    let mp_nexthop = match &reach4.nexthop {
-                        BgpNexthop::Ipv4(ip4) => IpAddr::V4(*ip4),
-                        BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
-                        BgpNexthop::Ipv6Double(addrs) => {
-                            if self.is_unnumbered() {
-                                IpAddr::V6(addrs.link_local)
-                            } else {
-                                IpAddr::V6(addrs.global)
-                            }
-                        }
-                    };
-
-                    let mp_nlri4: Vec<Prefix> = reach4
-                        .nlri
-                        .iter()
-                        .filter(|p| {
-                            !originated4.contains(&Prefix::V4(**p))
-                                && p.valid_for_rib()
-                                && !self.prefix_via_self(
-                                    Prefix::V4(**p),
-                                    mp_nexthop,
-                                )
-                        })
-                        .copied()
-                        .map(Prefix::V4)
-                        .collect();
-
-                    if !mp_nlri4.is_empty() {
-                        let mut as_path = Vec::new();
-                        if let Some(segments_list) = update.as_path() {
-                            for segments in &segments_list {
-                                as_path.extend(segments.value.iter());
-                            }
-                        }
-                        let nexthop_interface = derive_nexthop_interface(
+                    if treat_as_withdraw {
+                        // RFC 7606: treat MP_REACH NLRI as withdrawals
+                        let mp_withdrawn4: Vec<Prefix> = reach4
+                            .nlri
+                            .iter()
+                            .filter(|p| {
+                                !originated4.contains(&Prefix::V4(**p))
+                                    && p.valid_for_rib()
+                            })
+                            .copied()
+                            .map(Prefix::V4)
+                            .collect();
+                        self.db.remove_prefixes_from_bgp_peer(
+                            &mp_withdrawn4,
                             &self.peer_id(),
-                            mp_nexthop,
                         );
-                        let path4 = rdb::Path {
-                            nexthop: mp_nexthop,
-                            nexthop_interface,
-                            shutdown: update.graceful_shutdown(),
-                            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
-                            bgp: Some(BgpPathProperties {
-                                origin_as: pc.asn,
-                                peer: self.peer_id(),
-                                id: pc.id,
-                                med: update.multi_exit_discriminator(),
-                                local_pref: update.local_pref(),
-                                as_path,
-                                stale: None,
-                            }),
-                            vlan_id: lock!(self.session).vlan_id,
+                    } else {
+                        let mp_nexthop = match &reach4.nexthop {
+                            BgpNexthop::Ipv4(ip4) => IpAddr::V4(*ip4),
+                            BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
+                            BgpNexthop::Ipv6Double(addrs) => {
+                                if self.is_unnumbered() {
+                                    IpAddr::V6(addrs.link_local)
+                                } else {
+                                    IpAddr::V6(addrs.global)
+                                }
+                            }
                         };
 
-                        self.db.add_bgp_prefixes(&mp_nlri4, path4);
+                        let mp_nlri4: Vec<Prefix> = reach4
+                            .nlri
+                            .iter()
+                            .filter(|p| {
+                                !originated4.contains(&Prefix::V4(**p))
+                                    && p.valid_for_rib()
+                                    && !self.prefix_via_self(
+                                        Prefix::V4(**p),
+                                        mp_nexthop,
+                                    )
+                            })
+                            .copied()
+                            .map(Prefix::V4)
+                            .collect();
+
+                        if !mp_nlri4.is_empty() {
+                            let mut as_path = Vec::new();
+                            if let Some(segments_list) = update.as_path() {
+                                for segments in &segments_list {
+                                    as_path.extend(segments.value.iter());
+                                }
+                            }
+                            let nexthop_interface = derive_nexthop_interface(
+                                &self.peer_id(),
+                                mp_nexthop,
+                            );
+                            let path4 = rdb::Path {
+                                nexthop: mp_nexthop,
+                                nexthop_interface,
+                                shutdown: update.graceful_shutdown(),
+                                rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+                                bgp: Some(BgpPathProperties {
+                                    origin_as: pc.asn,
+                                    peer: self.peer_id(),
+                                    id: pc.id,
+                                    med: update.multi_exit_discriminator(),
+                                    local_pref: update.local_pref(),
+                                    as_path,
+                                    stale: None,
+                                }),
+                                vlan_id: lock!(self.session).vlan_id,
+                            };
+
+                            self.db.add_bgp_prefixes(&mp_nlri4, path4);
+                        }
                     }
                 }
                 MpReachNlri::Ipv6Unicast(reach6) => {
@@ -8658,69 +8694,91 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         }
                     };
 
-                    let nexthop6 = match &reach6.nexthop {
-                        BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
-                        BgpNexthop::Ipv6Double(addrs) => {
-                            if self.is_unnumbered() {
-                                IpAddr::V6(addrs.link_local)
-                            } else {
-                                IpAddr::V6(addrs.global)
+                    if treat_as_withdraw {
+                        // RFC 7606: treat MP_REACH NLRI as withdrawals
+                        let withdrawn6: Vec<Prefix> = reach6
+                            .nlri
+                            .iter()
+                            .filter(|p| {
+                                !originated6.contains(&Prefix::V6(**p))
+                                    && p.valid_for_rib()
+                            })
+                            .copied()
+                            .map(Prefix::V6)
+                            .collect();
+                        self.db.remove_prefixes_from_bgp_peer(
+                            &withdrawn6,
+                            &self.peer_id(),
+                        );
+                    } else {
+                        let nexthop6 = match &reach6.nexthop {
+                            BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
+                            BgpNexthop::Ipv6Double(addrs) => {
+                                if self.is_unnumbered() {
+                                    IpAddr::V6(addrs.link_local)
+                                } else {
+                                    IpAddr::V6(addrs.global)
+                                }
                             }
-                        }
-                        BgpNexthop::Ipv4(ip4) => {
-                            // IPv4 nexthop for IPv6 routes is unusual but possible
-                            // in some configurations (e.g., IPv4-mapped IPv6)
-                            session_log!(
-                                self,
-                                warn,
-                                pc.conn,
-                                "IPv4 nexthop in IPv6 MP_REACH_NLRI";
-                                "nexthop" => format!("{ip4}")
-                            );
-                            IpAddr::V4(*ip4)
-                        }
-                    };
-
-                    let nlri6: Vec<Prefix> = reach6
-                        .nlri
-                        .iter()
-                        .filter(|p| {
-                            !originated6.contains(&Prefix::V6(**p))
-                                && p.valid_for_rib()
-                                && !self
-                                    .prefix_via_self(Prefix::V6(**p), nexthop6)
-                        })
-                        .copied()
-                        .map(Prefix::V6)
-                        .collect();
-
-                    if !nlri6.is_empty() {
-                        let mut as_path = Vec::new();
-                        if let Some(segments_list) = update.as_path() {
-                            for segments in &segments_list {
-                                as_path.extend(segments.value.iter());
+                            BgpNexthop::Ipv4(ip4) => {
+                                // IPv4 nexthop for IPv6 routes is unusual but possible
+                                // in some configurations (e.g., IPv4-mapped IPv6)
+                                session_log!(
+                                    self,
+                                    warn,
+                                    pc.conn,
+                                    "IPv4 nexthop in IPv6 MP_REACH_NLRI";
+                                    "nexthop" => format!("{ip4}")
+                                );
+                                IpAddr::V4(*ip4)
                             }
-                        }
-                        let nexthop_interface =
-                            derive_nexthop_interface(&self.peer_id(), nexthop6);
-                        let path6 = rdb::Path {
-                            nexthop: nexthop6,
-                            nexthop_interface,
-                            shutdown: update.graceful_shutdown(),
-                            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
-                            bgp: Some(BgpPathProperties {
-                                origin_as: pc.asn,
-                                peer: self.peer_id(),
-                                id: pc.id,
-                                med: update.multi_exit_discriminator(),
-                                local_pref: update.local_pref(),
-                                as_path,
-                                stale: None,
-                            }),
-                            vlan_id: lock!(self.session).vlan_id,
                         };
 
-                        self.db.add_bgp_prefixes(&nlri6, path6);
+                        let nlri6: Vec<Prefix> = reach6
+                            .nlri
+                            .iter()
+                            .filter(|p| {
+                                !originated6.contains(&Prefix::V6(**p))
+                                    && p.valid_for_rib()
+                                    && !self.prefix_via_self(
+                                        Prefix::V6(**p),
+                                        nexthop6,
+                                    )
+                            })
+                            .copied()
+                            .map(Prefix::V6)
+                            .collect();
+
+                        if !nlri6.is_empty() {
+                            let mut as_path = Vec::new();
+                            if let Some(segments_list) = update.as_path() {
+                                for segments in &segments_list {
+                                    as_path.extend(segments.value.iter());
+                                }
+                            }
+                            let nexthop_interface = derive_nexthop_interface(
+                                &self.peer_id(),
+                                nexthop6,
+                            );
+                            let path6 = rdb::Path {
+                                nexthop: nexthop6,
+                                nexthop_interface,
+                                shutdown: update.graceful_shutdown(),
+                                rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+                                bgp: Some(BgpPathProperties {
+                                    origin_as: pc.asn,
+                                    peer: self.peer_id(),
+                                    id: pc.id,
+                                    med: update.multi_exit_discriminator(),
+                                    local_pref: update.local_pref(),
+                                    as_path,
+                                    stale: None,
+                                }),
+                                vlan_id: lock!(self.session).vlan_id,
+                            };
+
+                            self.db.add_bgp_prefixes(&nlri6, path6);
+                        }
                     }
                 }
             }
@@ -8784,21 +8842,21 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
-    /// Perform a set of checks on an update to see if we can accept it.
-    fn check_update(
-        &self,
-        update: &UpdateMessage,
-        peer_as: u32,
-    ) -> Result<(), Error> {
-        // Path vector routing and prefix validation
-        self.check_for_self_in_path(update)?;
+    /// Perform session-level checks on an update. Failures mark the
+    /// update for treat-as-withdraw rather than returning an error.
+    fn check_update(&self, update: &mut UpdateMessage, peer_as: u32) {
+        let local_asn = match self.asn {
+            Asn::TwoOctet(asn) => asn as u32,
+            Asn::FourOctet(asn) => asn,
+        };
+        check_for_self_in_path(update, local_asn);
 
-        // Optional enforce-first-AS validation
+        // Optional enforce-first-AS validation (eBGP only per
+        // RFC 4271 Section 6.3)
         let info = lock!(self.session);
-        if info.enforce_first_as {
-            self.enforce_first_as(update, peer_as)?;
+        if info.enforce_first_as && self.is_ebgp().unwrap_or(false) {
+            enforce_first_as(update, peer_as);
         }
-        Ok(())
     }
 
     fn apply_static_update_policy(&self, update: &mut UpdateMessage) {
@@ -8808,31 +8866,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         if let Some(pref) = lock!(self.session).local_pref {
             update.set_local_pref(pref);
         }
-    }
-
-    /// Do not accept routes that have our ASN in the AS_PATH e.g., do
-    /// path-vector routing not distance-vector routing.
-    fn check_for_self_in_path(
-        &self,
-        update: &UpdateMessage,
-    ) -> Result<(), Error> {
-        let asn = match self.asn {
-            Asn::TwoOctet(asn) => asn as u32,
-            Asn::FourOctet(asn) => asn,
-        };
-        for pa in &update.path_attributes {
-            let path = match &pa.value {
-                PathAttributeValue::AsPath(segments) => segments,
-                PathAttributeValue::As4Path(segments) => segments,
-                _ => continue,
-            };
-            for segment in path {
-                if segment.value.contains(&asn) {
-                    return Err(Error::SelfLoopDetected);
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Do not accept routes advertised with themselves as the next-hop.
@@ -8848,27 +8881,6 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
             _ => false,
         }
-    }
-
-    fn enforce_first_as(
-        &self,
-        update: &UpdateMessage,
-        peer_as: u32,
-    ) -> Result<(), Error> {
-        let path = match update.as_path() {
-            Some(path) => path,
-            None => return Err(Error::MissingAsPath),
-        };
-        let path: Vec<u32> = path.into_iter().flat_map(|x| x.value).collect();
-        if path.is_empty() {
-            return Err(Error::EmptyAsPath);
-        }
-
-        if path[0] != peer_as {
-            return Err(Error::EnforceAsFirst(peer_as, path));
-        }
-
-        Ok(())
     }
 
     /// Return the current BGP peer state of this session runner.
@@ -9376,6 +9388,59 @@ impl From<MessageHistory> for MessageHistoryV1 {
     }
 }
 
+/// Mark the update for treat-as-withdraw if `local_asn` appears in the
+/// AS_PATH (path-vector loop detection).
+pub(crate) fn check_for_self_in_path(
+    update: &mut UpdateMessage,
+    local_asn: u32,
+) {
+    for pa in &update.path_attributes {
+        let path = match &pa.value {
+            PathAttributeValue::AsPath(segments) => segments,
+            PathAttributeValue::As4Path(segments) => segments,
+            _ => continue,
+        };
+        for segment in path {
+            if segment.value.contains(&local_asn) {
+                update.set_treat_as_withdraw(
+                    UpdateParseErrorReason::AsLoopDetected,
+                );
+                return;
+            }
+        }
+    }
+}
+
+/// Mark the update for treat-as-withdraw if the first AS in the path
+/// does not match `peer_as` (RFC 4271 Section 6.3).
+///
+/// A missing AS_PATH attribute is not checked here — the parser already
+/// flags that as TreatAsWithdraw (mandatory attribute validation).
+pub(crate) fn enforce_first_as(update: &mut UpdateMessage, peer_as: u32) {
+    let Some(path) = update.as_path() else {
+        return;
+    };
+    let path: Vec<u32> = path.into_iter().flat_map(|x| x.value).collect();
+    if path.is_empty() {
+        update.set_treat_as_withdraw(
+            UpdateParseErrorReason::EnforceFirstAsFailed {
+                peer_as,
+                first_as: None,
+            },
+        );
+        return;
+    }
+
+    if path[0] != peer_as {
+        update.set_treat_as_withdraw(
+            UpdateParseErrorReason::EnforceFirstAsFailed {
+                peer_as,
+                first_as: Some(path[0]),
+            },
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9737,5 +9802,77 @@ mod tests {
             select_nexthop(Afi::Ipv6, local_ip, None, &BTreeSet::default());
         // Should error because cannot derive IPv6 nexthop from IPv4 connection
         assert!(result.is_err());
+    }
+
+    // ================================================================
+    // check_for_self_in_path / enforce_first_as unit tests
+    // ================================================================
+
+    use crate::messages::{As4PathSegment, AsPathType};
+
+    /// Build an UpdateMessage with an AS4_PATH containing a single
+    /// AS_SEQUENCE segment with the given ASNs.
+    fn make_update_with_as_path(asns: &[u32]) -> UpdateMessage {
+        let path_attr = PathAttribute::from(PathAttributeValue::As4Path(vec![
+            As4PathSegment {
+                typ: AsPathType::AsSequence,
+                value: asns.to_vec(),
+            },
+        ]));
+        UpdateMessage {
+            withdrawn: Vec::new(),
+            path_attributes: vec![path_attr],
+            nlri: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn self_in_path_sets_treat_as_withdraw() {
+        let mut update = make_update_with_as_path(&[65001, 65002]);
+        check_for_self_in_path(&mut update, 65002);
+        assert!(update.treat_as_withdraw());
+    }
+
+    #[test]
+    fn self_not_in_path_leaves_update_clean() {
+        let mut update = make_update_with_as_path(&[65001, 65002]);
+        check_for_self_in_path(&mut update, 65003);
+        assert!(!update.treat_as_withdraw());
+    }
+
+    #[test]
+    fn enforce_first_as_match_leaves_update_clean() {
+        let mut update = make_update_with_as_path(&[65001, 65002]);
+        enforce_first_as(&mut update, 65001);
+        assert!(!update.treat_as_withdraw());
+    }
+
+    #[test]
+    fn enforce_first_as_mismatch_sets_treat_as_withdraw() {
+        let mut update = make_update_with_as_path(&[65001, 65002]);
+        enforce_first_as(&mut update, 65099);
+        assert!(update.treat_as_withdraw());
+    }
+
+    #[test]
+    fn enforce_first_as_empty_path_sets_treat_as_withdraw() {
+        let mut update = make_update_with_as_path(&[]);
+        enforce_first_as(&mut update, 65001);
+        assert!(update.treat_as_withdraw());
+    }
+
+    #[test]
+    fn enforce_first_as_missing_path_is_noop() {
+        // Missing AS_PATH is handled by the parser's mandatory attribute
+        // validation, not by enforce_first_as.
+        let mut update = UpdateMessage {
+            withdrawn: Vec::new(),
+            path_attributes: Vec::new(),
+            nlri: Vec::new(),
+            errors: Vec::new(),
+        };
+        enforce_first_as(&mut update, 65001);
+        assert!(!update.treat_as_withdraw());
     }
 }
