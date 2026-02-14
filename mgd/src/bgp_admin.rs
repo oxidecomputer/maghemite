@@ -772,7 +772,7 @@ pub async fn create_origin4(
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
-        .create_origin4(prefixes)
+        .create_origin(AddressFamily::Ipv4, prefixes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
@@ -819,7 +819,7 @@ pub async fn update_origin4(
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
-        .set_origin4(prefixes)
+        .set_origin(AddressFamily::Ipv4, prefixes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
@@ -833,7 +833,7 @@ pub async fn delete_origin4(
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
-        .clear_origin4()
+        .clear_origin(AddressFamily::Ipv4)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseDeleted())
@@ -852,7 +852,7 @@ pub async fn create_origin6(
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
-        .create_origin6(prefixes)
+        .create_origin(AddressFamily::Ipv6, prefixes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
@@ -899,7 +899,7 @@ pub async fn update_origin6(
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
-        .set_origin6(prefixes)
+        .set_origin(AddressFamily::Ipv6, prefixes)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())
@@ -913,7 +913,7 @@ pub async fn delete_origin6(
     let ctx = ctx.context();
 
     get_router!(ctx, rq.asn)?
-        .clear_origin6()
+        .clear_origin(AddressFamily::Ipv6)
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseDeleted())
@@ -1593,11 +1593,17 @@ async fn do_bgp_apply(
     }
 
     get_router!(ctx, rq.asn)?
-        .set_origin4(rq.originate.clone().into_iter().collect())
+        .set_origin(
+            AddressFamily::Ipv4,
+            rq.originate.clone().into_iter().collect(),
+        )
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     get_router!(ctx, rq.asn)?
-        .set_origin6(rq.originate.clone().into_iter().collect())
+        .set_origin(
+            AddressFamily::Ipv6,
+            rq.originate.clone().into_iter().collect(),
+        )
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(HttpResponseUpdatedNoContent())

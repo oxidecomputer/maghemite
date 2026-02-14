@@ -464,73 +464,57 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
         Ok(())
     }
 
-    pub fn create_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        self.db.create_origin(AddressFamily::Ipv4, &prefixes)?;
+    pub fn create_origin(
+        &self,
+        af: AddressFamily,
+        prefixes: Vec<Prefix>,
+    ) -> Result<(), Error> {
+        self.db.create_origin(af, &prefixes)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
-            let prefix4: Vec<Prefix4> = prefixes
-                .into_iter()
-                .filter_map(|x| match x {
-                    Prefix::V4(p4) => Some(p4),
-                    _ => None,
-                })
-                .collect();
-            self.announce_origin4(prefix4);
+            self.announce_origin(af, prefixes);
         }
         Ok(())
     }
 
-    pub fn set_origin4(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        let current = self.db.get_origin(Some(AddressFamily::Ipv4))?;
+    pub fn set_origin(
+        &self,
+        af: AddressFamily,
+        prefixes: Vec<Prefix>,
+    ) -> Result<(), Error> {
+        let current = self.db.get_origin(Some(af))?;
         let current_set: BTreeSet<&Prefix> = current.iter().collect();
         let new_set: BTreeSet<&Prefix> = prefixes.iter().collect();
 
-        let to_withdraw: Vec<Prefix4> = current_set
-            .difference(&new_set)
-            .filter_map(|p| match p {
-                Prefix::V4(p4) => Some(*p4),
-                _ => None,
-            })
-            .collect();
+        let to_withdraw: Vec<Prefix> =
+            current_set.difference(&new_set).copied().copied().collect();
 
-        let to_announce: Vec<Prefix4> = new_set
-            .difference(&current_set)
-            .filter_map(|p| match p {
-                Prefix::V4(p4) => Some(*p4),
-                _ => None,
-            })
-            .collect();
+        let to_announce: Vec<Prefix> =
+            new_set.difference(&current_set).copied().copied().collect();
 
-        self.db.set_origin(AddressFamily::Ipv4, &prefixes)?;
+        self.db.set_origin(af, &prefixes)?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
-            self.withdraw_origin4(to_withdraw);
-            self.announce_origin4(to_announce);
+            self.withdraw_origin(af, to_withdraw);
+            self.announce_origin(af, to_announce);
         }
         Ok(())
     }
 
-    pub fn clear_origin4(&self) -> Result<(), Error> {
-        let current = self.db.get_origin(Some(AddressFamily::Ipv4))?;
+    pub fn clear_origin(&self, af: AddressFamily) -> Result<(), Error> {
+        let current = self.db.get_origin(Some(af))?;
 
         // Skip network propagation if router is shutdown
         if !self.shutdown.load(Ordering::Acquire) {
-            let current4: Vec<Prefix4> = current
-                .into_iter()
-                .filter_map(|p| match p {
-                    Prefix::V4(p4) => Some(p4),
-                    _ => None,
-                })
-                .collect();
-            self.withdraw_origin4(current4);
+            self.withdraw_origin(af, current);
         }
-        self.db.clear_origin(AddressFamily::Ipv4)?;
+        self.db.clear_origin(af)?;
         Ok(())
     }
 
-    fn announce_origin4(&self, prefixes: Vec<Prefix4>) {
+    fn announce_origin(&self, af: AddressFamily, prefixes: Vec<Prefix>) {
         if prefixes.is_empty() {
             return;
         }
@@ -543,16 +527,37 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         slog::debug!(
             self.log,
-            "announcing originated IPv4 prefixes";
+            "announcing originated {} prefixes", af;
             "component" => COMPONENT_BGP,
             "prefixes" => format!("[{pfx_str}]"),
             "count" => prefixes.len(),
         );
 
-        read_lock!(self.fanout4).send_all(prefixes, vec![]);
+        match af {
+            AddressFamily::Ipv4 => {
+                let typed: Vec<Prefix4> = prefixes
+                    .into_iter()
+                    .filter_map(|p| match p {
+                        Prefix::V4(p4) => Some(p4),
+                        _ => None,
+                    })
+                    .collect();
+                read_lock!(self.fanout4).send_all(typed, vec![]);
+            }
+            AddressFamily::Ipv6 => {
+                let typed: Vec<Prefix6> = prefixes
+                    .into_iter()
+                    .filter_map(|p| match p {
+                        Prefix::V6(p6) => Some(p6),
+                        _ => None,
+                    })
+                    .collect();
+                read_lock!(self.fanout6).send_all(typed, vec![]);
+            }
+        }
     }
 
-    fn withdraw_origin4(&self, prefixes: Vec<Prefix4>) {
+    fn withdraw_origin(&self, af: AddressFamily, prefixes: Vec<Prefix>) {
         if prefixes.is_empty() {
             return;
         }
@@ -565,123 +570,34 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
 
         slog::debug!(
             self.log,
-            "withdrawing originated IPv4 prefixes";
+            "withdrawing originated {} prefixes", af;
             "component" => COMPONENT_BGP,
             "prefixes" => format!("[{pfx_str}]"),
             "count" => prefixes.len(),
         );
 
-        read_lock!(self.fanout4).send_all(vec![], prefixes);
-    }
-
-    pub fn create_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        self.db.create_origin(AddressFamily::Ipv6, &prefixes)?;
-
-        // Skip network propagation if router is shutdown
-        if !self.shutdown.load(Ordering::Acquire) {
-            let prefix6: Vec<Prefix6> = prefixes
-                .into_iter()
-                .filter_map(|x| match x {
-                    Prefix::V6(p6) => Some(p6),
-                    _ => None,
-                })
-                .collect();
-            self.announce_origin6(prefix6);
+        match af {
+            AddressFamily::Ipv4 => {
+                let typed: Vec<Prefix4> = prefixes
+                    .into_iter()
+                    .filter_map(|p| match p {
+                        Prefix::V4(p4) => Some(p4),
+                        _ => None,
+                    })
+                    .collect();
+                read_lock!(self.fanout4).send_all(vec![], typed);
+            }
+            AddressFamily::Ipv6 => {
+                let typed: Vec<Prefix6> = prefixes
+                    .into_iter()
+                    .filter_map(|p| match p {
+                        Prefix::V6(p6) => Some(p6),
+                        _ => None,
+                    })
+                    .collect();
+                read_lock!(self.fanout6).send_all(vec![], typed);
+            }
         }
-        Ok(())
-    }
-
-    pub fn set_origin6(&self, prefixes: Vec<Prefix>) -> Result<(), Error> {
-        let current = self.db.get_origin(Some(AddressFamily::Ipv6))?;
-        let current_set: BTreeSet<&Prefix> = current.iter().collect();
-        let new_set: BTreeSet<&Prefix> = prefixes.iter().collect();
-
-        let to_withdraw: Vec<Prefix6> = current_set
-            .difference(&new_set)
-            .filter_map(|p| match p {
-                Prefix::V6(p6) => Some(*p6),
-                _ => None,
-            })
-            .collect();
-
-        let to_announce: Vec<Prefix6> = new_set
-            .difference(&current_set)
-            .filter_map(|p| match p {
-                Prefix::V6(p6) => Some(*p6),
-                _ => None,
-            })
-            .collect();
-
-        self.db.set_origin(AddressFamily::Ipv6, &prefixes)?;
-
-        // Skip network propagation if router is shutdown
-        if !self.shutdown.load(Ordering::Acquire) {
-            self.withdraw_origin6(to_withdraw);
-            self.announce_origin6(to_announce);
-        }
-        Ok(())
-    }
-
-    pub fn clear_origin6(&self) -> Result<(), Error> {
-        let current = self.db.get_origin(Some(AddressFamily::Ipv6))?;
-
-        // Skip network propagation if router is shutdown
-        if !self.shutdown.load(Ordering::Acquire) {
-            let current6: Vec<Prefix6> = current
-                .into_iter()
-                .filter_map(|p| match p {
-                    Prefix::V6(p6) => Some(p6),
-                    _ => None,
-                })
-                .collect();
-            self.withdraw_origin6(current6);
-        }
-        self.db.clear_origin(AddressFamily::Ipv6)?;
-        Ok(())
-    }
-
-    fn announce_origin6(&self, prefixes: Vec<Prefix6>) {
-        if prefixes.is_empty() {
-            return;
-        }
-
-        let pfx_str = prefixes
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        slog::debug!(
-            self.log,
-            "announcing originated IPv6 prefixes";
-            "component" => COMPONENT_BGP,
-            "prefixes" => format!("[{pfx_str}]"),
-            "count" => prefixes.len(),
-        );
-
-        read_lock!(self.fanout6).send_all(prefixes, vec![]);
-    }
-
-    fn withdraw_origin6(&self, prefixes: Vec<Prefix6>) {
-        if prefixes.is_empty() {
-            return;
-        }
-
-        let pfx_str = prefixes
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        slog::debug!(
-            self.log,
-            "withdrawing originated IPv6 prefixes";
-            "component" => COMPONENT_BGP,
-            "prefixes" => format!("[{pfx_str}]"),
-            "count" => prefixes.len(),
-        );
-
-        read_lock!(self.fanout6).send_all(vec![], prefixes);
     }
 
     pub fn base_attributes(&self) -> Vec<PathAttribute> {
@@ -749,47 +665,11 @@ impl<Cnx: BgpConnection + 'static> Router<Cnx> {
     }
 
     fn announce_all(&self) -> Result<(), Error> {
-        let originated4: Vec<Prefix4> = self
-            .db
-            .get_origin(Some(AddressFamily::Ipv4))?
-            .into_iter()
-            .filter_map(|p| match p {
-                Prefix::V4(p4) => Some(p4),
-                _ => None,
-            })
-            .collect();
+        let originated4 = self.db.get_origin(Some(AddressFamily::Ipv4))?;
+        self.announce_origin(AddressFamily::Ipv4, originated4);
 
-        if !originated4.is_empty() {
-            slog::debug!(
-                self.log,
-                "announcing all originated IPv4 prefixes";
-                "component" => COMPONENT_BGP,
-                "count" => originated4.len(),
-            );
-
-            read_lock!(self.fanout4).send_all(originated4, vec![]);
-        }
-
-        let originated6: Vec<Prefix6> = self
-            .db
-            .get_origin(Some(AddressFamily::Ipv6))?
-            .into_iter()
-            .filter_map(|p| match p {
-                Prefix::V6(p6) => Some(p6),
-                _ => None,
-            })
-            .collect();
-
-        if !originated6.is_empty() {
-            slog::debug!(
-                self.log,
-                "announcing all originated IPv6 prefixes";
-                "component" => COMPONENT_BGP,
-                "count" => originated6.len(),
-            );
-
-            read_lock!(self.fanout6).send_all(originated6, vec![]);
-        }
+        let originated6 = self.db.get_origin(Some(AddressFamily::Ipv6))?;
+        self.announce_origin(AddressFamily::Ipv6, originated6);
 
         Ok(())
     }

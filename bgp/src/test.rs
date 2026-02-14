@@ -22,7 +22,8 @@ use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
 use rdb::{
-    Asn, ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4, Prefix6,
+    AddressFamily, Asn, ImportExportPolicy4, ImportExportPolicy6, Prefix,
+    Prefix4, Prefix6,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -738,7 +739,7 @@ fn basic_update_helper<
             let prefixes_v4 = generate_test_prefixes_v4(TEST_ROUTE_COUNT);
 
             r1.router
-                .create_origin4(prefixes_v4.clone())
+                .create_origin(AddressFamily::Ipv4, prefixes_v4.clone())
                 .expect("originate IPv4");
 
             // Wait for all routes to arrive at R2
@@ -844,7 +845,7 @@ fn basic_update_helper<
             let prefixes_v6 = generate_test_prefixes_v6(TEST_ROUTE_COUNT);
 
             r1.router
-                .create_origin6(prefixes_v6.clone())
+                .create_origin(AddressFamily::Ipv6, prefixes_v6.clone())
                 .expect("originate IPv6");
 
             // Wait for all routes to arrive at R2
@@ -952,10 +953,10 @@ fn basic_update_helper<
             let prefixes_v6 = generate_test_prefixes_v6(TEST_ROUTE_COUNT);
 
             r1.router
-                .create_origin4(prefixes_v4.clone())
+                .create_origin(AddressFamily::Ipv4, prefixes_v4.clone())
                 .expect("originate IPv4");
             r1.router
-                .create_origin6(prefixes_v6.clone())
+                .create_origin(AddressFamily::Ipv6, prefixes_v6.clone())
                 .expect("originate IPv6");
 
             // Wait for all IPv4 and IPv6 routes to arrive at R2
@@ -1688,7 +1689,7 @@ fn test_import_export_policy_filtering() {
 
     // Originate all 3 prefixes from r1
     r1.router
-        .create_origin4(vec![prefix_a, prefix_b, prefix_c])
+        .create_origin(AddressFamily::Ipv4, vec![prefix_a, prefix_b, prefix_c])
         .expect("originate prefixes");
 
     // Wait for routes to propagate - r2 should only see prefix_a
@@ -3740,10 +3741,10 @@ fn test_three_router_chain_unnumbered() {
 
     // Step 8a: Originate routes from R1 and R3
     r1.router
-        .create_origin4(vec![cidr!("10.1.0.0/24")])
+        .create_origin(AddressFamily::Ipv4, vec![cidr!("10.1.0.0/24")])
         .expect("originate IPv4 route on R1");
     r3.router
-        .create_origin4(vec![cidr!("10.3.0.0/24")])
+        .create_origin(AddressFamily::Ipv4, vec![cidr!("10.3.0.0/24")])
         .expect("originate IPv4 route on R3");
 
     // Step 8b: Verify R2 receives both routes
@@ -3859,7 +3860,7 @@ fn test_unnumbered_dualstack_route_exchange() {
 
     // Step 1: Originate IPv4 route from R1
     r1.router
-        .create_origin4(vec![cidr!("10.1.0.0/24")])
+        .create_origin(AddressFamily::Ipv4, vec![cidr!("10.1.0.0/24")])
         .expect("originate IPv4 route on R1");
 
     // Step 2: Verify R2 receives IPv4 route with link-local nexthop
@@ -3878,7 +3879,7 @@ fn test_unnumbered_dualstack_route_exchange() {
 
     // Step 3: Originate IPv6 route from R1
     r1.router
-        .create_origin6(vec![cidr!("2001:db8:1::/48")])
+        .create_origin(AddressFamily::Ipv6, vec![cidr!("2001:db8:1::/48")])
         .expect("originate IPv6 route on R1");
 
     // Step 4: Verify R2 receives IPv6 route with link-local nexthop
@@ -3897,10 +3898,10 @@ fn test_unnumbered_dualstack_route_exchange() {
 
     // Step 5: Originate routes from R2 in the opposite direction
     r2.router
-        .create_origin4(vec![cidr!("10.2.0.0/24")])
+        .create_origin(AddressFamily::Ipv4, vec![cidr!("10.2.0.0/24")])
         .expect("originate IPv4 route on R2");
     r2.router
-        .create_origin6(vec![cidr!("2001:db8:2::/48")])
+        .create_origin(AddressFamily::Ipv6, vec![cidr!("2001:db8:2::/48")])
         .expect("originate IPv6 route on R2");
 
     // Step 6: Verify R1 receives both routes with R2's link-local nexthop
@@ -4442,7 +4443,7 @@ fn test_enforce_first_as_graceful_toggle() {
 
     // Originate routes from r1
     r1.router
-        .create_origin4(vec![prefix_a, prefix_b])
+        .create_origin(AddressFamily::Ipv4, vec![prefix_a, prefix_b])
         .expect("originate prefixes");
 
     let prefix_a_rdb = Prefix::V4(cidr!("10.10.0.0/24"));
