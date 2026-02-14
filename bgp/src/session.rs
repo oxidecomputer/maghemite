@@ -6545,7 +6545,19 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 }
 
                 AdminEvent::EnforceFirstAsEnabled => {
-                    self.db.enforce_first_as(&self.peer_id());
+                    let peer_id = self.peer_id();
+                    if pc.ipv4_unicast.negotiated() {
+                        self.db.enforce_first_as(
+                            &peer_id,
+                            Some(AddressFamily::Ipv4),
+                        );
+                    }
+                    if pc.ipv6_unicast.negotiated() {
+                        self.db.enforce_first_as(
+                            &peer_id,
+                            Some(AddressFamily::Ipv6),
+                        );
+                    }
                     FsmState::Established(pc)
                 }
 
@@ -7961,13 +7973,18 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let peer_id = self.peer_id();
         if pc.ipv4_unicast.negotiated() {
             write_lock!(self.fanout4).remove_egress(&peer_id);
+            self.db.remove_all_prefixes_from_bgp_peer(
+                &peer_id,
+                Some(AddressFamily::Ipv4),
+            );
         }
         if pc.ipv6_unicast.negotiated() {
             write_lock!(self.fanout6).remove_egress(&peer_id);
+            self.db.remove_all_prefixes_from_bgp_peer(
+                &peer_id,
+                Some(AddressFamily::Ipv6),
+            );
         }
-
-        // remove peer prefixes from db
-        self.db.remove_all_prefixes_from_bgp_peer(&self.peer_id());
     }
 
     /// Exit the established state into Idle.
