@@ -145,18 +145,6 @@ pub enum Error {
     #[error("Unsupported address family: AFI={0} SAFI={1}")]
     UnsupportedAddressFamily(u16, u8),
 
-    #[error("Self loop detected")]
-    SelfLoopDetected,
-
-    #[error("AS path missing")]
-    MissingAsPath,
-
-    #[error("AS path is empty")]
-    EmptyAsPath,
-
-    #[error("Enforce-first-AS check failed: expected: {0}, found: {1:?}")]
-    EnforceAsFirst(u32, Vec<u32>),
-
     #[error("Invalid address: {0}")]
     InvalidAddress(String),
 

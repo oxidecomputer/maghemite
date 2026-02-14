@@ -847,6 +847,13 @@ impl UpdateMessage {
         })
     }
 
+    /// Mark this update for treat-as-withdraw processing due to a
+    /// session-level check failure. All NLRI will be treated as
+    /// withdrawals when this flag is set.
+    pub fn set_treat_as_withdraw(&mut self, reason: UpdateParseErrorReason) {
+        self.errors.push((reason, AttributeAction::TreatAsWithdraw));
+    }
+
     /// Set the traditional IPv4 withdrawn routes field.
     pub fn set_withdrawn(&mut self, withdrawn: Vec<Prefix4>) {
         self.withdrawn = withdrawn;
@@ -5457,6 +5464,13 @@ pub enum UpdateParseErrorReason {
         available: usize,
     },
 
+    // Session-level checks (set after parsing, not during from_wire)
+    /// Own ASN found in AS_PATH — loop detection (session-level check)
+    AsLoopDetected,
+    /// First AS in path does not match eBGP peer AS (session-level
+    /// check)
+    EnforceFirstAsFailed { peer_as: u32, first_as: Option<u32> },
+
     // Generic fallback
     /// Other parse error (avoid if possible; prefer specific variant)
     Other { detail: String },
@@ -5580,6 +5594,21 @@ impl Display for UpdateParseErrorReason {
                     "truncated {} NLRI: need {} bytes, have {}",
                     section, needed, available
                 )
+            }
+            Self::AsLoopDetected => {
+                write!(f, "own ASN found in AS_PATH (loop)")
+            }
+            Self::EnforceFirstAsFailed { peer_as, first_as } => {
+                match first_as {
+                    Some(first) => write!(
+                        f,
+                        "enforce-first-AS failed: peer AS {peer_as}, first AS in path {first}"
+                    ),
+                    None => write!(
+                        f,
+                        "enforce-first-AS failed: peer AS {peer_as}, AS_PATH empty or missing"
+                    ),
+                }
             }
             Self::Other { detail } => {
                 write!(f, "{}", detail)
