@@ -1946,7 +1946,8 @@ pub(crate) mod helpers {
     ) -> Result<HttpResponseDeleted, Error> {
         bgp_log!(ctx.log, info, "remove neighbor (addr {addr}, asn {asn})");
 
-        ctx.db.remove_all_prefixes_from_bgp_peer(&PeerId::Ip(addr));
+        ctx.db
+            .remove_all_prefixes_from_bgp_peer(&PeerId::Ip(addr), None);
         ctx.db.remove_bgp_neighbor(addr)?;
         get_router!(&ctx, asn)?.delete_session(addr);
 

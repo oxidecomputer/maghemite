@@ -1210,18 +1210,24 @@ impl Db {
 
     /// Remove all BGP paths from a peer.
     /// Used when a peer is deleted or exits Established state.
-    pub fn remove_all_prefixes_from_bgp_peer(&self, peer: &PeerId) {
-        let all_prefixes: Vec<_> =
-            self.full_rib(None).keys().copied().collect();
+    /// When `af` is `Some`, only prefixes of that address family
+    /// are examined; when `None`, both address families are walked.
+    pub fn remove_all_prefixes_from_bgp_peer(
+        &self,
+        peer: &PeerId,
+        af: Option<AddressFamily>,
+    ) {
+        let all_prefixes: Vec<_> = self.full_rib(af).keys().copied().collect();
         self.remove_prefixes_from_bgp_peer(&all_prefixes, peer);
     }
 
     /// Remove BGP paths from a peer that violate the first-AS rule.
     /// A path violates first-AS when its AS path is empty or when
     /// the first AS in the path does not match the peer's origin AS.
-    pub fn enforce_first_as(&self, peer: &PeerId) {
-        let all_prefixes: Vec<_> =
-            self.full_rib(None).keys().copied().collect();
+    /// When `af` is `Some`, only prefixes of that address family
+    /// are examined; when `None`, both address families are walked.
+    pub fn enforce_first_as(&self, peer: &PeerId, af: Option<AddressFamily>) {
+        let all_prefixes: Vec<_> = self.full_rib(af).keys().copied().collect();
         let changed =
             self.remove_path_for_prefixes(&all_prefixes, |path: &Path| {
                 match path.bgp {
@@ -1651,7 +1657,10 @@ mod test {
         assert!(check_prefix_path(&db, &p2, rib_in_paths, loc_rib_paths));
 
         // yank all routes from bgp_path0, simulating peer shutdown
-        db.remove_all_prefixes_from_bgp_peer(&bgp_path0.bgp.unwrap().peer);
+        db.remove_all_prefixes_from_bgp_peer(
+            &bgp_path0.bgp.unwrap().peer,
+            None,
+        );
         // expected current state
         // rib_in:
         // - p0 via static_path1
@@ -1675,6 +1684,7 @@ mod test {
         // bgp_path2 should be unaffected, despite also having the same RID
         db.remove_all_prefixes_from_bgp_peer(
             &bgp_path2.clone().bgp.unwrap().peer,
+            None,
         );
         // expected current state
         // rib_in:
@@ -1697,6 +1707,7 @@ mod test {
         // p0 should be unaffected, still retaining the static path
         db.remove_all_prefixes_from_bgp_peer(
             &bgp_path1.clone().bgp.unwrap().peer,
+            None,
         );
         // expected current state
         // rib_in:
@@ -2600,7 +2611,7 @@ mod test {
         assert_eq!(db.get_prefix_paths(&p6).len(), 1);
 
         // Remove paths from `peer` that violate first-AS
-        db.enforce_first_as(&peer);
+        db.enforce_first_as(&peer, None);
 
         // p4: good_path (passes check) + other_peer_path (different
         // peer) should remain
@@ -2660,7 +2671,7 @@ mod test {
         db.add_bgp_prefixes(&[prefix], empty_as_path);
         assert_eq!(db.get_prefix_paths(&prefix).len(), 1);
 
-        db.enforce_first_as(&peer);
+        db.enforce_first_as(&peer, None);
 
         assert!(
             db.get_prefix_paths(&prefix).is_empty(),
@@ -2705,7 +2716,7 @@ mod test {
         assert_eq!(db.get_prefix_paths(&prefix).len(), 1);
 
         // All paths pass the first-AS check — nothing removed
-        db.enforce_first_as(&peer);
+        db.enforce_first_as(&peer, None);
 
         assert_eq!(
             db.get_prefix_paths(&prefix).len(),
