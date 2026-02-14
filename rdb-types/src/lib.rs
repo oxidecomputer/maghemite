@@ -435,6 +435,15 @@ pub enum AddressFamily {
     Ipv6,
 }
 
+impl std::fmt::Display for AddressFamily {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AddressFamily::Ipv4 => write!(f, "IPv4"),
+            AddressFamily::Ipv6 => write!(f, "IPv6"),
+        }
+    }
+}
+
 #[derive(
     Debug,
     Copy,
