@@ -70,7 +70,7 @@ ddm-api = { path = "ddm-api" }
 ddm-types = { path = "ddm-types" }
 
 # External
-slog = { version = "2.7.0", features = ["max_level_trace", "release_max_level_debug"] }
+slog = { version = "2.8.2", features = ["max_level_trace", "release_max_level_debug"] }
 slog-term = "2.9"
 slog-envlogger = "2.2"
 slog-async = "2.8"
@@ -80,24 +80,24 @@ ispf = { git = "https://github.com/oxidecomputer/ispf" }
 serde = { version = "1.0.228", features = ["derive"] }
 hostname = "0.3"
 thiserror = "1.0"
-dropshot = { version = "0.16.6", features = [ "usdt-probes" ] }
+dropshot = { version = "0.16.7", features = [ "usdt-probes" ] }
 dropshot-api-manager = "0.3.0"
 dropshot-api-manager-types = "0.3.0"
 schemars = { version = "0.8", features = [ "uuid1", "chrono" ] }
-tokio = { version = "1.37", features = ["full"] }
+tokio = { version = "1.49", features = ["full"] }
 serde_repr = "0.1"
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 hyper = "1.8.1"
 hyper-util = { version = "0.1", features = ["full"] }
-serde_json = "1.0.148"
+serde_json = "1.0.149"
 percent-encoding = "2.3.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
 progenitor = "0.11"
 progenitor-client = "0.11"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
-clap = { version = "4.5.53", features = ["derive", "unstable-styles", "env"] }
+clap = { version = "4.5.59", features = ["derive", "unstable-styles", "env"] }
 tabwriter = { version = "1", features = ["ansi_formatting"] }
-colored = "3.0"
+colored = "3.1"
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anstyle = "1.0.13"
@@ -105,7 +105,7 @@ nom = "7.1"
 num_enum = "0.7.5"
 pretty-hex = "0.4"
 pretty_assertions = "1.4"
-lazy_static = "1.4"
+lazy_static = "1.5"
 sled = "0.34"
 camino = "1.2.2"
 ciborium = "0.2.2"
@@ -113,21 +113,21 @@ http = "1.4.0"
 http-body-util = "0.1"
 rand = "0.8.5"
 backoff = "0.4"
-chrono = { version = "0.4.42", features = ["serde"] }
+chrono = { version = "0.4.43", features = ["serde"] }
 oxide-tokio-rt = "0.1.2"
 oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 oxnet = { version = "0.1.4", default-features = false, features = ["schemars", "serde"] }
 omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
 gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
-uuid = { version = "1.8", features = ["serde", "v4"] }
+uuid = { version = "1.21", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }
 libc = "0.2"
 itertools = "0.14"
 rhai = { version = "1", features = ["metadata", "sync"] }
 semver = "1.0"
-proptest = "1.4"
-serial_test = "3.2"
+proptest = "1.10"
+serial_test = "3.3"
 internet-checksum = "0.2.1"
 network-interface = { git = "https://github.com/oxidecomputer/network-interface", branch = "illumos" }
 natord = "1.0"
