@@ -135,7 +135,7 @@ natord = "1.0"
 
 [workspace.dependencies.opte-ioctl]
 git = "https://github.com/oxidecomputer/opte"
-rev = "e547d07b08c3f3d6c821c9eb7a958adcffce6e56"
+rev = "3f2daf7e45a26e6a00739d3ab7f6f289d46e5539"
 
 [workspace.dependencies.oxide-vpc]
 git = "https://github.com/oxidecomputer/opte"
