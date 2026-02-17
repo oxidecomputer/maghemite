@@ -101,7 +101,7 @@ colored = "3.1"
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 libfalcon = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 anstyle = "1.0.13"
-nom = "7.1"
+nom = "8.0"
 num_enum = "0.7.5"
 pretty-hex = "0.4"
 pretty_assertions = "1.4"
