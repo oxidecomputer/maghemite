@@ -26,7 +26,7 @@ use dropshot_api_manager_types::api_versions;
 use rdb::{
     BfdPeerConfig, Path as RdbPath, PathV1, Prefix, Prefix4, Prefix6,
     StaticRouteKey,
-    types::{AddressFamily, ProtocolFilter},
+    types::{AddressFamily, MulticastRoute, MulticastRouteKey, ProtocolFilter},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
+    (7, MULTICAST_SUPPORT),
     (6, RIB_EXPORTED_STRING_KEY),
     (5, UNNUMBERED),
     (4, MP_BGP),
@@ -602,6 +603,72 @@ pub trait MgAdminApi {
         rqctx: RequestContext<Self::Context>,
         request: Query<NdpInterfaceSelector>,
     ) -> Result<HttpResponseOk<NdpInterface>, HttpError>;
+
+    // ========================= MRIB: Multicast ==============================
+    //
+    // Multicast routing is API-driven with Omicron as the source of truth.
+    // Static route endpoints (add/delete) are intended for Nexus RPW use.
+    // Direct operator configuration should go through the Oxide API to
+    // maintain consistency with the control plane's view of group membership.
+
+    /// Get imported multicast routes (`mrib_in`).
+    ///
+    /// When `group` is provided, returns a specific route.
+    /// When `group` is omitted, returns all routes (with optional filters).
+    #[endpoint { method = GET, path = "/mrib/status/imported", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn get_mrib_imported(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<MribQuery>,
+    ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError>;
+
+    /// Get selected multicast routes (`mrib_loc`, RPF-validated).
+    ///
+    /// When `group` is provided, returns a specific route.
+    /// When `group` is omitted, returns all routes (with optional filters).
+    #[endpoint { method = GET, path = "/mrib/status/selected", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn get_mrib_selected(
+        rqctx: RequestContext<Self::Context>,
+        query: Query<MribQuery>,
+    ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError>;
+
+    /// Add static multicast routes.
+    ///
+    /// This endpoint is intended for Nexus RPW use. Operators should
+    /// configure multicast group membership through the Oxide API.
+    #[endpoint { method = PUT, path = "/static/mroute", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn static_add_mcast_route(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribAddStaticRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    /// Remove static multicast routes.
+    ///
+    /// This endpoint is intended for Nexus RPW use. Operators should
+    /// configure multicast group membership through the Oxide API.
+    #[endpoint { method = DELETE, path = "/static/mroute", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn static_remove_mcast_route(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribDeleteStaticRequest>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    /// List all static multicast routes.
+    #[endpoint { method = GET, path = "/static/mroute", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn static_list_mcast_routes(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<Vec<MulticastRoute>>, HttpError>;
+
+    /// Get the current RPF rebuild interval.
+    #[endpoint { method = GET, path = "/mrib/config/rpf/rebuild-interval", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn read_mrib_rpf_rebuild_interval(
+        rqctx: RequestContext<Self::Context>,
+    ) -> Result<HttpResponseOk<MribRpfRebuildIntervalResponse>, HttpError>;
+
+    /// Set the RPF rebuild interval.
+    #[endpoint { method = POST, path = "/mrib/config/rpf/rebuild-interval", versions = VERSION_MULTICAST_SUPPORT.. }]
+    async fn update_mrib_rpf_rebuild_interval(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MribRpfRebuildIntervalRequest>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 }
 
 /// Identifiers for a switch.
@@ -947,6 +1014,99 @@ impl From<StaticRoute6> for StaticRouteKey {
         }
     }
 }
+
+// ========================= MRIB Types ==============================
+
+/// Input for adding static multicast routes.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct StaticMulticastRouteInput {
+    /// The multicast route key (S,G) or (*,G).
+    pub key: MulticastRouteKey,
+    /// Underlay unicast nexthops for multicast replication.
+    ///
+    /// Unicast IPv6 addresses where encapsulated overlay multicast traffic
+    /// is forwarded. These are sled underlay addresses hosting VMs subscribed
+    /// to the multicast group. Forms the outgoing interface list (OIL).
+    pub underlay_nexthops: Vec<Ipv6Addr>,
+    /// Underlay multicast group address (ff04::X).
+    ///
+    /// Admin-local scoped IPv6 multicast address corresponding to the overlay
+    /// multicast group. 1:1 mapped and always derived from the overlay
+    /// multicast group in Omicron.
+    pub underlay_group: Ipv6Addr,
+}
+
+/// Request body for adding static multicast routes to the MRIB.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MribAddStaticRequest {
+    /// List of static multicast routes to add.
+    pub routes: Vec<StaticMulticastRouteInput>,
+}
+
+/// Request body for deleting static multicast routes from the MRIB.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MribDeleteStaticRequest {
+    /// List of route keys to delete.
+    pub keys: Vec<MulticastRouteKey>,
+}
+
+/// Response containing the current RPF rebuild interval.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MribRpfRebuildIntervalResponse {
+    /// Minimum interval between RPF cache rebuilds in milliseconds.
+    pub interval_ms: u64,
+}
+
+/// Request body for setting the RPF rebuild interval.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MribRpfRebuildIntervalRequest {
+    /// Minimum interval between RPF cache rebuilds in milliseconds.
+    pub interval_ms: u64,
+}
+
+/// Filter for multicast route origin.
+#[derive(
+    Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteOriginFilter {
+    /// Static routes only (operator configured).
+    Static,
+    /// Dynamic routes only (learned via IGMP, MLD, etc.).
+    Dynamic,
+}
+
+/// Query parameters for MRIB routes.
+///
+/// When `group` is provided, looks up a specific route.
+/// When `group` is omitted, lists all routes (with optional filters).
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MribQuery {
+    /// Multicast group address. If provided, returns a specific route.
+    /// If omitted, returns all routes matching the filters.
+    #[serde(default)]
+    pub group: Option<IpAddr>,
+    /// Source address (`None` for (*,G) routes). Only used when `group` is set.
+    #[serde(default)]
+    pub source: Option<IpAddr>,
+    /// VNI (defaults to 77 for fleet-scoped multicast).
+    /// Only used when `group` is set.
+    #[serde(default = "default_multicast_vni")]
+    pub vni: u32,
+    /// Filter by address family. Only used when listing all routes.
+    #[serde(default)]
+    pub address_family: Option<AddressFamily>,
+    /// Filter by route origin ("static" or "dynamic").
+    /// Only used when listing all routes.
+    #[serde(default)]
+    pub route_origin: Option<RouteOriginFilter>,
+}
+
+fn default_multicast_vni() -> u32 {
+    rdb::DEFAULT_MULTICAST_VNI
+}
+
+// ========================= RIB Types ==============================
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RibQuery {

@@ -115,10 +115,11 @@ rand = "0.8.5"
 backoff = "0.4"
 chrono = { version = "0.4.43", features = ["serde"] }
 oxide-tokio-rt = "0.1.2"
-oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
-oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
+oximeter = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
+oximeter-producer = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
 oxnet = { version = "0.1.4", default-features = false, features = ["schemars", "serde"] }
-omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main"}
+omicron-common = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
+poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "main" }
 gateway-client = { git = "https://github.com/oxidecomputer/omicron", branch = "main" }
 uuid = { version = "1.21", features = ["serde", "v4"] }
 smf = { git = "https://github.com/illumos/smf-rs", branch = "main" }

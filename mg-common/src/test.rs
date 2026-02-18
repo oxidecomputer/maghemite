@@ -13,8 +13,10 @@ use std::os::unix::io::AsRawFd;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-pub const DEFAULT_INTERVAL: u64 = 1;
-pub const DEFAULT_ITERATIONS: u64 = 30;
+/// Default polling interval in milliseconds for wait_for macros.
+pub const DEFAULT_INTERVAL_MS: u64 = 10;
+/// Default number of iterations for wait_for macros (30 seconds total).
+pub const DEFAULT_ITERATIONS: u64 = 3000;
 
 // Note: get_test_db has been moved to rdb::test::get_test_db
 // to break the circular dependency between mg-common and rdb.
@@ -37,18 +39,25 @@ impl FileLockExt for File {
     }
 }
 
+/// Wait for two expressions to be equal, polling at the given interval.
+///
+/// # Arguments
+/// - `$lhs`, `$rhs`: Expressions to compare
+/// - `$interval_ms`: Polling interval in milliseconds
+/// - `$count`: Maximum number of iterations
+/// - `$msg`: Optional panic message
 #[macro_export]
 macro_rules! wait_for_eq {
-    ($lhs:expr, $rhs:expr, $period:expr, $count:expr, $msg:tt) => {
-        wait_for!($lhs == $rhs, $period, $count, $msg);
+    ($lhs:expr, $rhs:expr, $interval_ms:expr, $count:expr, $msg:tt) => {
+        wait_for!($lhs == $rhs, $interval_ms, $count, $msg);
     };
-    ($lhs:expr, $rhs:expr, $period:expr, $count:expr) => {
-        wait_for!($lhs == $rhs, $period, $count);
+    ($lhs:expr, $rhs:expr, $interval_ms:expr, $count:expr) => {
+        wait_for!($lhs == $rhs, $interval_ms, $count);
     };
     ($lhs:expr, $rhs:expr, $msg:tt) => {
         wait_for!(
             $lhs == $rhs,
-            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_INTERVAL_MS,
             mg_common::test::DEFAULT_ITERATIONS,
             $msg
         );
@@ -56,24 +65,31 @@ macro_rules! wait_for_eq {
     ($lhs:expr, $rhs:expr) => {
         wait_for!(
             $lhs == $rhs,
-            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_INTERVAL_MS,
             mg_common::test::DEFAULT_ITERATIONS
         );
     };
 }
 
+/// Wait for two expressions to be not equal, polling at the given interval.
+///
+/// # Arguments
+/// - `$lhs`, `$rhs`: Expressions to compare
+/// - `$interval_ms`: Polling interval in milliseconds
+/// - `$count`: Maximum number of iterations
+/// - `$msg`: Optional panic message
 #[macro_export]
 macro_rules! wait_for_neq {
-    ($lhs:expr, $rhs:expr, $period:expr, $count:expr, $msg:tt) => {
-        wait_for!($lhs != $rhs, $period, $count, $msg);
+    ($lhs:expr, $rhs:expr, $interval_ms:expr, $count:expr, $msg:tt) => {
+        wait_for!($lhs != $rhs, $interval_ms, $count, $msg);
     };
-    ($lhs:expr, $rhs:expr, $period:expr, $count:expr) => {
-        wait_for!($lhs != $rhs, $period, $count);
+    ($lhs:expr, $rhs:expr, $interval_ms:expr, $count:expr) => {
+        wait_for!($lhs != $rhs, $interval_ms, $count);
     };
     ($lhs:expr, $rhs:expr, $msg:tt) => {
         wait_for!(
             $lhs != $rhs,
-            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_INTERVAL_MS,
             mg_common::test::DEFAULT_ITERATIONS,
             $msg
         );
@@ -81,35 +97,51 @@ macro_rules! wait_for_neq {
     ($lhs:expr, $rhs:expr) => {
         wait_for!(
             $lhs != $rhs,
-            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_INTERVAL_MS,
             mg_common::test::DEFAULT_ITERATIONS
         );
     };
 }
 
+/// Wait for a condition to become true, polling at the given interval.
+///
+/// # Arguments
+/// - `$cond`: Condition expression to poll
+/// - `$interval_ms`: Polling interval in milliseconds
+/// - `$count`: Maximum number of iterations
+/// - `$msg`: Optional panic message
+///
+/// # Example
+/// ```ignore
+/// // Wait up to 5 seconds (10ms × 500) for condition
+/// wait_for!(some_condition(), 10, 500, "condition not met");
+///
+/// // Use defaults (10ms × 3000 = 30 seconds)
+/// wait_for!(some_condition());
+/// ```
 #[macro_export]
 macro_rules! wait_for {
-    ($cond:expr, $period:expr, $count:expr, $msg:tt) => {
+    ($cond:expr, $interval_ms:expr, $count:expr, $msg:tt) => {
         let mut ok = false;
         for _ in 0..$count {
             if $cond {
                 ok = true;
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_secs($period));
+            std::thread::sleep(std::time::Duration::from_millis($interval_ms));
         }
         if !ok {
             assert!($cond, $msg);
         }
     };
-    ($cond:expr, $period:expr, $count:expr) => {
+    ($cond:expr, $interval_ms:expr, $count:expr) => {
         let mut ok = false;
         for _ in 0..$count {
             if $cond {
                 ok = true;
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_secs($period));
+            std::thread::sleep(std::time::Duration::from_millis($interval_ms));
         }
         if !ok {
             assert!($cond);
@@ -118,7 +150,7 @@ macro_rules! wait_for {
     ($cond:expr, $msg:tt) => {
         wait_for!(
             $cond,
-            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_INTERVAL_MS,
             mg_common::test::DEFAULT_ITERATIONS,
             $msg
         );
@@ -126,7 +158,7 @@ macro_rules! wait_for {
     ($cond:expr) => {
         wait_for!(
             $cond,
-            mg_common::test::DEFAULT_INTERVAL,
+            mg_common::test::DEFAULT_INTERVAL_MS,
             mg_common::test::DEFAULT_ITERATIONS
         );
     };
@@ -740,7 +772,7 @@ pub fn dump_thread_stacks() -> Result<String, std::io::Error> {
     {
         // Use gdb to attach and dump thread backtraces
         let output = Command::new("gdb")
-            .args(&[
+            .args([
                 "-batch",
                 "-ex",
                 "thread apply all bt",
@@ -750,13 +782,10 @@ pub fn dump_thread_stacks() -> Result<String, std::io::Error> {
             .output()?;
 
         if !output.status.success() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "gdb failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            ));
+            return Err(std::io::Error::other(format!(
+                "gdb failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).to_string())

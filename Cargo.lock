@@ -4794,6 +4794,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "poptrie"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/poptrie?branch=main#5bf62f6b889c61e0608d8463ed11da28e130cb34"
+
+[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5370,7 +5375,9 @@ dependencies = [
  "itertools 0.14.0",
  "mg-common",
  "ndp",
+ "omicron-common",
  "oxnet",
+ "poptrie",
  "proptest",
  "rdb-types 0.1.0",
  "schemars 0.8.22",

@@ -9,6 +9,9 @@ use slog::Logger;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Default iteration count for wait_for! macro (5 seconds at 10ms polling).
+pub const TEST_WAIT_ITERATIONS: u64 = 500;
+
 /// A test database wrapper that automatically cleans up the database directory
 /// when dropped, but only if the test succeeded.
 ///

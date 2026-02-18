@@ -10,7 +10,7 @@ use dropshot::{
 };
 use mg_api::{
     AddStaticRoute4Request, AddStaticRoute6Request, DeleteStaticRoute4Request,
-    DeleteStaticRoute6Request, GetRibResult,
+    DeleteStaticRoute6Request, GetRibResult, SwitchIdentifiers,
 };
 use rdb::{AddressFamily, Prefix, StaticRouteKey};
 use std::{collections::BTreeMap, sync::Arc};
@@ -137,7 +137,7 @@ pub async fn static_list_v6_routes(
 
 pub(crate) async fn switch_identifiers(
     ctx: RequestContext<Arc<HandlerContext>>,
-) -> Result<HttpResponseOk<mg_api::SwitchIdentifiers>, HttpError> {
+) -> Result<HttpResponseOk<SwitchIdentifiers>, HttpError> {
     let slot = ctx.context().db.slot();
-    Ok(HttpResponseOk(mg_api::SwitchIdentifiers { slot }))
+    Ok(HttpResponseOk(SwitchIdentifiers { slot }))
 }

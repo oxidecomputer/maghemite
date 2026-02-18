@@ -3,9 +3,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub mod db;
+pub mod mrib;
 pub mod types;
 
 pub use db::Db;
+pub use mrib::Mrib;
 pub use types::*;
 pub mod bestpath;
 pub mod error;
