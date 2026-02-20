@@ -4550,3 +4550,107 @@ fn test_enforce_first_as_graceful_toggle() {
     r1.shutdown();
     r2.shutdown();
 }
+
+// =============================================================================
+// AFI mismatch rejection test
+// =============================================================================
+
+/// When two MP-BGP peers have no overlapping address families, neither
+/// session should reach Established. Both sides should increment their
+/// `open_handle_failures` counter.
+#[test]
+fn test_mismatched_afi_session_rejected() {
+    let r1_addr: SocketAddr = sockaddr!(&format!("127.0.0.16:{TEST_BGP_PORT}"));
+    let r2_addr: SocketAddr = sockaddr!(&format!("127.0.0.17:{TEST_BGP_PORT}"));
+
+    let _ip_guard = ensure_loop_ips(&[r1_addr.ip(), r2_addr.ip()]);
+
+    // r1: IPv4 only, r2: IPv6 only → no common AFI
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: create_test_session_info(
+                    RouteExchange::Ipv4 { nexthop: None },
+                    r1_addr,
+                    r2_addr,
+                    false,
+                ),
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r1".to_string(),
+                remote_host: r1_addr,
+                session_info: create_test_session_info(
+                    RouteExchange::Ipv6 { nexthop: None },
+                    r2_addr,
+                    r1_addr,
+                    false,
+                ),
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard2) = test_setup::<
+        BgpConnectionTcp,
+        BgpListenerTcp,
+    >("mismatched_afi", &routers);
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
+
+    let r1_session = r1
+        .router
+        .get_session(r2_addr.ip())
+        .expect("get r1->r2 session");
+    let r2_session = r2
+        .router
+        .get_session(r1_addr.ip())
+        .expect("get r2->r1 session");
+
+    // Wait long enough for several connect-retry cycles. If the FSM were going
+    // to incorrectly establish, it will happen during this period.
+    let start = Instant::now();
+    while start.elapsed() < CONNECT_RETRY_VERIFICATION {
+        assert_ne!(
+            r1_session.state(),
+            FsmStateKind::Established,
+            "r1 must not reach Established with disjoint AFIs"
+        );
+        assert_ne!(
+            r2_session.state(),
+            FsmStateKind::Established,
+            "r2 must not reach Established with disjoint AFIs"
+        );
+    }
+
+    // At least one side should have recorded an open_handle_failure.
+    let r1_failures = r1_session
+        .counters
+        .open_handle_failures
+        .load(Ordering::Relaxed);
+    let r2_failures = r2_session
+        .counters
+        .open_handle_failures
+        .load(Ordering::Relaxed);
+    assert!(
+        r1_failures > 0 || r2_failures > 0,
+        "at least one side should record open_handle_failures \
+         (r1={r1_failures}, r2={r2_failures})"
+    );
+
+    r1.shutdown();
+    r2.shutdown();
+}

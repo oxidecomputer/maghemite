@@ -120,6 +120,13 @@ pub struct PeerConnection<Cnx: BgpConnection> {
     pub ipv4_unicast: AfiSafiState,
     /// This peer's AFI/SAFI state for IPv6 Unicast
     pub ipv6_unicast: AfiSafiState,
+    /// Indicates the peer supports MP-BGP, i.e. they advertised
+    /// Multiprotocol Extensions capabilities in their OPEN message.
+    /// True: the peer supports MP-BGP encoding.
+    /// False: the peer is a legacy BGP-4 speaker that does not support MP-BGP
+    /// encoding. IPv4 Unicast is implicitly negotiated, and is the only
+    /// address-family allowed for this peer.
+    pub mp_bgp: bool,
 }
 
 impl<Cnx: BgpConnection> Clone for PeerConnection<Cnx> {
@@ -131,6 +138,7 @@ impl<Cnx: BgpConnection> Clone for PeerConnection<Cnx> {
             caps: self.caps.clone(),
             ipv4_unicast: self.ipv4_unicast,
             ipv6_unicast: self.ipv6_unicast,
+            mp_bgp: self.mp_bgp,
         }
     }
 }
@@ -1299,40 +1307,58 @@ macro_rules! connect_timeout {
     };
 }
 
-/// Determines AFI/SAFI state based on capability negotiation.
+/// Determine AFI/SAFI negotiation state from two capability sets.
 ///
-/// Returns (ipv4_unicast, ipv6_unicast) states:
-/// - Negotiated: Both sides advertised the capability
-/// - Advertised: We advertised but peer did not
-/// - Unconfigured: We did not advertise (not configured)
-macro_rules! active_afi {
-    ($self:expr, $their_caps:ident) => {{
-        let cap4 = Capability::ipv4_unicast();
-        let cap6 = Capability::ipv6_unicast();
-        let our_caps = lock!($self.caps_tx);
+/// Returns `(ipv4_unicast, ipv6_unicast, mp_bgp)`:
+/// - `Negotiated`: Both sides advertised the capability, **or** the peer
+///   is a legacy (non-MP-BGP) speaker and we configured IPv4 Unicast
+///   (implicit negotiation per RFC 4271).
+/// - `Advertised`: We advertised but peer did not (and no implicit grant).
+/// - `Unconfigured`: We did not advertise (not configured).
+/// - `mp_bgp`: `true` if the peer advertised any
+///   `MultiprotocolExtensions` capabilities.
+pub(crate) fn negotiate_afis(
+    our_caps: &BTreeSet<Capability>,
+    their_caps: &BTreeSet<Capability>,
+) -> (AfiSafiState, AfiSafiState, bool) {
+    let cap4 = Capability::ipv4_unicast();
+    let cap6 = Capability::ipv6_unicast();
 
-        let ipv4_state = if our_caps.contains(&cap4) {
-            if $their_caps.contains(&cap4) {
+    // A peer is an MP-BGP speaker if they advertised any
+    // MultiprotocolExtensions capabilities.
+    let mp_bgp = their_caps
+        .iter()
+        .any(|c| matches!(c, Capability::MultiprotocolExtensions { .. }));
+
+    let ipv4_state = if our_caps.contains(&cap4) {
+        if mp_bgp {
+            // Peer sent MP-BGP caps: check for explicit v4
+            if their_caps.contains(&cap4) {
                 AfiSafiState::Negotiated
             } else {
                 AfiSafiState::Advertised
             }
         } else {
-            AfiSafiState::Unconfigured
-        };
+            // Legacy peer (no MP-BGP caps): implicitly
+            // negotiates IPv4 Unicast per RFC 4271.
+            AfiSafiState::Negotiated
+        }
+    } else {
+        AfiSafiState::Unconfigured
+    };
 
-        let ipv6_state = if our_caps.contains(&cap6) {
-            if $their_caps.contains(&cap6) {
-                AfiSafiState::Negotiated
-            } else {
-                AfiSafiState::Advertised
-            }
+    let ipv6_state = if our_caps.contains(&cap6) {
+        if their_caps.contains(&cap6) {
+            AfiSafiState::Negotiated
         } else {
-            AfiSafiState::Unconfigured
-        };
+            // Legacy peers never get implicit IPv6.
+            AfiSafiState::Advertised
+        }
+    } else {
+        AfiSafiState::Unconfigured
+    };
 
-        (ipv4_state, ipv6_state)
-    }};
+    (ipv4_state, ipv6_state, mp_bgp)
 }
 
 /// Registry for tracking active connections
@@ -3840,7 +3866,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         conn_timer!(conn, hold).enable();
 
         let caps = om.get_capabilities();
-        let (ipv4_unicast, ipv6_unicast) = active_afi!(self, caps);
+        let (ipv4_unicast, ipv6_unicast, mp_bgp) = {
+            let our_caps = lock!(self.caps_tx);
+            negotiate_afis(&our_caps, &caps)
+        };
 
         let pc = PeerConnection {
             conn,
@@ -3849,6 +3878,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             caps,
             ipv4_unicast,
             ipv6_unicast,
+            mp_bgp,
         };
 
         // Upgrade this connection from Partial to Full in the registry
@@ -5192,7 +5222,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .fetch_add(1, Ordering::Relaxed);
 
                 let caps = om.get_capabilities();
-                let (ipv4_unicast, ipv6_unicast) = active_afi!(self, caps);
+                let (ipv4_unicast, ipv6_unicast, mp_bgp) = {
+                    let our_caps = lock!(self.caps_tx);
+                    negotiate_afis(&our_caps, &caps)
+                };
 
                 let new_pc = PeerConnection {
                     conn: new,
@@ -5201,6 +5234,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     caps,
                     ipv4_unicast,
                     ipv6_unicast,
+                    mp_bgp,
                 };
 
                 conn_timer!(new_pc.conn, hold).restart();
@@ -5504,7 +5538,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 conn_timer!(exist, keepalive).restart();
 
                                                 let caps = om.get_capabilities();
-                                                let (ipv4_unicast, ipv6_unicast) = active_afi!(self, caps);
+                                                let (ipv4_unicast, ipv6_unicast, mp_bgp) = {
+                                                    let our_caps = lock!(self.caps_tx);
+                                                    negotiate_afis(&our_caps, &caps)
+                                                };
 
                                                 let exist_pc = PeerConnection {
                                                     conn: exist.clone(),
@@ -5513,6 +5550,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     caps,
                                                     ipv4_unicast,
                                                     ipv6_unicast,
+                                                    mp_bgp,
                                                 };
 
                                                 // Upgrade existing connection from Partial to Full in the registry
@@ -5636,7 +5674,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 self.stop(Some(&exist), None, StopReason::CollisionResolution);
 
                                                 let caps = om.get_capabilities();
-                                                let (ipv4_unicast, ipv6_unicast) = active_afi!(self, caps);
+                                                let (ipv4_unicast, ipv6_unicast, mp_bgp) = {
+                                                    let our_caps = lock!(self.caps_tx);
+                                                    negotiate_afis(&our_caps, &caps)
+                                                };
 
                                                 let new_pc = PeerConnection {
                                                     conn: new.clone(),
@@ -5645,6 +5686,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     caps,
                                                     ipv4_unicast,
                                                     ipv6_unicast,
+                                                    mp_bgp,
                                                 };
 
                                                 conn_timer!(new, hold).restart();
@@ -6824,7 +6866,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 //   deciding factor when choosing a connection
                                 //   to retain, but only if an Open isn't
                                 //   received on the new connection until
-                                //   after .
+                                //   after the old connection goes Established.
                                 // if true:
                                 //   Collision resolution is performed based
                                 //   on the BGP-ID of each peer as per the
@@ -6837,23 +6879,24 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 //
                                 // Note: This is not a full implementation of
                                 //       CollisionDetectEstablishedState.
-                                //
-                                // Rather, it is simply a lever for us to
-                                // choose whether to ensure determinism in
-                                // collision resolution (i.e. by forcing the
-                                // use of BGP-ID as tie-breaker) or not
-                                // (sticking to "first to Established wins")
-                                // for the scenario described above. A full
-                                // implementation would involve registration
-                                // and tracking of new connections that complete
-                                // while in Established (likely warranting
-                                // an additional CollisionPair variant and
-                                // collision_detection_* method) and adding
-                                // full handling for connections to go into
-                                // and out of Established while a collision is
-                                // underway. At the time of writing this, a full
-                                // implementation is not believed to be worth
-                                // the added complexity and maintenance burden.
+                                //       Rather, it is simply a lever for us to
+                                //       choose whether to ensure determinism in
+                                //       collision resolution (i.e. by forcing
+                                //       the use of BGP-ID as tie-breaker) or
+                                //       not (sticking to "first to Established
+                                //       wins") for the scenario described
+                                //       above. A full implementation would
+                                //       involve registration and tracking of
+                                //       new connections that complete while
+                                //       in Established (likely warranting an
+                                //       additional CollisionPair variant and
+                                //       collision_detection_* method) and
+                                //       adding full handling for connections
+                                //       to go into and out of Established while
+                                //       a collision is underway. At the time
+                                //       of writing this, a full implementation
+                                //       is not believed to be worth the added
+                                //       complexity and maintenance burden.
                                 if lock!(self.session)
                                     .deterministic_collision_resolution
                                 {
@@ -6894,8 +6937,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                             );
 
                                             let caps = om.get_capabilities();
-                                            let (ipv4_unicast, ipv6_unicast) =
-                                                active_afi!(self, caps);
+                                            let (
+                                                ipv4_unicast,
+                                                ipv6_unicast,
+                                                mp_bgp,
+                                            ) = {
+                                                let our_caps =
+                                                    lock!(self.caps_tx);
+                                                negotiate_afis(&our_caps, &caps)
+                                            };
 
                                             let new_pc = PeerConnection {
                                                 conn: incoming_conn.clone(),
@@ -6904,6 +6954,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 caps,
                                                 ipv4_unicast,
                                                 ipv6_unicast,
+                                                mp_bgp,
                                             };
 
                                             // Clean up the old established connection
@@ -7256,6 +7307,31 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 got: remote_asn,
             }));
         }
+
+        // Verify at least one address family is compatible. This
+        // covers both MP-BGP peers with disjoint AFIs and legacy
+        // (non-MP-BGP) peers when we don't have IPv4 configured.
+        let their_caps = om.get_capabilities();
+        let our_caps = lock!(self.caps_tx);
+        let (ipv4, ipv6, _mp_bgp) = negotiate_afis(&our_caps, &their_caps);
+        drop(our_caps);
+
+        if !ipv4.negotiated() && !ipv6.negotiated() {
+            session_log!(
+                self,
+                warn,
+                conn,
+                "no compatible address families negotiated";
+            );
+            self.send_notification(
+                conn,
+                ErrorCode::Open,
+                ErrorSubcode::Open(OpenErrorSubcode::UnsupportedCapability),
+            );
+            self.unregister_conn(conn.id());
+            return Err(Error::NoCompatibleAddressFamilies);
+        }
+
         if let Some(checker) = read_lock!(self.router.policy.checker).as_ref() {
             let peer_ip = match self.neighbor.peer {
                 PeerId::Ip(ip) => ip,
@@ -7324,6 +7400,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 kt.restart();
             }
         }
+
         Ok(())
     }
 
@@ -8288,6 +8365,38 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         update: &mut UpdateMessage,
         pc: &PeerConnection<Cnx>,
     ) -> Result<(), Error> {
+        // A legacy peer must only use traditional encoding.
+        // Strip any MP-BGP attributes they send -- they have no
+        // business using multiprotocol extensions.
+        if !pc.mp_bgp {
+            let has_mp_attrs = update.path_attributes.iter().any(|a| {
+                matches!(
+                    a.value,
+                    PathAttributeValue::MpReachNlri(_)
+                        | PathAttributeValue::MpUnreachNlri(_)
+                )
+            });
+            if has_mp_attrs {
+                session_log!(
+                    self,
+                    warn,
+                    pc.conn,
+                    "stripping MP-BGP attributes from non-MP-BGP peer";
+                );
+                self.counters
+                    .unnegotiated_address_family
+                    .fetch_add(1, Ordering::Relaxed);
+                update.path_attributes.retain(|a| {
+                    !matches!(
+                        a.value,
+                        PathAttributeValue::MpReachNlri(_)
+                            | PathAttributeValue::MpUnreachNlri(_)
+                    )
+                });
+            }
+            return Ok(());
+        }
+
         // We'll rebuild the attributes list, filtering out unnegotiated AFI/SAFIs.
         // Note: AFI/SAFI and NLRI validation happens during parsing (from_wire),
         // so we only need to check negotiation state here.
@@ -8519,34 +8628,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             }
         };
 
-        let withdrawn: Vec<Prefix> = update
-            .withdrawn
-            .iter()
-            .filter(|p| {
-                !originated4.contains(&Prefix::V4(**p)) && p.valid_for_rib()
-            })
-            .copied()
-            .map(Prefix::V4)
-            .collect();
-
-        self.db
-            .remove_prefixes_from_bgp_peer(&withdrawn, &self.peer_id());
-
-        if treat_as_withdraw {
-            self.counters
-                .updates_treated_as_withdraw
-                .fetch_add(1, Ordering::Relaxed);
-            session_log!(
-                self,
-                warn,
-                pc.conn,
-                "update marked treat-as-withdraw";
-                "errors" => format!("{:?}", update.errors),
-                "message" => "update",
-                "message_contents" => format!("{update}")
-            );
-            let nlri_as_withdrawn: Vec<Prefix> = update
-                .nlri
+        // Traditional NLRI / withdrawn routes fields are IPv4 Unicast
+        // only. Only process them if IPv4 Unicast was negotiated.
+        if pc.ipv4_unicast.negotiated() {
+            let withdrawn: Vec<Prefix> = update
+                .withdrawn
                 .iter()
                 .filter(|p| {
                     !originated4.contains(&Prefix::V4(**p)) && p.valid_for_rib()
@@ -8554,63 +8640,106 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .copied()
                 .map(Prefix::V4)
                 .collect();
-            self.db.remove_prefixes_from_bgp_peer(
-                &nlri_as_withdrawn,
-                &self.peer_id(),
-            );
-        } else if let Some(nexthop) = update.nexthop4().map(IpAddr::V4) {
-            let nlri: Vec<Prefix> = update
-                .nlri
-                .iter()
-                .filter(|p| {
-                    !originated4.contains(&Prefix::V4(**p))
-                        && p.valid_for_rib()
-                        && !self.prefix_via_self(Prefix::V4(**p), nexthop)
-                })
-                .copied()
-                .map(Prefix::V4)
-                .collect();
 
-            if !nlri.is_empty() {
-                let mut as_path = Vec::new();
-                if let Some(segments_list) = update.as_path() {
-                    for segments in &segments_list {
-                        as_path.extend(segments.value.iter());
+            self.db
+                .remove_prefixes_from_bgp_peer(&withdrawn, &self.peer_id());
+
+            if treat_as_withdraw {
+                self.counters
+                    .updates_treated_as_withdraw
+                    .fetch_add(1, Ordering::Relaxed);
+                session_log!(
+                    self,
+                    warn,
+                    pc.conn,
+                    "update marked treat-as-withdraw";
+                    "errors" => format!("{:?}", update.errors),
+                    "message" => "update",
+                    "message_contents" => format!("{update}")
+                );
+                let nlri_as_withdrawn: Vec<Prefix> = update
+                    .nlri
+                    .iter()
+                    .filter(|p| {
+                        !originated4.contains(&Prefix::V4(**p))
+                            && p.valid_for_rib()
+                    })
+                    .copied()
+                    .map(Prefix::V4)
+                    .collect();
+                self.db.remove_prefixes_from_bgp_peer(
+                    &nlri_as_withdrawn,
+                    &self.peer_id(),
+                );
+            } else if let Some(nexthop) = update.nexthop4().map(IpAddr::V4) {
+                let nlri: Vec<Prefix> = update
+                    .nlri
+                    .iter()
+                    .filter(|p| {
+                        !originated4.contains(&Prefix::V4(**p))
+                            && p.valid_for_rib()
+                            && !self.prefix_via_self(Prefix::V4(**p), nexthop)
+                    })
+                    .copied()
+                    .map(Prefix::V4)
+                    .collect();
+
+                if !nlri.is_empty() {
+                    let mut as_path = Vec::new();
+                    if let Some(segments_list) = update.as_path() {
+                        for segments in &segments_list {
+                            as_path.extend(segments.value.iter());
+                        }
                     }
-                }
-                let nexthop_interface =
-                    derive_nexthop_interface(&self.peer_id(), nexthop);
-                let path = rdb::Path {
-                    nexthop,
-                    nexthop_interface,
-                    shutdown: update.graceful_shutdown(),
-                    rib_priority: DEFAULT_RIB_PRIORITY_BGP,
-                    bgp: Some(BgpPathProperties {
-                        origin_as: pc.asn,
-                        peer: self.peer_id(),
-                        id: pc.id,
-                        med: update.multi_exit_discriminator(),
-                        local_pref: update.local_pref(),
-                        as_path,
-                        stale: None,
-                    }),
-                    vlan_id: lock!(self.session).vlan_id,
-                };
+                    let nexthop_interface =
+                        derive_nexthop_interface(&self.peer_id(), nexthop);
+                    let path = rdb::Path {
+                        nexthop,
+                        nexthop_interface,
+                        shutdown: update.graceful_shutdown(),
+                        rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+                        bgp: Some(BgpPathProperties {
+                            origin_as: pc.asn,
+                            peer: self.peer_id(),
+                            id: pc.id,
+                            med: update.multi_exit_discriminator(),
+                            local_pref: update.local_pref(),
+                            as_path,
+                            stale: None,
+                        }),
+                        vlan_id: lock!(self.session).vlan_id,
+                    };
 
-                self.db.add_bgp_prefixes(&nlri, path.clone());
+                    self.db.add_bgp_prefixes(&nlri, path.clone());
+                }
+            } else if !update.nlri.is_empty() {
+                session_log!(
+                    self,
+                    warn,
+                    pc.conn,
+                    "update has traditional nlri encoding but no nexthop4";
+                    "message" => "update",
+                    "message_contents" => format!("{update}").as_str()
+                );
+                self.counters
+                    .update_nexhop_missing
+                    .fetch_add(1, Ordering::Relaxed);
             }
-        } else if !update.nlri.is_empty() {
+        } else if !update.withdrawn.is_empty() || !update.nlri.is_empty() {
             session_log!(
                 self,
                 warn,
                 pc.conn,
-                "update has traditional nlri encoding but no nexthop4";
-                "message" => "update",
-                "message_contents" => format!("{update}").as_str()
+                "ignoring traditional NLRI/withdrawn: IPv4 Unicast not negotiated";
             );
             self.counters
-                .update_nexhop_missing
+                .unnegotiated_address_family
                 .fetch_add(1, Ordering::Relaxed);
+        }
+
+        // Non-MP-BGP peers only use traditional NLRI (handled above).
+        if !pc.mp_bgp {
+            return;
         }
 
         // Process MP_REACH_NLRI for IPv4 and IPv6 routes

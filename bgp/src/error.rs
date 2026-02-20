@@ -160,6 +160,9 @@ pub enum Error {
     #[error("Hold time too small")]
     HoldTimeTooSmall,
 
+    #[error("No compatible address families")]
+    NoCompatibleAddressFamilies,
+
     #[error("Invalid NLRI prefix: {0:?}")]
     InvalidNlriPrefix(Vec<u8>),
 
