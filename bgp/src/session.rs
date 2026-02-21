@@ -2136,16 +2136,26 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Determine if event is "major" (should be in major buffer)
-    /// Major events: all admin events, new TCP connections, state transitions
+    ///
+    /// Non-major events are high-frequency timer/keepalive noise:
+    /// connect retry timer, idle hold timer, keepalive timer, and
+    /// received keepalive messages. Everything else is major.
     fn is_major_event(event: &FsmEvent<Cnx>) -> bool {
         match event {
-            FsmEvent::Admin(_) => true, // All admin events are major
+            FsmEvent::Admin(_) => true,
             FsmEvent::Session(se) => matches!(
                 se,
                 SessionEvent::TcpConnectionAcked(_)
                     | SessionEvent::TcpConnectionConfirmed(_)
             ),
-            FsmEvent::Connection(_) => false, // Major only if causes state transition
+            FsmEvent::Connection(ce) => !matches!(
+                ce,
+                ConnectionEvent::KeepaliveTimerExpires(_)
+                    | ConnectionEvent::Message {
+                        msg: Message::KeepAlive,
+                        ..
+                    }
+            ),
         }
     }
 
