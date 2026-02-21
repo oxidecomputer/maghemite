@@ -20,8 +20,8 @@ use bgp::{
     router::{LoadPolicyError, Router},
     session::{
         AdminEvent, ConnectionKind, FsmEvent, FsmEventRecord, FsmStateKind,
-        MessageHistory, MessageHistoryV1, PeerId, SessionEndpoint, SessionInfo,
-        SessionRunner,
+        MessageDirection, MessageHistoryEntry, MessageHistoryEntryV2,
+        MessageHistoryV1, PeerId, SessionEndpoint, SessionInfo, SessionRunner,
     },
 };
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -32,13 +32,15 @@ use dropshot::{
 use mg_api::{
     AsnSelector, BestpathFanoutRequest, BestpathFanoutResponse,
     ExportedSelector, FsmEventBuffer, FsmHistoryRequest, FsmHistoryRequestV4,
-    FsmHistoryResponse, FsmHistoryResponseV4, MessageDirection,
+    FsmHistoryResponse, FsmHistoryResponseV4, MessageBuffer,
     MessageHistoryRequest, MessageHistoryRequestV1, MessageHistoryRequestV4,
-    MessageHistoryResponse, MessageHistoryResponseV1, MessageHistoryResponseV4,
-    NdpInterface, NdpInterfaceSelector, NdpManagerState, NdpPeer,
-    NdpPendingInterface, NdpThreadState, NeighborResetRequest,
-    NeighborResetRequestV1, NeighborSelector, NeighborSelectorV1, RibV1,
-    UnnumberedNeighborResetRequest, UnnumberedNeighborSelector,
+    MessageHistoryRequestV5, MessageHistoryResponse, MessageHistoryResponseV1,
+    MessageHistoryResponseV4, MessageHistoryResponseV5,
+    MessageHistorySentReceived, NdpInterface, NdpInterfaceSelector,
+    NdpManagerState, NdpPeer, NdpPendingInterface, NdpThreadState,
+    NeighborResetRequest, NeighborResetRequestV1, NeighborSelector,
+    NeighborSelectorV1, RibV1, UnnumberedNeighborResetRequest,
+    UnnumberedNeighborSelector,
 };
 use mg_common::lock;
 use rdb::{
@@ -1609,15 +1611,18 @@ async fn do_bgp_apply(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-// Helper for fetching message history with PeerId filtering
-// Returns HashMap with string keys using PeerId Display format
+/// Unified helper for message history retrieval.
+/// Selects the requested buffer, applies direction filter, and returns
+/// a flat `Vec<MessageHistoryEntry>` per peer keyed by PeerId Display.
 fn get_message_history_filtered(
     ctx: &Arc<HandlerContext>,
     asn: u32,
     peer: Option<PeerId>,
     direction: Option<MessageDirection>,
-) -> Result<HashMap<String, MessageHistory>, HttpError> {
+    buffer: MessageBuffer,
+) -> Result<HashMap<String, Vec<MessageHistoryEntry>>, HttpError> {
     let mut result = HashMap::new();
+    let use_all_buffer = matches!(buffer, MessageBuffer::All);
 
     // Determine which peers to fetch history for
     let peers_to_query: Vec<PeerId> = if let Some(peer_id) = peer {
@@ -1638,26 +1643,44 @@ fn get_message_history_filtered(
         if let Some(session) =
             lock!(get_router!(ctx, asn)?.sessions).get(&peer_id)
         {
-            let mut history = lock!(session.message_history).clone();
+            let history = lock!(session.message_history).clone();
+            let source = if use_all_buffer {
+                history.all
+            } else {
+                history.major
+            };
 
-            // Apply direction filter if specified
-            if let Some(dir) = direction {
-                match dir {
-                    MessageDirection::Sent => {
-                        history.received.clear();
-                    }
-                    MessageDirection::Received => {
-                        history.sent.clear();
-                    }
-                }
-            }
+            let entries: Vec<MessageHistoryEntry> = match direction {
+                Some(dir) => source
+                    .into_iter()
+                    .filter(|e| e.direction() == dir)
+                    .collect(),
+                None => source.into_iter().collect(),
+            };
 
-            // Use PeerId Display impl as HashMap key
-            result.insert(peer_id.to_string(), history);
+            result.insert(peer_id.to_string(), entries);
         }
     }
 
     Ok(result)
+}
+
+/// Reconstruct the old sent/received split format from a flat entry list.
+/// Converts to `MessageHistoryEntryV2` (without direction) for v2/v3 compat.
+fn to_sent_received(
+    entries: Vec<MessageHistoryEntry>,
+) -> MessageHistorySentReceived {
+    let mut sent = std::collections::VecDeque::new();
+    let mut received = std::collections::VecDeque::new();
+    for entry in entries {
+        let dir = entry.direction();
+        let v2: MessageHistoryEntryV2 = entry.into();
+        match dir {
+            MessageDirection::Sent => sent.push_back(v2),
+            MessageDirection::Received => received.push_back(v2),
+        }
+    }
+    MessageHistorySentReceived { sent, received }
 }
 
 pub async fn message_history(
@@ -1689,24 +1712,29 @@ pub async fn message_history_v2(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    // Convert IpAddr filter to PeerId and call unified helper
     let peer_id = rq.peer.map(PeerId::Ip);
-    let by_peer_string =
-        get_message_history_filtered(ctx, rq.asn, peer_id, rq.direction)?;
+    let by_peer_string = get_message_history_filtered(
+        ctx,
+        rq.asn,
+        peer_id,
+        rq.direction,
+        MessageBuffer::Major,
+    )?;
 
     // Convert String keys back to IpAddr (filters out unnumbered peers)
     let by_peer = by_peer_string
         .into_iter()
-        .filter_map(|(key, history)| {
-            key.parse::<IpAddr>().ok().map(|addr| (addr, history))
+        .filter_map(|(key, entries)| {
+            key.parse::<IpAddr>()
+                .ok()
+                .map(|addr| (addr, to_sent_received(entries)))
         })
         .collect();
 
     Ok(HttpResponseOk(MessageHistoryResponseV4 { by_peer }))
 }
 
-// UNNUMBERED+ API endpoint (VERSION_UNNUMBERED..)
-// Uses PeerId enum for both numbered and unnumbered peers
+// V3 API endpoint (VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC)
 pub async fn message_history_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MessageHistoryRequest>,
@@ -1714,9 +1742,36 @@ pub async fn message_history_v3(
     let rq = request.into_inner();
     let ctx = ctx.context();
 
-    let by_peer =
-        get_message_history_filtered(ctx, rq.asn, rq.peer, rq.direction)?;
+    let by_peer_flat = get_message_history_filtered(
+        ctx,
+        rq.asn,
+        rq.peer,
+        rq.direction,
+        MessageBuffer::Major,
+    )?;
+    let by_peer = by_peer_flat
+        .into_iter()
+        .map(|(k, entries)| (k, to_sent_received(entries)))
+        .collect();
     Ok(HttpResponseOk(MessageHistoryResponse { by_peer }))
+}
+
+// V4 API endpoint (VERSION_EXTENDED_NH_STATIC..)
+pub async fn message_history_v4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<MessageHistoryRequestV5>,
+) -> Result<HttpResponseOk<MessageHistoryResponseV5>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let by_peer = get_message_history_filtered(
+        ctx,
+        rq.asn,
+        rq.peer,
+        rq.direction,
+        rq.buffer.unwrap_or(MessageBuffer::Major),
+    )?;
+    Ok(HttpResponseOk(MessageHistoryResponseV5 { by_peer }))
 }
 
 /// Unified helper for FSM history retrieval.

@@ -23,6 +23,39 @@ use std::{
 };
 use tabwriter::TabWriter;
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum BufferSelect {
+    All,
+    Major,
+}
+
+impl BufferSelect {
+    fn label(&self) -> &'static str {
+        match self {
+            BufferSelect::All => "All",
+            BufferSelect::Major => "Major",
+        }
+    }
+}
+
+impl From<BufferSelect> for types::FsmEventBuffer {
+    fn from(b: BufferSelect) -> Self {
+        match b {
+            BufferSelect::All => types::FsmEventBuffer::All,
+            BufferSelect::Major => types::FsmEventBuffer::Major,
+        }
+    }
+}
+
+impl From<BufferSelect> for types::MessageBuffer {
+    fn from(b: BufferSelect) -> Self {
+        match b {
+            BufferSelect::All => types::MessageBuffer::All,
+            BufferSelect::Major => types::MessageBuffer::Major,
+        }
+    }
+}
+
 fn jitter_range_to_api(j: JitterRange) -> types::JitterRange {
     types::JitterRange {
         min: j.min,
@@ -142,7 +175,7 @@ pub enum HistoryCmd {
 
         /// Which buffer to display: 'major' (default) or 'all'.
         #[clap(default_value = "major")]
-        buffer: String,
+        buffer: BufferSelect,
 
         /// BGP Autonomous System number. Can be specified via ASN env var.
         #[clap(env)]
@@ -161,6 +194,10 @@ pub enum HistoryCmd {
     Message {
         /// Peer to show history for (IP address for numbered, interface name for unnumbered).
         peer: String,
+
+        /// Which buffer to display: 'major' (default) or 'all'.
+        #[clap(default_value = "major")]
+        buffer: BufferSelect,
 
         /// BGP Autonomous System number. Can be specified via ASN env var.
         #[clap(env)]
@@ -949,11 +986,12 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
                 let asn = asn.ok_or_else(|| {
                     anyhow::anyhow!("ASN is required. Specify it on the command line or set the ASN environment variable.")
                 })?;
-                get_fsm_history(c, asn, peer, &buffer, &limit, wide).await?
+                get_fsm_history(c, asn, peer, buffer, &limit, wide).await?
             }
             HistoryCmd::Message {
                 asn,
                 peer,
+                buffer,
                 direction,
                 limit,
                 wide,
@@ -961,8 +999,10 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
                 let asn = asn.ok_or_else(|| {
                     anyhow::anyhow!("ASN is required. Specify it on the command line or set the ASN environment variable.")
                 })?;
-                get_message_history(c, asn, peer, &direction, &limit, wide)
-                    .await?
+                get_message_history(
+                    c, asn, peer, buffer, &direction, &limit, wide,
+                )
+                .await?
             }
         },
 
@@ -1609,21 +1649,10 @@ async fn get_fsm_history(
     c: Client,
     asn: u32,
     peer: Option<String>,
-    buffer: &str,
+    buffer: BufferSelect,
     limit_str: &str,
     wide: bool,
 ) -> Result<()> {
-    // Parse buffer type for server-side filtering
-    let buffer_type = match buffer {
-        "all" => Some(types::FsmEventBuffer::All),
-        _ => Some(types::FsmEventBuffer::Major), // Default to major
-    };
-
-    let buffer_name = match buffer {
-        "all" => "All Events",
-        _ => "Major Events",
-    };
-
     // Parse peer filter if provided and convert to API type
     let peer_id = peer.as_ref().map(|p| {
         let bgp_peer_id: bgp::session::PeerId =
@@ -1635,7 +1664,7 @@ async fn get_fsm_history(
         .fsm_history_v2(&types::FsmHistoryRequest {
             asn,
             peer: peer_id,
-            buffer: buffer_type,
+            buffer: Some(buffer.into()),
         })
         .await?
         .into_inner();
@@ -1666,8 +1695,9 @@ async fn get_fsm_history(
             println_nopipe!(
                 "\n{}",
                 format!(
-                    "FSM Event History - Peer: {} - {} (empty)",
-                    peer_addr, buffer_name
+                    "FSM Event History - Peer: {} - {} Events (empty)",
+                    peer_addr,
+                    buffer.label()
                 )
                 .dimmed()
             );
@@ -1677,8 +1707,9 @@ async fn get_fsm_history(
         println_nopipe!(
             "\n{}",
             format!(
-                "FSM Event History - Peer: {} - {}",
-                peer_addr, buffer_name
+                "FSM Event History - Peer: {} - {} Events",
+                peer_addr,
+                buffer.label()
             )
             .dimmed()
         );
@@ -1746,6 +1777,7 @@ async fn get_message_history(
     c: Client,
     asn: u32,
     peer: String,
+    buffer: BufferSelect,
     direction: &str,
     limit_str: &str,
     wide: bool,
@@ -1775,10 +1807,11 @@ async fn get_message_history(
     let peer_id = peer_id_to_api(bgp_peer_id);
 
     let result = c
-        .message_history_v3(&types::MessageHistoryRequest {
+        .message_history_v4(&types::MessageHistoryRequestV5 {
             asn,
             peer: Some(peer_id),
             direction: dir,
+            buffer: Some(buffer.into()),
         })
         .await?
         .into_inner();
@@ -1793,65 +1826,45 @@ async fn get_message_history(
     }
 
     // Should only have one peer since we filtered by peer
-    // Note: by_peer uses String keys (from JSON serialization)
-    let history = result.by_peer.get(&peer.to_string()).ok_or_else(|| {
+    let entries = result.by_peer.get(&peer.to_string()).ok_or_else(|| {
         anyhow::anyhow!("Peer {} not found in message history", peer)
     })?;
 
-    // Combine sent and received messages with their direction
-    let mut all_messages = Vec::new();
-
-    for entry in &history.received {
-        all_messages.push((
-            entry.timestamp,
-            "RX",
-            &entry.connection_id,
-            &entry.message,
-        ));
-    }
-
-    for entry in &history.sent {
-        all_messages.push((
-            entry.timestamp,
-            "TX",
-            &entry.connection_id,
-            &entry.message,
-        ));
-    }
-
-    // Sort by timestamp (oldest first)
-    all_messages.sort_by_key(|(ts, _, _, _)| *ts);
-
-    // Apply limit
-    let messages_to_show =
-        all_messages.iter().rev().take(limit).collect::<Vec<_>>();
-    let total_count = all_messages.len();
+    // Apply limit (entries are already in reverse chronological order)
+    let messages_to_show: Vec<_> = entries.iter().take(limit).collect();
+    let total_count = entries.len();
 
     println_nopipe!(
         "\n{}",
-        format!("BGP Message History - Peer: {}", peer).dimmed()
+        format!(
+            "BGP Message History - Peer: {} - {} Messages",
+            peer,
+            buffer.label()
+        )
+        .dimmed()
     );
     println_nopipe!("{}", "=".repeat(80).dimmed());
     println_nopipe!(
-        "Showing {} of {} messages ({} RX, {} TX)\n",
+        "Showing {} of {} messages\n",
         messages_to_show.len(),
         total_count,
-        history.received.len(),
-        history.sent.len()
     );
 
-    // Display messages in reverse chronological order (newest first)
-    for (timestamp, direction, conn_id, message) in
-        messages_to_show.iter().rev()
-    {
-        let ts_str = timestamp.format("%Y-%m-%d %H:%M:%S%.3f");
-        let uuid_str = conn_id.uuid.to_string();
+    // Display messages (already newest-first from server)
+    for entry in &messages_to_show {
+        let ts_str = entry.timestamp.format("%Y-%m-%d %H:%M:%S%.3f");
+        let uuid_str = entry.connection_id.uuid.to_string();
         let conn_short =
             format!("{}...{}", &uuid_str[..8], &uuid_str[uuid_str.len() - 4..]);
 
+        let dir_arrow = match entry.direction {
+            types::MessageDirection::Received => "←".green(),
+            types::MessageDirection::Sent => "→".blue(),
+        };
+
         // Use Debug formatting for full message content
         // (client-generated types don't implement Display)
-        let msg_content = format!("{:?}", message);
+        let msg_content = format!("{:?}", entry.message);
 
         // Apply truncation unless wide mode
         let msg_display = if !wide && msg_content.len() > 100 {
@@ -1863,11 +1876,7 @@ async fn get_message_history(
         println_nopipe!(
             "{} {} [{}] {}",
             ts_str.to_string().dimmed(),
-            if *direction == "RX" {
-                "←".green()
-            } else {
-                "→".blue()
-            },
+            dir_arrow,
             conn_short.dimmed(),
             msg_display
         );

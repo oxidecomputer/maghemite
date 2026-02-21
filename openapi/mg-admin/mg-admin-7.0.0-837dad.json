@@ -1097,12 +1097,12 @@
     },
     "/bgp/history/message": {
       "get": {
-        "operationId": "message_history_v3",
+        "operationId": "message_history_v4",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MessageHistoryRequest"
+                "$ref": "#/components/schemas/MessageHistoryRequestV5"
               }
             }
           },
@@ -1114,7 +1114,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MessageHistoryResponse"
+                  "$ref": "#/components/schemas/MessageHistoryResponseV5"
                 }
               }
             }
@@ -3495,41 +3495,42 @@
           }
         ]
       },
+      "MessageBuffer": {
+        "description": "Which message buffer to retrieve",
+        "oneOf": [
+          {
+            "description": "All messages including KeepAlives",
+            "type": "string",
+            "enum": [
+              "all"
+            ]
+          },
+          {
+            "description": "Major messages only (excludes KeepAlives)",
+            "type": "string",
+            "enum": [
+              "major"
+            ]
+          }
+        ]
+      },
       "MessageDirection": {
+        "description": "Direction of a BGP message (sent or received).",
         "type": "string",
         "enum": [
           "sent",
           "received"
         ]
       },
-      "MessageHistory": {
-        "description": "Message history for a BGP session",
-        "type": "object",
-        "properties": {
-          "received": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MessageHistoryEntry"
-            }
-          },
-          "sent": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MessageHistoryEntry"
-            }
-          }
-        },
-        "required": [
-          "received",
-          "sent"
-        ]
-      },
       "MessageHistoryEntry": {
-        "description": "A message history entry is a BGP message with an associated timestamp and connection ID",
+        "description": "A message history entry is a BGP message with an associated timestamp, connection ID, and direction.",
         "type": "object",
         "properties": {
           "connection_id": {
             "$ref": "#/components/schemas/ConnectionId"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/MessageDirection"
           },
           "message": {
             "$ref": "#/components/schemas/Message"
@@ -3541,12 +3542,13 @@
         },
         "required": [
           "connection_id",
+          "direction",
           "message",
           "timestamp"
         ]
       },
-      "MessageHistoryRequest": {
-        "description": "Unified message history request supporting both numbered and unnumbered peers",
+      "MessageHistoryRequestV5": {
+        "description": "V4 message history request (VERSION_EXTENDED_NH_STATIC..)",
         "type": "object",
         "properties": {
           "asn": {
@@ -3555,9 +3557,18 @@
             "format": "uint32",
             "minimum": 0
           },
+          "buffer": {
+            "nullable": true,
+            "description": "Which buffer to retrieve - if None, returns major buffer",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MessageBuffer"
+              }
+            ]
+          },
           "direction": {
             "nullable": true,
-            "description": "Optional direction filter - if None, returns both sent and received",
+            "description": "Optional direction filter - if None, returns both directions",
             "allOf": [
               {
                 "$ref": "#/components/schemas/MessageDirection"
@@ -3566,7 +3577,7 @@
           },
           "peer": {
             "nullable": true,
-            "description": "Optional peer filter using PeerId enum JSON format: {\"ip\": \"192.0.2.1\"} or {\"interface\": \"eth0\"}",
+            "description": "Optional peer filter using PeerId enum",
             "allOf": [
               {
                 "$ref": "#/components/schemas/PeerId"
@@ -3578,14 +3589,17 @@
           "asn"
         ]
       },
-      "MessageHistoryResponse": {
-        "description": "Unified message history response with string keys from PeerId Display Keys will be \"192.0.2.1\" or \"eth0\" format",
+      "MessageHistoryResponseV5": {
+        "description": "V4 message history response (VERSION_EXTENDED_NH_STATIC..) Flat list of entries per peer, each entry carries its own direction.",
         "type": "object",
         "properties": {
           "by_peer": {
             "type": "object",
             "additionalProperties": {
-              "$ref": "#/components/schemas/MessageHistory"
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/MessageHistoryEntry"
+              }
             }
           }
         },

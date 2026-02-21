@@ -9,6 +9,7 @@ use std::{
 };
 
 use bfd::BfdPeerState;
+pub use bgp::session::MessageDirection;
 use bgp::{
     messages::Afi,
     params::{
@@ -16,7 +17,10 @@ use bgp::{
         NeighborResetOpV1, NeighborV1, Origin4, Origin6, PeerInfo, PeerInfoV1,
         PeerInfoV2, Router, ShaperSource, UnnumberedNeighbor,
     },
-    session::{FsmEventRecord, MessageHistory, MessageHistoryV1, PeerId},
+    session::{
+        FsmEventRecord, MessageHistoryEntry, MessageHistoryEntryV2,
+        MessageHistoryV1, PeerId,
+    },
 };
 use dropshot::{
     HttpError, HttpResponseDeleted, HttpResponseOk,
@@ -457,11 +461,17 @@ pub trait MgAdminApi {
         request: TypedBody<MessageHistoryRequestV4>,
     ) -> Result<HttpResponseOk<MessageHistoryResponseV4>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_UNNUMBERED.. }]
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
     async fn message_history_v3(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn message_history_v4(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<MessageHistoryRequestV5>,
+    ) -> Result<HttpResponseOk<MessageHistoryResponseV5>, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/history/fsm", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
     async fn fsm_history(
@@ -807,11 +817,13 @@ pub struct MessageHistoryResponseV1 {
     pub by_peer: HashMap<IpAddr, MessageHistoryV1>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum MessageDirection {
-    Sent,
-    Received,
+/// Backward-compatible message history with sent/received split.
+/// Used by v2/v3 API endpoints to preserve the original wire format.
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+#[schemars(rename = "MessageHistory")]
+pub struct MessageHistorySentReceived {
+    pub sent: std::collections::VecDeque<MessageHistoryEntryV2>,
+    pub received: std::collections::VecDeque<MessageHistoryEntryV2>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
@@ -828,10 +840,10 @@ pub struct MessageHistoryRequestV4 {
 #[derive(Debug, Serialize, JsonSchema, Clone)]
 #[schemars(rename = "MessageHistoryResponse")]
 pub struct MessageHistoryResponseV4 {
-    pub by_peer: HashMap<IpAddr, MessageHistory>,
+    pub by_peer: HashMap<IpAddr, MessageHistorySentReceived>,
 }
 
-/// Unified message history request supporting both numbered and unnumbered peers
+/// V3 message history request (VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC)
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
 pub struct MessageHistoryRequest {
     /// ASN of the BGP router
@@ -845,11 +857,43 @@ pub struct MessageHistoryRequest {
     pub direction: Option<MessageDirection>,
 }
 
-/// Unified message history response with string keys from PeerId Display
-/// Keys will be "192.0.2.1" or "eth0" format
+/// V3 message history response (VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC)
 #[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct MessageHistoryResponse {
-    pub by_peer: HashMap<String, MessageHistory>,
+    pub by_peer: HashMap<String, MessageHistorySentReceived>,
+}
+
+/// Which message buffer to retrieve
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageBuffer {
+    /// All messages including KeepAlives
+    All,
+    /// Major messages only (excludes KeepAlives)
+    Major,
+}
+
+/// V4 message history request (VERSION_EXTENDED_NH_STATIC..)
+#[derive(Debug, Deserialize, JsonSchema, Clone)]
+pub struct MessageHistoryRequestV5 {
+    /// ASN of the BGP router
+    pub asn: u32,
+
+    /// Optional peer filter using PeerId enum
+    pub peer: Option<bgp::session::PeerId>,
+
+    /// Optional direction filter - if None, returns both directions
+    pub direction: Option<MessageDirection>,
+
+    /// Which buffer to retrieve - if None, returns major buffer
+    pub buffer: Option<MessageBuffer>,
+}
+
+/// V4 message history response (VERSION_EXTENDED_NH_STATIC..)
+/// Flat list of entries per peer, each entry carries its own direction.
+#[derive(Debug, Serialize, JsonSchema, Clone)]
+pub struct MessageHistoryResponseV5 {
+    pub by_peer: HashMap<String, Vec<MessageHistoryEntry>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq)]
