@@ -575,10 +575,38 @@ pub struct PeerTimers {
     pub delay_open: StaticTimerInfo,
 }
 
-/// Session-level counters that persist across connection changes
-/// These serve as aggregate counters across all connections for the session
+/// Reason for the most recent session reset.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum ResetReason {
+    AdministrativeReset,
+    AdministrativeShutdown,
+    HoldTimerExpired,
+    FsmError,
+    ConnectionRejected,
+    CollisionResolution,
+    IoError,
+    ParseError,
+    NotificationReceived,
+}
+
+/// Information about the most recent session reset.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FsmResetRecord {
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub reason: ResetReason,
+}
+
+/// A record of a BGP notification message with a timestamp.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotificationRecord {
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub notification: crate::messages::NotificationMessage,
+}
+
+/// Session-level counters (v5-v6 API: aggregate NLRI, no reset_count).
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PeerCounters {
+#[schemars(rename = "PeerCounters")]
+pub struct PeerCountersV1 {
     // FSM Counters
     pub connection_retries: u64,
     pub active_connections_accepted: u64,
@@ -635,7 +663,7 @@ pub struct PeerCounters {
     pub connector_panics: u64,
 }
 
-impl From<&SessionCounters> for PeerCounters {
+impl From<&SessionCounters> for PeerCountersV1 {
     fn from(value: &SessionCounters) -> Self {
         Self {
             connection_retries: value
@@ -684,9 +712,13 @@ impl From<&SessionCounters> for PeerCounters {
                 .idle_hold_timer_expirations
                 .load(Ordering::Relaxed),
             prefixes_advertised: value
-                .prefixes_advertised
-                .load(Ordering::Relaxed),
-            prefixes_imported: value.prefixes_imported.load(Ordering::Relaxed),
+                .ipv4_prefixes_advertised
+                .load(Ordering::Relaxed)
+                + value.ipv6_prefixes_advertised.load(Ordering::Relaxed),
+            prefixes_imported: value
+                .ipv4_prefixes_imported
+                .load(Ordering::Relaxed)
+                + value.ipv6_prefixes_imported.load(Ordering::Relaxed),
             keepalives_sent: value.keepalives_sent.load(Ordering::Relaxed),
             keepalives_received: value
                 .keepalives_received
@@ -798,6 +830,223 @@ impl From<&Capability> for BgpCapability {
     }
 }
 
+/// Peer info for v5-v6 API (aggregate NLRI counters, no reset/notification).
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "PeerInfo")]
+pub struct PeerInfoV3 {
+    pub name: String,
+    pub peer_group: String,
+    pub fsm_state: FsmStateKind,
+    pub fsm_state_duration: Duration,
+    pub asn: Option<u32>,
+    pub id: Option<u32>,
+    pub local_ip: IpAddr,
+    pub remote_ip: IpAddr,
+    pub local_tcp_port: u16,
+    pub remote_tcp_port: u16,
+    pub received_capabilities: Vec<BgpCapability>,
+    pub timers: PeerTimers,
+    pub counters: PeerCountersV1,
+    pub ipv4_unicast: Ipv4UnicastConfig,
+    pub ipv6_unicast: Ipv6UnicastConfig,
+}
+
+/// Session-level counters with per-AFI NLRI gauges (v7+ API).
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerCounters {
+    // FSM Counters
+    pub connection_retries: u64,
+    pub active_connections_accepted: u64,
+    pub active_connections_declined: u64,
+    pub passive_connections_accepted: u64,
+    pub passive_connections_declined: u64,
+    pub transitions_to_idle: u64,
+    pub transitions_to_connect: u64,
+    pub transitions_to_active: u64,
+    pub transitions_to_open_sent: u64,
+    pub transitions_to_open_confirm: u64,
+    pub transitions_to_connection_collision: u64,
+    pub transitions_to_session_setup: u64,
+    pub transitions_to_established: u64,
+    pub hold_timer_expirations: u64,
+    pub idle_hold_timer_expirations: u64,
+
+    // Per-AFI NLRI gauge counters
+    pub ipv4_prefixes_advertised: u64,
+    pub ipv4_prefixes_imported: u64,
+    pub ipv6_prefixes_advertised: u64,
+    pub ipv6_prefixes_imported: u64,
+
+    // Message counters
+    pub keepalives_sent: u64,
+    pub keepalives_received: u64,
+    pub route_refresh_sent: u64,
+    pub route_refresh_received: u64,
+    pub opens_sent: u64,
+    pub opens_received: u64,
+    pub notifications_sent: u64,
+    pub notifications_received: u64,
+    pub updates_sent: u64,
+    pub updates_received: u64,
+
+    // Message error counters
+    pub unexpected_update_message: u64,
+    pub unexpected_keepalive_message: u64,
+    pub unexpected_open_message: u64,
+    pub unexpected_route_refresh_message: u64,
+    pub unexpected_notification_message: u64,
+    pub update_nexhop_missing: u64,
+    pub open_handle_failures: u64,
+    pub unnegotiated_address_family: u64,
+    pub updates_treated_as_withdraw: u64,
+
+    // Send failure counters
+    pub notification_send_failure: u64,
+    pub open_send_failure: u64,
+    pub keepalive_send_failure: u64,
+    pub route_refresh_send_failure: u64,
+    pub update_send_failure: u64,
+
+    // Connection failure counters
+    pub tcp_connection_failure: u64,
+    pub md5_auth_failures: u64,
+    pub connector_panics: u64,
+
+    // Reset counter
+    pub reset_count: u64,
+}
+
+impl From<&SessionCounters> for PeerCounters {
+    fn from(value: &SessionCounters) -> Self {
+        Self {
+            connection_retries: value
+                .connection_retries
+                .load(Ordering::Relaxed),
+            active_connections_accepted: value
+                .active_connections_accepted
+                .load(Ordering::Relaxed),
+            active_connections_declined: value
+                .active_connections_declined
+                .load(Ordering::Relaxed),
+            passive_connections_accepted: value
+                .passive_connections_accepted
+                .load(Ordering::Relaxed),
+            passive_connections_declined: value
+                .passive_connections_declined
+                .load(Ordering::Relaxed),
+            transitions_to_idle: value
+                .transitions_to_idle
+                .load(Ordering::Relaxed),
+            transitions_to_connect: value
+                .transitions_to_connect
+                .load(Ordering::Relaxed),
+            transitions_to_active: value
+                .transitions_to_active
+                .load(Ordering::Relaxed),
+            transitions_to_open_sent: value
+                .transitions_to_open_sent
+                .load(Ordering::Relaxed),
+            transitions_to_open_confirm: value
+                .transitions_to_open_confirm
+                .load(Ordering::Relaxed),
+            transitions_to_connection_collision: value
+                .transitions_to_connection_collision
+                .load(Ordering::Relaxed),
+            transitions_to_session_setup: value
+                .transitions_to_session_setup
+                .load(Ordering::Relaxed),
+            transitions_to_established: value
+                .transitions_to_established
+                .load(Ordering::Relaxed),
+            hold_timer_expirations: value
+                .hold_timer_expirations
+                .load(Ordering::Relaxed),
+            idle_hold_timer_expirations: value
+                .idle_hold_timer_expirations
+                .load(Ordering::Relaxed),
+            ipv4_prefixes_advertised: value
+                .ipv4_prefixes_advertised
+                .load(Ordering::Relaxed),
+            ipv4_prefixes_imported: value
+                .ipv4_prefixes_imported
+                .load(Ordering::Relaxed),
+            ipv6_prefixes_advertised: value
+                .ipv6_prefixes_advertised
+                .load(Ordering::Relaxed),
+            ipv6_prefixes_imported: value
+                .ipv6_prefixes_imported
+                .load(Ordering::Relaxed),
+            keepalives_sent: value.keepalives_sent.load(Ordering::Relaxed),
+            keepalives_received: value
+                .keepalives_received
+                .load(Ordering::Relaxed),
+            route_refresh_sent: value
+                .route_refresh_sent
+                .load(Ordering::Relaxed),
+            route_refresh_received: value
+                .route_refresh_received
+                .load(Ordering::Relaxed),
+            opens_sent: value.opens_sent.load(Ordering::Relaxed),
+            opens_received: value.opens_received.load(Ordering::Relaxed),
+            notifications_sent: value
+                .notifications_sent
+                .load(Ordering::Relaxed),
+            notifications_received: value
+                .notifications_received
+                .load(Ordering::Relaxed),
+            updates_sent: value.updates_sent.load(Ordering::Relaxed),
+            updates_received: value.updates_received.load(Ordering::Relaxed),
+            unexpected_update_message: value
+                .unexpected_update_message
+                .load(Ordering::Relaxed),
+            unexpected_keepalive_message: value
+                .unexpected_keepalive_message
+                .load(Ordering::Relaxed),
+            unexpected_open_message: value
+                .unexpected_open_message
+                .load(Ordering::Relaxed),
+            unexpected_route_refresh_message: value
+                .unexpected_route_refresh_message
+                .load(Ordering::Relaxed),
+            unexpected_notification_message: value
+                .unexpected_notification_message
+                .load(Ordering::Relaxed),
+            update_nexhop_missing: value
+                .update_nexhop_missing
+                .load(Ordering::Relaxed),
+            open_handle_failures: value
+                .open_handle_failures
+                .load(Ordering::Relaxed),
+            unnegotiated_address_family: value
+                .unnegotiated_address_family
+                .load(Ordering::Relaxed),
+            updates_treated_as_withdraw: value
+                .updates_treated_as_withdraw
+                .load(Ordering::Relaxed),
+            notification_send_failure: value
+                .notification_send_failure
+                .load(Ordering::Relaxed),
+            open_send_failure: value.open_send_failure.load(Ordering::Relaxed),
+            keepalive_send_failure: value
+                .keepalive_send_failure
+                .load(Ordering::Relaxed),
+            route_refresh_send_failure: value
+                .route_refresh_send_failure
+                .load(Ordering::Relaxed),
+            update_send_failure: value
+                .update_send_failure
+                .load(Ordering::Relaxed),
+            tcp_connection_failure: value
+                .tcp_connection_failure
+                .load(Ordering::Relaxed),
+            md5_auth_failures: value.md5_auth_failures.load(Ordering::Relaxed),
+            connector_panics: value.connector_panics.load(Ordering::Relaxed),
+            reset_count: value.reset_count.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Peer info for v7+ API (per-AFI counters, reset/notification tracking).
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PeerInfo {
     pub name: String,
@@ -815,6 +1064,111 @@ pub struct PeerInfo {
     pub counters: PeerCounters,
     pub ipv4_unicast: Ipv4UnicastConfig,
     pub ipv6_unicast: Ipv6UnicastConfig,
+    pub last_reset: Option<FsmResetRecord>,
+    pub last_notification_sent: Option<NotificationRecord>,
+    pub last_notification_received: Option<NotificationRecord>,
+}
+
+impl From<PeerInfo> for PeerInfoV3 {
+    fn from(info: PeerInfo) -> Self {
+        Self {
+            name: info.name,
+            peer_group: info.peer_group,
+            fsm_state: info.fsm_state,
+            fsm_state_duration: info.fsm_state_duration,
+            asn: info.asn,
+            id: info.id,
+            local_ip: info.local_ip,
+            remote_ip: info.remote_ip,
+            local_tcp_port: info.local_tcp_port,
+            remote_tcp_port: info.remote_tcp_port,
+            received_capabilities: info.received_capabilities,
+            timers: info.timers,
+            counters: PeerCountersV1 {
+                connection_retries: info.counters.connection_retries,
+                active_connections_accepted: info
+                    .counters
+                    .active_connections_accepted,
+                active_connections_declined: info
+                    .counters
+                    .active_connections_declined,
+                passive_connections_accepted: info
+                    .counters
+                    .passive_connections_accepted,
+                passive_connections_declined: info
+                    .counters
+                    .passive_connections_declined,
+                transitions_to_idle: info.counters.transitions_to_idle,
+                transitions_to_connect: info.counters.transitions_to_connect,
+                transitions_to_active: info.counters.transitions_to_active,
+                transitions_to_open_sent: info
+                    .counters
+                    .transitions_to_open_sent,
+                transitions_to_open_confirm: info
+                    .counters
+                    .transitions_to_open_confirm,
+                transitions_to_connection_collision: info
+                    .counters
+                    .transitions_to_connection_collision,
+                transitions_to_session_setup: info
+                    .counters
+                    .transitions_to_session_setup,
+                transitions_to_established: info
+                    .counters
+                    .transitions_to_established,
+                hold_timer_expirations: info.counters.hold_timer_expirations,
+                idle_hold_timer_expirations: info
+                    .counters
+                    .idle_hold_timer_expirations,
+                prefixes_advertised: info.counters.ipv4_prefixes_advertised
+                    + info.counters.ipv6_prefixes_advertised,
+                prefixes_imported: info.counters.ipv4_prefixes_imported
+                    + info.counters.ipv6_prefixes_imported,
+                keepalives_sent: info.counters.keepalives_sent,
+                keepalives_received: info.counters.keepalives_received,
+                route_refresh_sent: info.counters.route_refresh_sent,
+                route_refresh_received: info.counters.route_refresh_received,
+                opens_sent: info.counters.opens_sent,
+                opens_received: info.counters.opens_received,
+                notifications_sent: info.counters.notifications_sent,
+                notifications_received: info.counters.notifications_received,
+                updates_sent: info.counters.updates_sent,
+                updates_received: info.counters.updates_received,
+                unexpected_update_message: info
+                    .counters
+                    .unexpected_update_message,
+                unexpected_keepalive_message: info
+                    .counters
+                    .unexpected_keepalive_message,
+                unexpected_open_message: info.counters.unexpected_open_message,
+                unexpected_route_refresh_message: info
+                    .counters
+                    .unexpected_route_refresh_message,
+                unexpected_notification_message: info
+                    .counters
+                    .unexpected_notification_message,
+                update_nexhop_missing: info.counters.update_nexhop_missing,
+                open_handle_failures: info.counters.open_handle_failures,
+                unnegotiated_address_family: info
+                    .counters
+                    .unnegotiated_address_family,
+                notification_send_failure: info
+                    .counters
+                    .notification_send_failure,
+                open_send_failure: info.counters.open_send_failure,
+                keepalive_send_failure: info.counters.keepalive_send_failure,
+                route_refresh_send_failure: info
+                    .counters
+                    .route_refresh_send_failure,
+                update_send_failure: info.counters.update_send_failure,
+                tcp_connection_failure: info.counters.tcp_connection_failure,
+                md5_auth_failures: info.counters.md5_auth_failures,
+                connector_panics: info.counters.connector_panics,
+            },
+            ipv4_unicast: info.ipv4_unicast,
+            ipv6_unicast: info.ipv6_unicast,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]

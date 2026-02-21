@@ -448,15 +448,22 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn get_neighbors_v3(
         ctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV3>>, HttpError> {
         bgp_admin::get_neighbors_v3(ctx, request).await
     }
 
     async fn get_neighbors_v4(
         ctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfoV3>>, HttpError> {
         bgp_admin::get_neighbors_unified(ctx, request).await
+    }
+
+    async fn get_neighbors_v5(
+        ctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
+        bgp_admin::get_neighbors_v5(ctx, request).await
     }
 
     async fn bgp_apply(

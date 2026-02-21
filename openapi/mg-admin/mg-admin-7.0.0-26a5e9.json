@@ -1196,7 +1196,7 @@
     },
     "/bgp/status/neighbors": {
       "get": {
-        "operationId": "get_neighbors_v4",
+        "operationId": "get_neighbors_v5",
         "parameters": [
           {
             "in": "query",
@@ -3197,6 +3197,23 @@
           "by_peer"
         ]
       },
+      "FsmResetRecord": {
+        "description": "Information about the most recent session reset.",
+        "type": "object",
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/ResetReason"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "reason",
+          "timestamp"
+        ]
+      },
       "FsmStateKind": {
         "description": "Simplified representation of a BGP state without having to carry a connection.",
         "oneOf": [
@@ -4171,6 +4188,23 @@
           "error_subcode"
         ]
       },
+      "NotificationRecord": {
+        "description": "A record of a BGP notification message with a timestamp.",
+        "type": "object",
+        "properties": {
+          "notification": {
+            "$ref": "#/components/schemas/NotificationMessage"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "notification",
+          "timestamp"
+        ]
+      },
       "OpenErrorSubcode": {
         "description": "Open message error subcode types",
         "type": "string",
@@ -4688,7 +4722,7 @@
         ]
       },
       "PeerCounters": {
-        "description": "Session-level counters that persist across connection changes These serve as aggregate counters across all connections for the session",
+        "description": "Session-level counters with per-AFI NLRI gauges (v7+ API).",
         "type": "object",
         "properties": {
           "active_connections_accepted": {
@@ -4717,6 +4751,26 @@
             "minimum": 0
           },
           "idle_hold_timer_expirations": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ipv4_prefixes_advertised": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ipv4_prefixes_imported": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ipv6_prefixes_advertised": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ipv6_prefixes_imported": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0
@@ -4786,12 +4840,7 @@
             "format": "uint64",
             "minimum": 0
           },
-          "prefixes_advertised": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "prefixes_imported": {
+          "reset_count": {
             "type": "integer",
             "format": "uint64",
             "minimum": 0
@@ -4905,6 +4954,11 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "updates_treated_as_withdraw": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
           }
         },
         "required": [
@@ -4914,6 +4968,10 @@
           "connector_panics",
           "hold_timer_expirations",
           "idle_hold_timer_expirations",
+          "ipv4_prefixes_advertised",
+          "ipv4_prefixes_imported",
+          "ipv6_prefixes_advertised",
+          "ipv6_prefixes_imported",
           "keepalive_send_failure",
           "keepalives_received",
           "keepalives_sent",
@@ -4927,8 +4985,7 @@
           "opens_sent",
           "passive_connections_accepted",
           "passive_connections_declined",
-          "prefixes_advertised",
-          "prefixes_imported",
+          "reset_count",
           "route_refresh_received",
           "route_refresh_send_failure",
           "route_refresh_sent",
@@ -4950,7 +5007,8 @@
           "update_nexhop_missing",
           "update_send_failure",
           "updates_received",
-          "updates_sent"
+          "updates_sent",
+          "updates_treated_as_withdraw"
         ]
       },
       "PeerId": {
@@ -4986,6 +5044,7 @@
         ]
       },
       "PeerInfo": {
+        "description": "Peer info for v7+ API (per-AFI counters, reset/notification tracking).",
         "type": "object",
         "properties": {
           "asn": {
@@ -5014,6 +5073,30 @@
           },
           "ipv6_unicast": {
             "$ref": "#/components/schemas/Ipv6UnicastConfig"
+          },
+          "last_notification_received": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NotificationRecord"
+              }
+            ]
+          },
+          "last_notification_sent": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NotificationRecord"
+              }
+            ]
+          },
+          "last_reset": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FsmResetRecord"
+              }
+            ]
           },
           "local_ip": {
             "type": "string",
@@ -5170,6 +5253,21 @@
         "required": [
           "length",
           "value"
+        ]
+      },
+      "ResetReason": {
+        "description": "Reason for the most recent session reset.",
+        "type": "string",
+        "enum": [
+          "AdministrativeReset",
+          "AdministrativeShutdown",
+          "HoldTimerExpired",
+          "FsmError",
+          "ConnectionRejected",
+          "CollisionResolution",
+          "IoError",
+          "ParseError",
+          "NotificationReceived"
         ]
       },
       "Rib": {

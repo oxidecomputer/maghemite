@@ -8,7 +8,7 @@ use crate::{
     connection_channel::{BgpConnectionChannel, BgpListenerChannel},
     connection_tcp::{BgpConnectionTcp, BgpListenerTcp},
     dispatcher::Dispatcher,
-    params::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange},
+    params::{Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange, ResetReason},
     router::{EnsureSessionResult, Router},
     session::{
         AdminEvent, ConnectionKind, FsmEvent, FsmStateKind, PeerId,
@@ -676,6 +676,8 @@ fn basic_update_helper<
         (false, false) => "basic_update",
     };
 
+    // Use passive/active pairing so the admin-reset cycle later in this
+    // test avoids connection collisions (both sides racing to reconnect).
     let routers = vec![
         LogicalRouter {
             name: "r1".to_string(),
@@ -690,7 +692,7 @@ fn basic_update_helper<
                     route_exchange,
                     r1_addr,
                     r2_addr,
-                    false,
+                    true, // r1 passive
                 ),
             }],
         },
@@ -707,7 +709,7 @@ fn basic_update_helper<
                     route_exchange,
                     r2_addr,
                     r1_addr,
-                    false,
+                    false, // r2 active
                 ),
             }],
         },
@@ -784,6 +786,75 @@ fn basic_update_helper<
                     "{prefix:?}: route should not be stale"
                 );
             }
+
+            // Verify per-AFI NLRI gauge counters
+            wait_for_eq!(
+                r1_session.get_peer_info().counters.ipv4_prefixes_advertised,
+                TEST_ROUTE_COUNT as u64,
+                "r1 ipv4_prefixes_advertised"
+            );
+            wait_for_eq!(
+                r2_session.get_peer_info().counters.ipv4_prefixes_imported,
+                TEST_ROUTE_COUNT as u64,
+                "r2 ipv4_prefixes_imported"
+            );
+            assert_eq!(
+                r1_session.get_peer_info().counters.ipv6_prefixes_advertised,
+                0,
+                "r1 ipv6_prefixes_advertised should be 0"
+            );
+
+            // Admin reset r1 and verify routes re-propagate from DB
+            let r1_est = r1_session
+                .counters
+                .transitions_to_established
+                .load(Ordering::Relaxed);
+            let r2_est = r2_session
+                .counters
+                .transitions_to_established
+                .load(Ordering::Relaxed);
+            r1_session
+                .event_tx
+                .send(FsmEvent::Admin(AdminEvent::Reset))
+                .expect("reset r1");
+            wait_for!(
+                r1_session
+                    .counters
+                    .transitions_to_established
+                    .load(Ordering::Relaxed)
+                    > r1_est,
+                "r1 should re-establish after reset"
+            );
+            wait_for!(
+                r2_session
+                    .counters
+                    .transitions_to_established
+                    .load(Ordering::Relaxed)
+                    > r2_est,
+                "r2 should re-establish after r1 reset"
+            );
+
+            // Routes are re-announced from DB during session_setup
+            wait_for!(
+                prefixes_v4
+                    .iter()
+                    .filter(|p| {
+                        !r2.router.db.get_prefix_paths(p).is_empty()
+                    })
+                    .count()
+                    == TEST_ROUTE_COUNT,
+                "all IPv4 routes should re-arrive after reset"
+            );
+            wait_for_eq!(
+                r1_session.get_peer_info().counters.ipv4_prefixes_advertised,
+                TEST_ROUTE_COUNT as u64,
+                "r1 ipv4_prefixes_advertised after reset"
+            );
+            wait_for_eq!(
+                r2_session.get_peer_info().counters.ipv4_prefixes_imported,
+                TEST_ROUTE_COUNT as u64,
+                "r2 ipv4_prefixes_imported after reset"
+            );
 
             if let Some(initial_nh) = initial_nexthop {
                 // Test nexthop override change
@@ -890,6 +961,75 @@ fn basic_update_helper<
                     "{prefix:?}: route should not be stale"
                 );
             }
+
+            // Verify per-AFI NLRI gauge counters
+            wait_for_eq!(
+                r1_session.get_peer_info().counters.ipv6_prefixes_advertised,
+                TEST_ROUTE_COUNT as u64,
+                "r1 ipv6_prefixes_advertised"
+            );
+            wait_for_eq!(
+                r2_session.get_peer_info().counters.ipv6_prefixes_imported,
+                TEST_ROUTE_COUNT as u64,
+                "r2 ipv6_prefixes_imported"
+            );
+            assert_eq!(
+                r1_session.get_peer_info().counters.ipv4_prefixes_advertised,
+                0,
+                "r1 ipv4_prefixes_advertised should be 0"
+            );
+
+            // Admin reset r1 and verify routes re-propagate from DB
+            let r1_est = r1_session
+                .counters
+                .transitions_to_established
+                .load(Ordering::Relaxed);
+            let r2_est = r2_session
+                .counters
+                .transitions_to_established
+                .load(Ordering::Relaxed);
+            r1_session
+                .event_tx
+                .send(FsmEvent::Admin(AdminEvent::Reset))
+                .expect("reset r1");
+            wait_for!(
+                r1_session
+                    .counters
+                    .transitions_to_established
+                    .load(Ordering::Relaxed)
+                    > r1_est,
+                "r1 should re-establish after reset"
+            );
+            wait_for!(
+                r2_session
+                    .counters
+                    .transitions_to_established
+                    .load(Ordering::Relaxed)
+                    > r2_est,
+                "r2 should re-establish after r1 reset"
+            );
+
+            // Routes are re-announced from DB during session_setup
+            wait_for!(
+                prefixes_v6
+                    .iter()
+                    .filter(|p| {
+                        !r2.router.db.get_prefix_paths(p).is_empty()
+                    })
+                    .count()
+                    == TEST_ROUTE_COUNT,
+                "all IPv6 routes should re-arrive after reset"
+            );
+            wait_for_eq!(
+                r1_session.get_peer_info().counters.ipv6_prefixes_advertised,
+                TEST_ROUTE_COUNT as u64,
+                "r1 ipv6_prefixes_advertised after reset"
+            );
+            wait_for_eq!(
+                r2_session.get_peer_info().counters.ipv6_prefixes_imported,
+                TEST_ROUTE_COUNT as u64,
+                "r2 ipv6_prefixes_imported after reset"
+            );
 
             if let Some(initial_nh) = initial_nexthop {
                 // Test nexthop override change
@@ -1040,6 +1180,98 @@ fn basic_update_helper<
                     "{prefix:?}: route should not be stale"
                 );
             }
+
+            // Verify per-AFI NLRI gauge counters (dual-stack)
+            wait_for_eq!(
+                r1_session.get_peer_info().counters.ipv4_prefixes_advertised,
+                TEST_ROUTE_COUNT as u64,
+                "r1 ipv4_prefixes_advertised (dual-stack)"
+            );
+            wait_for_eq!(
+                r1_session.get_peer_info().counters.ipv6_prefixes_advertised,
+                TEST_ROUTE_COUNT as u64,
+                "r1 ipv6_prefixes_advertised (dual-stack)"
+            );
+            wait_for_eq!(
+                r2_session.get_peer_info().counters.ipv4_prefixes_imported,
+                TEST_ROUTE_COUNT as u64,
+                "r2 ipv4_prefixes_imported (dual-stack)"
+            );
+            wait_for_eq!(
+                r2_session.get_peer_info().counters.ipv6_prefixes_imported,
+                TEST_ROUTE_COUNT as u64,
+                "r2 ipv6_prefixes_imported (dual-stack)"
+            );
+
+            // Admin reset r1 and verify routes re-propagate from DB
+            let r1_est = r1_session
+                .counters
+                .transitions_to_established
+                .load(Ordering::Relaxed);
+            let r2_est = r2_session
+                .counters
+                .transitions_to_established
+                .load(Ordering::Relaxed);
+            r1_session
+                .event_tx
+                .send(FsmEvent::Admin(AdminEvent::Reset))
+                .expect("reset r1");
+            wait_for!(
+                r1_session
+                    .counters
+                    .transitions_to_established
+                    .load(Ordering::Relaxed)
+                    > r1_est,
+                "r1 should re-establish after reset"
+            );
+            wait_for!(
+                r2_session
+                    .counters
+                    .transitions_to_established
+                    .load(Ordering::Relaxed)
+                    > r2_est,
+                "r2 should re-establish after r1 reset"
+            );
+
+            // Routes are re-announced from DB during session_setup
+            wait_for!(
+                {
+                    let v4_count = prefixes_v4
+                        .iter()
+                        .filter(|p| {
+                            !r2.router.db.get_prefix_paths(p).is_empty()
+                        })
+                        .count();
+                    let v6_count = prefixes_v6
+                        .iter()
+                        .filter(|p| {
+                            !r2.router.db.get_prefix_paths(p).is_empty()
+                        })
+                        .count();
+                    v4_count == TEST_ROUTE_COUNT && v6_count == TEST_ROUTE_COUNT
+                },
+                "all dual-stack routes should re-arrive after reset"
+            );
+            wait_for_eq!(
+                r1_session.get_peer_info().counters.ipv4_prefixes_advertised,
+                TEST_ROUTE_COUNT as u64,
+                "r1 ipv4_prefixes_advertised after reset (dual-stack)"
+            );
+            wait_for_eq!(
+                r1_session.get_peer_info().counters.ipv6_prefixes_advertised,
+                TEST_ROUTE_COUNT as u64,
+                "r1 ipv6_prefixes_advertised after reset (dual-stack)"
+            );
+            wait_for_eq!(
+                r2_session.get_peer_info().counters.ipv4_prefixes_imported,
+                TEST_ROUTE_COUNT as u64,
+                "r2 ipv4_prefixes_imported after reset (dual-stack)"
+            );
+            wait_for_eq!(
+                r2_session.get_peer_info().counters.ipv6_prefixes_imported,
+                TEST_ROUTE_COUNT as u64,
+                "r2 ipv6_prefixes_imported after reset (dual-stack)"
+            );
 
             // Test nexthop override changes if any were configured
             if ipv4_nexthop.is_some() || ipv6_nexthop.is_some() {
@@ -1318,8 +1550,8 @@ fn test_basic_peering_passive() {
     basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         true,
         RouteExchange::Ipv4 { nexthop: None },
-        sockaddr!(&format!("11.0.0.1:{TEST_BGP_PORT}")),
-        sockaddr!(&format!("11.0.0.2:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("10.0.0.3:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("10.0.0.4:{TEST_BGP_PORT}")),
     )
 }
 
@@ -1328,8 +1560,8 @@ fn test_basic_peering_active() {
     basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         false,
         RouteExchange::Ipv4 { nexthop: None },
-        sockaddr!(&format!("12.0.0.1:{TEST_BGP_PORT}")),
-        sockaddr!(&format!("12.0.0.2:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("10.0.0.5:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("10.0.0.6:{TEST_BGP_PORT}")),
     )
 }
 
@@ -1856,8 +2088,8 @@ fn test_basic_update_ipv6() {
 fn test_basic_update_ipv6_tcp() {
     basic_update_helper::<BgpConnectionTcp, BgpListenerTcp>(
         RouteExchange::Ipv6 { nexthop: None },
-        sockaddr!(&format!("[3fff::a]:{TEST_BGP_PORT}")),
-        sockaddr!(&format!("[3fff::b]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::2]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::3]:{TEST_BGP_PORT}")),
     )
 }
 
@@ -1866,8 +2098,8 @@ fn test_ipv6_basic_peering_passive() {
     basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         true,
         RouteExchange::Ipv6 { nexthop: None },
-        sockaddr!(&format!("[3fff::2]:{TEST_BGP_PORT}")),
-        sockaddr!(&format!("[3fff::3]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::4]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::5]:{TEST_BGP_PORT}")),
     )
 }
 
@@ -1876,8 +2108,8 @@ fn test_ipv6_basic_peering_active() {
     basic_peering_helper::<BgpConnectionChannel, BgpListenerChannel>(
         false,
         RouteExchange::Ipv6 { nexthop: None },
-        sockaddr!(&format!("[3fff::4]:{TEST_BGP_PORT}")),
-        sockaddr!(&format!("[3fff::5]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::6]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::7]:{TEST_BGP_PORT}")),
     )
 }
 
@@ -1886,8 +2118,8 @@ fn test_ipv6_basic_peering_passive_tcp() {
     basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
         true,
         RouteExchange::Ipv6 { nexthop: None },
-        sockaddr!(&format!("[3fff::6]:{TEST_BGP_PORT}")),
-        sockaddr!(&format!("[3fff::7]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::8]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::9]:{TEST_BGP_PORT}")),
     )
 }
 
@@ -1896,8 +2128,8 @@ fn test_ipv6_basic_peering_active_tcp() {
     basic_peering_helper::<BgpConnectionTcp, BgpListenerTcp>(
         false,
         RouteExchange::Ipv6 { nexthop: None },
-        sockaddr!(&format!("[3fff::8]:{TEST_BGP_PORT}")),
-        sockaddr!(&format!("[3fff::9]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::a]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::b]:{TEST_BGP_PORT}")),
     )
 }
 
@@ -1915,8 +2147,8 @@ fn test_dual_stack_routes_ipv4_peer_success() {
             ipv4_nexthop: Some(ip!("10.0.1.1")),
             ipv6_nexthop: Some(ip!("3fff:db8:1::1")),
         },
-        sockaddr!(&format!("10.0.1.1:{TEST_BGP_PORT}")),
-        sockaddr!(&format!("10.0.1.2:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("10.0.0.11:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("10.0.0.12:{TEST_BGP_PORT}")),
     )
 }
 
@@ -1928,8 +2160,8 @@ fn test_dual_stack_routes_ipv6_peer_success() {
             ipv4_nexthop: Some(ip!("10.0.2.1")),
             ipv6_nexthop: Some(ip!("3fff:db8:2::1")),
         },
-        sockaddr!(&format!("[3fff::f]:{TEST_BGP_PORT}")),
         sockaddr!(&format!("[3fff::10]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::11]:{TEST_BGP_PORT}")),
     )
 }
 
@@ -1940,8 +2172,8 @@ fn test_ipv4_routes_ipv6_peer_success() {
         RouteExchange::Ipv4 {
             nexthop: Some(ip!("10.0.3.1")),
         },
-        sockaddr!(&format!("[3fff::11]:{TEST_BGP_PORT}")),
         sockaddr!(&format!("[3fff::12]:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("[3fff::13]:{TEST_BGP_PORT}")),
     )
 }
 
@@ -1952,8 +2184,8 @@ fn test_ipv6_routes_ipv4_peer_success() {
         RouteExchange::Ipv6 {
             nexthop: Some(ip!("3fff:db8:4::1")),
         },
-        sockaddr!(&format!("10.0.4.1:{TEST_BGP_PORT}")),
-        sockaddr!(&format!("10.0.4.2:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("10.0.0.7:{TEST_BGP_PORT}")),
+        sockaddr!(&format!("10.0.0.8:{TEST_BGP_PORT}")),
     )
 }
 
@@ -4649,6 +4881,239 @@ fn test_mismatched_afi_session_rejected() {
         r1_failures > 0 || r2_failures > 0,
         "at least one side should record open_handle_failures \
          (r1={r1_failures}, r2={r2_failures})"
+    );
+
+    r1.shutdown();
+    r2.shutdown();
+}
+
+/// Test: Reset/notification tracking fields in PeerInfo.
+///
+/// Exercises FsmResetRecord, last_notification_sent/received,
+/// reset_count, and timestamp monotonicity through admin resets.
+///
+/// Uses passive/active pairing to avoid connection collisions that
+/// would overwrite last_reset with CollisionResolution.
+#[test]
+fn test_reset_tracking() {
+    let r1_addr = sockaddr!(&format!("10.0.0.9:{TEST_BGP_PORT}"));
+    let r2_addr = sockaddr!(&format!("10.0.0.10:{TEST_BGP_PORT}"));
+
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: create_test_session_info(
+                    RouteExchange::Ipv4 { nexthop: None },
+                    r1_addr,
+                    r2_addr,
+                    true, // r1 passive
+                ),
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r1".to_string(),
+                remote_host: r1_addr,
+                session_info: create_test_session_info(
+                    RouteExchange::Ipv4 { nexthop: None },
+                    r2_addr,
+                    r1_addr,
+                    false, // r2 active
+                ),
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard) = test_setup::<
+        BgpConnectionChannel,
+        BgpListenerChannel,
+    >("reset_tracking", &routers);
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
+
+    let r1_session = r1
+        .router
+        .get_session(r2_addr.ip())
+        .expect("get r1->r2 session");
+    let r2_session = r2
+        .router
+        .get_session(r1_addr.ip())
+        .expect("get r2->r1 session");
+
+    // Wait for initial establishment
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    // Phase A: No reset has occurred yet
+    assert!(
+        r1_session.get_peer_info().last_reset.is_none(),
+        "last_reset should be None before any reset"
+    );
+
+    // Record establishment counts before reset. Channel-based connections
+    // cycle through states so fast that polling state() may miss the
+    // transient Idle — use the counter to reliably detect re-establishment.
+    let r1_established_before = r1_session
+        .counters
+        .transitions_to_established
+        .load(Ordering::Relaxed);
+    let r2_established_before = r2_session
+        .counters
+        .transitions_to_established
+        .load(Ordering::Relaxed);
+
+    // Send AdminEvent::Reset to r1
+    r1_session
+        .event_tx
+        .send(FsmEvent::Admin(AdminEvent::Reset))
+        .expect("send reset to r1");
+
+    // Wait for both to re-establish (counter-based, not state-based)
+    wait_for!(
+        r1_session
+            .counters
+            .transitions_to_established
+            .load(Ordering::Relaxed)
+            > r1_established_before,
+        "r1 should re-establish after reset"
+    );
+    wait_for!(
+        r2_session
+            .counters
+            .transitions_to_established
+            .load(Ordering::Relaxed)
+            > r2_established_before,
+        "r2 should re-establish after r1 reset"
+    );
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    let r1_info = r1_session.get_peer_info();
+    assert!(
+        r1_info.last_reset.is_some(),
+        "last_reset should be set after admin reset"
+    );
+    assert!(
+        matches!(
+            r1_info.last_reset.as_ref().unwrap().reason,
+            ResetReason::AdministrativeReset
+        ),
+        "reset reason should be AdministrativeReset, got {:?}",
+        r1_info.last_reset.as_ref().unwrap().reason
+    );
+    assert!(
+        r1_info.counters.reset_count >= 1,
+        "reset_count should be >= 1 after admin reset, got {}",
+        r1_info.counters.reset_count
+    );
+    assert!(
+        r1_info.last_notification_sent.is_some(),
+        "last_notification_sent should be set (CEASE sent on reset)"
+    );
+
+    // Phase B: Reset r2 so r1 receives a notification
+    let r1_established_before = r1_session
+        .counters
+        .transitions_to_established
+        .load(Ordering::Relaxed);
+    let r2_established_before = r2_session
+        .counters
+        .transitions_to_established
+        .load(Ordering::Relaxed);
+
+    r2_session
+        .event_tx
+        .send(FsmEvent::Admin(AdminEvent::Reset))
+        .expect("send reset to r2");
+
+    // Wait for both to re-establish
+    wait_for!(
+        r1_session
+            .counters
+            .transitions_to_established
+            .load(Ordering::Relaxed)
+            > r1_established_before,
+        "r1 should re-establish after r2 reset"
+    );
+    wait_for!(
+        r2_session
+            .counters
+            .transitions_to_established
+            .load(Ordering::Relaxed)
+            > r2_established_before,
+        "r2 should re-establish after reset"
+    );
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    let r1_info = r1_session.get_peer_info();
+    assert!(
+        r1_info.last_notification_received.is_some(),
+        "r1 should have received a notification from r2's reset"
+    );
+    assert!(
+        matches!(
+            r1_info.last_reset.as_ref().unwrap().reason,
+            ResetReason::NotificationReceived
+        ),
+        "r1's last reset reason should be NotificationReceived, \
+         got {:?}",
+        r1_info.last_reset.as_ref().unwrap().reason
+    );
+
+    let r2_info = r2_session.get_peer_info();
+    assert!(
+        matches!(
+            r2_info.last_reset.as_ref().unwrap().reason,
+            ResetReason::AdministrativeReset
+        ),
+        "r2's last reset reason should be AdministrativeReset, \
+         got {:?}",
+        r2_info.last_reset.as_ref().unwrap().reason
+    );
+
+    // Phase C: Timestamp monotonicity
+    let old_timestamp =
+        r1_session.get_peer_info().last_reset.unwrap().timestamp;
+    let r1_established_before = r1_session
+        .counters
+        .transitions_to_established
+        .load(Ordering::Relaxed);
+
+    r1_session
+        .event_tx
+        .send(FsmEvent::Admin(AdminEvent::Reset))
+        .expect("send second reset to r1");
+
+    wait_for!(
+        r1_session
+            .counters
+            .transitions_to_established
+            .load(Ordering::Relaxed)
+            > r1_established_before,
+        "r1 should re-establish after second reset"
+    );
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+
+    let new_timestamp =
+        r1_session.get_peer_info().last_reset.unwrap().timestamp;
+    assert!(
+        new_timestamp > old_timestamp,
+        "new reset timestamp ({new_timestamp}) should be after \
+         old ({old_timestamp})"
     );
 
     r1.shutdown();

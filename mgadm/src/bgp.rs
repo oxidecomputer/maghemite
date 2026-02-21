@@ -1065,7 +1065,7 @@ async fn get_neighbors(
     asn: u32,
     mode: NeighborDisplayMode,
 ) -> Result<()> {
-    let result = c.get_neighbors_v4(asn).await?.into_inner();
+    let result = c.get_neighbors_v5(asn).await?.into_inner();
     let mut sorted: Vec<_> = result.iter().collect();
 
     // Sort using natural sorting to handle both IP addresses and interface names
@@ -1240,10 +1240,21 @@ fn display_neighbors_detail(
         println_nopipe!("\n{}", "Counters:".bold());
         println_nopipe!("  Prefixes:");
         println_nopipe!(
-            "    Advertised: {}",
-            info.counters.prefixes_advertised
+            "    IPv4 Advertised: {}",
+            info.counters.ipv4_prefixes_advertised
         );
-        println_nopipe!("    Imported: {}", info.counters.prefixes_imported);
+        println_nopipe!(
+            "    IPv4 Imported: {}",
+            info.counters.ipv4_prefixes_imported
+        );
+        println_nopipe!(
+            "    IPv6 Advertised: {}",
+            info.counters.ipv6_prefixes_advertised
+        );
+        println_nopipe!(
+            "    IPv6 Imported: {}",
+            info.counters.ipv6_prefixes_imported
+        );
 
         println_nopipe!("  Messages Sent:");
         println_nopipe!("    Opens: {}", info.counters.opens_sent);

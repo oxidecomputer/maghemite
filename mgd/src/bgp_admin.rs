@@ -1246,7 +1246,7 @@ pub async fn get_neighbors_v2(
 pub async fn get_neighbors_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError> {
+) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV3>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -1267,13 +1267,41 @@ pub async fn get_neighbors_v3(
             PeerId::Ip(ip) => ip,
             PeerId::Interface(_) => continue, // Skip unnumbered sessions
         };
-        peers.insert(peer_ip, s.get_peer_info());
+        peers.insert(peer_ip, PeerInfoV3::from(s.get_peer_info()));
     }
 
     Ok(HttpResponseOk(peers))
 }
 
 pub async fn get_neighbors_unified(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<HashMap<String, PeerInfoV3>>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+
+    let mut peers = HashMap::new();
+
+    // Clone sessions while holding locks, then release them
+    let sessions: Vec<_> = {
+        let routers = lock!(ctx.bgp.router);
+        let r = routers.get(&rq.asn).ok_or(HttpError::for_not_found(
+            None,
+            "ASN not found".to_string(),
+        ))?;
+        lock!(r.sessions).values().cloned().collect()
+    };
+
+    for s in sessions.iter() {
+        // Use PeerId Display impl as HashMap key
+        let peer_key = s.neighbor.peer.to_string();
+        peers.insert(peer_key, PeerInfoV3::from(s.get_peer_info()));
+    }
+
+    Ok(HttpResponseOk(peers))
+}
+
+pub async fn get_neighbors_v5(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
 ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError> {
@@ -1293,7 +1321,6 @@ pub async fn get_neighbors_unified(
     };
 
     for s in sessions.iter() {
-        // Use PeerId Display impl as HashMap key
         let peer_key = s.neighbor.peer.to_string();
         peers.insert(peer_key, s.get_peer_info());
     }

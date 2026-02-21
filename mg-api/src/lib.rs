@@ -15,7 +15,7 @@ use bgp::{
     params::{
         ApplyRequest, ApplyRequestV1, CheckerSource, Neighbor, NeighborResetOp,
         NeighborResetOpV1, NeighborV1, Origin4, Origin6, PeerInfo, PeerInfoV1,
-        PeerInfoV2, Router, ShaperSource, UnnumberedNeighbor,
+        PeerInfoV2, PeerInfoV3, Router, ShaperSource, UnnumberedNeighbor,
     },
     session::{
         FsmEventRecord, MessageHistoryEntry, MessageHistoryEntryV2,
@@ -427,10 +427,16 @@ pub trait MgAdminApi {
     async fn get_neighbors_v3(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfo>>, HttpError>;
+    ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV3>>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_UNNUMBERED.. }]
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
     async fn get_neighbors_v4(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<HashMap<String, PeerInfoV3>>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn get_neighbors_v5(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<String, PeerInfo>>, HttpError>;

@@ -21,8 +21,9 @@ use crate::{
     },
     params::{
         BgpCapability, BgpPeerParameters, BgpPeerParametersV1,
-        DynamicTimerInfo, Ipv4UnicastConfig, Ipv6UnicastConfig, JitterRange,
-        PeerCounters, PeerInfo, PeerTimers, StaticTimerInfo, TimerConfig,
+        DynamicTimerInfo, FsmResetRecord, Ipv4UnicastConfig, Ipv6UnicastConfig,
+        JitterRange, NotificationRecord, PeerCounters, PeerInfo, PeerTimers,
+        ResetReason, StaticTimerInfo, TimerConfig,
     },
     policy::{
         CheckerResult, ShaperResult, check_incoming_open,
@@ -620,6 +621,8 @@ pub enum StopReason {
         error_code: ErrorCode,
         error_subcode: ErrorSubcode,
     },
+    /// A NOTIFICATION message was received from the peer.
+    NotificationReceived(NotificationMessage),
 }
 
 /// FsmEvents pertaining to a specific Connection
@@ -1215,9 +1218,14 @@ pub struct SessionCounters {
     pub hold_timer_expirations: AtomicU64,
     pub idle_hold_timer_expirations: AtomicU64,
 
-    // NLRI counters
-    pub prefixes_advertised: AtomicU64,
-    pub prefixes_imported: AtomicU64,
+    // Per-AFI NLRI gauge counters (current prefix counts, not cumulative)
+    pub ipv4_prefixes_advertised: AtomicU64,
+    pub ipv4_prefixes_imported: AtomicU64,
+    pub ipv6_prefixes_advertised: AtomicU64,
+    pub ipv6_prefixes_imported: AtomicU64,
+
+    // Reset counter
+    pub reset_count: AtomicU64,
 
     // Message counters
     pub keepalives_sent: AtomicU64,
@@ -1253,6 +1261,23 @@ pub struct SessionCounters {
     pub tcp_connection_failure: AtomicU64,
     pub md5_auth_failures: AtomicU64,
     pub connector_panics: AtomicU64,
+}
+
+/// Atomically subtract `n` from `counter`, clamping at zero.
+fn atomic_saturating_sub(counter: &AtomicU64, n: u64) {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let new = current.saturating_sub(n);
+        match counter.compare_exchange_weak(
+            current,
+            new,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 pub enum ShaperApplication {
@@ -1680,6 +1705,15 @@ pub struct SessionRunner<Cnx: BgpConnection + 'static> {
     /// Used to track outbound connection attempts and prevent duplicate spawns.
     connector_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 
+    /// Information about the most recent session reset.
+    last_reset: Mutex<Option<FsmResetRecord>>,
+
+    /// The most recently sent notification message.
+    last_notification_sent: Mutex<Option<NotificationRecord>>,
+
+    /// The most recently received notification message.
+    last_notification_received: Mutex<Option<NotificationRecord>>,
+
     log: Logger,
 }
 
@@ -1753,6 +1787,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Mutex::new(ConnectionRegistry::new()),
             ),
             connector_handle: Mutex::new(None),
+            last_reset: Mutex::new(None),
+            last_notification_sent: Mutex::new(None),
+            last_notification_received: Mutex::new(None),
         };
         drop(session_info);
         runner
@@ -2297,6 +2334,26 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.counters
                             .transitions_to_idle
                             .fetch_add(1, Ordering::Relaxed);
+
+                        // Conditionally bump reset_count based on
+                        // the reset reason already stored in
+                        // last_reset by stop().
+                        if let Some(ref info) = *lock!(self.last_reset) {
+                            let count_it = matches!(
+                                previous,
+                                FsmStateKind::Established
+                                    | FsmStateKind::SessionSetup
+                            ) || matches!(
+                                info.reason,
+                                ResetReason::AdministrativeReset
+                                    | ResetReason::AdministrativeShutdown
+                            );
+                            if count_it {
+                                self.counters
+                                    .reset_count
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
                     }
                     FsmStateKind::Connect => {
                         self.counters
@@ -2633,6 +2690,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
+                self.stop(None, None, StopReason::Shutdown);
                 return FsmState::Idle;
             }
 
@@ -2868,6 +2926,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             let title = msg.title();
 
                             if let Message::Notification(ref n) = msg {
+                                self.record_notification_received(n);
                                 session_log_lite!(
                                     self,
                                     warn,
@@ -2972,6 +3031,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
+                self.stop(None, None, StopReason::Shutdown);
                 return FsmState::Idle;
             }
 
@@ -3090,6 +3150,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             let title = msg.title();
 
                             if let Message::Notification(ref n) = msg {
+                                self.record_notification_received(n);
                                 session_log_lite!(
                                     self,
                                     warn,
@@ -3346,6 +3407,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let om = loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
+                self.stop(Some(&conn), None, StopReason::Shutdown);
                 return FsmState::Idle;
             }
 
@@ -3929,6 +3991,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn fsm_open_confirm(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
         if self.shutdown.load(Ordering::Acquire) {
+            self.stop(Some(&pc.conn), None, StopReason::Shutdown);
             return FsmState::Idle;
         }
 
@@ -4467,6 +4530,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let om = loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
+                self.stop(Some(&exist.conn), Some(&new), StopReason::Shutdown);
                 return FsmState::Idle;
             }
 
@@ -5332,6 +5396,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
             if self.shutdown.load(Ordering::Acquire) {
+                self.stop(Some(&exist), Some(&new), StopReason::Shutdown);
                 return FsmState::Idle;
             }
 
@@ -6118,7 +6183,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn fsm_session_setup(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
         if self.shutdown.load(Ordering::Acquire) {
-            return FsmState::Idle;
+            self.stop(Some(&pc.conn), None, StopReason::Shutdown);
+            return self.exit_established(pc);
         }
 
         // Collect the prefixes this router is originating.
@@ -6208,6 +6274,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 "failed to send originated IPv4 routes: {e}";
                 "error" => format!("{e}")
             );
+            self.stop(Some(&pc.conn), None, StopReason::IoError);
             return self.exit_established(pc);
         }
 
@@ -6234,6 +6301,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 "failed to send originated IPv6 routes: {e}";
                 "error" => format!("{e}")
             );
+            self.stop(Some(&pc.conn), None, StopReason::IoError);
             return self.exit_established(pc);
         }
 
@@ -6299,6 +6367,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     fn fsm_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
         if self.shutdown.load(Ordering::Acquire) {
+            self.stop(Some(&pc.conn), None, StopReason::Shutdown);
             return self.exit_established(pc);
         }
 
@@ -6352,6 +6421,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             "failed to send update from announce-routes: {e}";
                             "error" => format!("{e}")
                         );
+                        self.stop(Some(&pc.conn), None, StopReason::IoError);
                         return self.exit_established(pc);
                     }
 
@@ -6370,6 +6440,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 pc.conn,
                                 "failed to originate update, fsm transition to idle";
                                 "error" => format!("{e}")
+                            );
+                            self.stop(
+                                Some(&pc.conn),
+                                None,
+                                StopReason::IoError,
                             );
                             self.exit_established(pc)
                         }
@@ -6477,6 +6552,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     "failed to send IPv4 export policy announce: {e}";
                                     "error" => format!("{e}")
                                 );
+                                self.stop(
+                                    Some(&pc.conn),
+                                    None,
+                                    StopReason::IoError,
+                                );
                                 return self.exit_established(pc);
                             }
 
@@ -6495,6 +6575,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     pc.conn,
                                     "failed to send IPv4 export policy withdraw: {e}";
                                     "error" => format!("{e}")
+                                );
+                                self.stop(
+                                    Some(&pc.conn),
+                                    None,
+                                    StopReason::IoError,
                                 );
                                 return self.exit_established(pc);
                             }
@@ -6599,6 +6684,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     "failed to send IPv6 export policy announce: {e}";
                                     "error" => format!("{e}")
                                 );
+                                self.stop(
+                                    Some(&pc.conn),
+                                    None,
+                                    StopReason::IoError,
+                                );
                                 return self.exit_established(pc);
                             }
 
@@ -6617,6 +6707,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     pc.conn,
                                     "failed to send IPv6 export policy withdraw: {e}";
                                     "error" => format!("{e}")
+                                );
+                                self.stop(
+                                    Some(&pc.conn),
+                                    None,
+                                    StopReason::IoError,
                                 );
                                 return self.exit_established(pc);
                             }
@@ -6666,6 +6761,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             "route re-advertisement error: {e}";
                             "error" => format!("{e}")
                         );
+                        self.stop(Some(&pc.conn), None, StopReason::IoError);
                         return self.exit_established(pc);
                     }
                     FsmState::Established(pc)
@@ -7191,6 +7287,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 MessageDirection::Received,
                             );
                             self.bump_msg_counter(msg_kind, false);
+                            self.stop(
+                                Some(&pc.conn),
+                                None,
+                                StopReason::NotificationReceived(m.clone()),
+                            );
                             self.exit_established(pc)
                         }
 
@@ -7258,6 +7359,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     conn_id.short();
                                     "error" => format!("{e}")
                                 );
+                                self.stop(
+                                    Some(&pc.conn),
+                                    None,
+                                    StopReason::IoError,
+                                );
                                 self.exit_established(pc)
                             } else {
                                 FsmState::Established(pc)
@@ -7290,7 +7396,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         "error_code" => format!("{error_code:?}"),
                         "error_subcode" => format!("{error_subcode:?}")
                     );
-                    self.send_notification(&pc.conn, error_code, error_subcode);
+                    self.stop(
+                        Some(&pc.conn),
+                        None,
+                        StopReason::ParseError {
+                            error_code,
+                            error_subcode,
+                        },
+                    );
                     self.exit_established(pc)
                 }
 
@@ -7596,6 +7709,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         )
     }
 
+    fn record_notification_received(&self, m: &NotificationMessage) {
+        *lock!(self.last_notification_received) = Some(NotificationRecord {
+            timestamp: chrono::Utc::now(),
+            notification: m.clone(),
+        });
+    }
+
+    fn record_reset(&self, reason: ResetReason) {
+        *lock!(self.last_reset) = Some(FsmResetRecord {
+            timestamp: chrono::Utc::now(),
+            reason,
+        });
+    }
+
     fn send_notification(
         &self,
         conn: &Cnx,
@@ -7607,6 +7734,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             error_subcode,
             data: Vec::new(),
         };
+
+        *lock!(self.last_notification_sent) = Some(NotificationRecord {
+            timestamp: chrono::Utc::now(),
+            notification: notification.clone(),
+        });
 
         session_log!(
             self,
@@ -7962,6 +8094,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     return Ok(());
                 }
 
+                let count = nlri.len() as u64;
                 let (skeleton, stamp) =
                     match self.derive_nexthop(Afi::Ipv4, pc)? {
                         BgpNexthop::Ipv4(nh4) => {
@@ -8005,8 +8138,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     max_body,
                     |msg| self.send_shaped(msg, pc, shaper_application),
                 )?;
+                self.counters
+                    .ipv4_prefixes_advertised
+                    .fetch_add(count, Ordering::Relaxed);
             }
             RouteUpdate::V4(RouteUpdate4::Withdraw(withdrawn)) => {
+                let count = withdrawn.len() as u64;
                 UpdateMessage::default().chunk_and_send(
                     withdrawn,
                     UpdateMessage::set_withdrawn,
@@ -8014,6 +8151,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     max_body,
                     |msg| self.send_shaped(msg, pc, shaper_application),
                 )?;
+                atomic_saturating_sub(
+                    &self.counters.ipv4_prefixes_advertised,
+                    count,
+                );
             }
             RouteUpdate::V6(RouteUpdate6::Announce(nlri)) => {
                 let session = lock!(self.session);
@@ -8030,6 +8171,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     return Ok(());
                 }
 
+                let count = nlri.len() as u64;
                 let nh6 = self.derive_nexthop(Afi::Ipv6, pc)?;
                 if matches!(nh6, BgpNexthop::Ipv4(_)) {
                     return Err(Error::InvalidAddress(
@@ -8055,8 +8197,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     max_body,
                     |msg| self.send_shaped(msg, pc, shaper_application),
                 )?;
+                self.counters
+                    .ipv6_prefixes_advertised
+                    .fetch_add(count, Ordering::Relaxed);
             }
             RouteUpdate::V6(RouteUpdate6::Withdraw(withdrawn)) => {
+                let count = withdrawn.len() as u64;
                 let skeleton = UpdateMessage {
                     path_attributes: vec![
                         PathAttributeValue::MpUnreachNlri(
@@ -8073,6 +8219,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     max_body,
                     |msg| self.send_shaped(msg, pc, shaper_application),
                 )?;
+                atomic_saturating_sub(
+                    &self.counters.ipv6_prefixes_advertised,
+                    count,
+                );
             }
         }
         Ok(())
@@ -8161,6 +8311,20 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 Some(AddressFamily::Ipv6),
             );
         }
+
+        // Reset per-AFI NLRI gauge counters
+        self.counters
+            .ipv4_prefixes_advertised
+            .store(0, Ordering::Relaxed);
+        self.counters
+            .ipv4_prefixes_imported
+            .store(0, Ordering::Relaxed);
+        self.counters
+            .ipv6_prefixes_advertised
+            .store(0, Ordering::Relaxed);
+        self.counters
+            .ipv6_prefixes_imported
+            .store(0, Ordering::Relaxed);
     }
 
     /// Exit the established state into Idle.
@@ -8252,6 +8416,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
                 session_timer!(self, connect_retry).stop();
+                self.record_reset(ResetReason::AdministrativeReset);
             }
 
             StopReason::Shutdown => {
@@ -8265,6 +8430,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
                 session_timer!(self, connect_retry).stop();
+                self.record_reset(ResetReason::AdministrativeShutdown);
             }
 
             StopReason::FsmError => {
@@ -8278,6 +8444,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
                 session_timer!(self, connect_retry).stop();
+                self.record_reset(ResetReason::FsmError);
             }
 
             StopReason::HoldTimeExpired => {
@@ -8296,6 +8463,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
                 session_timer!(self, connect_retry).stop();
+                self.record_reset(ResetReason::HoldTimerExpired);
             }
 
             StopReason::ConnectionRejected => {
@@ -8305,6 +8473,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 if let Some(c2) = conn2 {
                     self.send_rejected_notification(c2);
                 }
+                self.record_reset(ResetReason::ConnectionRejected);
             }
 
             StopReason::CollisionResolution => {
@@ -8314,8 +8483,17 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 if let Some(c2) = conn2 {
                     self.send_collision_resolution_notification(c2);
                 }
+                self.record_reset(ResetReason::CollisionResolution);
             }
-            StopReason::IoError => {}
+
+            StopReason::IoError => {
+                self.record_reset(ResetReason::IoError);
+            }
+
+            StopReason::NotificationReceived(ref m) => {
+                self.record_notification_received(m);
+                self.record_reset(ResetReason::NotificationReceived);
+            }
 
             StopReason::ParseError {
                 error_code,
@@ -8331,6 +8509,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
                 session_timer!(self, connect_retry).stop();
+                self.record_reset(ResetReason::ParseError);
             }
         }
 
@@ -8742,6 +8921,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
             self.db
                 .remove_prefixes_from_bgp_peer(&withdrawn, &self.peer_id());
+            atomic_saturating_sub(
+                &self.counters.ipv4_prefixes_imported,
+                withdrawn.len() as u64,
+            );
 
             if treat_as_withdraw {
                 self.counters
@@ -8769,6 +8952,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 self.db.remove_prefixes_from_bgp_peer(
                     &nlri_as_withdrawn,
                     &self.peer_id(),
+                );
+                atomic_saturating_sub(
+                    &self.counters.ipv4_prefixes_imported,
+                    nlri_as_withdrawn.len() as u64,
                 );
             } else if let Some(nexthop) = update.nexthop4().map(IpAddr::V4) {
                 let nlri: Vec<Prefix> = update
@@ -8810,6 +8997,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     };
 
                     self.db.add_bgp_prefixes(&nlri, path.clone());
+                    self.counters
+                        .ipv4_prefixes_imported
+                        .fetch_add(nlri.len() as u64, Ordering::Relaxed);
                 }
             } else if !update.nlri.is_empty() {
                 session_log!(
@@ -8860,6 +9050,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.db.remove_prefixes_from_bgp_peer(
                             &mp_withdrawn4,
                             &self.peer_id(),
+                        );
+                        atomic_saturating_sub(
+                            &self.counters.ipv4_prefixes_imported,
+                            mp_withdrawn4.len() as u64,
                         );
                     } else {
                         let mp_nexthop = match &reach4.nexthop {
@@ -8918,6 +9112,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             };
 
                             self.db.add_bgp_prefixes(&mp_nlri4, path4);
+                            self.counters.ipv4_prefixes_imported.fetch_add(
+                                mp_nlri4.len() as u64,
+                                Ordering::Relaxed,
+                            );
                         }
                     }
                 }
@@ -8954,6 +9152,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         self.db.remove_prefixes_from_bgp_peer(
                             &withdrawn6,
                             &self.peer_id(),
+                        );
+                        atomic_saturating_sub(
+                            &self.counters.ipv6_prefixes_imported,
+                            withdrawn6.len() as u64,
                         );
                     } else {
                         let nexthop6 = match &reach6.nexthop {
@@ -9023,6 +9225,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             };
 
                             self.db.add_bgp_prefixes(&nlri6, path6);
+                            self.counters.ipv6_prefixes_imported.fetch_add(
+                                nlri6.len() as u64,
+                                Ordering::Relaxed,
+                            );
                         }
                     }
                 }
@@ -9047,6 +9253,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.db.remove_prefixes_from_bgp_peer(
                         &mp_withdrawn4,
                         &self.peer_id(),
+                    );
+                    atomic_saturating_sub(
+                        &self.counters.ipv4_prefixes_imported,
+                        mp_withdrawn4.len() as u64,
                     );
                 }
                 MpUnreachNlri::Ipv6Unicast(unreach6) => {
@@ -9081,6 +9291,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     self.db.remove_prefixes_from_bgp_peer(
                         &withdrawn6,
                         &self.peer_id(),
+                    );
+                    atomic_saturating_sub(
+                        &self.counters.ipv6_prefixes_imported,
+                        withdrawn6.len() as u64,
                     );
                 }
             }
@@ -9430,6 +9644,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let counters = self.get_counters();
         let name = lock!(self.neighbor.name).clone();
         let peer_group = self.neighbor.peer_group.clone();
+        let last_reset = lock!(self.last_reset).clone();
+        let last_notification_sent = lock!(self.last_notification_sent).clone();
+        let last_notification_received =
+            lock!(self.last_notification_received).clone();
 
         // Extract config and runtime state WITHOUT holding any locks long-term
         let (ipv4_unicast, ipv6_unicast, timer_config) = {
@@ -9520,6 +9738,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         counters,
                         ipv4_unicast,
                         ipv6_unicast,
+                        last_reset: last_reset.clone(),
+                        last_notification_sent: last_notification_sent.clone(),
+                        last_notification_received: last_notification_received
+                            .clone(),
                     }
                 }
                 ConnectionKind::Full(pc) => {
@@ -9543,6 +9765,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         counters,
                         ipv4_unicast,
                         ipv6_unicast,
+                        last_reset: last_reset.clone(),
+                        last_notification_sent: last_notification_sent.clone(),
+                        last_notification_received: last_notification_received
+                            .clone(),
                     }
                 }
             },
@@ -9578,6 +9804,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     counters,
                     ipv4_unicast,
                     ipv6_unicast,
+                    last_reset,
+                    last_notification_sent,
+                    last_notification_received,
                 }
             }
         }
