@@ -6900,7 +6900,30 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 if lock!(self.session)
                                     .deterministic_collision_resolution
                                 {
-                                    // Determine which connection wins using pure function
+                                    // Make sure the OPEN is valid before we
+                                    // consider it for collision resolution.
+                                    if let Err(e) =
+                                        self.handle_open(&incoming_conn, om)
+                                    {
+                                        session_log!(
+                                            self,
+                                            warn,
+                                            incoming_conn,
+                                            "collision in established: failed to handle open ({e})";
+                                            "error" => format!("{e}")
+                                        );
+                                        self.counters
+                                            .open_handle_failures
+                                            .fetch_add(1, Ordering::Relaxed);
+                                        self.stop(
+                                            Some(&incoming_conn),
+                                            None,
+                                            StopReason::ConnectionRejected,
+                                        );
+                                        return FsmState::Established(pc);
+                                    }
+
+                                    // Determine which connection wins
                                     let resolution = collision_resolution(
                                         pc.conn.direction(),
                                         om.id,
