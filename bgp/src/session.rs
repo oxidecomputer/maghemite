@@ -2421,6 +2421,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
     /// Initial state. Refuse all incoming BGP connections. No resources
     /// allocated to peer.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn fsm_idle(&self) -> FsmState<Cnx> {
         // Clean up connection registry
         self.cleanup_connections();
@@ -2686,6 +2687,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// is important because in "later" FSM states, a ConnectRetryTimerExpires
     /// event is considered an FSM error that triggers a Notification and an FSM
     /// transition back to idle. So we need to get it right.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn fsm_connect(&self) -> FsmState<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
@@ -2974,7 +2976,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                     ) => {
                                         conn_timer!(conn, delay_open).stop();
                                     }
-                                    _ => {}
+                                    ConnectionEvent::Message { .. }
+                                    | ConnectionEvent::ParseError { .. }
+                                    | ConnectionEvent::TcpConnectionFails(_) => {
+                                    }
                                 }
                             }
 
@@ -3027,6 +3032,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// is important because in "later" FSM states, a ConnectRetryTimerExpires
     /// event is considered an FSM error that triggers a Notification and an FSM
     /// transition back to idle. So we need to get it right.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn fsm_active(&self) -> FsmState<Cnx> {
         loop {
             // Check to see if a shutdown has been requested.
@@ -3403,6 +3409,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Waiting for open message from peer.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn fsm_open_sent(&self, conn: Arc<Cnx>) -> FsmState<Cnx> {
         let om = loop {
             // Check to see if a shutdown has been requested.
@@ -3910,31 +3917,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
          * - changes its state to Idle.
          */
         if let Err(e) = self.handle_open(&conn, &om) {
-            match e {
-                Error::PolicyCheckFailed => {
-                    session_log!(
-                        self,
-                        info,
-                        conn,
-                        "policy check failed";
-                        "error" => format!("{e}")
-                    );
-                }
-                e => {
-                    session_log!(
-                        self,
-                        warn,
-                        conn,
-                        "failed to handle open message, fsm transition to idle";
-                        "error" => format!("{e}")
-                    );
-                    self.counters
-                        .open_handle_failures
-                        .fetch_add(1, Ordering::Relaxed);
-                    // Notification sent by handle_open for all Errors except
-                    // PolicyCheckFailed, which is handled in other match arm.
-                    return FsmState::Idle;
-                }
+            if let Error::PolicyCheckFailed = e {
+                session_log!(
+                    self,
+                    info,
+                    conn,
+                    "policy check failed";
+                    "error" => format!("{e}")
+                );
+            } else {
+                session_log!(
+                    self,
+                    warn,
+                    conn,
+                    "failed to handle open message, fsm transition to idle";
+                    "error" => format!("{e}")
+                );
+                self.counters
+                    .open_handle_failures
+                    .fetch_add(1, Ordering::Relaxed);
+                // Notification sent by handle_open for all Errors except
+                // PolicyCheckFailed, which is handled above.
+                return FsmState::Idle;
             }
         }
 
@@ -3988,6 +3992,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Waiting for keepalive or notification from peer.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn fsm_open_confirm(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
         if self.shutdown.load(Ordering::Acquire) {
@@ -4470,6 +4475,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// identifying which real FsmState a connection is in currently. FSM Events
     /// are handled for a connection according to the real FsmState a connection
     /// is currently in.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn fsm_connection_collision(
         self: &Arc<Self>,
         conn_pair: CollisionPair<Cnx>,
@@ -4522,6 +4528,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     /// state. Whereas the next valid BGP Message that would progress `new`
     /// gives us the info needed to perform Collision Resolution, which we must
     /// do once we have the data available to do so.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn connection_collision_open_confirm(
         self: &Arc<Self>,
         exist: PeerConnection<Cnx>,
@@ -6180,6 +6187,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Sync up with peers.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn fsm_session_setup(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
         if self.shutdown.load(Ordering::Acquire) {
@@ -6259,7 +6267,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .into_iter()
                         .filter_map(|p| match p {
                             Prefix::V4(p4) => Some(p4),
-                            _ => None,
+                            Prefix::V6(_) => None,
                         })
                         .collect(),
                 )),
@@ -6286,7 +6294,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                         .into_iter()
                         .filter_map(|p| match p {
                             Prefix::V6(p6) => Some(p6),
-                            _ => None,
+                            Prefix::V4(_) => None,
                         })
                         .collect(),
                 )),
@@ -6327,7 +6335,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .into_iter()
                 .filter_map(|p| match p {
                     Prefix::V4(p4) => Some(p4),
-                    _ => None,
+                    Prefix::V6(_) => None,
                 })
                 .collect();
             self.send_update(
@@ -6350,7 +6358,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 .into_iter()
                 .filter_map(|p| match p {
                     Prefix::V6(p6) => Some(p6),
-                    _ => None,
+                    Prefix::V4(_) => None,
                 })
                 .collect();
             self.send_update(
@@ -6364,6 +6372,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
     }
 
     /// Able to exchange update, notification and keepliave messages with peers.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn fsm_established(&self, pc: PeerConnection<Cnx>) -> FsmState<Cnx> {
         // Check to see if a shutdown has been requested.
         if self.shutdown.load(Ordering::Acquire) {
@@ -6487,7 +6496,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 Prefix::V4(p4) => {
                                                     list.contains(p4)
                                                 }
-                                                _ => false,
+                                                Prefix::V6(_) => false,
                                             })
                                             .collect()
                                     }
@@ -6511,7 +6520,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 Prefix::V4(p4) => {
                                                     list.contains(p4)
                                                 }
-                                                _ => false,
+                                                Prefix::V6(_) => false,
                                             })
                                             .collect()
                                     }
@@ -6522,7 +6531,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 .difference(&originated_after)
                                 .filter_map(|p| match p {
                                     Prefix::V4(p4) => Some(*p4),
-                                    _ => None,
+                                    Prefix::V6(_) => None,
                                 })
                                 .collect();
 
@@ -6530,7 +6539,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 .difference(&originated_before)
                                 .filter_map(|p| match p {
                                     Prefix::V4(p4) => Some(*p4),
-                                    _ => None,
+                                    Prefix::V6(_) => None,
                                 })
                                 .collect();
 
@@ -6619,7 +6628,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 Prefix::V6(p6) => {
                                                     list.contains(p6)
                                                 }
-                                                _ => false,
+                                                Prefix::V4(_) => false,
                                             })
                                             .collect()
                                     }
@@ -6643,7 +6652,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 Prefix::V6(p6) => {
                                                     list.contains(p6)
                                                 }
-                                                _ => false,
+                                                Prefix::V4(_) => false,
                                             })
                                             .collect()
                                     }
@@ -6654,7 +6663,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 .difference(&originated_after)
                                 .filter_map(|p| match p {
                                     Prefix::V6(p6) => Some(*p6),
-                                    _ => None,
+                                    Prefix::V4(_) => None,
                                 })
                                 .collect();
 
@@ -6662,7 +6671,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                 .difference(&originated_before)
                                 .filter_map(|p| match p {
                                     Prefix::V6(p6) => Some(*p6),
-                                    _ => None,
+                                    Prefix::V4(_) => None,
                                 })
                                 .collect();
 
