@@ -25,13 +25,16 @@ use crate::{
     },
     unnumbered::UnnumberedManager,
 };
+use libc::{IPPROTO_IP, IPPROTO_IPV6, c_void};
 use mg_common::lock;
+use rdb::Dscp;
 use slog::Logger;
 use std::{
     collections::BTreeMap,
     io::Read,
     io::Write,
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    os::fd::AsRawFd,
     sync::atomic::AtomicBool,
     sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
     thread::{JoinHandle, sleep},
@@ -39,10 +42,7 @@ use std::{
 };
 
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
-use {
-    libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_int, c_void},
-    std::os::fd::AsRawFd,
-};
+use libc::{IPPROTO_TCP, c_int};
 
 #[cfg(target_os = "linux")]
 use crate::connection::MAX_MD5SIG_KEYLEN;
@@ -187,12 +187,15 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         conn: &BgpConnectionTcp,
         min_ttl: Option<u8>,
         md5_key: Option<String>,
+        dscp: Dscp,
     ) -> Result<(), Error> {
         let tcp_stream = lock!(conn.conn);
 
         if let Some(ttl) = min_ttl {
             apply_min_ttl(&tcp_stream, ttl, conn.peer)?;
         }
+
+        apply_dscp(&tcp_stream, dscp, conn.peer)?;
 
         if let Some(ref key) = md5_key {
             #[cfg(target_os = "linux")]
@@ -335,6 +338,17 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     connection_log_lite!(log,
                         warn,
                         "failed to apply min TTL for {peer}: {e}";
+                        "direction" => ConnectionDirection::Outbound,
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
+
+                if let Err(e) = apply_dscp(&new_conn, config.dscp, peer) {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to apply DSCP for {peer}: {e}";
                         "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}"),
                         "error" => format!("{e}")
@@ -1214,6 +1228,44 @@ fn create_outbound_socket(
     })
 }
 
+/// Apply DSCP marking to a BGP TCP connection.
+///
+/// Sets the DSCP field in the IP header via IP_TOS (IPv4) or
+/// IPV6_TCLASS (IPv6).
+fn apply_dscp(
+    conn: &TcpStream,
+    dscp: Dscp,
+    peer: SocketAddr,
+) -> Result<(), Error> {
+    let tos = u32::from(dscp.tos_byte());
+    let fd = conn.as_raw_fd();
+    unsafe {
+        if peer.is_ipv4()
+            && libc::setsockopt(
+                fd,
+                IPPROTO_IP,
+                libc::IP_TOS,
+                &tos as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+        if peer.is_ipv6()
+            && libc::setsockopt(
+                fd,
+                IPPROTO_IPV6,
+                libc::IPV6_TCLASS,
+                &tos as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
+    Ok(())
+}
+
 /// Apply min TTL setting to a TCP connection
 #[allow(unused_variables)]
 fn apply_min_ttl(
@@ -1505,4 +1557,61 @@ fn setup_outbound_md5(
     init_md5_associations(fd, key, local.clone(), peer)?;
 
     Ok((key.to_string(), local))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rdb::Dscp;
+    use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn apply_dscp_sets_ip_tos() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        let dscp = Dscp::new(48).unwrap();
+        apply_dscp(&stream, dscp, addr).unwrap();
+
+        let mut readback: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                IPPROTO_IP,
+                libc::IP_TOS,
+                &mut readback as *mut u32 as *mut c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
+        // DSCP 48 → TOS byte = 48 << 2 = 192
+        assert_eq!(readback, u32::from(dscp.tos_byte()));
+    }
+
+    #[test]
+    fn apply_dscp_sets_ipv6_tclass() {
+        let listener = TcpListener::bind("[::1]:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        let dscp = Dscp::new(46).unwrap(); // EF
+        apply_dscp(&stream, dscp, addr).unwrap();
+
+        let mut readback: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                IPPROTO_IPV6,
+                libc::IPV6_TCLASS,
+                &mut readback as *mut u32 as *mut c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
+        // DSCP 46 (EF) → TOS byte = 46 << 2 = 184
+        assert_eq!(readback, u32::from(dscp.tos_byte()));
+    }
 }

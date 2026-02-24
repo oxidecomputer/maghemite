@@ -9,7 +9,7 @@
 //! tests, which are in bgp/src/proptest.rs since they test BgpWireFormat).
 
 use crate::{
-    BgpNeighborParameters,
+    BgpNeighborParameters, Dscp,
     types::{
         BgpNeighborInfo, ImportExportPolicy4, ImportExportPolicy6, Prefix,
         Prefix4, Prefix6, StaticRouteKey,
@@ -200,6 +200,7 @@ fn bgp_neighbor_info_strategy() -> impl Strategy<Value = BgpNeighborInfo> {
                         nexthop4,
                         nexthop6,
                         vlan_id: Some(1),
+                        dscp: Dscp::default(),
                     },
                 }
             },

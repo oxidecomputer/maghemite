@@ -35,7 +35,7 @@ use crate::{
 };
 use mg_common::{lock, read_lock, write_lock};
 use rdb::{
-    AddressFamily, Asn, BgpPathProperties, Db, ImportExportPolicy,
+    AddressFamily, Asn, BgpPathProperties, Db, Dscp, ImportExportPolicy,
     ImportExportPolicy4, ImportExportPolicy6, Prefix, Prefix4, Prefix6,
 };
 pub use rdb::{DEFAULT_RIB_PRIORITY_BGP, DEFAULT_ROUTE_PRIORITY, PeerId};
@@ -911,6 +911,10 @@ pub struct SessionInfo {
     /// resolution even when one connection is already in Established state.
     /// When false, Established connection always wins (timing-based resolution).
     pub deterministic_collision_resolution: bool,
+    /// DSCP value for BGP TCP connections (0-63).
+    /// RFC 4271 Appendix E recommends CS6 (48) for BGP traffic.
+    /// Default: CS6 (48).
+    pub dscp: Dscp,
 }
 
 impl SessionInfo {
@@ -947,6 +951,7 @@ impl SessionInfo {
             }),
             connect_retry_jitter: None,
             deterministic_collision_resolution: false,
+            dscp: Dscp::default(),
         }
     }
 }
@@ -977,6 +982,7 @@ impl From<&BgpPeerParameters> for SessionInfo {
                 .deterministic_collision_resolution,
             ipv4_unicast: value.ipv4_unicast.clone(),
             ipv6_unicast: value.ipv6_unicast.clone(),
+            dscp: value.dscp,
         }
     }
 }
@@ -1013,6 +1019,7 @@ impl From<&BgpPeerParametersV1> for SessionInfo {
                 export_policy: value.allow_export.as_ipv4_policy().clone(),
             }),
             ipv6_unicast: None,
+            dscp: Dscp::default(),
         }
     }
 }
@@ -9511,6 +9518,11 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if current.vlan_id != info.vlan_id {
             current.vlan_id = info.vlan_id;
+            reset_needed = true;
+        }
+
+        if current.dscp != info.dscp {
+            current.dscp = info.dscp;
             reset_needed = true;
         }
 

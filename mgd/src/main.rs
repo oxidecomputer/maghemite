@@ -361,6 +361,7 @@ fn start_bgp_routers(
                         None
                     },
                     vlan_id: nbr.parameters.vlan_id,
+                    dscp: nbr.parameters.dscp,
                 },
             },
             true,
@@ -416,6 +417,7 @@ fn start_bgp_routers(
                         None
                     },
                     vlan_id: nbr.parameters.vlan_id,
+                    dscp: nbr.parameters.dscp,
                 },
             },
             true,

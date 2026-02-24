@@ -279,6 +279,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         _conn: &BgpConnectionChannel,
         _min_ttl: Option<u8>,
         _md5_key: Option<String>,
+        _dscp: rdb::Dscp,
     ) -> Result<(), Error> {
         // Policy application is ignored for test connections
         Ok(())

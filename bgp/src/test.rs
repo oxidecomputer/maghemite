@@ -22,7 +22,7 @@ use mg_common::log::init_file_logger;
 use mg_common::test::{IpAllocation, LoopbackIpManager};
 use mg_common::*;
 use rdb::{
-    AddressFamily, Asn, ImportExportPolicy4, ImportExportPolicy6, Prefix,
+    AddressFamily, Asn, Dscp, ImportExportPolicy4, ImportExportPolicy6, Prefix,
     Prefix4, Prefix6,
 };
 use std::{
@@ -306,6 +306,7 @@ fn create_test_session_info(
             max: 1.0,
         }),
         deterministic_collision_resolution: false,
+        dscp: Dscp::default(),
     }
 }
 
@@ -2961,6 +2962,7 @@ fn create_unnumbered_session_info(
         connect_retry_jitter: None,
         idle_hold_jitter: None,
         deterministic_collision_resolution: false,
+        dscp: Dscp::default(),
     }
 }
 

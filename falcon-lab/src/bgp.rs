@@ -4,6 +4,7 @@ use mg_admin_client::types::{
     ImportExportPolicy4, ImportExportPolicy6, Ipv4UnicastConfig,
     Ipv6UnicastConfig, UnnumberedNeighbor,
 };
+use rdb_types::Dscp;
 
 pub fn basic_unnumbered_neighbor(
     name: &str,
@@ -46,5 +47,6 @@ pub fn basic_unnumbered_neighbor(
         connect_retry_jitter: None,
         deterministic_collision_resolution: false,
         idle_hold_jitter: None,
+        dscp: Dscp::default(),
     }
 }

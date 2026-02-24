@@ -170,13 +170,15 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                 match lock!(self.peer_to_session).get(&key).cloned() {
                     Some(session_endpoint) => {
                         // Apply connection policy from the session configuration
-                        let min_ttl = lock!(session_endpoint.config).min_ttl;
-                        let md5_key =
-                            lock!(session_endpoint.config).md5_auth_key.clone();
+                        let config = lock!(session_endpoint.config);
+                        let min_ttl = config.min_ttl;
+                        let md5_key = config.md5_auth_key.clone();
+                        let dscp = config.dscp;
+                        drop(config);
 
-                        if let Err(e) =
-                            Listener::apply_policy(&accepted, min_ttl, md5_key)
-                        {
+                        if let Err(e) = Listener::apply_policy(
+                            &accepted, min_ttl, md5_key, dscp,
+                        ) {
                             dispatcher_log!(self,
                                 warn,
                                 "failed to apply policy for connection from {}: {e}", peer_addr;

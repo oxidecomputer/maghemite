@@ -44,7 +44,7 @@ use mg_api::{
 };
 use mg_common::lock;
 use rdb::{
-    AddressFamily, Asn, BgpRouterInfo, ImportExportPolicy4,
+    AddressFamily, Asn, BgpRouterInfo, Dscp, ImportExportPolicy4,
     ImportExportPolicy6, ImportExportPolicyV1, Prefix, Prefix4, Prefix6,
 };
 use slog::Logger;
@@ -192,7 +192,7 @@ pub async fn delete_router(
 pub async fn read_neighbors_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+) -> Result<HttpResponseOk<Vec<NeighborV2>>, HttpError> {
     let rq = request.into_inner();
     let ctx = ctx.context();
 
@@ -204,7 +204,7 @@ pub async fn read_neighbors_v2(
     let result = nbrs
         .into_iter()
         .filter(|x| x.asn == rq.asn)
-        .map(|x| Neighbor::from_rdb_neighbor_info(rq.asn, &x))
+        .map(|x| NeighborV2::from(Neighbor::from_rdb_neighbor_info(rq.asn, &x)))
         .collect();
 
     Ok(HttpResponseOk(result))
@@ -303,9 +303,9 @@ pub async fn clear_neighbor_v2(
 
 pub async fn create_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<Neighbor>,
+    request: TypedBody<NeighborV2>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq = request.into_inner();
+    let rq: Neighbor = request.into_inner().into();
     let ctx = ctx.context();
     helpers::add_neighbor(ctx.clone(), rq, false)?;
     Ok(HttpResponseUpdatedNoContent())
@@ -314,7 +314,7 @@ pub async fn create_neighbor_v2(
 pub async fn read_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: Query<NeighborSelectorV1>,
-) -> Result<HttpResponseOk<Neighbor>, HttpError> {
+) -> Result<HttpResponseOk<NeighborV2>, HttpError> {
     let rq = request.into_inner();
     let db_neighbors = ctx.context().db.get_bgp_neighbors().map_err(|e| {
         HttpError::for_internal_error(format!("get neighbors kv tree: {e}"))
@@ -327,15 +327,18 @@ pub async fn read_neighbor_v2(
             format!("neighbor {} not found in db", rq.addr),
         ))?;
 
-    let result = Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
+    let result = NeighborV2::from(Neighbor::from_rdb_neighbor_info(
+        rq.asn,
+        neighbor_info,
+    ));
     Ok(HttpResponseOk(result))
 }
 
 pub async fn update_neighbor_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<Neighbor>,
+    request: TypedBody<NeighborV2>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq = request.into_inner();
+    let rq: Neighbor = request.into_inner().into();
     let ctx = ctx.context();
     helpers::add_neighbor(ctx.clone(), rq, true)?;
     Ok(HttpResponseUpdatedNoContent())
@@ -350,25 +353,105 @@ pub async fn delete_neighbor_v2(
     Ok(helpers::remove_neighbor(ctx.clone(), rq.asn, rq.addr).await?)
 }
 
-// V3 API - Unified neighbor operations supporting both numbered and unnumbered
+// V3 API - Unified neighbor operations (no DSCP)
 pub async fn create_neighbor_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<Neighbor>,
+    request: TypedBody<NeighborV2>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    // Delegate to v2 - create operation doesn't depend on selector type
-    create_neighbor_v2(ctx, request).await
+    let rq: Neighbor = request.into_inner().into();
+    let ctx = ctx.context();
+    helpers::add_neighbor(ctx.clone(), rq, false)?;
+    Ok(HttpResponseUpdatedNoContent())
 }
 
 pub async fn read_neighbor_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
     path: Path<NeighborSelector>,
+) -> Result<HttpResponseOk<NeighborV2>, HttpError> {
+    Ok(HttpResponseOk(do_read_neighbor(ctx, path)?.into()))
+}
+
+pub async fn read_neighbors_v3(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    path: Path<AsnSelector>,
+) -> Result<HttpResponseOk<Vec<NeighborV2>>, HttpError> {
+    Ok(HttpResponseOk(
+        do_read_neighbors(ctx, path)?
+            .into_iter()
+            .map(NeighborV2::from)
+            .collect(),
+    ))
+}
+
+pub async fn update_neighbor_v3(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<NeighborV2>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq: Neighbor = request.into_inner().into();
+    let ctx = ctx.context();
+    helpers::add_neighbor(ctx.clone(), rq, true)?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn delete_neighbor_v3(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    path: Path<NeighborSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    do_delete_neighbor(ctx, path).await
+}
+
+// V4 API - Unified neighbor operations (with DSCP)
+pub async fn create_neighbor_v4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<Neighbor>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    helpers::add_neighbor(ctx.clone(), rq, false)?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn read_neighbor_v4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    path: Path<NeighborSelector>,
 ) -> Result<HttpResponseOk<Neighbor>, HttpError> {
+    Ok(HttpResponseOk(do_read_neighbor(ctx, path)?))
+}
+
+pub async fn read_neighbors_v4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    path: Path<AsnSelector>,
+) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+    Ok(HttpResponseOk(do_read_neighbors(ctx, path)?))
+}
+
+pub async fn update_neighbor_v4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<Neighbor>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = ctx.context();
+    helpers::add_neighbor(ctx.clone(), rq, true)?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn delete_neighbor_v4(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    path: Path<NeighborSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    do_delete_neighbor(ctx, path).await
+}
+
+/// Shared implementation for read_neighbor_v3 and read_neighbor_v4
+fn do_read_neighbor(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    path: Path<NeighborSelector>,
+) -> Result<Neighbor, HttpError> {
     let rq = path.into_inner();
     let peer_id = rq.to_peer_id();
 
     match peer_id {
         PeerId::Ip(addr) => {
-            // Numbered peer - query numbered neighbors DB
             let db_neighbors =
                 ctx.context().db.get_bgp_neighbors().map_err(|e| {
                     HttpError::for_internal_error(format!(
@@ -382,12 +465,9 @@ pub async fn read_neighbor_v3(
                     None,
                     format!("neighbor {} not found in db", addr),
                 ))?;
-            let result =
-                Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
-            Ok(HttpResponseOk(result))
+            Ok(Neighbor::from_rdb_neighbor_info(rq.asn, neighbor_info))
         }
         PeerId::Interface(ref iface) => {
-            // Unnumbered peer - query unnumbered neighbors DB
             let db_neighbors =
                 ctx.context().db.get_unnumbered_bgp_neighbors().map_err(
                     |e| {
@@ -407,8 +487,7 @@ pub async fn read_neighbor_v3(
                 rq.asn,
                 neighbor_info,
             );
-            // Convert UnnumberedNeighbor to Neighbor
-            Ok(HttpResponseOk(Neighbor {
+            Ok(Neighbor {
                 asn: result.asn,
                 name: result.name,
                 group: result.group,
@@ -417,15 +496,16 @@ pub async fn read_neighbor_v3(
                     179,
                 ),
                 parameters: result.parameters,
-            }))
+            })
         }
     }
 }
 
-pub async fn read_neighbors_v3(
+/// Shared implementation for read_neighbors_v3 and read_neighbors_v4
+fn do_read_neighbors(
     ctx: RequestContext<Arc<HandlerContext>>,
     path: Path<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError> {
+) -> Result<Vec<Neighbor>, HttpError> {
     let rq = path.into_inner();
     let ctx = ctx.context();
 
@@ -434,24 +514,15 @@ pub async fn read_neighbors_v3(
         .get_bgp_neighbors()
         .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
-    let result = nbrs
+    Ok(nbrs
         .into_iter()
         .filter(|x| x.asn == rq.asn)
         .map(|x| Neighbor::from_rdb_neighbor_info(rq.asn, &x))
-        .collect();
-
-    Ok(HttpResponseOk(result))
+        .collect())
 }
 
-pub async fn update_neighbor_v3(
-    ctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<Neighbor>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    // Delegate to v2 - update operation doesn't depend on selector type
-    update_neighbor_v2(ctx, request).await
-}
-
-pub async fn delete_neighbor_v3(
+/// Shared implementation for delete_neighbor_v3 and delete_neighbor_v4
+async fn do_delete_neighbor(
     ctx: RequestContext<Arc<HandlerContext>>,
     path: Path<NeighborSelector>,
 ) -> Result<HttpResponseDeleted, HttpError> {
@@ -472,28 +543,68 @@ pub async fn delete_neighbor_v3(
 
 // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+// Unnumbered neighbors (no DSCP) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 pub async fn read_unnumbered_neighbors(
     rqctx: RequestContext<Arc<HandlerContext>>,
     request: Query<AsnSelector>,
-) -> Result<HttpResponseOk<Vec<UnnumberedNeighbor>>, HttpError> {
-    let rq = request.into_inner();
-    let ctx = rqctx.context();
-
-    let nbrs = ctx
-        .db
-        .get_unnumbered_bgp_neighbors()
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
-
-    let result = nbrs
-        .into_iter()
-        .filter(|x| x.asn == rq.asn)
-        .map(|x| UnnumberedNeighbor::from_rdb_neighbor_info(rq.asn, &x))
-        .collect();
-
-    Ok(HttpResponseOk(result))
+) -> Result<HttpResponseOk<Vec<UnnumberedNeighborV1>>, HttpError> {
+    Ok(HttpResponseOk(
+        do_read_unnumbered_neighbors(rqctx, request)?
+            .into_iter()
+            .map(UnnumberedNeighborV1::from)
+            .collect(),
+    ))
 }
 
 pub async fn create_unnumbered_neighbor(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<UnnumberedNeighborV1>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq: UnnumberedNeighbor = request.into_inner().into();
+    let ctx = rqctx.context();
+    helpers::add_unnumbered_neighbor(ctx.clone(), rq, false)?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn read_unnumbered_neighbor(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<UnnumberedNeighborSelector>,
+) -> Result<HttpResponseOk<UnnumberedNeighborV1>, HttpError> {
+    Ok(HttpResponseOk(
+        do_read_unnumbered_neighbor(rqctx, request)?.into(),
+    ))
+}
+
+pub async fn update_unnumbered_neighbor(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<UnnumberedNeighborV1>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq: UnnumberedNeighbor = request.into_inner().into();
+    let ctx = rqctx.context();
+    helpers::add_unnumbered_neighbor(ctx.clone(), rq, true)?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn delete_unnumbered_neighbor(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<UnnumberedNeighborSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    do_delete_unnumbered_neighbor(rqctx, request).await
+}
+
+// Unnumbered neighbors (with DSCP) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+pub async fn read_unnumbered_neighbors_v2(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<HttpResponseOk<Vec<UnnumberedNeighbor>>, HttpError> {
+    Ok(HttpResponseOk(do_read_unnumbered_neighbors(
+        rqctx, request,
+    )?))
+}
+
+pub async fn create_unnumbered_neighbor_v2(
     rqctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<UnnumberedNeighbor>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -503,10 +614,55 @@ pub async fn create_unnumbered_neighbor(
     Ok(HttpResponseUpdatedNoContent())
 }
 
-pub async fn read_unnumbered_neighbor(
+pub async fn read_unnumbered_neighbor_v2(
     rqctx: RequestContext<Arc<HandlerContext>>,
     request: Query<UnnumberedNeighborSelector>,
 ) -> Result<HttpResponseOk<UnnumberedNeighbor>, HttpError> {
+    Ok(HttpResponseOk(do_read_unnumbered_neighbor(rqctx, request)?))
+}
+
+pub async fn update_unnumbered_neighbor_v2(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<UnnumberedNeighbor>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    let rq = request.into_inner();
+    let ctx = rqctx.context();
+    helpers::add_unnumbered_neighbor(ctx.clone(), rq, true)?;
+    Ok(HttpResponseUpdatedNoContent())
+}
+
+pub async fn delete_unnumbered_neighbor_v2(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<UnnumberedNeighborSelector>,
+) -> Result<HttpResponseDeleted, HttpError> {
+    do_delete_unnumbered_neighbor(rqctx, request).await
+}
+
+/// Shared implementation for read_unnumbered_neighbors{,_v2}
+fn do_read_unnumbered_neighbors(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<AsnSelector>,
+) -> Result<Vec<UnnumberedNeighbor>, HttpError> {
+    let rq = request.into_inner();
+    let ctx = rqctx.context();
+
+    let nbrs = ctx
+        .db
+        .get_unnumbered_bgp_neighbors()
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+
+    Ok(nbrs
+        .into_iter()
+        .filter(|x| x.asn == rq.asn)
+        .map(|x| UnnumberedNeighbor::from_rdb_neighbor_info(rq.asn, &x))
+        .collect())
+}
+
+/// Shared implementation for read_unnumbered_neighbor{,_v2}
+fn do_read_unnumbered_neighbor(
+    rqctx: RequestContext<Arc<HandlerContext>>,
+    request: Query<UnnumberedNeighborSelector>,
+) -> Result<UnnumberedNeighbor, HttpError> {
     let rq = request.into_inner();
     let db_neighbors = rqctx
         .context()
@@ -523,22 +679,14 @@ pub async fn read_unnumbered_neighbor(
             format!("neighbor {} not found in db", rq.interface),
         ))?;
 
-    let result =
-        UnnumberedNeighbor::from_rdb_neighbor_info(rq.asn, neighbor_info);
-    Ok(HttpResponseOk(result))
+    Ok(UnnumberedNeighbor::from_rdb_neighbor_info(
+        rq.asn,
+        neighbor_info,
+    ))
 }
 
-pub async fn update_unnumbered_neighbor(
-    rqctx: RequestContext<Arc<HandlerContext>>,
-    request: TypedBody<UnnumberedNeighbor>,
-) -> Result<HttpResponseUpdatedNoContent, HttpError> {
-    let rq = request.into_inner();
-    let ctx = rqctx.context();
-    helpers::add_unnumbered_neighbor(ctx.clone(), rq, true)?;
-    Ok(HttpResponseUpdatedNoContent())
-}
-
-pub async fn delete_unnumbered_neighbor(
+/// Shared implementation for delete_unnumbered_neighbor{,_v2}
+async fn do_delete_unnumbered_neighbor(
     rqctx: RequestContext<Arc<HandlerContext>>,
     request: Query<UnnumberedNeighborSelector>,
 ) -> Result<HttpResponseDeleted, HttpError> {
@@ -1337,6 +1485,13 @@ pub async fn bgp_apply(
 }
 
 pub async fn bgp_apply_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    request: TypedBody<ApplyRequestV2>,
+) -> Result<HttpResponseUpdatedNoContent, HttpError> {
+    do_bgp_apply(ctx.context(), ApplyRequest::from(request.into_inner())).await
+}
+
+pub async fn bgp_apply_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<ApplyRequest>,
 ) -> Result<HttpResponseUpdatedNoContent, HttpError> {
@@ -2141,6 +2296,7 @@ pub(crate) mod helpers {
                 allow_export6: ImportExportPolicy6::NoFiltering,
                 nexthop4: None,
                 nexthop6: None,
+                dscp: Dscp::default(),
             },
         })?;
 
@@ -2251,6 +2407,7 @@ pub(crate) mod helpers {
                 nexthop4,
                 nexthop6,
                 vlan_id: rq.parameters.vlan_id,
+                dscp: rq.parameters.dscp,
             },
         })?;
 
@@ -2374,6 +2531,7 @@ pub(crate) mod helpers {
                     nexthop4,
                     nexthop6,
                     vlan_id: rq.parameters.vlan_id,
+                    dscp: rq.parameters.dscp,
                 },
             })?;
 

@@ -604,3 +604,106 @@ impl PeerId {
         matches!(self, Self::Ip(_))
     }
 }
+
+/// DSCP value for BGP TCP connections (0-63).
+///
+/// RFC 4271 Appendix E recommends CS6 (48) for BGP traffic.
+/// Default: CS6 (48).
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
+pub struct Dscp(u8);
+
+impl Dscp {
+    /// CS6 (48) — the RFC 4271 Appendix E recommended default.
+    pub const CS6: Self = Self(48);
+
+    /// Create a new DSCP value from a raw 6-bit value (0-63).
+    pub fn new(val: u8) -> Result<Self, String> {
+        if val > 63 {
+            Err(format!("DSCP value {val} out of range (0-63)"))
+        } else {
+            Ok(Self(val))
+        }
+    }
+
+    /// Create a DSCP value from a TOS/Traffic-Class byte as
+    /// returned by `getsockopt(IP_TOS)` or `getsockopt(IPV6_TCLASS)`.
+    /// Extracts the upper 6 bits (DSCP), ignoring the lower 2 ECN
+    /// bits.
+    pub fn from_tos_byte(tos: u8) -> Self {
+        Self(tos >> 2)
+    }
+
+    /// Return the raw numeric value (0-63).
+    pub fn value(self) -> u8 {
+        self.0
+    }
+
+    /// Return the TOS/Traffic-Class byte for use with `IP_TOS` or
+    /// `IPV6_TCLASS`. The DSCP value occupies the upper 6 bits of
+    /// the byte (value << 2), with the lower 2 ECN bits left zero.
+    pub fn tos_byte(self) -> u8 {
+        self.0 << 2
+    }
+}
+
+impl Default for Dscp {
+    fn default() -> Self {
+        Self::CS6
+    }
+}
+
+impl TryFrom<u8> for Dscp {
+    type Error = String;
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        Self::new(val)
+    }
+}
+
+impl From<Dscp> for u8 {
+    fn from(d: Dscp) -> u8 {
+        d.0
+    }
+}
+
+impl fmt::Display for Dscp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for Dscp {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let val: u8 =
+            s.parse().map_err(|_| format!("invalid DSCP value: {s}"))?;
+        Self::new(val)
+    }
+}
+
+impl JsonSchema for Dscp {
+    fn schema_name() -> String {
+        "Dscp".to_string()
+    }
+    fn json_schema(
+        _g: &mut schemars::r#gen::SchemaGenerator,
+    ) -> schemars::schema::Schema {
+        schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::InstanceType::Integer.into()),
+            format: Some("uint8".to_string()),
+            number: Some(Box::new(schemars::schema::NumberValidation {
+                minimum: Some(0.0),
+                maximum: Some(63.0),
+                ..Default::default()
+            })),
+            metadata: Some(Box::new(schemars::schema::Metadata {
+                description: Some(
+                    "DSCP value (0-63). Default: CS6 (48).".to_string(),
+                ),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into()
+    }
+}

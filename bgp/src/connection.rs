@@ -9,6 +9,7 @@ use crate::{
     session::{FsmEvent, PeerId, SessionEndpoint, SessionInfo},
     unnumbered::UnnumberedManager,
 };
+use rdb::Dscp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
@@ -147,6 +148,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
         conn: &Cnx,
         min_ttl: Option<u8>,
         md5_key: Option<String>,
+        dscp: Dscp,
     ) -> Result<(), Error>;
 }
 

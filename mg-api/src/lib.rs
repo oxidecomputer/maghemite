@@ -13,9 +13,10 @@ pub use bgp::session::MessageDirection;
 use bgp::{
     messages::Afi,
     params::{
-        ApplyRequest, ApplyRequestV1, CheckerSource, Neighbor, NeighborResetOp,
-        NeighborResetOpV1, NeighborV1, Origin4, Origin6, PeerInfo, PeerInfoV1,
-        PeerInfoV2, PeerInfoV3, Router, ShaperSource, UnnumberedNeighbor,
+        ApplyRequest, ApplyRequestV1, ApplyRequestV2, CheckerSource, Neighbor,
+        NeighborResetOp, NeighborResetOpV1, NeighborV1, NeighborV2, Origin4,
+        Origin6, PeerInfo, PeerInfoV1, PeerInfoV2, PeerInfoV3, Router,
+        ShaperSource, UnnumberedNeighbor, UnnumberedNeighborV1,
     },
     session::{
         FsmEventRecord, MessageHistoryEntry, MessageHistoryEntryV2,
@@ -158,29 +159,29 @@ pub trait MgAdminApi {
         request: Query<NeighborSelectorV1>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    // V3 API - new Neighbor type with explicit per-AF configuration (numbered peers only)
+    // V3 API - per-AF configuration, no DSCP (numbered peers only)
     #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn create_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Neighbor>,
+        request: TypedBody<NeighborV2>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn read_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<NeighborSelectorV1>,
-    ) -> Result<HttpResponseOk<Neighbor>, HttpError>;
+    ) -> Result<HttpResponseOk<NeighborV2>, HttpError>;
 
     #[endpoint { method = GET, path = "/bgp/config/neighbors", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn read_neighbors_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
-    ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError>;
+    ) -> Result<HttpResponseOk<Vec<NeighborV2>>, HttpError>;
 
     #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
     async fn update_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
-        request: TypedBody<Neighbor>,
+        request: TypedBody<NeighborV2>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     #[endpoint { method = DELETE, path = "/bgp/config/neighbor", versions = VERSION_MP_BGP..VERSION_UNNUMBERED }]
@@ -189,34 +190,65 @@ pub trait MgAdminApi {
         request: Query<NeighborSelectorV1>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    // Unified API (VERSION_UNNUMBERED..) - supports both numbered and unnumbered neighbors
-    // Uses PeerId in path parameters with FromStr for type-safe parsing
-    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED.. }]
+    // Unified API (VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC)
+    // Per-AF config, no DSCP. PeerId in path parameters.
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
     async fn create_neighbor_v3(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborV2>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    async fn read_neighbor_v3(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<NeighborSelector>,
+    ) -> Result<HttpResponseOk<NeighborV2>, HttpError>;
+
+    #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    async fn read_neighbors_v3(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<NeighborV2>>, HttpError>;
+
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    async fn update_neighbor_v3(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<NeighborV2>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    async fn delete_neighbor_v3(
+        rqctx: RequestContext<Self::Context>,
+        path: Path<NeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    // Unified API (VERSION_EXTENDED_NH_STATIC..) - with DSCP support
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn create_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED.. }]
-    async fn read_neighbor_v3(
+    #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn read_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         path: Path<NeighborSelector>,
     ) -> Result<HttpResponseOk<Neighbor>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_UNNUMBERED.. }]
-    async fn read_neighbors_v3(
+    #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn read_neighbors_v4(
         rqctx: RequestContext<Self::Context>,
         path: Path<AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError>;
 
-    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED.. }]
-    async fn update_neighbor_v3(
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn update_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED.. }]
-    async fn delete_neighbor_v3(
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn delete_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         path: Path<NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
@@ -237,12 +269,65 @@ pub trait MgAdminApi {
 
     // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+    // Unnumbered neighbors (VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC)
+    // No DSCP support.
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbors",
-        versions = VERSION_UNNUMBERED..,
+        versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC,
     }]
     async fn read_unnumbered_neighbors(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<AsnSelector>,
+    ) -> Result<HttpResponseOk<Vec<UnnumberedNeighborV1>>, HttpError>;
+
+    #[endpoint {
+        method = PUT,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC,
+    }]
+    async fn create_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighborV1>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC,
+    }]
+    async fn read_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseOk<UnnumberedNeighborV1>, HttpError>;
+
+    #[endpoint {
+        method = POST,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC,
+    }]
+    async fn update_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<UnnumberedNeighborV1>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    #[endpoint {
+        method = DELETE,
+        path = "/bgp/config/unnumbered-neighbor",
+        versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC,
+    }]
+    async fn delete_unnumbered_neighbor(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<UnnumberedNeighborSelector>,
+    ) -> Result<HttpResponseDeleted, HttpError>;
+
+    // Unnumbered neighbors (VERSION_EXTENDED_NH_STATIC..) - with DSCP
+    #[endpoint {
+        method = GET,
+        path = "/bgp/config/unnumbered-neighbors",
+        versions = VERSION_EXTENDED_NH_STATIC..,
+    }]
+    async fn read_unnumbered_neighbors_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<UnnumberedNeighbor>>, HttpError>;
@@ -250,9 +335,9 @@ pub trait MgAdminApi {
     #[endpoint {
         method = PUT,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_UNNUMBERED..,
+        versions = VERSION_EXTENDED_NH_STATIC..,
     }]
-    async fn create_unnumbered_neighbor(
+    async fn create_unnumbered_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
@@ -260,9 +345,9 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_UNNUMBERED..,
+        versions = VERSION_EXTENDED_NH_STATIC..,
     }]
-    async fn read_unnumbered_neighbor(
+    async fn read_unnumbered_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseOk<UnnumberedNeighbor>, HttpError>;
@@ -270,9 +355,9 @@ pub trait MgAdminApi {
     #[endpoint {
         method = POST,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_UNNUMBERED..,
+        versions = VERSION_EXTENDED_NH_STATIC..,
     }]
-    async fn update_unnumbered_neighbor(
+    async fn update_unnumbered_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<UnnumberedNeighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
@@ -280,9 +365,9 @@ pub trait MgAdminApi {
     #[endpoint {
         method = DELETE,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_UNNUMBERED..,
+        versions = VERSION_EXTENDED_NH_STATIC..,
     }]
-    async fn delete_unnumbered_neighbor(
+    async fn delete_unnumbered_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
@@ -448,9 +533,16 @@ pub trait MgAdminApi {
         request: TypedBody<ApplyRequestV1>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    // V3 API - ApplyRequest with per-AF policies
-    #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = VERSION_MP_BGP.. }]
+    // V3 API - ApplyRequest with per-AF policies (no DSCP)
+    #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = VERSION_MP_BGP..VERSION_EXTENDED_NH_STATIC }]
     async fn bgp_apply_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: TypedBody<ApplyRequestV2>,
+    ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
+
+    // V4 API - ApplyRequest with DSCP support
+    #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn bgp_apply_v3(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<ApplyRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;

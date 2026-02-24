@@ -17,7 +17,7 @@ use std::str::FromStr;
 
 // Re-export core types from rdb-types
 pub use rdb_types::{
-    AddressFamily, PeerId, Prefix, Prefix4, Prefix6, ProtocolFilter,
+    AddressFamily, Dscp, PeerId, Prefix, Prefix4, Prefix6, ProtocolFilter,
 };
 
 // Marker types for compile-time address family discrimination.
@@ -692,6 +692,10 @@ pub struct BgpNeighborParameters {
     #[serde(default)]
     pub nexthop6: Option<IpAddr>,
     pub vlan_id: Option<u16>,
+    /// DSCP value for BGP TCP connections (0-63).
+    /// Default: CS6 (48).
+    #[serde(default)]
+    pub dscp: Dscp,
 }
 
 /// Default value for ipv4_enabled - true for backward compatibility

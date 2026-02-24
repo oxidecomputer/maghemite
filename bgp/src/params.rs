@@ -8,7 +8,7 @@ use crate::{
     session::{FsmStateKind, SessionCounters, SessionInfo},
 };
 use rdb::{
-    ImportExportPolicy4, ImportExportPolicy6, ImportExportPolicyV1,
+    Dscp, ImportExportPolicy4, ImportExportPolicy6, ImportExportPolicyV1,
     PolicyAction, Prefix, Prefix4, Prefix6,
 };
 use schemars::JsonSchema;
@@ -398,6 +398,7 @@ impl UnnumberedNeighbor {
                     min: 0.75,
                     max: 1.0,
                 }),
+                dscp: rq.parameters.dscp,
             },
         }
     }
@@ -464,6 +465,7 @@ impl Neighbor {
                 }),
                 idle_hold_jitter: None,
                 deterministic_collision_resolution: false,
+                dscp: rq.parameters.dscp,
             },
         }
     }
@@ -1275,6 +1277,11 @@ pub struct BgpPeerParameters {
     /// is multiplied by a random value within the (min, max) range supplied.
     /// Useful to help break repeated synchronization of connection collisions.
     pub connect_retry_jitter: Option<JitterRange>,
+    /// DSCP value for BGP TCP connections (0-63).
+    /// RFC 4271 Appendix E recommends CS6 (48) for BGP traffic.
+    /// Default: CS6 (48).
+    #[serde(default)]
+    pub dscp: Dscp,
 }
 
 impl BgpPeerParameters {
@@ -1344,6 +1351,7 @@ impl From<BgpPeerConfigV1> for BgpPeerConfig {
                 }),
                 idle_hold_jitter: None,
                 deterministic_collision_resolution: false,
+                dscp: Dscp::default(),
             },
         }
     }
@@ -1357,6 +1365,308 @@ pub enum PolicySource {
 pub enum PolicyKind {
     Checker,
     Shaper,
+}
+
+// ============================================================================
+// API Compatibility Types (VERSION_MP_BGP..VERSION_EXTENDED_NH_STATIC)
+// ============================================================================
+// These types represent the v3-v6 API format (per-AF config, no DSCP).
+// Used for API versions between VERSION_MP_BGP and
+// VERSION_EXTENDED_NH_STATIC.
+// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported version.
+
+/// BGP peer parameters for v3-v6 API (per-AF config, no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "BgpPeerParameters")]
+pub struct BgpPeerParametersV2 {
+    pub hold_time: u64,
+    pub idle_hold_time: u64,
+    pub delay_open: u64,
+    pub connect_retry: u64,
+    pub keepalive: u64,
+    pub resolution: u64,
+    pub passive: bool,
+    pub remote_asn: Option<u32>,
+    pub min_ttl: Option<u8>,
+    pub md5_auth_key: Option<String>,
+    pub multi_exit_discriminator: Option<u32>,
+    pub communities: Vec<u32>,
+    pub local_pref: Option<u32>,
+    pub enforce_first_as: bool,
+    pub vlan_id: Option<u16>,
+    pub ipv4_unicast: Option<Ipv4UnicastConfig>,
+    pub ipv6_unicast: Option<Ipv6UnicastConfig>,
+    pub deterministic_collision_resolution: bool,
+    pub idle_hold_jitter: Option<JitterRange>,
+    pub connect_retry_jitter: Option<JitterRange>,
+}
+
+impl From<BgpPeerParameters> for BgpPeerParametersV2 {
+    fn from(p: BgpPeerParameters) -> Self {
+        Self {
+            hold_time: p.hold_time,
+            idle_hold_time: p.idle_hold_time,
+            delay_open: p.delay_open,
+            connect_retry: p.connect_retry,
+            keepalive: p.keepalive,
+            resolution: p.resolution,
+            passive: p.passive,
+            remote_asn: p.remote_asn,
+            min_ttl: p.min_ttl,
+            md5_auth_key: p.md5_auth_key,
+            multi_exit_discriminator: p.multi_exit_discriminator,
+            communities: p.communities,
+            local_pref: p.local_pref,
+            enforce_first_as: p.enforce_first_as,
+            vlan_id: p.vlan_id,
+            ipv4_unicast: p.ipv4_unicast,
+            ipv6_unicast: p.ipv6_unicast,
+            deterministic_collision_resolution: p
+                .deterministic_collision_resolution,
+            idle_hold_jitter: p.idle_hold_jitter,
+            connect_retry_jitter: p.connect_retry_jitter,
+        }
+    }
+}
+
+impl From<BgpPeerParametersV2> for BgpPeerParameters {
+    fn from(p: BgpPeerParametersV2) -> Self {
+        Self {
+            hold_time: p.hold_time,
+            idle_hold_time: p.idle_hold_time,
+            delay_open: p.delay_open,
+            connect_retry: p.connect_retry,
+            keepalive: p.keepalive,
+            resolution: p.resolution,
+            passive: p.passive,
+            remote_asn: p.remote_asn,
+            min_ttl: p.min_ttl,
+            md5_auth_key: p.md5_auth_key,
+            multi_exit_discriminator: p.multi_exit_discriminator,
+            communities: p.communities,
+            local_pref: p.local_pref,
+            enforce_first_as: p.enforce_first_as,
+            vlan_id: p.vlan_id,
+            ipv4_unicast: p.ipv4_unicast,
+            ipv6_unicast: p.ipv6_unicast,
+            deterministic_collision_resolution: p
+                .deterministic_collision_resolution,
+            idle_hold_jitter: p.idle_hold_jitter,
+            connect_retry_jitter: p.connect_retry_jitter,
+            dscp: Dscp::default(),
+        }
+    }
+}
+
+/// BGP peer config for v3-v6 API (no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "BgpPeerConfig")]
+pub struct BgpPeerConfigV2 {
+    pub host: SocketAddr,
+    pub name: String,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV2,
+}
+
+impl From<BgpPeerConfig> for BgpPeerConfigV2 {
+    fn from(c: BgpPeerConfig) -> Self {
+        Self {
+            host: c.host,
+            name: c.name,
+            parameters: c.parameters.into(),
+        }
+    }
+}
+
+impl From<BgpPeerConfigV2> for BgpPeerConfig {
+    fn from(c: BgpPeerConfigV2) -> Self {
+        Self {
+            host: c.host,
+            name: c.name,
+            parameters: c.parameters.into(),
+        }
+    }
+}
+
+/// Neighbor configuration for v3-v6 API (no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "Neighbor")]
+pub struct NeighborV2 {
+    pub asn: u32,
+    pub name: String,
+    pub group: String,
+    pub host: SocketAddr,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV2,
+}
+
+impl From<Neighbor> for NeighborV2 {
+    fn from(n: Neighbor) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            host: n.host,
+            parameters: n.parameters.into(),
+        }
+    }
+}
+
+impl From<NeighborV2> for Neighbor {
+    fn from(n: NeighborV2) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            host: n.host,
+            parameters: n.parameters.into(),
+        }
+    }
+}
+
+/// Unnumbered BGP peer config for v5-v6 API (no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "UnnumberedBgpPeerConfig")]
+pub struct UnnumberedBgpPeerConfigV1 {
+    pub interface: String,
+    pub name: String,
+    pub router_lifetime: u16,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV2,
+}
+
+impl From<UnnumberedBgpPeerConfig> for UnnumberedBgpPeerConfigV1 {
+    fn from(c: UnnumberedBgpPeerConfig) -> Self {
+        Self {
+            interface: c.interface,
+            name: c.name,
+            router_lifetime: c.router_lifetime,
+            parameters: c.parameters.into(),
+        }
+    }
+}
+
+impl From<UnnumberedBgpPeerConfigV1> for UnnumberedBgpPeerConfig {
+    fn from(c: UnnumberedBgpPeerConfigV1) -> Self {
+        Self {
+            interface: c.interface,
+            name: c.name,
+            router_lifetime: c.router_lifetime,
+            parameters: c.parameters.into(),
+        }
+    }
+}
+
+/// Unnumbered neighbor configuration for v5-v6 API (no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "UnnumberedNeighbor")]
+pub struct UnnumberedNeighborV1 {
+    pub asn: u32,
+    pub name: String,
+    pub group: String,
+    pub interface: String,
+    pub act_as_a_default_ipv6_router: u16,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV2,
+}
+
+impl From<UnnumberedNeighbor> for UnnumberedNeighborV1 {
+    fn from(n: UnnumberedNeighbor) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            interface: n.interface,
+            act_as_a_default_ipv6_router: n.act_as_a_default_ipv6_router,
+            parameters: n.parameters.into(),
+        }
+    }
+}
+
+impl From<UnnumberedNeighborV1> for UnnumberedNeighbor {
+    fn from(n: UnnumberedNeighborV1) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            interface: n.interface,
+            act_as_a_default_ipv6_router: n.act_as_a_default_ipv6_router,
+            parameters: n.parameters.into(),
+        }
+    }
+}
+
+/// Apply request for v3-v6 API (no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[schemars(rename = "ApplyRequest")]
+pub struct ApplyRequestV2 {
+    pub asn: u32,
+    pub originate: Vec<Prefix>,
+    pub checker: Option<CheckerSource>,
+    pub shaper: Option<ShaperSource>,
+    pub peers: HashMap<String, Vec<BgpPeerConfigV2>>,
+    #[serde(default)]
+    pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfigV1>>,
+}
+
+impl From<ApplyRequest> for ApplyRequestV2 {
+    fn from(r: ApplyRequest) -> Self {
+        Self {
+            asn: r.asn,
+            originate: r.originate,
+            checker: r.checker,
+            shaper: r.shaper,
+            peers: r
+                .peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (k, v.into_iter().map(BgpPeerConfigV2::from).collect())
+                })
+                .collect(),
+            unnumbered_peers: r
+                .unnumbered_peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k,
+                        v.into_iter()
+                            .map(UnnumberedBgpPeerConfigV1::from)
+                            .collect(),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<ApplyRequestV2> for ApplyRequest {
+    fn from(r: ApplyRequestV2) -> Self {
+        Self {
+            asn: r.asn,
+            originate: r.originate,
+            checker: r.checker,
+            shaper: r.shaper,
+            peers: r
+                .peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (k, v.into_iter().map(BgpPeerConfig::from).collect())
+                })
+                .collect(),
+            unnumbered_peers: r
+                .unnumbered_peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k,
+                        v.into_iter()
+                            .map(UnnumberedBgpPeerConfig::from)
+                            .collect(),
+                    )
+                })
+                .collect(),
+        }
+    }
 }
 
 // ============================================================================

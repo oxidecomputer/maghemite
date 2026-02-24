@@ -23,6 +23,7 @@ progenitor::generate_api!(
         AddressFamily = rdb_types::AddressFamily,
         ProtocolFilter = rdb_types::ProtocolFilter,
         PeerId = rdb_types::PeerId,
+        Dscp = rdb_types::Dscp,
         Duration = std::time::Duration,
     }
 );
