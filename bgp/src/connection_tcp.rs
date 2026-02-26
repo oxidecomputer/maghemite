@@ -58,6 +58,10 @@ const UNIT_CONNECTION: &str = "connection_tcp";
 
 #[cfg(target_os = "illumos")]
 const IP_MINTTL: i32 = 0x1c;
+#[cfg(target_os = "linux")]
+const IPV6_MINHOPCOUNT: i32 = 73;
+#[cfg(target_os = "illumos")]
+const IPV6_MINHOPCOUNT: i32 = 0x2f;
 #[cfg(target_os = "illumos")]
 const TCP_MD5SIG: i32 = 0x27;
 #[cfg(target_os = "illumos")]
@@ -1278,20 +1282,40 @@ fn apply_dscp(
 
 /// Apply min TTL setting to a TCP connection.
 ///
-/// Sets both the outgoing IP_TTL and the incoming IP_MINTTL filter
-/// to `ttl`.
+/// Sets both the outgoing TTL/hop-limit and the incoming
+/// IP_MINTTL / IPV6_MINHOPCOUNT filter to `ttl`.
 #[allow(unused_variables)]
 fn apply_min_ttl(
     conn: &TcpStream,
     ttl: u8,
     peer: SocketAddr,
 ) -> Result<(), Error> {
-    conn.set_ttl(ttl.into())?;
+    if peer.is_ipv4() {
+        conn.set_ttl(ttl.into())?;
+    } else {
+        // TcpStream::set_ttl sets IP_TTL which is IPv4-only.
+        // Set IPV6_UNICAST_HOPS directly for IPv6 peers.
+        let val = ttl as u32;
+        let fd = conn.as_raw_fd();
+        let rc = unsafe {
+            libc::setsockopt(
+                fd,
+                IPPROTO_IPV6,
+                libc::IPV6_UNICAST_HOPS,
+                &val as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            )
+        };
+        if rc != 0 {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
     set_ip_minttl(conn, ttl, peer)
 }
 
-/// Set the IP_MINTTL socket option (minimum acceptable incoming TTL).
+/// Set the minimum acceptable incoming TTL/hop-limit.
 ///
+/// Uses IP_MINTTL for IPv4 and IPV6_MINHOPCOUNT for IPv6.
 /// A value of 0 disables the check. Only effective on Linux/illumos;
 /// a no-op on other platforms.
 #[allow(unused_variables)]
@@ -1320,7 +1344,7 @@ fn set_ip_minttl(
                 && libc::setsockopt(
                     fd,
                     IPPROTO_IPV6,
-                    IP_MINTTL,
+                    IPV6_MINHOPCOUNT,
                     &val as *const u32 as *const c_void,
                     std::mem::size_of::<u32>() as u32,
                 ) != 0
