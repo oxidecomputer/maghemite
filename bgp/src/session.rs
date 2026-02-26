@@ -47,6 +47,7 @@ use std::{
     collections::{BTreeSet, VecDeque},
     fmt::{self, Display, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    num::NonZeroU8,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -865,7 +866,7 @@ pub struct SessionInfo {
     /// derived by the system.
     pub bind_addr: Option<SocketAddr>,
     /// Minimum acceptable TTL value for incomming BGP packets.
-    pub min_ttl: Option<u8>,
+    pub min_ttl: Option<NonZeroU8>,
     /// Md5 peer authentication key
     pub md5_auth_key: Option<String>,
     /// Multi-exit discriminator. This an optional attribute that is intended to
@@ -993,7 +994,7 @@ impl From<&BgpPeerParametersV1> for SessionInfo {
         SessionInfo {
             passive_tcp_establishment: value.passive,
             remote_asn: value.remote_asn,
-            min_ttl: value.min_ttl,
+            min_ttl: value.min_ttl.and_then(NonZeroU8::new),
             md5_auth_key: value.md5_auth_key.clone(),
             multi_exit_discriminator: value.multi_exit_discriminator,
             communities: value.communities.clone().into_iter().collect(),

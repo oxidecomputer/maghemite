@@ -16,6 +16,7 @@ use slog::Logger;
 use std::{
     collections::BTreeMap,
     net::{SocketAddr, ToSocketAddrs},
+    num::NonZeroU8,
     sync::{Arc, Mutex, mpsc::Sender},
     thread::JoinHandle,
     time::Duration,
@@ -146,7 +147,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
     /// Dispatcher after accept() returns and session lookup is completed.
     fn apply_policy(
         conn: &Cnx,
-        min_ttl: Option<u8>,
+        min_ttl: Option<NonZeroU8>,
         md5_key: Option<String>,
         dscp: Dscp,
     ) -> Result<(), Error>;
@@ -225,7 +226,7 @@ pub trait BgpConnection: Send + Sync + Sized {
 /// A socket option that can be updated on a live BGP connection.
 pub enum SocketOption {
     Dscp(Dscp),
-    MinTtl(Option<u8>),
+    MinTtl(Option<NonZeroU8>),
 }
 
 pub use mg_common::thread::{ManagedThread, ThreadState};

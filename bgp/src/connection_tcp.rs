@@ -2,8 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::num::NonZeroU8;
 use crate::{
-    IO_TIMEOUT,
+    DEFAULT_BGP_TTL, IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
@@ -55,6 +56,10 @@ use itertools::Itertools;
 use std::{collections::HashSet, net::IpAddr};
 
 const UNIT_CONNECTION: &str = "connection_tcp";
+
+/// Value passed to IP_MINTTL / IPV6_MINHOPCOUNT to disable the
+/// minimum incoming TTL/hop-limit filter.
+const MINTTL_DISABLED: u8 = 0;
 
 #[cfg(target_os = "illumos")]
 const IP_MINTTL: i32 = 0x1c;
@@ -121,6 +126,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
             ))?;
         let listener = TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
+        set_outgoing_ttl(&listener, DEFAULT_BGP_TTL, addr)?;
         Ok(Self {
             listener,
             unnumbered_manager,
@@ -189,15 +195,13 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
 
     fn apply_policy(
         conn: &BgpConnectionTcp,
-        min_ttl: Option<u8>,
+        min_ttl: Option<NonZeroU8>,
         md5_key: Option<String>,
         dscp: Dscp,
     ) -> Result<(), Error> {
         let tcp_stream = lock!(conn.conn);
 
-        if let Some(ttl) = min_ttl {
-            apply_min_ttl(&tcp_stream, ttl, conn.peer)?;
-        }
+        apply_min_ttl(&tcp_stream, min_ttl, conn.peer)?;
 
         apply_dscp(&tcp_stream, dscp, conn.peer)?;
 
@@ -335,9 +339,10 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     }
                 };
 
-                // Apply TTL if specified
-                if let Some(ttl) = config.min_ttl
-                    && let Err(e) = apply_min_ttl(&new_conn, ttl, peer)
+                // Apply TTL (always set DEFAULT_BGP_TTL unless
+                // overridden by min_ttl config)
+                if let Err(e) =
+                    apply_min_ttl(&new_conn, config.min_ttl, peer)
                 {
                     connection_log_lite!(log,
                         warn,
@@ -528,7 +533,7 @@ impl BgpConnection for BgpConnectionTcp {
         match *option {
             SocketOption::Dscp(dscp) => apply_dscp(&guard, dscp, self.peer),
             SocketOption::MinTtl(ttl) => {
-                apply_min_ttl(&guard, ttl.unwrap_or_default(), self.peer)
+                apply_min_ttl(&guard, ttl, self.peer)
             }
         }
     }
@@ -1280,28 +1285,24 @@ fn apply_dscp(
     Ok(())
 }
 
-/// Apply min TTL setting to a TCP connection.
+/// Set the outgoing TTL/hop-limit on a socket.
 ///
-/// Sets both the outgoing TTL/hop-limit and the incoming
-/// IP_MINTTL / IPV6_MINHOPCOUNT filter to `ttl`.
-#[allow(unused_variables)]
-fn apply_min_ttl(
-    conn: &TcpStream,
+/// Works on both `TcpStream` and `TcpListener` (anything with
+/// `AsRawFd`). Uses `IP_TTL` for IPv4 and `IPV6_UNICAST_HOPS` for
+/// IPv6.
+fn set_outgoing_ttl(
+    sock: &impl AsRawFd,
     ttl: u8,
-    peer: SocketAddr,
+    addr: SocketAddr,
 ) -> Result<(), Error> {
-    if peer.is_ipv4() {
-        conn.set_ttl(ttl.into())?;
-    } else {
-        // TcpStream::set_ttl sets IP_TTL which is IPv4-only.
-        // Set IPV6_UNICAST_HOPS directly for IPv6 peers.
+    if addr.is_ipv4() {
         let val = ttl as u32;
-        let fd = conn.as_raw_fd();
+        let fd = sock.as_raw_fd();
         let rc = unsafe {
             libc::setsockopt(
                 fd,
-                IPPROTO_IPV6,
-                libc::IPV6_UNICAST_HOPS,
+                IPPROTO_IP,
+                libc::IP_TTL,
                 &val as *const u32 as *const c_void,
                 std::mem::size_of::<u32>() as u32,
             )
@@ -1309,8 +1310,40 @@ fn apply_min_ttl(
         if rc != 0 {
             return Err(Error::Io(std::io::Error::last_os_error()));
         }
+    } else {
+        let val: i32 = ttl.into();
+        let fd = sock.as_raw_fd();
+        let rc = unsafe {
+            libc::setsockopt(
+                fd,
+                IPPROTO_IPV6,
+                libc::IPV6_UNICAST_HOPS,
+                &val as *const i32 as *const c_void,
+                std::mem::size_of::<i32>() as u32,
+            )
+        };
+        if rc != 0 {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
     }
-    set_ip_minttl(conn, ttl, peer)
+    Ok(())
+}
+
+/// Apply min TTL setting to a TCP connection.
+///
+/// Sets the outgoing TTL/hop-limit to `min_ttl` if configured, or
+/// `DEFAULT_BGP_TTL` otherwise. Sets the incoming IP_MINTTL /
+/// IPV6_MINHOPCOUNT filter to `min_ttl`, or 0 (disabled) if not
+/// configured.
+#[allow(unused_variables)]
+fn apply_min_ttl(
+    conn: &TcpStream,
+    min_ttl: Option<NonZeroU8>,
+    peer: SocketAddr,
+) -> Result<(), Error> {
+    let ttl = min_ttl.map(NonZeroU8::get);
+    set_outgoing_ttl(conn, ttl.unwrap_or(DEFAULT_BGP_TTL), peer)?;
+    set_ip_minttl(conn, ttl.unwrap_or(MINTTL_DISABLED), peer)
 }
 
 /// Set the minimum acceptable incoming TTL/hop-limit.

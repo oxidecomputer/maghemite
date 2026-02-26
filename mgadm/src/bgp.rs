@@ -20,6 +20,7 @@ use std::{
     fs::read_to_string,
     io::{Write, stdout},
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    num::NonZeroU8,
     time::Duration,
 };
 use tabwriter::TabWriter;
@@ -637,9 +638,9 @@ pub struct Neighbor {
     #[arg(long)]
     pub remote_asn: Option<u32>,
 
-    /// Minimum acceptable TTL for neighbor.
-    #[arg(long)]
-    pub min_ttl: Option<u8>,
+    /// Minimum acceptable TTL for neighbor (1-255).
+    #[arg(long, value_parser = clap::value_parser!(NonZeroU8))]
+    pub min_ttl: Option<NonZeroU8>,
 
     /// Authentication key used for TCP-MD5 with remote peer.
     #[arg(long)]

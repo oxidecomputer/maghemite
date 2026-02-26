@@ -2383,7 +2383,7 @@ pub(crate) mod helpers {
             host: rq.host,
             parameters: BgpNeighborParameters {
                 remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq.parameters.min_ttl,
+                min_ttl: rq.parameters.min_ttl.map(|v| v.get()),
                 hold_time: rq.parameters.hold_time,
                 idle_hold_time: rq.parameters.idle_hold_time,
                 delay_open: rq.parameters.delay_open,
@@ -2507,7 +2507,7 @@ pub(crate) mod helpers {
                 router_lifetime: rq.act_as_a_default_ipv6_router,
                 parameters: BgpNeighborParameters {
                     remote_asn: rq.parameters.remote_asn,
-                    min_ttl: rq.parameters.min_ttl,
+                    min_ttl: rq.parameters.min_ttl.map(|v| v.get()),
                     hold_time: rq.parameters.hold_time,
                     idle_hold_time: rq.parameters.idle_hold_time,
                     delay_open: rq.parameters.delay_open,

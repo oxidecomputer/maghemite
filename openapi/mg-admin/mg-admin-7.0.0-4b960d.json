@@ -2289,7 +2289,7 @@
             "nullable": true,
             "type": "integer",
             "format": "uint8",
-            "minimum": 0
+            "minimum": 1
           },
           "multi_exit_discriminator": {
             "nullable": true,
@@ -4059,7 +4059,7 @@
             "nullable": true,
             "type": "integer",
             "format": "uint8",
-            "minimum": 0
+            "minimum": 1
           },
           "multi_exit_discriminator": {
             "nullable": true,
@@ -5607,7 +5607,7 @@
             "nullable": true,
             "type": "integer",
             "format": "uint8",
-            "minimum": 0
+            "minimum": 1
           },
           "multi_exit_discriminator": {
             "nullable": true,
@@ -5778,7 +5778,7 @@
             "nullable": true,
             "type": "integer",
             "format": "uint8",
-            "minimum": 0
+            "minimum": 1
           },
           "multi_exit_discriminator": {
             "nullable": true,

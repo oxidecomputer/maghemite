@@ -37,6 +37,9 @@ pub mod unnumbered_mock;
 
 pub const BGP_PORT: u16 = 179;
 pub const BGP_VERSION: u8 = 4;
+/// Default outgoing TTL/hop-limit for BGP TCP sockets.
+pub const DEFAULT_BGP_TTL: u8 = 255;
+
 pub const COMPONENT_BGP: &str = "bgp";
 pub const MOD_ROUTER: &str = "router";
 pub const MOD_NEIGHBOR: &str = "neighbor";

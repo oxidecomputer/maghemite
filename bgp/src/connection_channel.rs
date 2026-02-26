@@ -277,7 +277,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
 
     fn apply_policy(
         _conn: &BgpConnectionChannel,
-        _min_ttl: Option<u8>,
+        _min_ttl: Option<std::num::NonZeroU8>,
         _md5_key: Option<String>,
         _dscp: rdb::Dscp,
     ) -> Result<(), Error> {

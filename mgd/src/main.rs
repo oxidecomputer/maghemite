@@ -21,6 +21,7 @@ use signal::handle_signals;
 use slog::Logger;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::num::NonZeroU8;
 use std::sync::{Arc, Mutex};
 use std::thread::Builder;
 use uuid::Uuid;
@@ -324,7 +325,10 @@ fn start_bgp_routers(
                 host: nbr.host,
                 parameters: BgpPeerParameters {
                     remote_asn: nbr.parameters.remote_asn,
-                    min_ttl: nbr.parameters.min_ttl,
+                    min_ttl: nbr
+                        .parameters
+                        .min_ttl
+                        .and_then(NonZeroU8::new),
                     hold_time: nbr.parameters.hold_time,
                     idle_hold_time: nbr.parameters.idle_hold_time,
                     delay_open: nbr.parameters.delay_open,
@@ -380,7 +384,10 @@ fn start_bgp_routers(
                 act_as_a_default_ipv6_router: nbr.router_lifetime,
                 parameters: BgpPeerParameters {
                     remote_asn: nbr.parameters.remote_asn,
-                    min_ttl: nbr.parameters.min_ttl,
+                    min_ttl: nbr
+                        .parameters
+                        .min_ttl
+                        .and_then(NonZeroU8::new),
                     hold_time: nbr.parameters.hold_time,
                     idle_hold_time: nbr.parameters.idle_hold_time,
                     delay_open: nbr.parameters.delay_open,

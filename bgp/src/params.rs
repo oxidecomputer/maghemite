@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     net::{IpAddr, SocketAddr, SocketAddrV6},
+    num::NonZeroU8,
     sync::atomic::Ordering,
     time::Duration,
 };
@@ -364,7 +365,10 @@ impl UnnumberedNeighbor {
             act_as_a_default_ipv6_router: rq.router_lifetime,
             parameters: BgpPeerParameters {
                 remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq.parameters.min_ttl,
+                min_ttl: rq
+                    .parameters
+                    .min_ttl
+                    .and_then(NonZeroU8::new),
                 hold_time: rq.parameters.hold_time,
                 idle_hold_time: rq.parameters.idle_hold_time,
                 delay_open: rq.parameters.delay_open,
@@ -431,7 +435,10 @@ impl Neighbor {
             group: rq.group.clone(),
             parameters: BgpPeerParameters {
                 remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq.parameters.min_ttl,
+                min_ttl: rq
+                    .parameters
+                    .min_ttl
+                    .and_then(NonZeroU8::new),
                 hold_time: rq.parameters.hold_time,
                 idle_hold_time: rq.parameters.idle_hold_time,
                 delay_open: rq.parameters.delay_open,
@@ -1251,7 +1258,7 @@ pub struct BgpPeerParameters {
     pub resolution: u64,
     pub passive: bool,
     pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
+    pub min_ttl: Option<NonZeroU8>,
     pub md5_auth_key: Option<String>,
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
@@ -1330,7 +1337,10 @@ impl From<BgpPeerConfigV1> for BgpPeerConfig {
                 resolution: cfg.parameters.resolution,
                 passive: cfg.parameters.passive,
                 remote_asn: cfg.parameters.remote_asn,
-                min_ttl: cfg.parameters.min_ttl,
+                min_ttl: cfg
+                    .parameters
+                    .min_ttl
+                    .and_then(NonZeroU8::new),
                 md5_auth_key: cfg.parameters.md5_auth_key,
                 multi_exit_discriminator: cfg
                     .parameters
@@ -1412,7 +1422,7 @@ impl From<BgpPeerParameters> for BgpPeerParametersV2 {
             resolution: p.resolution,
             passive: p.passive,
             remote_asn: p.remote_asn,
-            min_ttl: p.min_ttl,
+            min_ttl: p.min_ttl.map(NonZeroU8::get),
             md5_auth_key: p.md5_auth_key,
             multi_exit_discriminator: p.multi_exit_discriminator,
             communities: p.communities,
@@ -1440,7 +1450,7 @@ impl From<BgpPeerParametersV2> for BgpPeerParameters {
             resolution: p.resolution,
             passive: p.passive,
             remote_asn: p.remote_asn,
-            min_ttl: p.min_ttl,
+            min_ttl: p.min_ttl.and_then(NonZeroU8::new),
             md5_auth_key: p.md5_auth_key,
             multi_exit_discriminator: p.multi_exit_discriminator,
             communities: p.communities,

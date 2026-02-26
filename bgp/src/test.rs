@@ -28,6 +28,7 @@ use rdb::{
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6},
+    num::NonZeroU8,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -5272,7 +5273,7 @@ fn test_inflight_socket_option_updates() {
     assert_no_reset("setting DSCP");
 
     // ===== Set min_ttl (no reset) =====
-    min_ttl = Some(1);
+    min_ttl = Some(NonZeroU8::new(1).unwrap());
     let mut info = SessionInfo::from_peer_config(&r2_peer_config);
     info.dscp = dscp;
     info.min_ttl = min_ttl;
