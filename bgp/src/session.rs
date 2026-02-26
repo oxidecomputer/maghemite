@@ -7,6 +7,7 @@ use crate::{
     config::PeerConfig,
     connection::{
         BgpConnection, BgpConnector, ConnectionDirection, ConnectionId,
+        SocketOption,
     },
     error::{Error, ExpectationMismatch},
     fanout::{Fanout4, Fanout6},
@@ -9473,7 +9474,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if current.min_ttl != info.min_ttl {
             current.min_ttl = info.min_ttl;
-            reset_needed = true;
+            self.apply_sockopt(SocketOption::MinTtl(info.min_ttl));
         }
 
         if current.md5_auth_key != info.md5_auth_key {
@@ -9523,7 +9524,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         if current.dscp != info.dscp {
             current.dscp = info.dscp;
-            reset_needed = true;
+            self.apply_sockopt(SocketOption::Dscp(info.dscp));
         }
 
         // Update jitter settings (no session reset required)
@@ -9634,6 +9635,23 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         Ok(reset_needed)
+    }
+
+    /// Apply a socket option to all live connections. Errors are
+    /// logged but do not fail the operation — the connection remains
+    /// valid even if the setsockopt doesn't take effect.
+    fn apply_sockopt(&self, option: SocketOption) {
+        let registry = lock!(self.connection_registry);
+        for conn in registry.all_connections() {
+            if let Err(e) = conn.connection().update_socket_option(&option) {
+                session_log_lite!(
+                    self,
+                    error,
+                    "failed to update socket option: {e}";
+                    "error" => format!("{e}")
+                );
+            }
+        }
     }
 
     /// Get all registered connections

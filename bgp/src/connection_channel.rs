@@ -12,7 +12,7 @@ use crate::{
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        ConnectionId, SocketOption, ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -377,6 +377,14 @@ impl BgpConnection for BgpConnectionChannel {
         // Store the handle in the typestate
         state.start(handle);
 
+        Ok(())
+    }
+
+    fn update_socket_option(
+        &self,
+        _option: &SocketOption,
+    ) -> Result<(), Error> {
+        // Socket options are ignored for test connections
         Ok(())
     }
 }

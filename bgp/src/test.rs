@@ -5121,3 +5121,186 @@ fn test_reset_tracking() {
     r1.shutdown();
     r2.shutdown();
 }
+
+// =============================================================================
+// In-flight DSCP/min_ttl socket option update test
+// =============================================================================
+
+/// Verify that DSCP and min_ttl changes are applied to live sockets
+/// without resetting the BGP session, while md5_auth_key changes
+/// still trigger a session reset.
+///
+/// This test uses real TCP connections to exercise the setsockopt
+/// path through `update_socket_options()`.
+#[test]
+fn test_inflight_socket_option_updates() {
+    let r1_addr: SocketAddr = sockaddr!(&format!("127.0.0.18:{TEST_BGP_PORT}"));
+    let r2_addr: SocketAddr = sockaddr!(&format!("127.0.0.19:{TEST_BGP_PORT}"));
+
+    let _ip_guard = ensure_loop_ips(&[r1_addr.ip(), r2_addr.ip()]);
+
+    let r1_peer_config = PeerConfig {
+        name: "r2".into(),
+        group: String::new(),
+        host: r2_addr,
+        hold_time: TEST_HOLD_TIME_SECS,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: TEST_CONNECT_RETRY_SECS,
+        keepalive: 3,
+        resolution: 100,
+    };
+    let r1_session_info = SessionInfo::from_peer_config(&r1_peer_config);
+
+    let r2_peer_config = PeerConfig {
+        name: "r1".into(),
+        group: String::new(),
+        host: r1_addr,
+        hold_time: TEST_HOLD_TIME_SECS,
+        idle_hold_time: 0,
+        delay_open: 0,
+        connect_retry: TEST_CONNECT_RETRY_SECS,
+        keepalive: 3,
+        resolution: 100,
+    };
+    let r2_session_info = SessionInfo::from_peer_config(&r2_peer_config);
+
+    let routers = vec![
+        LogicalRouter {
+            name: "r1".to_string(),
+            asn: Asn::FourOctet(4200000001),
+            id: 1,
+            listen_addr: r1_addr,
+            bind_addr: Some(r1_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r2".to_string(),
+                remote_host: r2_addr,
+                session_info: r1_session_info,
+            }],
+        },
+        LogicalRouter {
+            name: "r2".to_string(),
+            asn: Asn::FourOctet(4200000002),
+            id: 2,
+            listen_addr: r2_addr,
+            bind_addr: Some(r2_addr),
+            neighbors: vec![NeighborConfig {
+                peer_name: "r1".to_string(),
+                remote_host: r1_addr,
+                session_info: r2_session_info,
+            }],
+        },
+    ];
+
+    let (test_routers, _ip_guard2) = test_setup::<
+        BgpConnectionTcp,
+        BgpListenerTcp,
+    >("inflight_sockopt", &routers);
+
+    let r1 = &test_routers[0];
+    let r2 = &test_routers[1];
+
+    let r1_session = r1
+        .router
+        .get_session(r2_addr.ip())
+        .expect("get r1->r2 session");
+    let r2_session = r2
+        .router
+        .get_session(r1_addr.ip())
+        .expect("get r2->r1 session");
+    wait_for_eq!(r1_session.state(), FsmStateKind::Established);
+    wait_for_eq!(r2_session.state(), FsmStateKind::Established);
+
+    // Helper: assert both sessions stay Established for longer
+    // than hold_time and that neither side's transition counter
+    // increments (i.e. no reset occurred).
+    let assert_no_reset = |label: &str| {
+        let r1_before = r1_session
+            .counters
+            .transitions_to_established
+            .load(Ordering::Relaxed);
+        let r2_before = r2_session
+            .counters
+            .transitions_to_established
+            .load(Ordering::Relaxed);
+
+        let start = Instant::now();
+        while start.elapsed() < ESTABLISHED_VERIFICATION {
+            assert_eq!(
+                r1_session.state(),
+                FsmStateKind::Established,
+                "r1 should stay Established after {label}"
+            );
+            assert_eq!(
+                r2_session.state(),
+                FsmStateKind::Established,
+                "r2 should stay Established after {label}"
+            );
+            sleep(Duration::from_millis(100));
+        }
+
+        assert_eq!(
+            r1_session
+                .counters
+                .transitions_to_established
+                .load(Ordering::Relaxed),
+            r1_before,
+            "r1 should not re-establish after {label}"
+        );
+        assert_eq!(
+            r2_session
+                .counters
+                .transitions_to_established
+                .load(Ordering::Relaxed),
+            r2_before,
+            "r2 should not re-establish after {label}"
+        );
+    };
+
+    // Track cumulative session state so each phase builds on the
+    // previous one (mirrors how the real API works).
+    let mut min_ttl = None;
+
+    // ===== Set DSCP (no reset) =====
+    let mut dscp = Dscp::new(46).unwrap(); // EF
+    let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+    info.dscp = dscp;
+    info.min_ttl = min_ttl;
+    r2.router
+        .update_session(r2_peer_config.clone(), info)
+        .expect("set DSCP");
+    assert_no_reset("setting DSCP");
+
+    // ===== Set min_ttl (no reset) =====
+    min_ttl = Some(1);
+    let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+    info.dscp = dscp;
+    info.min_ttl = min_ttl;
+    r2.router
+        .update_session(r2_peer_config.clone(), info)
+        .expect("set min_ttl");
+    assert_no_reset("setting min_ttl");
+
+    // ===== Unset min_ttl (no reset) =====
+    min_ttl = None;
+    let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+    info.dscp = dscp;
+    info.min_ttl = min_ttl;
+    r2.router
+        .update_session(r2_peer_config.clone(), info)
+        .expect("unset min_ttl");
+    assert_no_reset("unsetting min_ttl");
+
+    // ===== Reset DSCP to default (no reset) =====
+    dscp = Dscp::default();
+    let mut info = SessionInfo::from_peer_config(&r2_peer_config);
+    info.dscp = dscp;
+    info.min_ttl = min_ttl;
+    r2.router
+        .update_session(r2_peer_config.clone(), info)
+        .expect("reset DSCP to default");
+    assert_no_reset("resetting DSCP to default");
+
+    r1.shutdown();
+    r2.shutdown();
+}

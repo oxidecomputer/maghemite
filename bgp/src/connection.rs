@@ -217,6 +217,15 @@ pub trait BgpConnection: Send + Sync + Sized {
     /// Start the receive loop for this connection. This method is idempotent.
     /// Returns Ok(()) upon successful start of recv loop, else Err.
     fn start_recv_loop(self: &Arc<Self>) -> Result<(), Error>;
+
+    /// Update a socket option on a live connection.
+    fn update_socket_option(&self, option: &SocketOption) -> Result<(), Error>;
+}
+
+/// A socket option that can be updated on a live BGP connection.
+pub enum SocketOption {
+    Dscp(Dscp),
+    MinTtl(Option<u8>),
 }
 
 pub use mg_common::thread::{ManagedThread, ThreadState};

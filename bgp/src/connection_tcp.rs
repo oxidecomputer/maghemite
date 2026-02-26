@@ -7,7 +7,7 @@ use crate::{
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        ConnectionId, SocketOption, ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -517,6 +517,16 @@ impl BgpConnection for BgpConnectionTcp {
         state.start(handle);
 
         Ok(())
+    }
+
+    fn update_socket_option(&self, option: &SocketOption) -> Result<(), Error> {
+        let guard = lock!(self.conn);
+        match *option {
+            SocketOption::Dscp(dscp) => apply_dscp(&guard, dscp, self.peer),
+            SocketOption::MinTtl(ttl) => {
+                apply_min_ttl(&guard, ttl.unwrap_or_default(), self.peer)
+            }
+        }
     }
 }
 
@@ -1266,7 +1276,10 @@ fn apply_dscp(
     Ok(())
 }
 
-/// Apply min TTL setting to a TCP connection
+/// Apply min TTL setting to a TCP connection.
+///
+/// Sets both the outgoing IP_TTL and the incoming IP_MINTTL filter
+/// to `ttl`.
 #[allow(unused_variables)]
 fn apply_min_ttl(
     conn: &TcpStream,
@@ -1274,17 +1287,30 @@ fn apply_min_ttl(
     peer: SocketAddr,
 ) -> Result<(), Error> {
     conn.set_ttl(ttl.into())?;
+    set_ip_minttl(conn, ttl, peer)
+}
+
+/// Set the IP_MINTTL socket option (minimum acceptable incoming TTL).
+///
+/// A value of 0 disables the check. Only effective on Linux/illumos;
+/// a no-op on other platforms.
+#[allow(unused_variables)]
+fn set_ip_minttl(
+    conn: &TcpStream,
+    min_ttl: u8,
+    peer: SocketAddr,
+) -> Result<(), Error> {
     #[cfg(any(target_os = "linux", target_os = "illumos"))]
     {
         let fd = conn.as_raw_fd();
-        let min_ttl = ttl as u32;
+        let val = min_ttl as u32;
         unsafe {
             if peer.is_ipv4()
                 && libc::setsockopt(
                     fd,
                     IPPROTO_IP,
                     IP_MINTTL,
-                    &min_ttl as *const u32 as *const c_void,
+                    &val as *const u32 as *const c_void,
                     std::mem::size_of::<u32>() as u32,
                 ) != 0
             {
@@ -1295,7 +1321,7 @@ fn apply_min_ttl(
                     fd,
                     IPPROTO_IPV6,
                     IP_MINTTL,
-                    &min_ttl as *const u32 as *const c_void,
+                    &val as *const u32 as *const c_void,
                     std::mem::size_of::<u32>() as u32,
                 ) != 0
             {
