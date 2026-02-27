@@ -472,28 +472,28 @@ pub trait MgAdminApi {
     #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
     async fn get_rib_imported(
         rqctx: RequestContext<Self::Context>,
-        request: Query<RibQuery>,
+        request: Query<RibQueryV1>,
     ) -> Result<HttpResponseOk<RibV1>, HttpError>;
 
     // Original version (VERSION_IPV6_BASIC..VERSION_UNNUMBERED): BgpPathProperties.peer is IpAddr
     #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_IPV6_BASIC..VERSION_UNNUMBERED }]
     async fn get_rib_selected(
         rqctx: RequestContext<Self::Context>,
-        request: Query<RibQuery>,
+        request: Query<RibQueryV1>,
     ) -> Result<HttpResponseOk<RibV1>, HttpError>;
 
     // VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC: PeerId but no origin/internal
     #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
     async fn get_rib_imported_v2(
         rqctx: RequestContext<Self::Context>,
-        request: Query<RibQuery>,
+        request: Query<RibQueryV1>,
     ) -> Result<HttpResponseOk<RibV2>, HttpError>;
 
     // VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC: PeerId but no origin/internal
     #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
     async fn get_rib_selected_v2(
         rqctx: RequestContext<Self::Context>,
-        request: Query<RibQuery>,
+        request: Query<RibQueryV1>,
     ) -> Result<HttpResponseOk<RibV2>, HttpError>;
 
     // VERSION_EXTENDED_NH_STATIC+: BgpPathProperties with origin/internal
@@ -1253,6 +1253,20 @@ impl From<StaticRoute6> for StaticRouteKey {
     }
 }
 
+/// Previous version of RibQuery.
+/// Used for API versions before VERSION_EXTENDED_NH_STATIC.
+/// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported
+/// version.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "RibQuery")]
+pub struct RibQueryV1 {
+    /// Filter by address family (None means all families)
+    #[serde(default)]
+    pub address_family: Option<AddressFamily>,
+    /// Filter by protocol (optional)
+    pub protocol: Option<ProtocolFilter>,
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RibQuery {
     /// Filter by address family (None means all families)
@@ -1260,6 +1274,9 @@ pub struct RibQuery {
     pub address_family: Option<AddressFamily>,
     /// Filter by protocol (optional)
     pub protocol: Option<ProtocolFilter>,
+    /// Exact-match prefix filter (e.g. "10.0.0.0/24")
+    #[serde(default)]
+    pub prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]

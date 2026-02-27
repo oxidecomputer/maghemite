@@ -45,12 +45,12 @@ pub enum StatusCmd {
         /// Protocol filter (optional)
         #[arg(value_enum)]
         protocol: Option<ProtocolFilter>,
-        /// Display mode: summary (default) or detail.
-        #[clap(long, value_enum, default_value = "summary")]
-        mode: RibDisplayMode,
         /// Exact-match prefix filter (e.g. 10.0.0.0/24)
-        #[clap(long)]
         prefix: Option<String>,
+        /// Display mode: summary (default) or detail.
+        /// Defaults to detail when a prefix is specified.
+        #[clap(long, value_enum)]
+        mode: Option<RibDisplayMode>,
     },
 
     /// Get the loc-rib table. Contains only valid routes and their
@@ -62,12 +62,12 @@ pub enum StatusCmd {
         /// Protocol filter (optional)
         #[arg(value_enum)]
         protocol: Option<ProtocolFilter>,
-        /// Display mode: summary (default) or detail.
-        #[clap(long, value_enum, default_value = "summary")]
-        mode: RibDisplayMode,
         /// Exact-match prefix filter (e.g. 10.0.0.0/24)
-        #[clap(long)]
         prefix: Option<String>,
+        /// Display mode: summary (default) or detail.
+        /// Defaults to detail when a prefix is specified.
+        #[clap(long, value_enum)]
+        mode: Option<RibDisplayMode>,
     },
 }
 
@@ -101,20 +101,26 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             StatusCmd::Imported {
                 address_family,
                 protocol,
-                mode,
                 prefix,
+                mode,
             } => {
-                let detail = matches!(mode, RibDisplayMode::detail);
+                let detail = match mode {
+                    Some(m) => matches!(m, RibDisplayMode::detail),
+                    None => prefix.is_some(),
+                };
                 get_imported(c, address_family, protocol, detail, prefix)
                     .await?
             }
             StatusCmd::Selected {
                 address_family,
                 protocol,
-                mode,
                 prefix,
+                mode,
             } => {
-                let detail = matches!(mode, RibDisplayMode::detail);
+                let detail = match mode {
+                    Some(m) => matches!(m, RibDisplayMode::detail),
+                    None => prefix.is_some(),
+                };
                 get_selected(c, address_family, protocol, detail, prefix)
                     .await?
             }
@@ -131,17 +137,15 @@ async fn get_imported(
     prefix: Option<String>,
 ) -> Result<()> {
     let imported = c
-        .get_rib_imported_v3(address_family.as_ref(), protocol.as_ref())
+        .get_rib_imported_v3(
+            address_family.as_ref(),
+            prefix.as_deref(),
+            protocol.as_ref(),
+        )
         .await?
         .into_inner();
 
-    print_rib(
-        imported,
-        address_family,
-        protocol,
-        detail,
-        prefix.as_deref(),
-    );
+    print_rib(imported, detail);
     Ok(())
 }
 
@@ -153,17 +157,15 @@ async fn get_selected(
     prefix: Option<String>,
 ) -> Result<()> {
     let selected = c
-        .get_rib_selected_v3(address_family.as_ref(), protocol.as_ref())
+        .get_rib_selected_v3(
+            address_family.as_ref(),
+            prefix.as_deref(),
+            protocol.as_ref(),
+        )
         .await?
         .into_inner();
 
-    print_rib(
-        selected,
-        address_family,
-        protocol,
-        detail,
-        prefix.as_deref(),
-    );
+    print_rib(selected, detail);
     Ok(())
 }
 

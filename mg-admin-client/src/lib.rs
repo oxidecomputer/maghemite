@@ -29,37 +29,22 @@ progenitor::generate_api!(
 );
 
 use colored::*;
-use rdb_types::{AddressFamily, Prefix, ProtocolFilter};
+use rdb_types::Prefix;
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
 use std::net::Ipv4Addr;
 use tabwriter::TabWriter;
 use types::{Path, Rib};
 
-pub fn print_rib(
-    rib: Rib,
-    address_family: Option<AddressFamily>,
-    protocol_filter: Option<ProtocolFilter>,
-    detail: bool,
-    prefix_filter: Option<&str>,
-) {
+pub fn print_rib(rib: Rib, detail: bool) {
     type CliRib = BTreeMap<Prefix, Vec<Path>>;
 
-    // Always split into 4 collections
     let mut v4_static = CliRib::new();
     let mut v4_bgp = CliRib::new();
     let mut v6_static = CliRib::new();
     let mut v6_bgp = CliRib::new();
 
-    // Parse and categorize all routes
     for (prefix, paths) in rib.0.into_iter() {
-        // Client-side exact-match prefix filter
-        if let Some(filter) = prefix_filter
-            && prefix != filter
-        {
-            continue;
-        }
-
         let pfx: Prefix = match prefix.parse() {
             Ok(p) => p,
             Err(e) => {
@@ -91,36 +76,30 @@ pub fn print_rib(
         }
     }
 
-    let show_ipv4 = matches!(address_family, None | Some(AddressFamily::Ipv4));
-    let show_ipv6 = matches!(address_family, None | Some(AddressFamily::Ipv6));
-    let show_static =
-        matches!(protocol_filter, None | Some(ProtocolFilter::Static));
-    let show_bgp = matches!(protocol_filter, None | Some(ProtocolFilter::Bgp));
-
     if detail {
-        if show_ipv4 && show_static && !v4_static.is_empty() {
+        if !v4_static.is_empty() {
             print_static_routes_detail(&v4_static, "Static Routes (IPv4)");
         }
-        if show_ipv4 && show_bgp && !v4_bgp.is_empty() {
+        if !v4_bgp.is_empty() {
             print_bgp_routes_detail(&v4_bgp, "BGP Routes (IPv4)");
         }
-        if show_ipv6 && show_static && !v6_static.is_empty() {
+        if !v6_static.is_empty() {
             print_static_routes_detail(&v6_static, "Static Routes (IPv6)");
         }
-        if show_ipv6 && show_bgp && !v6_bgp.is_empty() {
+        if !v6_bgp.is_empty() {
             print_bgp_routes_detail(&v6_bgp, "BGP Routes (IPv6)");
         }
     } else {
-        if show_ipv4 && show_static && !v4_static.is_empty() {
+        if !v4_static.is_empty() {
             print_static_routes(&v4_static, "Static Routes (IPv4)");
         }
-        if show_ipv4 && show_bgp && !v4_bgp.is_empty() {
+        if !v4_bgp.is_empty() {
             print_bgp_routes(&v4_bgp, "BGP Routes (IPv4)");
         }
-        if show_ipv6 && show_static && !v6_static.is_empty() {
+        if !v6_static.is_empty() {
             print_static_routes(&v6_static, "Static Routes (IPv6)");
         }
-        if show_ipv6 && show_bgp && !v6_bgp.is_empty() {
+        if !v6_bgp.is_empty() {
             print_bgp_routes(&v6_bgp, "BGP Routes (IPv6)");
         }
     }

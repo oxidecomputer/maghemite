@@ -1416,6 +1416,15 @@
           },
           {
             "in": "query",
+            "name": "prefix",
+            "description": "Exact-match prefix filter (e.g. \"10.0.0.0/24\")",
+            "schema": {
+              "nullable": true,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "protocol",
             "description": "Filter by protocol (optional)",
             "schema": {
@@ -1453,6 +1462,15 @@
             "description": "Filter by address family (None means all families)",
             "schema": {
               "$ref": "#/components/schemas/AddressFamily"
+            }
+          },
+          {
+            "in": "query",
+            "name": "prefix",
+            "description": "Exact-match prefix filter (e.g. \"10.0.0.0/24\")",
+            "schema": {
+              "nullable": true,
+              "type": "string"
             }
           },
           {

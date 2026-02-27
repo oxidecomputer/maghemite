@@ -223,6 +223,28 @@ impl Db {
         }
     }
 
+    /// Look up a single prefix in the imported (adj-rib-in) table.
+    pub fn get_imported_prefix(
+        &self,
+        prefix: &Prefix,
+    ) -> Option<BTreeSet<Path>> {
+        match prefix {
+            Prefix::V4(p4) => lock!(self.rib4_in).get(p4).cloned(),
+            Prefix::V6(p6) => lock!(self.rib6_in).get(p6).cloned(),
+        }
+    }
+
+    /// Look up a single prefix in the selected (loc-rib) table.
+    pub fn get_selected_prefix(
+        &self,
+        prefix: &Prefix,
+    ) -> Option<BTreeSet<Path>> {
+        match prefix {
+            Prefix::V4(p4) => lock!(self.rib4_loc).get(p4).cloned(),
+            Prefix::V6(p6) => lock!(self.rib6_loc).get(p6).cloned(),
+        }
+    }
+
     pub fn add_bgp_router(
         &self,
         asn: u32,

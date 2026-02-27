@@ -477,28 +477,28 @@ impl MgAdminApi for MgAdminApiImpl {
 
     async fn get_rib_imported(
         ctx: RequestContext<Self::Context>,
-        request: Query<RibQuery>,
+        request: Query<RibQueryV1>,
     ) -> Result<HttpResponseOk<RibV1>, HttpError> {
         rib_admin::get_rib_imported(ctx, request).await
     }
 
     async fn get_rib_selected(
         ctx: RequestContext<Self::Context>,
-        request: Query<RibQuery>,
+        request: Query<RibQueryV1>,
     ) -> Result<HttpResponseOk<RibV1>, HttpError> {
         rib_admin::get_rib_selected(ctx, request).await
     }
 
     async fn get_rib_imported_v2(
         ctx: RequestContext<Self::Context>,
-        request: Query<RibQuery>,
+        request: Query<RibQueryV1>,
     ) -> Result<HttpResponseOk<RibV2>, HttpError> {
         rib_admin::get_rib_imported_v2(ctx, request).await
     }
 
     async fn get_rib_selected_v2(
         ctx: RequestContext<Self::Context>,
-        request: Query<RibQuery>,
+        request: Query<RibQueryV1>,
     ) -> Result<HttpResponseOk<RibV2>, HttpError> {
         rib_admin::get_rib_selected_v2(ctx, request).await
     }
