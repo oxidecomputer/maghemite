@@ -32,6 +32,7 @@ use colored::*;
 use rdb_types::{AddressFamily, Prefix, ProtocolFilter};
 use std::collections::BTreeMap;
 use std::io::{Write, stdout};
+use std::net::Ipv4Addr;
 use tabwriter::TabWriter;
 use types::{Path, Rib};
 
@@ -39,6 +40,8 @@ pub fn print_rib(
     rib: Rib,
     address_family: Option<AddressFamily>,
     protocol_filter: Option<ProtocolFilter>,
+    detail: bool,
+    prefix_filter: Option<&str>,
 ) {
     type CliRib = BTreeMap<Prefix, Vec<Path>>;
 
@@ -50,6 +53,13 @@ pub fn print_rib(
 
     // Parse and categorize all routes
     for (prefix, paths) in rib.0.into_iter() {
+        // Client-side exact-match prefix filter
+        if let Some(filter) = prefix_filter
+            && prefix != filter
+        {
+            continue;
+        }
+
         let pfx: Prefix = match prefix.parse() {
             Ok(p) => p,
             Err(e) => {
@@ -87,20 +97,32 @@ pub fn print_rib(
         matches!(protocol_filter, None | Some(ProtocolFilter::Static));
     let show_bgp = matches!(protocol_filter, None | Some(ProtocolFilter::Bgp));
 
-    if show_ipv4 && show_static && !v4_static.is_empty() {
-        print_static_routes(&v4_static, "Static Routes (IPv4)");
-    }
-
-    if show_ipv4 && show_bgp && !v4_bgp.is_empty() {
-        print_bgp_routes(&v4_bgp, "BGP Routes (IPv4)");
-    }
-
-    if show_ipv6 && show_static && !v6_static.is_empty() {
-        print_static_routes(&v6_static, "Static Routes (IPv6)");
-    }
-
-    if show_ipv6 && show_bgp && !v6_bgp.is_empty() {
-        print_bgp_routes(&v6_bgp, "BGP Routes (IPv6)");
+    if detail {
+        if show_ipv4 && show_static && !v4_static.is_empty() {
+            print_static_routes_detail(&v4_static, "Static Routes (IPv4)");
+        }
+        if show_ipv4 && show_bgp && !v4_bgp.is_empty() {
+            print_bgp_routes_detail(&v4_bgp, "BGP Routes (IPv4)");
+        }
+        if show_ipv6 && show_static && !v6_static.is_empty() {
+            print_static_routes_detail(&v6_static, "Static Routes (IPv6)");
+        }
+        if show_ipv6 && show_bgp && !v6_bgp.is_empty() {
+            print_bgp_routes_detail(&v6_bgp, "BGP Routes (IPv6)");
+        }
+    } else {
+        if show_ipv4 && show_static && !v4_static.is_empty() {
+            print_static_routes(&v4_static, "Static Routes (IPv4)");
+        }
+        if show_ipv4 && show_bgp && !v4_bgp.is_empty() {
+            print_bgp_routes(&v4_bgp, "BGP Routes (IPv4)");
+        }
+        if show_ipv6 && show_static && !v6_static.is_empty() {
+            print_static_routes(&v6_static, "Static Routes (IPv6)");
+        }
+        if show_ipv6 && show_bgp && !v6_bgp.is_empty() {
+            print_bgp_routes(&v6_bgp, "BGP Routes (IPv6)");
+        }
     }
 }
 
@@ -111,7 +133,7 @@ fn print_static_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
         "{}\t{}\t{}",
         "Prefix".dimmed(),
         "Nexthop".dimmed(),
-        "RIB Priority".dimmed(),
+        "RIB Prio".dimmed(),
     )
     .unwrap();
 
@@ -141,16 +163,19 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
     let mut tw = TabWriter::new(stdout());
     writeln!(
         &mut tw,
-        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         "Prefix".dimmed(),
         "Nexthop".dimmed(),
-        "RIB Priority".dimmed(),
-        "Local Pref".dimmed(),
-        "Origin AS".dimmed(),
+        "RIB Prio".dimmed(),
+        "LocPref".dimmed(),
+        "Orig AS".dimmed(),
         "Peer".dimmed(),
         "MED".dimmed(),
         "AS Path".dimmed(),
         "Stale".dimmed(),
+        "Origin".dimmed(),
+        "iBGP".dimmed(),
+        "RID".dimmed(),
     )
     .unwrap();
 
@@ -159,16 +184,20 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
         for path in paths.iter() {
             let bgp = path.bgp.as_ref().unwrap();
             let nexthop_display = match &path.nexthop_interface {
-                Some(iface) => format!("{}({})", iface, path.nexthop),
+                Some(iface) => {
+                    format!("{}({})", iface, path.nexthop)
+                }
                 None => path.nexthop.to_string(),
             };
             let peer_str = match &bgp.peer {
                 rdb_types::PeerId::Ip(ip) => ip.to_string(),
                 rdb_types::PeerId::Interface(iface) => iface.clone(),
             };
+            let router_id = Ipv4Addr::from(bgp.id);
             writeln!(
                 &mut tw,
-                "\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}",
+                "\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{:?}\t{:?}\
+                 \t{}\t{}\t{}",
                 nexthop_display,
                 path.rib_priority,
                 bgp.local_pref,
@@ -177,6 +206,9 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
                 bgp.med,
                 bgp.as_path,
                 bgp.stale,
+                bgp.origin,
+                bgp.internal,
+                router_id,
             )
             .unwrap();
         }
@@ -185,4 +217,85 @@ fn print_bgp_routes(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
     println!("{}", title.dimmed());
     println!("{}", "=".repeat(title.len()).dimmed());
     tw.flush().unwrap();
+}
+
+fn opt_display<T: std::fmt::Display>(v: &Option<T>) -> String {
+    match v {
+        Some(val) => val.to_string(),
+        None => "-".to_string(),
+    }
+}
+
+fn print_static_routes_detail(
+    routes: &BTreeMap<Prefix, Vec<Path>>,
+    title: &str,
+) {
+    println!("{}", title.dimmed());
+    println!("{}", "=".repeat(title.len()).dimmed());
+
+    for (prefix, paths) in routes.iter() {
+        println!("{prefix}");
+        for path in paths.iter() {
+            let nexthop_display = match &path.nexthop_interface {
+                Some(iface) => {
+                    format!("{}({})", iface, path.nexthop)
+                }
+                None => path.nexthop.to_string(),
+            };
+            println!("  via {}:", nexthop_display);
+            println!(
+                "    Nexthop Interface: {}",
+                opt_display(&path.nexthop_interface),
+            );
+            println!("    RIB Priority:      {}", path.rib_priority,);
+            println!("    Shutdown:          {}", path.shutdown,);
+            println!("    VLAN ID:           {}", opt_display(&path.vlan_id),);
+        }
+    }
+}
+
+fn print_bgp_routes_detail(routes: &BTreeMap<Prefix, Vec<Path>>, title: &str) {
+    println!("{}", title.dimmed());
+    println!("{}", "=".repeat(title.len()).dimmed());
+
+    for (prefix, paths) in routes.iter() {
+        println!("{prefix}");
+        for path in paths.iter() {
+            let bgp = path.bgp.as_ref().unwrap();
+            let peer_str = match &bgp.peer {
+                rdb_types::PeerId::Ip(ip) => ip.to_string(),
+                rdb_types::PeerId::Interface(iface) => iface.clone(),
+            };
+            println!("  via {}:", peer_str);
+            println!("    Nexthop:           {}", path.nexthop,);
+            println!(
+                "    Nexthop Interface: {}",
+                opt_display(&path.nexthop_interface),
+            );
+            println!("    Origin:            {}", bgp.origin,);
+            println!("    Origin AS:         {}", bgp.origin_as,);
+            println!("    Internal:          {}", bgp.internal,);
+            println!("    Router ID:         {}", Ipv4Addr::from(bgp.id),);
+            println!("    Local Pref:        {}", opt_display(&bgp.local_pref),);
+            println!("    MED:               {}", opt_display(&bgp.med),);
+            let as_path_str = bgp
+                .as_path
+                .iter()
+                .map(|asn| asn.to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!(
+                "    AS Path:           {}",
+                if as_path_str.is_empty() {
+                    "-".to_string()
+                } else {
+                    as_path_str
+                },
+            );
+            println!("    RIB Priority:      {}", path.rib_priority,);
+            println!("    Shutdown:          {}", path.shutdown,);
+            println!("    Stale:             {}", opt_display(&bgp.stale),);
+            println!("    VLAN ID:           {}", opt_display(&path.vlan_id),);
+        }
+    }
 }

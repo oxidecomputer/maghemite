@@ -3,12 +3,21 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::Result;
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use mg_admin_client::types::BestpathFanoutRequest;
 use mg_admin_client::{Client, print_rib};
 use mg_common::println_nopipe;
 use rdb::types::{AddressFamily, ProtocolFilter};
 use std::num::NonZeroU8;
+
+#[derive(Clone, Debug, ValueEnum)]
+#[allow(non_camel_case_types)]
+pub enum RibDisplayMode {
+    /// Display summary information (default).
+    summary,
+    /// Display detailed information.
+    detail,
+}
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -36,6 +45,12 @@ pub enum StatusCmd {
         /// Protocol filter (optional)
         #[arg(value_enum)]
         protocol: Option<ProtocolFilter>,
+        /// Display mode: summary (default) or detail.
+        #[clap(long, value_enum, default_value = "summary")]
+        mode: RibDisplayMode,
+        /// Exact-match prefix filter (e.g. 10.0.0.0/24)
+        #[clap(long)]
+        prefix: Option<String>,
     },
 
     /// Get the loc-rib table. Contains only valid routes and their
@@ -47,6 +62,12 @@ pub enum StatusCmd {
         /// Protocol filter (optional)
         #[arg(value_enum)]
         protocol: Option<ProtocolFilter>,
+        /// Display mode: summary (default) or detail.
+        #[clap(long, value_enum, default_value = "summary")]
+        mode: RibDisplayMode,
+        /// Exact-match prefix filter (e.g. 10.0.0.0/24)
+        #[clap(long)]
+        prefix: Option<String>,
     },
 }
 
@@ -80,11 +101,23 @@ pub async fn commands(command: Commands, c: Client) -> Result<()> {
             StatusCmd::Imported {
                 address_family,
                 protocol,
-            } => get_imported(c, address_family, protocol).await?,
+                mode,
+                prefix,
+            } => {
+                let detail = matches!(mode, RibDisplayMode::detail);
+                get_imported(c, address_family, protocol, detail, prefix)
+                    .await?
+            }
             StatusCmd::Selected {
                 address_family,
                 protocol,
-            } => get_selected(c, address_family, protocol).await?,
+                mode,
+                prefix,
+            } => {
+                let detail = matches!(mode, RibDisplayMode::detail);
+                get_selected(c, address_family, protocol, detail, prefix)
+                    .await?
+            }
         },
     }
     Ok(())
@@ -94,13 +127,21 @@ async fn get_imported(
     c: Client,
     address_family: Option<AddressFamily>,
     protocol: Option<ProtocolFilter>,
+    detail: bool,
+    prefix: Option<String>,
 ) -> Result<()> {
     let imported = c
         .get_rib_imported_v3(address_family.as_ref(), protocol.as_ref())
         .await?
         .into_inner();
 
-    print_rib(imported, address_family, protocol);
+    print_rib(
+        imported,
+        address_family,
+        protocol,
+        detail,
+        prefix.as_deref(),
+    );
     Ok(())
 }
 
@@ -108,13 +149,21 @@ async fn get_selected(
     c: Client,
     address_family: Option<AddressFamily>,
     protocol: Option<ProtocolFilter>,
+    detail: bool,
+    prefix: Option<String>,
 ) -> Result<()> {
     let selected = c
         .get_rib_selected_v3(address_family.as_ref(), protocol.as_ref())
         .await?
         .into_inner();
 
-    print_rib(selected, address_family, protocol);
+    print_rib(
+        selected,
+        address_family,
+        protocol,
+        detail,
+        prefix.as_deref(),
+    );
     Ok(())
 }
 
