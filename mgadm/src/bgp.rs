@@ -786,33 +786,37 @@ impl Neighbor {
 
         types::Neighbor {
             asn: self.asn,
-            remote_asn: self.remote_asn,
-            min_ttl: self.min_ttl,
             name: self.name.clone(),
             host: SocketAddr::new(addr, self.port).to_string(),
-            hold_time: self.hold_time,
-            idle_hold_time: self.idle_hold_time,
-            connect_retry: self.connect_retry_time,
-            keepalive: self.keepalive_time,
-            delay_open: self.delay_open_time,
-            resolution: self.clock_resolution,
             group: self.group.clone(),
-            passive: self.passive_connection,
-            md5_auth_key: self.md5_auth_key.clone(),
-            multi_exit_discriminator: self.med,
-            communities: self.communities.clone(),
-            local_pref: self.local_pref,
-            enforce_first_as: self.enforce_first_as,
-            ipv4_unicast,
-            ipv6_unicast,
-            vlan_id: self.vlan_id,
-            connect_retry_jitter: self
-                .connect_retry_jitter
-                .map(jitter_range_to_api),
-            idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
-            deterministic_collision_resolution: self
-                .deterministic_collision_resolution,
-            dscp: self.dscp.unwrap_or_default(),
+            parameters: types::BgpPeerParameters {
+                remote_asn: self.remote_asn,
+                min_ttl: self.min_ttl,
+                hold_time: self.hold_time,
+                idle_hold_time: self.idle_hold_time,
+                connect_retry: self.connect_retry_time,
+                keepalive: self.keepalive_time,
+                delay_open: self.delay_open_time,
+                resolution: self.clock_resolution,
+                passive: self.passive_connection,
+                md5_auth_key: self.md5_auth_key.clone(),
+                multi_exit_discriminator: self.med,
+                communities: self.communities.clone(),
+                local_pref: self.local_pref,
+                enforce_first_as: self.enforce_first_as,
+                ipv4_unicast,
+                ipv6_unicast,
+                vlan_id: self.vlan_id,
+                connect_retry_jitter: self
+                    .connect_retry_jitter
+                    .map(jitter_range_to_api),
+                idle_hold_jitter: self
+                    .idle_hold_jitter
+                    .map(jitter_range_to_api),
+                deterministic_collision_resolution: self
+                    .deterministic_collision_resolution,
+                dscp: self.dscp.unwrap_or_default(),
+            },
         }
     }
 
@@ -865,8 +869,6 @@ impl Neighbor {
 
         types::UnnumberedNeighbor {
             asn: self.asn,
-            remote_asn: self.remote_asn,
-            min_ttl: self.min_ttl,
             act_as_a_default_ipv6_router: if self.act_as_default_router {
                 1800
             } else {
@@ -874,29 +876,35 @@ impl Neighbor {
             },
             name: self.name.clone(),
             interface,
-            hold_time: self.hold_time,
-            idle_hold_time: self.idle_hold_time,
-            connect_retry: self.connect_retry_time,
-            keepalive: self.keepalive_time,
-            delay_open: self.delay_open_time,
-            resolution: self.clock_resolution,
             group: self.group.clone(),
-            passive: self.passive_connection,
-            md5_auth_key: self.md5_auth_key.clone(),
-            multi_exit_discriminator: self.med,
-            communities: self.communities.clone(),
-            local_pref: self.local_pref,
-            enforce_first_as: self.enforce_first_as,
-            ipv4_unicast,
-            ipv6_unicast,
-            vlan_id: self.vlan_id,
-            connect_retry_jitter: self
-                .connect_retry_jitter
-                .map(jitter_range_to_api),
-            idle_hold_jitter: self.idle_hold_jitter.map(jitter_range_to_api),
-            deterministic_collision_resolution: self
-                .deterministic_collision_resolution,
-            dscp: self.dscp.unwrap_or_default(),
+            parameters: types::BgpPeerParameters {
+                remote_asn: self.remote_asn,
+                min_ttl: self.min_ttl,
+                hold_time: self.hold_time,
+                idle_hold_time: self.idle_hold_time,
+                connect_retry: self.connect_retry_time,
+                keepalive: self.keepalive_time,
+                delay_open: self.delay_open_time,
+                resolution: self.clock_resolution,
+                passive: self.passive_connection,
+                md5_auth_key: self.md5_auth_key.clone(),
+                multi_exit_discriminator: self.med,
+                communities: self.communities.clone(),
+                local_pref: self.local_pref,
+                enforce_first_as: self.enforce_first_as,
+                ipv4_unicast,
+                ipv6_unicast,
+                vlan_id: self.vlan_id,
+                connect_retry_jitter: self
+                    .connect_retry_jitter
+                    .map(jitter_range_to_api),
+                idle_hold_jitter: self
+                    .idle_hold_jitter
+                    .map(jitter_range_to_api),
+                deterministic_collision_resolution: self
+                    .deterministic_collision_resolution,
+                dscp: self.dscp.unwrap_or_default(),
+            },
         }
     }
 }

@@ -199,7 +199,6 @@ pub struct Neighbor {
     pub name: String,
     pub group: String,
     pub host: SocketAddr,
-    #[serde(flatten)]
     pub parameters: BgpPeerParameters,
 }
 
@@ -235,7 +234,6 @@ pub struct UnnumberedNeighbor {
     pub group: String,
     pub interface: String,
     pub act_as_a_default_ipv6_router: u16,
-    #[serde(flatten)]
     pub parameters: BgpPeerParameters,
 }
 
@@ -1229,7 +1227,6 @@ pub struct BgpPeerConfigV1 {
 pub struct BgpPeerConfig {
     pub host: SocketAddr,
     pub name: String,
-    #[serde(flatten)]
     pub parameters: BgpPeerParameters,
 }
 
@@ -1238,7 +1235,6 @@ pub struct UnnumberedBgpPeerConfig {
     pub interface: String,
     pub name: String,
     pub router_lifetime: u16,
-    #[serde(flatten)]
     pub parameters: BgpPeerParameters,
 }
 

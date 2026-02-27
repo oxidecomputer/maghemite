@@ -2187,6 +2187,25 @@
       "BgpPeerConfig": {
         "type": "object",
         "properties": {
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/BgpPeerParameters"
+          }
+        },
+        "required": [
+          "host",
+          "name",
+          "parameters"
+        ]
+      },
+      "BgpPeerParameters": {
+        "type": "object",
+        "properties": {
           "communities": {
             "type": "array",
             "items": {
@@ -2234,9 +2253,6 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 0
-          },
-          "host": {
-            "type": "string"
           },
           "idle_hold_jitter": {
             "nullable": true,
@@ -2297,9 +2313,6 @@
             "format": "uint32",
             "minimum": 0
           },
-          "name": {
-            "type": "string"
-          },
           "passive": {
             "type": "boolean"
           },
@@ -2328,10 +2341,8 @@
           "deterministic_collision_resolution",
           "enforce_first_as",
           "hold_time",
-          "host",
           "idle_hold_time",
           "keepalive",
-          "name",
           "passive",
           "resolution"
         ]
@@ -3954,158 +3965,25 @@
             "format": "uint32",
             "minimum": 0
           },
-          "communities": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          "connect_retry": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "connect_retry_jitter": {
-            "nullable": true,
-            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "delay_open": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "deterministic_collision_resolution": {
-            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
-            "type": "boolean"
-          },
-          "dscp": {
-            "description": "DSCP value for BGP TCP connections (0-63). RFC 4271 Appendix E recommends CS6 (48) for BGP traffic. Default: CS6 (48).",
-            "default": 48,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Dscp"
-              }
-            ]
-          },
-          "enforce_first_as": {
-            "type": "boolean"
-          },
           "group": {
             "type": "string"
-          },
-          "hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
           },
           "host": {
             "type": "string"
           },
-          "idle_hold_jitter": {
-            "nullable": true,
-            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "idle_hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "ipv4_unicast": {
-            "nullable": true,
-            "description": "IPv4 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv4UnicastConfig"
-              }
-            ]
-          },
-          "ipv6_unicast": {
-            "nullable": true,
-            "description": "IPv6 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv6UnicastConfig"
-              }
-            ]
-          },
-          "keepalive": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "local_pref": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "md5_auth_key": {
-            "nullable": true,
-            "type": "string"
-          },
-          "min_ttl": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 1
-          },
-          "multi_exit_discriminator": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
           "name": {
             "type": "string"
           },
-          "passive": {
-            "type": "boolean"
-          },
-          "remote_asn": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "resolution": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "vlan_id": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
+          "parameters": {
+            "$ref": "#/components/schemas/BgpPeerParameters"
           }
         },
         "required": [
           "asn",
-          "communities",
-          "connect_retry",
-          "delay_open",
-          "deterministic_collision_resolution",
-          "enforce_first_as",
           "group",
-          "hold_time",
           "host",
-          "idle_hold_time",
-          "keepalive",
           "name",
-          "passive",
-          "resolution"
+          "parameters"
         ]
       },
       "NeighborResetOp": {
@@ -5505,158 +5383,25 @@
       "UnnumberedBgpPeerConfig": {
         "type": "object",
         "properties": {
-          "communities": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          "connect_retry": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "connect_retry_jitter": {
-            "nullable": true,
-            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "delay_open": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "deterministic_collision_resolution": {
-            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
-            "type": "boolean"
-          },
-          "dscp": {
-            "description": "DSCP value for BGP TCP connections (0-63). RFC 4271 Appendix E recommends CS6 (48) for BGP traffic. Default: CS6 (48).",
-            "default": 48,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Dscp"
-              }
-            ]
-          },
-          "enforce_first_as": {
-            "type": "boolean"
-          },
-          "hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "idle_hold_jitter": {
-            "nullable": true,
-            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "idle_hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
           "interface": {
             "type": "string"
-          },
-          "ipv4_unicast": {
-            "nullable": true,
-            "description": "IPv4 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv4UnicastConfig"
-              }
-            ]
-          },
-          "ipv6_unicast": {
-            "nullable": true,
-            "description": "IPv6 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv6UnicastConfig"
-              }
-            ]
-          },
-          "keepalive": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "local_pref": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "md5_auth_key": {
-            "nullable": true,
-            "type": "string"
-          },
-          "min_ttl": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 1
-          },
-          "multi_exit_discriminator": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
           },
           "name": {
             "type": "string"
           },
-          "passive": {
-            "type": "boolean"
-          },
-          "remote_asn": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "resolution": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
+          "parameters": {
+            "$ref": "#/components/schemas/BgpPeerParameters"
           },
           "router_lifetime": {
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
-          },
-          "vlan_id": {
-            "nullable": true,
             "type": "integer",
             "format": "uint16",
             "minimum": 0
           }
         },
         "required": [
-          "communities",
-          "connect_retry",
-          "delay_open",
-          "deterministic_collision_resolution",
-          "enforce_first_as",
-          "hold_time",
-          "idle_hold_time",
           "interface",
-          "keepalive",
           "name",
-          "passive",
-          "resolution",
+          "parameters",
           "router_lifetime"
         ]
       },
@@ -5673,159 +5418,26 @@
             "format": "uint32",
             "minimum": 0
           },
-          "communities": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          },
-          "connect_retry": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "connect_retry_jitter": {
-            "nullable": true,
-            "description": "Jitter range for connect_retry timer. When used, the connect_retry timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "delay_open": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "deterministic_collision_resolution": {
-            "description": "Enable deterministic collision resolution in Established state. When true, uses BGP-ID comparison per RFC 4271 §6.8 for collision resolution even when one connection is already in Established state. When false, Established connection always wins (timing-based resolution).",
-            "type": "boolean"
-          },
-          "dscp": {
-            "description": "DSCP value for BGP TCP connections (0-63). RFC 4271 Appendix E recommends CS6 (48) for BGP traffic. Default: CS6 (48).",
-            "default": 48,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Dscp"
-              }
-            ]
-          },
-          "enforce_first_as": {
-            "type": "boolean"
-          },
           "group": {
             "type": "string"
-          },
-          "hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "idle_hold_jitter": {
-            "nullable": true,
-            "description": "Jitter range for idle hold timer. When used, the idle hold timer is multiplied by a random value within the (min, max) range supplied. Useful to help break repeated synchronization of connection collisions.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JitterRange"
-              }
-            ]
-          },
-          "idle_hold_time": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
           },
           "interface": {
             "type": "string"
           },
-          "ipv4_unicast": {
-            "nullable": true,
-            "description": "IPv4 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv4UnicastConfig"
-              }
-            ]
-          },
-          "ipv6_unicast": {
-            "nullable": true,
-            "description": "IPv6 Unicast address family configuration (None = disabled)",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/Ipv6UnicastConfig"
-              }
-            ]
-          },
-          "keepalive": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "local_pref": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "md5_auth_key": {
-            "nullable": true,
-            "type": "string"
-          },
-          "min_ttl": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 1
-          },
-          "multi_exit_discriminator": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
           "name": {
             "type": "string"
           },
-          "passive": {
-            "type": "boolean"
-          },
-          "remote_asn": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "resolution": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "vlan_id": {
-            "nullable": true,
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0
+          "parameters": {
+            "$ref": "#/components/schemas/BgpPeerParameters"
           }
         },
         "required": [
           "act_as_a_default_ipv6_router",
           "asn",
-          "communities",
-          "connect_retry",
-          "delay_open",
-          "deterministic_collision_resolution",
-          "enforce_first_as",
           "group",
-          "hold_time",
-          "idle_hold_time",
           "interface",
-          "keepalive",
           "name",
-          "passive",
-          "resolution"
+          "parameters"
         ]
       },
       "UnnumberedNeighborResetRequest": {
