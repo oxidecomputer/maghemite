@@ -326,17 +326,34 @@ mod test {
         let mut daemon = Daemon::new(log);
         assert_eq!(daemon.sessions.len(), 0);
 
+        // Add an IPv4 peer.
         let (a, _b) = bidi::channel();
-        let p1_addr = ip("203.0.113.10");
+        let v4_addr = ip("203.0.113.10");
         daemon.add_peer(
-            p1_addr,
+            v4_addr,
             Duration::from_secs(5),
             3,
             SessionMode::MultiHop,
             a,
             db.db().clone(),
         );
-        assert_eq!(daemon.peer_state(p1_addr), Some(BfdPeerState::Down));
+        assert_eq!(daemon.peer_state(v4_addr), Some(BfdPeerState::Down),);
+
+        // Add an IPv6 peer to the same daemon.
+        let (a, _b) = bidi::channel();
+        let v6_addr = ip("2001:db8::10");
+        daemon.add_peer(
+            v6_addr,
+            Duration::from_secs(5),
+            3,
+            SessionMode::MultiHop,
+            a,
+            db.db().clone(),
+        );
+        assert_eq!(daemon.peer_state(v6_addr), Some(BfdPeerState::Down),);
+
+        // Both peers coexist.
+        assert_eq!(daemon.sessions.len(), 2);
 
         Ok(())
     }
@@ -349,39 +366,71 @@ mod test {
 
         let mut net = Network::default();
 
-        let addr1 = ip("203.0.113.10");
-        let addr2 = ip("203.0.113.20");
+        // IPv4 peer pair.
+        let v4_addr1 = ip("203.0.113.10");
+        let v4_addr2 = ip("203.0.113.20");
 
+        // IPv6 peer pair.
+        let v6_addr1 = ip("2001:db8::10");
+        let v6_addr2 = ip("2001:db8::20");
+
+        // Daemon 1 peers with both v4 and v6 counterparts.
         let mut d1 = Daemon::new(test_logger());
         let (a, b) = bidi::channel();
         d1.add_peer(
-            addr1,
+            v4_addr1,
             Duration::from_secs(5),
             3,
             SessionMode::MultiHop,
             a,
             db.db().clone(),
         );
-        net.register(addr2, b);
+        net.register(v4_addr2, b);
 
+        let (a, b) = bidi::channel();
+        d1.add_peer(
+            v6_addr1,
+            Duration::from_secs(5),
+            3,
+            SessionMode::MultiHop,
+            a,
+            db.db().clone(),
+        );
+        net.register(v6_addr2, b);
+
+        // Daemon 2 peers with both v4 and v6 counterparts.
         let mut d2 = Daemon::new(test_logger());
         let (a, b) = bidi::channel();
         d2.add_peer(
-            addr2,
+            v4_addr2,
             Duration::from_secs(5),
             3,
             SessionMode::MultiHop,
             a,
             db.db().clone(),
         );
-        net.register(addr1, b);
+        net.register(v4_addr1, b);
+
+        let (a, b) = bidi::channel();
+        d2.add_peer(
+            v6_addr2,
+            Duration::from_secs(5),
+            3,
+            SessionMode::MultiHop,
+            a,
+            db.db().clone(),
+        );
+        net.register(v6_addr1, b);
 
         net.run();
 
         sleep(Duration::from_secs(10));
 
-        assert_eq!(d1.peer_state(addr1), Some(BfdPeerState::Up));
-        assert_eq!(d2.peer_state(addr2), Some(BfdPeerState::Up));
+        // All four sessions should reach Up.
+        assert_eq!(d1.peer_state(v4_addr1), Some(BfdPeerState::Up),);
+        assert_eq!(d1.peer_state(v6_addr1), Some(BfdPeerState::Up),);
+        assert_eq!(d2.peer_state(v4_addr2), Some(BfdPeerState::Up),);
+        assert_eq!(d2.peer_state(v6_addr2), Some(BfdPeerState::Up),);
 
         Ok(())
     }
