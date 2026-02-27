@@ -365,10 +365,7 @@ impl UnnumberedNeighbor {
             act_as_a_default_ipv6_router: rq.router_lifetime,
             parameters: BgpPeerParameters {
                 remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq
-                    .parameters
-                    .min_ttl
-                    .and_then(NonZeroU8::new),
+                min_ttl: rq.parameters.min_ttl.and_then(NonZeroU8::new),
                 hold_time: rq.parameters.hold_time,
                 idle_hold_time: rq.parameters.idle_hold_time,
                 delay_open: rq.parameters.delay_open,
@@ -435,10 +432,7 @@ impl Neighbor {
             group: rq.group.clone(),
             parameters: BgpPeerParameters {
                 remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq
-                    .parameters
-                    .min_ttl
-                    .and_then(NonZeroU8::new),
+                min_ttl: rq.parameters.min_ttl.and_then(NonZeroU8::new),
                 hold_time: rq.parameters.hold_time,
                 idle_hold_time: rq.parameters.idle_hold_time,
                 delay_open: rq.parameters.delay_open,
@@ -1337,10 +1331,7 @@ impl From<BgpPeerConfigV1> for BgpPeerConfig {
                 resolution: cfg.parameters.resolution,
                 passive: cfg.parameters.passive,
                 remote_asn: cfg.parameters.remote_asn,
-                min_ttl: cfg
-                    .parameters
-                    .min_ttl
-                    .and_then(NonZeroU8::new),
+                min_ttl: cfg.parameters.min_ttl.and_then(NonZeroU8::new),
                 md5_auth_key: cfg.parameters.md5_auth_key,
                 multi_exit_discriminator: cfg
                     .parameters

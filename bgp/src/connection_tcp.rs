@@ -2,7 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::num::NonZeroU8;
 use crate::{
     DEFAULT_BGP_TTL, IO_TIMEOUT,
     clock::ConnectionClock,
@@ -35,6 +34,7 @@ use std::{
     io::Read,
     io::Write,
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    num::NonZeroU8,
     os::fd::AsRawFd,
     sync::atomic::AtomicBool,
     sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
@@ -532,9 +532,7 @@ impl BgpConnection for BgpConnectionTcp {
         let guard = lock!(self.conn);
         match *option {
             SocketOption::Dscp(dscp) => apply_dscp(&guard, dscp, self.peer),
-            SocketOption::MinTtl(ttl) => {
-                apply_min_ttl(&guard, ttl, self.peer)
-            }
+            SocketOption::MinTtl(ttl) => apply_min_ttl(&guard, ttl, self.peer),
         }
     }
 }
