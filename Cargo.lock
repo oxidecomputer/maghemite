@@ -5386,6 +5386,7 @@ name = "rdb-types"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "num_enum 0.7.5",
  "oxnet",
  "schemars 0.8.22",
  "serde",

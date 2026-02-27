@@ -492,15 +492,29 @@ impl MgAdminApi for MgAdminApiImpl {
     async fn get_rib_imported_v2(
         ctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+    ) -> Result<HttpResponseOk<RibV2>, HttpError> {
         rib_admin::get_rib_imported_v2(ctx, request).await
     }
 
     async fn get_rib_selected_v2(
         ctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
-    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+    ) -> Result<HttpResponseOk<RibV2>, HttpError> {
         rib_admin::get_rib_selected_v2(ctx, request).await
+    }
+
+    async fn get_rib_imported_v3(
+        ctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        rib_admin::get_rib_imported_v3(ctx, request).await
+    }
+
+    async fn get_rib_selected_v3(
+        ctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<Rib>, HttpError> {
+        rib_admin::get_rib_selected_v3(ctx, request).await
     }
 
     async fn get_neighbors(

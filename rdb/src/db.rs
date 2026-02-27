@@ -1445,7 +1445,8 @@ mod test {
         use crate::StaticRouteKey;
         use crate::{
             BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-            DEFAULT_RIB_PRIORITY_STATIC, Path, PeerId, Prefix, Prefix4, db::Db,
+            DEFAULT_RIB_PRIORITY_STATIC, Path, PathOrigin, PeerId, Prefix,
+            Prefix4, db::Db,
         };
         // init test vars
         let p0 = Prefix::from("192.168.0.0/24".parse::<Prefix4>().unwrap());
@@ -1461,8 +1462,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 1111,
                 peer: PeerId::Ip(remote_ip0),
+                peer_ip: remote_ip0,
+                internal: false,
                 id: 1111,
                 med: Some(1111),
                 local_pref: Some(1111),
@@ -1477,8 +1481,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 2222,
                 peer: PeerId::Ip(remote_ip1),
+                peer_ip: remote_ip1,
+                internal: false,
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(2222),
@@ -1498,8 +1505,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 2222,
                 peer: PeerId::Ip(remote_ip2),
+                peer_ip: remote_ip2,
+                internal: false,
                 id: 2222,
                 med: Some(2222),
                 local_pref: Some(4444),
@@ -2528,8 +2538,8 @@ mod test {
     #[test]
     fn test_enforce_first_as() {
         use crate::{
-            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PeerId, Prefix,
-            Prefix4, Prefix6,
+            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PathOrigin,
+            PeerId, Prefix, Prefix4, Prefix6,
         };
 
         let log = init_file_logger("rib.log");
@@ -2552,8 +2562,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 65001,
                 peer: peer.clone(),
+                peer_ip,
+                internal: false,
                 id: 1,
                 med: None,
                 local_pref: Some(100),
@@ -2571,8 +2584,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 65001,
                 peer: peer.clone(),
+                peer_ip,
+                internal: false,
                 id: 1,
                 med: None,
                 local_pref: Some(100),
@@ -2589,8 +2605,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 65002,
                 peer: other_peer.clone(),
+                peer_ip: other_ip,
+                internal: false,
                 id: 2,
                 med: None,
                 local_pref: Some(100),
@@ -2637,8 +2656,8 @@ mod test {
     #[test]
     fn test_enforce_first_as_empty_as_path() {
         use crate::{
-            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PeerId, Prefix,
-            Prefix4,
+            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PathOrigin,
+            PeerId, Prefix, Prefix4,
         };
 
         let log = init_file_logger("rib.log");
@@ -2657,8 +2676,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 65001,
                 peer: peer.clone(),
+                peer_ip,
+                internal: false,
                 id: 1,
                 med: None,
                 local_pref: Some(100),
@@ -2682,8 +2704,8 @@ mod test {
     #[test]
     fn test_enforce_first_as_no_match() {
         use crate::{
-            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PeerId, Prefix,
-            Prefix4,
+            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP, Path, PathOrigin,
+            PeerId, Prefix, Prefix4,
         };
 
         let log = init_file_logger("rib.log");
@@ -2701,8 +2723,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 65001,
                 peer: peer.clone(),
+                peer_ip,
+                internal: false,
                 id: 1,
                 med: None,
                 local_pref: Some(100),

@@ -1404,7 +1404,7 @@
     },
     "/rib/status/imported": {
       "get": {
-        "operationId": "get_rib_imported_v2",
+        "operationId": "get_rib_imported_v3",
         "parameters": [
           {
             "in": "query",
@@ -1445,7 +1445,7 @@
     },
     "/rib/status/selected": {
       "get": {
-        "operationId": "get_rib_selected_v2",
+        "operationId": "get_rib_selected_v3",
         "parameters": [
           {
             "in": "query",
@@ -2151,6 +2151,9 @@
             "format": "uint32",
             "minimum": 0
           },
+          "internal": {
+            "type": "boolean"
+          },
           "local_pref": {
             "nullable": true,
             "type": "integer",
@@ -2163,6 +2166,9 @@
             "format": "uint32",
             "minimum": 0
           },
+          "origin": {
+            "$ref": "#/components/schemas/PathOrigin"
+          },
           "origin_as": {
             "type": "integer",
             "format": "uint32",
@@ -2170,6 +2176,10 @@
           },
           "peer": {
             "$ref": "#/components/schemas/PeerId"
+          },
+          "peer_ip": {
+            "type": "string",
+            "format": "ip"
           },
           "stale": {
             "nullable": true,
@@ -2180,8 +2190,11 @@
         "required": [
           "as_path",
           "id",
+          "internal",
+          "origin",
           "origin_as",
-          "peer"
+          "peer",
+          "peer_ip"
         ]
       },
       "BgpPeerConfig": {
@@ -4599,7 +4612,7 @@
         ]
       },
       "PathOrigin": {
-        "description": "An enumeration indicating the origin type of a path.",
+        "description": "BGP ORIGIN path attribute (RFC 4271 Section 4.3).\n\nIndicates how the route was learned: - `Igp` (0): Route interior to the originating AS - `Egp` (1): Route learned via EGP - `Incomplete` (2): Route learned by some other means\n\nUsed in bestpath selection: lower origin value is preferred (IGP < EGP < Incomplete).",
         "oneOf": [
           {
             "description": "Interior gateway protocol",

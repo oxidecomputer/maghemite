@@ -10,8 +10,8 @@ use nom::{
 use num_enum::FromPrimitive;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use path_attribute_flags::*;
-pub use rdb::types::Prefix;
 use rdb::types::{AddressFamily, Prefix4, Prefix6};
+pub use rdb::types::{PathOrigin, Prefix};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -1758,6 +1758,15 @@ impl UpdateMessage {
             .map(|p| p.iter().fold(0, |a, b| a + b.value.len()))
     }
 
+    pub fn origin(&self) -> PathOrigin {
+        for a in &self.path_attributes {
+            if let PathAttributeValue::Origin(origin) = &a.value {
+                return *origin;
+            }
+        }
+        PathOrigin::Incomplete
+    }
+
     pub fn has_community(&self, community: Community) -> bool {
         for a in &self.path_attributes {
             if let PathAttributeValue::Communities(communities) = &a.value {
@@ -2731,40 +2740,6 @@ pub enum Community {
     /// A user defined community
     #[num_enum(catch_all)]
     UserDefined(u32),
-}
-
-/// An enumeration indicating the origin type of a path.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    IntoPrimitive,
-    JsonSchema,
-    PartialEq,
-    Serialize,
-    TryFromPrimitive,
-)]
-#[repr(u8)]
-#[serde(rename_all = "snake_case")]
-pub enum PathOrigin {
-    /// Interior gateway protocol
-    Igp = 0,
-    /// Exterior gateway protocol
-    Egp = 1,
-    /// Incomplete path origin
-    Incomplete = 2,
-}
-
-impl Display for PathOrigin {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            PathOrigin::Igp => write!(f, "igp"),
-            PathOrigin::Egp => write!(f, "egp"),
-            PathOrigin::Incomplete => write!(f, "incomplete"),
-        }
-    }
 }
 
 // A self describing segment found in path sets and sequences.

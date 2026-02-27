@@ -707,3 +707,48 @@ impl JsonSchema for Dscp {
         .into()
     }
 }
+
+/// BGP ORIGIN path attribute (RFC 4271 Section 4.3).
+///
+/// Indicates how the route was learned:
+/// - `Igp` (0): Route interior to the originating AS
+/// - `Egp` (1): Route learned via EGP
+/// - `Incomplete` (2): Route learned by some other means
+///
+/// Used in bestpath selection: lower origin value is preferred
+/// (IGP < EGP < Incomplete).
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    num_enum::IntoPrimitive,
+    JsonSchema,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    num_enum::TryFromPrimitive,
+)]
+#[repr(u8)]
+#[serde(rename_all = "snake_case")]
+pub enum PathOrigin {
+    /// Interior gateway protocol
+    Igp = 0,
+    /// Exterior gateway protocol
+    Egp = 1,
+    /// Incomplete path origin
+    Incomplete = 2,
+}
+
+impl fmt::Display for PathOrigin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PathOrigin::Igp => write!(f, "igp"),
+            PathOrigin::Egp => write!(f, "egp"),
+            PathOrigin::Incomplete => write!(f, "incomplete"),
+        }
+    }
+}

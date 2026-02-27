@@ -8,7 +8,7 @@ use dropshot::{
     RequestContext, TypedBody,
 };
 use mg_api::{
-    BestpathFanoutRequest, BestpathFanoutResponse, Rib, RibQuery, RibV1,
+    BestpathFanoutRequest, BestpathFanoutResponse, Rib, RibQuery, RibV1, RibV2,
     filter_rib_by_protocol,
 };
 use std::sync::Arc;
@@ -36,8 +36,31 @@ pub async fn get_rib_selected(
     Ok(HttpResponseOk(filtered.into()))
 }
 
-// VERSION_UNNUMBERED+ (BgpPathProperties.peer is PeerId enum)
+// VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC (PeerId, no origin/internal)
 pub async fn get_rib_imported_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    query: Query<RibQuery>,
+) -> Result<HttpResponseOk<RibV2>, HttpError> {
+    let ctx = ctx.context();
+    let query = query.into_inner();
+    let imported = ctx.db.full_rib(query.address_family);
+    let filtered = filter_rib_by_protocol(imported, query.protocol);
+    Ok(HttpResponseOk(filtered.into()))
+}
+
+pub async fn get_rib_selected_v2(
+    ctx: RequestContext<Arc<HandlerContext>>,
+    query: Query<RibQuery>,
+) -> Result<HttpResponseOk<RibV2>, HttpError> {
+    let ctx = ctx.context();
+    let query = query.into_inner();
+    let selected = ctx.db.loc_rib(query.address_family);
+    let filtered = filter_rib_by_protocol(selected, query.protocol);
+    Ok(HttpResponseOk(filtered.into()))
+}
+
+// VERSION_EXTENDED_NH_STATIC+ (BgpPathProperties with origin/internal)
+pub async fn get_rib_imported_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
     query: Query<RibQuery>,
 ) -> Result<HttpResponseOk<Rib>, HttpError> {
@@ -48,7 +71,7 @@ pub async fn get_rib_imported_v2(
     Ok(HttpResponseOk(filtered.into()))
 }
 
-pub async fn get_rib_selected_v2(
+pub async fn get_rib_selected_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
     query: Query<RibQuery>,
 ) -> Result<HttpResponseOk<Rib>, HttpError> {

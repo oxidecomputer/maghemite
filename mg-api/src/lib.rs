@@ -29,7 +29,7 @@ use dropshot::{
 };
 use dropshot_api_manager_types::api_versions;
 use rdb::{
-    BfdPeerConfig, Path as RdbPath, PathV1, Prefix, Prefix4, Prefix6,
+    BfdPeerConfig, Path as RdbPath, PathV1, PathV2, Prefix, Prefix4, Prefix6,
     StaticRouteKey,
     types::{AddressFamily, ProtocolFilter},
 };
@@ -482,16 +482,30 @@ pub trait MgAdminApi {
         request: Query<RibQuery>,
     ) -> Result<HttpResponseOk<RibV1>, HttpError>;
 
-    // VERSION_UNNUMBERED+: BgpPathProperties.peer is PeerId enum
-    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_UNNUMBERED.. }]
+    // VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC: PeerId but no origin/internal
+    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
     async fn get_rib_imported_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<RibV2>, HttpError>;
+
+    // VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC: PeerId but no origin/internal
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    async fn get_rib_selected_v2(
+        rqctx: RequestContext<Self::Context>,
+        request: Query<RibQuery>,
+    ) -> Result<HttpResponseOk<RibV2>, HttpError>;
+
+    // VERSION_EXTENDED_NH_STATIC+: BgpPathProperties with origin/internal
+    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn get_rib_imported_v3(
         rqctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
     ) -> Result<HttpResponseOk<Rib>, HttpError>;
 
-    // VERSION_UNNUMBERED+: BgpPathProperties.peer is PeerId enum
-    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_UNNUMBERED.. }]
-    async fn get_rib_selected_v2(
+    // VERSION_EXTENDED_NH_STATIC+: BgpPathProperties with origin/internal
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    async fn get_rib_selected_v3(
         rqctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
     ) -> Result<HttpResponseOk<Rib>, HttpError>;
@@ -822,6 +836,29 @@ impl From<rdb::db::Rib> for RibV1 {
                     let paths_v1: BTreeSet<PathV1> =
                         v.into_iter().map(PathV1::from).collect();
                     (k.to_string(), paths_v1)
+                })
+                .collect(),
+        )
+    }
+}
+
+/// V2 Rib with PathV2 (no origin/internal in BgpPathProperties).
+/// Used for VERSION_UNNUMBERED through VERSION_EXTENDED_NH_STATIC.
+/// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported
+/// version.
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[schemars(rename = "Rib")]
+pub struct RibV2(BTreeMap<String, BTreeSet<PathV2>>);
+
+impl From<rdb::db::Rib> for RibV2 {
+    fn from(value: rdb::db::Rib) -> Self {
+        RibV2(
+            value
+                .into_iter()
+                .map(|(k, v)| {
+                    let paths_v2: BTreeSet<PathV2> =
+                        v.into_iter().map(PathV2::from).collect();
+                    (k.to_string(), paths_v2)
                 })
                 .collect(),
         )
