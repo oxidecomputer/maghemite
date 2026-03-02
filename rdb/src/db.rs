@@ -1680,14 +1680,14 @@ mod test {
 
         // expected current state
         // rib_in:
-        // - p0 via bgp_path0, static_path1 (ordered by nexthop IP)
+        // - p0 via static_path1, bgp_path0 (static before BGP)
         // - p1 via bgp_path{0,1,2}
         // - p2 via bgp_path{1,2}
         // loc_rib:
         // - p0 via static_path1 (win by rib_priority/protocol)
         // - p1 via bgp_path2    (win by local pref)
         // - p2 via bgp_path2    (win by local pref)
-        let rib_in_paths = vec![bgp_path0.clone(), static_path1.clone()];
+        let rib_in_paths = vec![static_path1.clone(), bgp_path0.clone()];
         let loc_rib_paths = vec![static_path1.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
         let rib_in_paths =
@@ -1702,14 +1702,14 @@ mod test {
         db.remove_bgp_prefixes(&[p2], &bgp_path1.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
-        // - p0 via bgp_path0, static_path1 (ordered by nexthop IP)
+        // - p0 via static_path1, bgp_path0 (static before BGP)
         // - p1 via bgp_path{0,1,2}
         // - p2 via bgp_path2
         // loc_rib:
         // - p0 via static_path1 (win by rib_priority/protocol)
         // - p1 via bgp_path2    (win by local pref)
         // - p2 via bgp_path2    (win by local pref)
-        let rib_in_paths = vec![bgp_path0.clone(), static_path1.clone()];
+        let rib_in_paths = vec![static_path1.clone(), bgp_path0.clone()];
         let loc_rib_paths = vec![static_path1.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
         let rib_in_paths =

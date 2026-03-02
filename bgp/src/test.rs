@@ -2310,6 +2310,35 @@ fn test_same_linklocal_multiple_interfaces() {
     assert_eq!(session1_eth0.get_peer_socket_addr(), Some(peer_eth0));
     assert_eq!(session1_eth1.get_peer_socket_addr(), Some(peer_eth1));
 
+    // Originate a route from R2 and verify R1 receives it via both
+    // sessions. R1's RIB must contain two paths for the prefix — one
+    // per interface. With the old Path::Ord these paths would collide
+    // (same nexthop, router-id, AS, AS-path) and one would be silently
+    // dropped.
+    router2
+        .create_origin4(vec![cidr!("10.2.0.0/24")])
+        .expect("originate route on R2");
+
+    let prefix = Prefix::V4(cidr!("10.2.0.0/24"));
+    wait_for!(
+        router1.db.get_prefix_paths(&prefix).len() == 2,
+        "R1 should have 2 paths for 10.2.0.0/24 (one per interface)"
+    );
+
+    let paths = router1.db.get_prefix_paths(&prefix);
+    let peers: BTreeSet<_> = paths
+        .iter()
+        .map(|p| p.bgp.as_ref().unwrap().peer.clone())
+        .collect();
+    assert!(
+        peers.contains(&PeerId::Interface("eth0".into())),
+        "should have path from eth0"
+    );
+    assert!(
+        peers.contains(&PeerId::Interface("eth1".into())),
+        "should have path from eth1"
+    );
+
     // Verify they're truly independent: change eth0's peer
     let new_peer_ip: Ipv6Addr = "fe80::99".parse().unwrap();
     mock_ndp1.discover_peer("eth0", new_peer_ip).unwrap();
