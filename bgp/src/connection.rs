@@ -9,12 +9,14 @@ use crate::{
     session::{FsmEvent, PeerId, SessionEndpoint, SessionInfo},
     unnumbered::UnnumberedManager,
 };
+use rdb::Dscp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::Logger;
 use std::{
     collections::BTreeMap,
     net::{SocketAddr, ToSocketAddrs},
+    num::NonZeroU8,
     sync::{Arc, Mutex, mpsc::Sender},
     thread::JoinHandle,
     time::Duration,
@@ -145,8 +147,9 @@ pub trait BgpListener<Cnx: BgpConnection> {
     /// Dispatcher after accept() returns and session lookup is completed.
     fn apply_policy(
         conn: &Cnx,
-        min_ttl: Option<u8>,
+        min_ttl: Option<NonZeroU8>,
         md5_key: Option<String>,
+        dscp: Dscp,
     ) -> Result<(), Error>;
 }
 
@@ -215,6 +218,15 @@ pub trait BgpConnection: Send + Sync + Sized {
     /// Start the receive loop for this connection. This method is idempotent.
     /// Returns Ok(()) upon successful start of recv loop, else Err.
     fn start_recv_loop(self: &Arc<Self>) -> Result<(), Error>;
+
+    /// Update a socket option on a live connection.
+    fn update_socket_option(&self, option: &SocketOption) -> Result<(), Error>;
+}
+
+/// A socket option that can be updated on a live BGP connection.
+pub enum SocketOption {
+    Dscp(Dscp),
+    MinTtl(Option<NonZeroU8>),
 }
 
 pub use mg_common::thread::{ManagedThread, ThreadState};

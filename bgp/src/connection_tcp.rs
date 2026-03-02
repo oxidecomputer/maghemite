@@ -3,11 +3,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{
-    IO_TIMEOUT,
+    DEFAULT_BGP_TTL, IO_TIMEOUT,
     clock::ConnectionClock,
     connection::{
         BgpConnection, BgpConnector, BgpListener, ConnectionDirection,
-        ConnectionId, ThreadState,
+        ConnectionId, SocketOption, ThreadState,
     },
     error::Error,
     log::{connection_log, connection_log_lite},
@@ -25,13 +25,17 @@ use crate::{
     },
     unnumbered::UnnumberedManager,
 };
+use libc::{IPPROTO_IP, IPPROTO_IPV6, c_void};
 use mg_common::lock;
+use rdb::Dscp;
 use slog::Logger;
 use std::{
     collections::BTreeMap,
     io::Read,
     io::Write,
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    num::NonZeroU8,
+    os::fd::AsRawFd,
     sync::atomic::AtomicBool,
     sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
     thread::{JoinHandle, sleep},
@@ -39,10 +43,7 @@ use std::{
 };
 
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
-use {
-    libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_int, c_void},
-    std::os::fd::AsRawFd,
-};
+use libc::{IPPROTO_TCP, c_int};
 
 #[cfg(target_os = "linux")]
 use crate::connection::MAX_MD5SIG_KEYLEN;
@@ -56,8 +57,16 @@ use std::{collections::HashSet, net::IpAddr};
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
+/// Value passed to IP_MINTTL / IPV6_MINHOPCOUNT to disable the
+/// minimum incoming TTL/hop-limit filter.
+const MINTTL_DISABLED: u8 = 0;
+
 #[cfg(target_os = "illumos")]
 const IP_MINTTL: i32 = 0x1c;
+#[cfg(target_os = "linux")]
+const IPV6_MINHOPCOUNT: i32 = 73;
+#[cfg(target_os = "illumos")]
+const IPV6_MINHOPCOUNT: i32 = 0x2f;
 #[cfg(target_os = "illumos")]
 const TCP_MD5SIG: i32 = 0x27;
 #[cfg(target_os = "illumos")]
@@ -117,6 +126,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
             ))?;
         let listener = TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
+        set_outgoing_ttl(&listener, DEFAULT_BGP_TTL, addr)?;
         Ok(Self {
             listener,
             unnumbered_manager,
@@ -185,14 +195,15 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
 
     fn apply_policy(
         conn: &BgpConnectionTcp,
-        min_ttl: Option<u8>,
+        min_ttl: Option<NonZeroU8>,
         md5_key: Option<String>,
+        dscp: Dscp,
     ) -> Result<(), Error> {
         let tcp_stream = lock!(conn.conn);
 
-        if let Some(ttl) = min_ttl {
-            apply_min_ttl(&tcp_stream, ttl, conn.peer)?;
-        }
+        apply_min_ttl(&tcp_stream, min_ttl, conn.peer)?;
+
+        apply_dscp(&tcp_stream, dscp, conn.peer)?;
 
         if let Some(ref key) = md5_key {
             #[cfg(target_os = "linux")]
@@ -328,13 +339,25 @@ impl BgpConnector<BgpConnectionTcp> for BgpConnectorTcp {
                     }
                 };
 
-                // Apply TTL if specified
-                if let Some(ttl) = config.min_ttl
-                    && let Err(e) = apply_min_ttl(&new_conn, ttl, peer)
+                // Apply TTL (always set DEFAULT_BGP_TTL unless
+                // overridden by min_ttl config)
+                if let Err(e) =
+                    apply_min_ttl(&new_conn, config.min_ttl, peer)
                 {
                     connection_log_lite!(log,
                         warn,
                         "failed to apply min TTL for {peer}: {e}";
+                        "direction" => ConnectionDirection::Outbound,
+                        "peer" => format!("{peer}"),
+                        "error" => format!("{e}")
+                    );
+                    return;
+                }
+
+                if let Err(e) = apply_dscp(&new_conn, config.dscp, peer) {
+                    connection_log_lite!(log,
+                        warn,
+                        "failed to apply DSCP for {peer}: {e}";
                         "direction" => ConnectionDirection::Outbound,
                         "peer" => format!("{peer}"),
                         "error" => format!("{e}")
@@ -504,6 +527,14 @@ impl BgpConnection for BgpConnectionTcp {
 
         Ok(())
     }
+
+    fn update_socket_option(&self, option: &SocketOption) -> Result<(), Error> {
+        let guard = lock!(self.conn);
+        match *option {
+            SocketOption::Dscp(dscp) => apply_dscp(&guard, dscp, self.peer),
+            SocketOption::MinTtl(ttl) => apply_min_ttl(&guard, ttl, self.peer),
+        }
+    }
 }
 
 impl Drop for BgpConnectionTcp {
@@ -536,6 +567,8 @@ impl BgpConnectionTcp {
         direction: ConnectionDirection,
         config: &SessionInfo,
     ) -> Result<Self, Error> {
+        conn.set_nodelay(true)?;
+
         let id = ConnectionId::new(source, peer);
 
         let dropped = Arc::new(AtomicBool::new(false));
@@ -1212,25 +1245,127 @@ fn create_outbound_socket(
     })
 }
 
-/// Apply min TTL setting to a TCP connection
+/// Apply DSCP marking to a BGP TCP connection.
+///
+/// Sets the DSCP field in the IP header via IP_TOS (IPv4) or
+/// IPV6_TCLASS (IPv6).
+fn apply_dscp(
+    conn: &TcpStream,
+    dscp: Dscp,
+    peer: SocketAddr,
+) -> Result<(), Error> {
+    let tos = u32::from(dscp.tos_byte());
+    let fd = conn.as_raw_fd();
+    unsafe {
+        if peer.is_ipv4()
+            && libc::setsockopt(
+                fd,
+                IPPROTO_IP,
+                libc::IP_TOS,
+                &tos as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+        if peer.is_ipv6()
+            && libc::setsockopt(
+                fd,
+                IPPROTO_IPV6,
+                libc::IPV6_TCLASS,
+                &tos as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
+    Ok(())
+}
+
+/// Set the outgoing TTL/hop-limit on a socket.
+///
+/// Works on both `TcpStream` and `TcpListener` (anything with
+/// `AsRawFd`). Uses `IP_TTL` for IPv4 and `IPV6_UNICAST_HOPS` for
+/// IPv6.
+fn set_outgoing_ttl(
+    sock: &impl AsRawFd,
+    ttl: u8,
+    addr: SocketAddr,
+) -> Result<(), Error> {
+    if addr.is_ipv4() {
+        let val = ttl as u32;
+        let fd = sock.as_raw_fd();
+        let rc = unsafe {
+            libc::setsockopt(
+                fd,
+                IPPROTO_IP,
+                libc::IP_TTL,
+                &val as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            )
+        };
+        if rc != 0 {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    } else {
+        let val: i32 = ttl.into();
+        let fd = sock.as_raw_fd();
+        let rc = unsafe {
+            libc::setsockopt(
+                fd,
+                IPPROTO_IPV6,
+                libc::IPV6_UNICAST_HOPS,
+                &val as *const i32 as *const c_void,
+                std::mem::size_of::<i32>() as u32,
+            )
+        };
+        if rc != 0 {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+    }
+    Ok(())
+}
+
+/// Apply min TTL setting to a TCP connection.
+///
+/// Sets the outgoing TTL/hop-limit to `min_ttl` if configured, or
+/// `DEFAULT_BGP_TTL` otherwise. Sets the incoming IP_MINTTL /
+/// IPV6_MINHOPCOUNT filter to `min_ttl`, or 0 (disabled) if not
+/// configured.
 #[allow(unused_variables)]
 fn apply_min_ttl(
     conn: &TcpStream,
-    ttl: u8,
+    min_ttl: Option<NonZeroU8>,
     peer: SocketAddr,
 ) -> Result<(), Error> {
-    conn.set_ttl(ttl.into())?;
+    let ttl = min_ttl.map(NonZeroU8::get);
+    set_outgoing_ttl(conn, ttl.unwrap_or(DEFAULT_BGP_TTL), peer)?;
+    set_ip_minttl(conn, ttl.unwrap_or(MINTTL_DISABLED), peer)
+}
+
+/// Set the minimum acceptable incoming TTL/hop-limit.
+///
+/// Uses IP_MINTTL for IPv4 and IPV6_MINHOPCOUNT for IPv6.
+/// A value of 0 disables the check. Only effective on Linux/illumos;
+/// a no-op on other platforms.
+#[allow(unused_variables)]
+fn set_ip_minttl(
+    conn: &TcpStream,
+    min_ttl: u8,
+    peer: SocketAddr,
+) -> Result<(), Error> {
     #[cfg(any(target_os = "linux", target_os = "illumos"))]
     {
         let fd = conn.as_raw_fd();
-        let min_ttl = ttl as u32;
+        let val = min_ttl as u32;
         unsafe {
             if peer.is_ipv4()
                 && libc::setsockopt(
                     fd,
                     IPPROTO_IP,
                     IP_MINTTL,
-                    &min_ttl as *const u32 as *const c_void,
+                    &val as *const u32 as *const c_void,
                     std::mem::size_of::<u32>() as u32,
                 ) != 0
             {
@@ -1240,8 +1375,8 @@ fn apply_min_ttl(
                 && libc::setsockopt(
                     fd,
                     IPPROTO_IPV6,
-                    IP_MINTTL,
-                    &min_ttl as *const u32 as *const c_void,
+                    IPV6_MINHOPCOUNT,
+                    &val as *const u32 as *const c_void,
                     std::mem::size_of::<u32>() as u32,
                 ) != 0
             {
@@ -1503,4 +1638,61 @@ fn setup_outbound_md5(
     init_md5_associations(fd, key, local.clone(), peer)?;
 
     Ok((key.to_string(), local))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rdb::Dscp;
+    use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn apply_dscp_sets_ip_tos() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        let dscp = Dscp::new(48).unwrap();
+        apply_dscp(&stream, dscp, addr).unwrap();
+
+        let mut readback: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                IPPROTO_IP,
+                libc::IP_TOS,
+                &mut readback as *mut u32 as *mut c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
+        // DSCP 48 → TOS byte = 48 << 2 = 192
+        assert_eq!(readback, u32::from(dscp.tos_byte()));
+    }
+
+    #[test]
+    fn apply_dscp_sets_ipv6_tclass() {
+        let listener = TcpListener::bind("[::1]:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        let dscp = Dscp::new(46).unwrap(); // EF
+        apply_dscp(&stream, dscp, addr).unwrap();
+
+        let mut readback: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                IPPROTO_IPV6,
+                libc::IPV6_TCLASS,
+                &mut readback as *mut u32 as *mut c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
+        // DSCP 46 (EF) → TOS byte = 46 << 2 = 184
+        assert_eq!(readback, u32::from(dscp.tos_byte()));
+    }
 }

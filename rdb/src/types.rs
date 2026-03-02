@@ -17,7 +17,8 @@ use std::str::FromStr;
 
 // Re-export core types from rdb-types
 pub use rdb_types::{
-    AddressFamily, PeerId, Prefix, Prefix4, Prefix6, ProtocolFilter,
+    AddressFamily, Dscp, PathOrigin, PeerId, Prefix, Prefix4, Prefix6,
+    ProtocolFilter,
 };
 
 // Marker types for compile-time address family discrimination.
@@ -130,6 +131,12 @@ impl Ord for Path {
         if self.nexthop != other.nexthop {
             return self.nexthop.cmp(&other.nexthop);
         }
+        if self.vlan_id != other.vlan_id {
+            return self.vlan_id.cmp(&other.vlan_id);
+        }
+        if self.nexthop_interface != other.nexthop_interface {
+            return self.nexthop_interface.cmp(&other.nexthop_interface);
+        }
         if self.shutdown != other.shutdown {
             return self.shutdown.cmp(&other.shutdown);
         }
@@ -144,7 +151,7 @@ impl From<StaticRouteKey> for Path {
     fn from(value: StaticRouteKey) -> Self {
         Self {
             nexthop: value.nexthop,
-            nexthop_interface: None, // Static routes don't use interface binding
+            nexthop_interface: value.nexthop_interface,
             vlan_id: value.vlan_id,
             rib_priority: value.rib_priority,
             shutdown: false,
@@ -203,11 +210,95 @@ impl From<BgpPathProperties> for BgpPathPropertiesV1 {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
-pub struct BgpPathProperties {
+/// Pre-BESTPATH version of BgpPathProperties (no origin/internal).
+/// Used for API versions VERSION_UNNUMBERED through
+/// VERSION_EXTENDED_NH_STATIC (5.0.0 - 6.0.0).
+/// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported
+/// version.
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+)]
+#[schemars(rename = "BgpPathProperties")]
+pub struct BgpPathPropertiesV2 {
     pub origin_as: u32,
     pub id: u32,
     pub peer: PeerId,
+    pub med: Option<u32>,
+    pub local_pref: Option<u32>,
+    pub as_path: Vec<u32>,
+    pub stale: Option<DateTime<Utc>>,
+}
+
+impl From<BgpPathProperties> for BgpPathPropertiesV2 {
+    fn from(value: BgpPathProperties) -> Self {
+        Self {
+            origin_as: value.origin_as,
+            id: value.id,
+            peer: value.peer,
+            med: value.med,
+            local_pref: value.local_pref,
+            as_path: value.as_path,
+            stale: value.stale,
+        }
+    }
+}
+
+/// Pre-BESTPATH version of Path (no origin/internal in BgpPathProperties).
+/// Used for API versions VERSION_UNNUMBERED through
+/// VERSION_EXTENDED_NH_STATIC (5.0.0 - 6.0.0).
+/// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported
+/// version.
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+)]
+#[schemars(rename = "Path")]
+pub struct PathV2 {
+    pub nexthop: IpAddr,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub nexthop_interface: Option<String>,
+    pub shutdown: bool,
+    pub rib_priority: u8,
+    pub bgp: Option<BgpPathPropertiesV2>,
+    pub vlan_id: Option<u16>,
+}
+
+impl From<Path> for PathV2 {
+    fn from(value: Path) -> Self {
+        Self {
+            nexthop: value.nexthop,
+            nexthop_interface: value.nexthop_interface,
+            shutdown: value.shutdown,
+            rib_priority: value.rib_priority,
+            bgp: value.bgp.map(BgpPathPropertiesV2::from),
+            vlan_id: value.vlan_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
+pub struct BgpPathProperties {
+    pub origin: PathOrigin,
+    pub origin_as: u32,
+    pub peer: PeerId,
+    pub peer_ip: IpAddr,
+    pub internal: bool,
+    pub id: u32,
     pub med: Option<u32>,
     pub local_pref: Option<u32>,
     pub as_path: Vec<u32>,
@@ -245,7 +336,6 @@ impl Ord for BgpPathProperties {
 }
 
 #[derive(
-    Copy,
     Clone,
     PartialEq,
     Eq,
@@ -259,6 +349,7 @@ impl Ord for BgpPathProperties {
 pub struct StaticRouteKey {
     pub prefix: Prefix,
     pub nexthop: IpAddr,
+    pub nexthop_interface: Option<String>,
     pub vlan_id: Option<u16>,
     pub rib_priority: u8,
 }
@@ -267,9 +358,10 @@ impl Display for StaticRouteKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "[prefix={}, nexthop={}, vlan_id={}, rib_priority={}]",
+            "[prefix={}, nexthop={}, nexthop_interface={}, vlan_id={}, rib_priority={}]",
             self.prefix,
             self.nexthop,
+            self.nexthop_interface.as_deref().unwrap_or("none"),
             self.vlan_id.unwrap_or(0),
             self.rib_priority
         )
@@ -685,6 +777,10 @@ pub struct BgpNeighborParameters {
     #[serde(default)]
     pub nexthop6: Option<IpAddr>,
     pub vlan_id: Option<u16>,
+    /// DSCP value for BGP TCP connections (0-63).
+    /// Default: CS6 (48).
+    #[serde(default)]
+    pub dscp: Dscp,
 }
 
 /// Default value for ipv4_enabled - true for backward compatibility
