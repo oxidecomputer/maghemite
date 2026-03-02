@@ -96,6 +96,13 @@ support for illumos/Helios and Dendrite/Sidecar data planes.
 - **`mg-ddm-verify`** — DDM verification tool.
 - **`docs/`** — Architecture and developer docs.
 
+## Justfile
+
+Common workflows are available as `just` recipes. The justfile
+automatically excludes illumos-only crates (`ddm`, `ddmd`,
+`falcon-lab`, `lab`) on non-illumos platforms. Run `just --list`
+to see all available recipes.
+
 ## Building
 
 The build has ordering constraints — OpenAPI client generation
@@ -137,16 +144,8 @@ their respective environments (containerlab, Docker, libfalcon).
 All work should compile and pass these checks before submitting:
 
 ```bash
-# Compilation (all targets including tests/benches)
-cargo check --all-targets
-
-# Clippy with warnings as errors
 cargo clippy --all-targets -- --deny warnings
-
-# Format check
 cargo fmt --all --check
-
-# Verify OpenAPI specs are up to date
 cargo xtask openapi check
 ```
 
