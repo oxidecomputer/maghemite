@@ -99,7 +99,20 @@ pub struct Path {
     pub vlan_id: Option<u16>,
 }
 
-// Define a basic ordering on paths so bestpath selection is deterministic
+// Ord defines path *identity* for BTreeSet membership.
+//
+// A path's identity determines when insert() is a no-op and when
+// replace() overwrites an existing entry. Attributes like shutdown,
+// rib_priority, med, local_pref, etc. are NOT part of identity —
+// they are carried on a path and can be updated via replace().
+//
+// Identity rules:
+// - BGP path:    identified solely by PeerId
+// - Static path: identified by (nexthop, nexthop_interface, vlan_id)
+// - BGP and static paths are never the same path
+//
+// Note: this intentionally disagrees with derived Eq (which compares
+// all fields). Eq gives structural equality; Ord gives set identity.
 impl PartialOrd for Path {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -107,36 +120,24 @@ impl PartialOrd for Path {
 }
 impl Ord for Path {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Paths from the same source are considered equal for set membership.
-        // This enables BTreeSet::replace() to update paths from the same source.
-        //
-        // BGP paths: identified by peer IP
-        if let (Some(a), Some(b)) = (&self.bgp, &other.bgp)
-            && a.peer == b.peer
-        {
-            return Ordering::Equal;
-        }
+        match (&self.bgp, &other.bgp) {
+            // BGP path identity is purely PeerId.
+            (Some(a), Some(b)) => a.peer.cmp(&b.peer),
 
-        // Static paths: identified by (nexthop, nexthop_interface, vlan_id)
-        if self.bgp.is_none()
-            && other.bgp.is_none()
-            && self.nexthop == other.nexthop
-            && self.nexthop_interface == other.nexthop_interface
-            && self.vlan_id == other.vlan_id
-        {
-            return Ordering::Equal;
-        }
+            // Static path identity is
+            // (nexthop, nexthop_interface, vlan_id).
+            (None, None) => self
+                .nexthop
+                .cmp(&other.nexthop)
+                .then_with(|| {
+                    self.nexthop_interface.cmp(&other.nexthop_interface)
+                })
+                .then_with(|| self.vlan_id.cmp(&other.vlan_id)),
 
-        if self.nexthop != other.nexthop {
-            return self.nexthop.cmp(&other.nexthop);
+            // BGP and static paths are never the same path.
+            (Some(_), None) => Ordering::Greater,
+            (None, Some(_)) => Ordering::Less,
         }
-        if self.shutdown != other.shutdown {
-            return self.shutdown.cmp(&other.shutdown);
-        }
-        if self.rib_priority != other.rib_priority {
-            return self.rib_priority.cmp(&other.rib_priority);
-        }
-        self.bgp.cmp(&other.bgp)
     }
 }
 
@@ -203,6 +204,9 @@ impl From<BgpPathProperties> for BgpPathPropertiesV1 {
     }
 }
 
+// BgpPathProperties intentionally does not implement Ord — Path::Ord
+// compares only the `peer` field for BGP path identity. All other
+// fields are attributes, not identity.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Eq, PartialEq)]
 pub struct BgpPathProperties {
     pub origin_as: u32,
@@ -219,28 +223,6 @@ impl BgpPathProperties {
         let mut s = self.clone();
         s.stale = Some(Utc::now());
         s
-    }
-}
-
-impl PartialOrd for BgpPathProperties {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for BgpPathProperties {
-    fn cmp(&self, other: &Self) -> Ordering {
-        if self.origin_as != other.origin_as {
-            return self.origin_as.cmp(&other.origin_as);
-        }
-        if self.id != other.id {
-            return self.id.cmp(&other.id);
-        }
-        // MED should *not* be used as a basis for comparison. Paths with
-        // distinct MED values are not distinct paths.
-        if self.as_path != other.as_path {
-            return self.as_path.cmp(&other.as_path);
-        }
-        self.stale.cmp(&other.stale)
     }
 }
 
@@ -765,6 +747,7 @@ pub mod test_helpers {
     /// to verify all fields match exactly.
     pub fn paths_equal(a: &Path, b: &Path) -> bool {
         a.nexthop == b.nexthop
+            && a.nexthop_interface == b.nexthop_interface
             && a.shutdown == b.shutdown
             && a.rib_priority == b.rib_priority
             && a.vlan_id == b.vlan_id
@@ -781,5 +764,282 @@ pub mod test_helpers {
     pub fn path_vecs_equal(a: &[Path], b: &[Path]) -> bool {
         a.len() == b.len()
             && a.iter().zip(b.iter()).all(|(x, y)| paths_equal(x, y))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::DEFAULT_RIB_PRIORITY_BGP;
+    use std::{
+        cmp::Ordering, collections::BTreeSet, net::IpAddr, str::FromStr,
+    };
+
+    fn bgp_path(
+        nexthop: IpAddr,
+        peer: PeerId,
+        id: u32,
+        origin_as: u32,
+    ) -> Path {
+        let nexthop_interface = match &peer {
+            PeerId::Interface(iface) => Some(iface.clone()),
+            PeerId::Ip(_) => None,
+        };
+        Path {
+            nexthop,
+            nexthop_interface,
+            shutdown: false,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            bgp: Some(BgpPathProperties {
+                origin_as,
+                id,
+                peer,
+                med: None,
+                local_pref: Some(100),
+                as_path: vec![origin_as],
+                stale: None,
+            }),
+            vlan_id: None,
+        }
+    }
+
+    fn static_path(nexthop: IpAddr) -> Path {
+        Path {
+            nexthop,
+            nexthop_interface: None,
+            shutdown: false,
+            rib_priority: 10,
+            bgp: None,
+            vlan_id: None,
+        }
+    }
+
+    /// BGP path identity is purely PeerId. Two paths with the
+    /// same PeerId are Equal regardless of all other fields.
+    /// Different PeerIds are never Equal, even when everything
+    /// else matches.
+    #[test]
+    fn bgp_path_identity() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+        let ll = IpAddr::from_str("fe80::1").unwrap();
+
+        // Same numbered peer: Equal despite every attribute
+        // differing.
+        let mut a = bgp_path(ip1, PeerId::Ip(ip1), 1, 100);
+        let mut b = a.clone();
+        b.bgp.as_mut().unwrap().med = Some(999);
+        b.bgp.as_mut().unwrap().local_pref = Some(999);
+        b.bgp.as_mut().unwrap().origin_as = 999;
+        b.bgp.as_mut().unwrap().id = 999;
+        b.bgp.as_mut().unwrap().as_path = vec![1, 2, 3, 4, 5];
+        b.nexthop = IpAddr::from_str("99.99.99.99").unwrap();
+        b.shutdown = true;
+        b.rib_priority = 255;
+        b.vlan_id = Some(42);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+
+        // Same unnumbered peer: Equal despite attribute
+        // differences.
+        a = bgp_path(ll, PeerId::Interface("eth0".into()), 1, 100);
+        b = a.clone();
+        b.bgp.as_mut().unwrap().med = Some(999);
+        b.nexthop = IpAddr::from_str("fe80::99").unwrap();
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+
+        // Different numbered peers: not Equal.
+        a = bgp_path(ip1, PeerId::Ip(ip1), 1, 100);
+        b = bgp_path(ip2, PeerId::Ip(ip2), 1, 100);
+        assert_ne!(a.cmp(&b), Ordering::Equal);
+
+        // Different unnumbered peers sharing a link-local: not
+        // Equal. (Previously broken: silent path loss.)
+        a = bgp_path(ll, PeerId::Interface("eth0".into()), 1, 100);
+        b = bgp_path(ll, PeerId::Interface("eth1".into()), 1, 100);
+        assert_ne!(a.cmp(&b), Ordering::Equal);
+
+        // Multiple sessions to the same router (same id + AS):
+        // not Equal because PeerIds differ.
+        a = bgp_path(ip1, PeerId::Ip(ip1), 42, 100);
+        b = bgp_path(ip2, PeerId::Ip(ip2), 42, 100);
+        assert_ne!(a.cmp(&b), Ordering::Equal);
+
+        // Same nexthop, same id, different peer: not Equal.
+        a = bgp_path(ip1, PeerId::Ip(ip1), 1, 100);
+        b = bgp_path(ip1, PeerId::Ip(ip2), 1, 100);
+        assert_ne!(a.cmp(&b), Ordering::Equal);
+    }
+
+    /// Static path identity is (nexthop, nexthop_interface,
+    /// vlan_id). Changing shutdown or rib_priority does not
+    /// affect identity.
+    #[test]
+    fn static_path_identity() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+
+        // Same source: Equal despite attribute differences.
+        let mut a = static_path(ip1);
+        let mut b = a.clone();
+        b.shutdown = true;
+        b.rib_priority = 99;
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+
+        // Different nexthop: not Equal.
+        a = static_path(ip1);
+        b = static_path(ip2);
+        assert_ne!(a.cmp(&b), Ordering::Equal);
+
+        // Different nexthop_interface: not Equal.
+        a = static_path(ip1);
+        a.nexthop_interface = Some("eth0".to_string());
+        b = static_path(ip1);
+        b.nexthop_interface = Some("eth1".to_string());
+        assert_ne!(a.cmp(&b), Ordering::Equal);
+
+        // Different vlan_id: not Equal.
+        a = static_path(ip1);
+        a.vlan_id = Some(100);
+        b = static_path(ip1);
+        b.vlan_id = Some(200);
+        assert_ne!(a.cmp(&b), Ordering::Equal);
+    }
+
+    /// BGP and static paths are never Equal, and BGP sorts after
+    /// static (Some > None).
+    #[test]
+    fn bgp_vs_static_ordering() {
+        let ip = IpAddr::from_str("10.0.0.1").unwrap();
+        let b = bgp_path(ip, PeerId::Ip(ip), 1, 100);
+        let s = static_path(ip);
+        assert_ne!(b.cmp(&s), Ordering::Equal);
+        assert_eq!(b.cmp(&s), Ordering::Greater);
+        assert_eq!(s.cmp(&b), Ordering::Less);
+    }
+
+    // ---- BTreeSet behavior ----
+
+    /// Paths with distinct identities all coexist in a BTreeSet:
+    /// two unnumbered peers (same link-local), one numbered peer,
+    /// and one static route.
+    #[test]
+    fn btreeset_coexistence() {
+        let ll = IpAddr::from_str("fe80::1").unwrap();
+        let numbered_ip = IpAddr::from_str("10.0.0.1").unwrap();
+        let static_nh = IpAddr::from_str("10.0.0.254").unwrap();
+
+        let mut set = BTreeSet::new();
+        set.insert(bgp_path(ll, PeerId::Interface("eth0".into()), 1, 100));
+        set.insert(bgp_path(ll, PeerId::Interface("eth1".into()), 1, 100));
+        set.insert(bgp_path(numbered_ip, PeerId::Ip(numbered_ip), 2, 200));
+        set.insert(static_path(static_nh));
+        assert_eq!(set.len(), 4);
+    }
+
+    /// replace() overwrites the existing entry when identity
+    /// matches, for both BGP and static paths.
+    #[test]
+    fn btreeset_replace() {
+        let ip = IpAddr::from_str("10.0.0.1").unwrap();
+
+        // BGP: same peer, different med.
+        let a = bgp_path(ip, PeerId::Ip(ip), 1, 100);
+        let mut b = a.clone();
+        b.bgp.as_mut().unwrap().med = Some(999);
+
+        let mut set = BTreeSet::new();
+        set.insert(a);
+        set.replace(b);
+        assert_eq!(set.len(), 1);
+        assert_eq!(
+            set.iter().next().unwrap().bgp.as_ref().unwrap().med,
+            Some(999),
+        );
+
+        // Static: same source, different rib_priority.
+        let a = static_path(ip);
+        let mut b = a.clone();
+        b.rib_priority = 99;
+
+        let mut set = BTreeSet::new();
+        set.insert(a);
+        set.replace(b);
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.iter().next().unwrap().rib_priority, 99);
+    }
+
+    /// insert() with the same identity is a no-op — the original
+    /// value is kept, not overwritten.
+    #[test]
+    fn btreeset_insert_is_noop() {
+        let ip = IpAddr::from_str("10.0.0.1").unwrap();
+        let a = bgp_path(ip, PeerId::Ip(ip), 1, 100);
+        let mut b = a.clone();
+        b.bgp.as_mut().unwrap().med = Some(999);
+
+        let mut set = BTreeSet::new();
+        set.insert(a);
+        let was_new = set.insert(b);
+        assert!(!was_new);
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.iter().next().unwrap().bgp.as_ref().unwrap().med, None,);
+    }
+
+    /// remove() targets the correct path by identity, not by
+    /// attribute values.
+    #[test]
+    fn btreeset_remove() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+        let a = bgp_path(ip1, PeerId::Ip(ip1), 1, 100);
+        let b = bgp_path(ip2, PeerId::Ip(ip2), 1, 100);
+
+        let mut set = BTreeSet::new();
+        set.insert(a.clone());
+        set.insert(b);
+        assert_eq!(set.len(), 2);
+
+        // Probe with same peer as `a` but different attributes.
+        let mut probe = a.clone();
+        probe.bgp.as_mut().unwrap().med = Some(999);
+        probe.shutdown = true;
+        set.remove(&probe);
+        assert_eq!(set.len(), 1);
+        assert_eq!(
+            set.iter().next().unwrap().bgp.as_ref().unwrap().peer,
+            PeerId::Ip(ip2),
+        );
+    }
+
+    // ---- Ord contract ----
+
+    /// Antisymmetry and transitivity across BGP, static, and
+    /// cross-type path comparisons.
+    #[test]
+    fn ord_contract() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+        let ip3 = IpAddr::from_str("10.0.0.3").unwrap();
+
+        // BGP paths.
+        let a = bgp_path(ip1, PeerId::Ip(ip1), 1, 100);
+        let b = bgp_path(ip2, PeerId::Ip(ip2), 1, 100);
+        let c = bgp_path(ip3, PeerId::Ip(ip3), 1, 100);
+        assert_eq!(a.cmp(&b), b.cmp(&a).reverse());
+        assert_eq!(b.cmp(&c), c.cmp(&b).reverse());
+        assert_eq!(a.cmp(&c), Ordering::Less); // transitivity
+
+        // Static paths.
+        let a = static_path(ip1);
+        let b = static_path(ip2);
+        let c = static_path(ip3);
+        assert_eq!(a.cmp(&b), b.cmp(&a).reverse());
+        assert_eq!(b.cmp(&c), c.cmp(&b).reverse());
+        assert_eq!(a.cmp(&c), Ordering::Less);
+
+        // Cross-type.
+        let bgp = bgp_path(ip1, PeerId::Ip(ip1), 1, 100);
+        let st = static_path(ip1);
+        assert_eq!(bgp.cmp(&st), st.cmp(&bgp).reverse());
     }
 }

@@ -1018,7 +1018,7 @@ impl Db {
                     if p.nexthop == nexthop && p.shutdown != shutdown {
                         let mut replacement = p.clone();
                         replacement.shutdown = shutdown;
-                        paths.insert(replacement);
+                        paths.replace(replacement);
                         pcn.changed.insert(Prefix::from(*prefix));
                     }
                 }
@@ -1045,7 +1045,7 @@ impl Db {
                     if p.nexthop == nexthop && p.shutdown != shutdown {
                         let mut replacement = p.clone();
                         replacement.shutdown = shutdown;
-                        paths.insert(replacement);
+                        paths.replace(replacement);
                         pcn6.changed.insert(Prefix::from(*prefix));
                     }
                 }
@@ -1680,14 +1680,14 @@ mod test {
 
         // expected current state
         // rib_in:
-        // - p0 via bgp_path0, static_path1 (ordered by nexthop IP)
+        // - p0 via static_path1, bgp_path0 (static before BGP)
         // - p1 via bgp_path{0,1,2}
         // - p2 via bgp_path{1,2}
         // loc_rib:
         // - p0 via static_path1 (win by rib_priority/protocol)
         // - p1 via bgp_path2    (win by local pref)
         // - p2 via bgp_path2    (win by local pref)
-        let rib_in_paths = vec![bgp_path0.clone(), static_path1.clone()];
+        let rib_in_paths = vec![static_path1.clone(), bgp_path0.clone()];
         let loc_rib_paths = vec![static_path1.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
         let rib_in_paths =
@@ -1702,14 +1702,14 @@ mod test {
         db.remove_bgp_prefixes(&[p2], &bgp_path1.clone().bgp.unwrap().peer);
         // expected current state
         // rib_in:
-        // - p0 via bgp_path0, static_path1 (ordered by nexthop IP)
+        // - p0 via static_path1, bgp_path0 (static before BGP)
         // - p1 via bgp_path{0,1,2}
         // - p2 via bgp_path2
         // loc_rib:
         // - p0 via static_path1 (win by rib_priority/protocol)
         // - p1 via bgp_path2    (win by local pref)
         // - p2 via bgp_path2    (win by local pref)
-        let rib_in_paths = vec![bgp_path0.clone(), static_path1.clone()];
+        let rib_in_paths = vec![static_path1.clone(), bgp_path0.clone()];
         let loc_rib_paths = vec![static_path1.clone()];
         assert!(check_prefix_path(&db, &p0, rib_in_paths, loc_rib_paths));
         let rib_in_paths =
@@ -2234,6 +2234,115 @@ mod test {
         assert!("invalid".parse::<Prefix4>().is_err());
         assert!("192.168.1".parse::<Prefix4>().is_err());
         assert!("192.168.1.0/abc".parse::<Prefix4>().is_err());
+    }
+
+    /// Regression test for oxidecomputer/maghemite#651.
+    ///
+    /// `set_nexthop_shutdown` must actually update the `shutdown` field on
+    /// existing paths. Before the fix, `BTreeSet::insert` was used instead
+    /// of `BTreeSet::replace`, which silently dropped the update because
+    /// `shutdown` is not part of `Path::Ord` identity.
+    #[test]
+    fn test_set_nexthop_shutdown_replaces_path() {
+        use crate::{
+            BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
+            DEFAULT_RIB_PRIORITY_STATIC, Path, PeerId, Prefix, Prefix4,
+            Prefix6, StaticRouteKey,
+        };
+
+        let db = get_test_db();
+
+        // --- IPv4 static path ---
+        let nexthop4 = IpAddr::V4(Ipv4Addr::from_str("198.51.100.1").unwrap());
+        let prefix4 = Prefix4::new(Ipv4Addr::from_str("10.0.0.0").unwrap(), 24);
+        let static_key4 = StaticRouteKey {
+            prefix: Prefix::V4(prefix4),
+            nexthop: nexthop4,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[static_key4]).unwrap();
+
+        // Verify path starts not-shutdown.
+        let paths = db.get_prefix_paths(&Prefix::V4(prefix4));
+        assert_eq!(paths.len(), 1);
+        assert!(!paths[0].shutdown, "static v4 path should start active");
+
+        // Shut it down.
+        db.set_nexthop_shutdown(nexthop4, true);
+        let paths = db.get_prefix_paths(&Prefix::V4(prefix4));
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].shutdown, "static v4 path should be shutdown");
+
+        // Bring it back up.
+        db.set_nexthop_shutdown(nexthop4, false);
+        let paths = db.get_prefix_paths(&Prefix::V4(prefix4));
+        assert_eq!(paths.len(), 1);
+        assert!(!paths[0].shutdown, "static v4 path should be active again");
+
+        // --- IPv6 static path ---
+        let nexthop6 = IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap());
+        let prefix6 =
+            Prefix6::new(Ipv6Addr::from_str("2001:db8::").unwrap(), 48);
+        let static_key6 = StaticRouteKey {
+            prefix: Prefix::V6(prefix6),
+            nexthop: nexthop6,
+            vlan_id: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_STATIC,
+        };
+        db.add_static_routes(&[static_key6]).unwrap();
+
+        db.set_nexthop_shutdown(nexthop6, true);
+        let paths = db.get_prefix_paths(&Prefix::V6(prefix6));
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].shutdown, "static v6 path should be shutdown");
+
+        db.set_nexthop_shutdown(nexthop6, false);
+        let paths = db.get_prefix_paths(&Prefix::V6(prefix6));
+        assert_eq!(paths.len(), 1);
+        assert!(!paths[0].shutdown, "static v6 path should be active again");
+
+        // --- IPv4 BGP path ---
+        let bgp_nexthop =
+            IpAddr::V4(Ipv4Addr::from_str("203.0.113.1").unwrap());
+        let bgp_prefix = Prefix::V4(Prefix4::new(
+            Ipv4Addr::from_str("172.16.0.0").unwrap(),
+            16,
+        ));
+        let bgp_path = Path {
+            nexthop: bgp_nexthop,
+            nexthop_interface: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin_as: 65001,
+                peer: PeerId::Ip(bgp_nexthop),
+                id: 1,
+                med: None,
+                local_pref: Some(100),
+                as_path: vec![65001],
+                stale: None,
+            }),
+            vlan_id: None,
+        };
+        db.add_bgp_prefixes(&[bgp_prefix], bgp_path.clone());
+
+        // Verify path starts not-shutdown.
+        let paths = db.get_prefix_paths(&bgp_prefix);
+        assert_eq!(paths.len(), 1);
+        assert!(!paths[0].shutdown, "bgp path should start active");
+
+        // Shut it down.
+        db.set_nexthop_shutdown(bgp_nexthop, true);
+        let paths = db.get_prefix_paths(&bgp_prefix);
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].shutdown, "bgp path should be shutdown");
+
+        // Bring it back up.
+        db.set_nexthop_shutdown(bgp_nexthop, false);
+        let paths = db.get_prefix_paths(&bgp_prefix);
+        assert_eq!(paths.len(), 1);
+        assert!(!paths[0].shutdown, "bgp path should be active again");
     }
 
     #[test]
