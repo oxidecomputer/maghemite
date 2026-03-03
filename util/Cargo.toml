@@ -4,9 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-libnet.workspace = true
 anyhow.workspace = true
 slog.workspace = true
 slog-term.workspace = true
 slog-async.workspace = true
 slog-envlogger.workspace = true
+
+# libnet links against illumos-specific system libraries (kstat, nvpair,
+# zfs, dlpi) that are not available on other platforms.
+[target.'cfg(target_os = "illumos")'.dependencies]
+libnet.workspace = true

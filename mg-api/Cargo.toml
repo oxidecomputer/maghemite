@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 bfd = { path = "../bfd" }
 bgp = { path = "../bgp" }
+chrono.workspace = true
 dropshot.workspace = true
 dropshot-api-manager-types.workspace = true
 rdb = { path = "../rdb" }
