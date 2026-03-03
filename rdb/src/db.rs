@@ -2253,10 +2253,8 @@ mod test {
         let db = get_test_db();
 
         // --- IPv4 static path ---
-        let nexthop4 =
-            IpAddr::V4(Ipv4Addr::from_str("198.51.100.1").unwrap());
-        let prefix4 =
-            Prefix4::new(Ipv4Addr::from_str("10.0.0.0").unwrap(), 24);
+        let nexthop4 = IpAddr::V4(Ipv4Addr::from_str("198.51.100.1").unwrap());
+        let prefix4 = Prefix4::new(Ipv4Addr::from_str("10.0.0.0").unwrap(), 24);
         let static_key4 = StaticRouteKey {
             prefix: Prefix::V4(prefix4),
             nexthop: nexthop4,
@@ -2283,8 +2281,7 @@ mod test {
         assert!(!paths[0].shutdown, "static v4 path should be active again");
 
         // --- IPv6 static path ---
-        let nexthop6 =
-            IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap());
+        let nexthop6 = IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap());
         let prefix6 =
             Prefix6::new(Ipv6Addr::from_str("2001:db8::").unwrap(), 48);
         let static_key6 = StaticRouteKey {
@@ -2308,11 +2305,10 @@ mod test {
         // --- IPv4 BGP path ---
         let bgp_nexthop =
             IpAddr::V4(Ipv4Addr::from_str("203.0.113.1").unwrap());
-        let bgp_prefix =
-            Prefix::V4(Prefix4::new(
-                Ipv4Addr::from_str("172.16.0.0").unwrap(),
-                16,
-            ));
+        let bgp_prefix = Prefix::V4(Prefix4::new(
+            Ipv4Addr::from_str("172.16.0.0").unwrap(),
+            16,
+        ));
         let bgp_path = Path {
             nexthop: bgp_nexthop,
             nexthop_interface: None,
