@@ -30,13 +30,13 @@ use crate::messages::{
     CapabilityCode, Message, OpenMessage, Prefix, UpdateMessage,
 };
 use crate::rhai_integration::*;
+use rdb::{Prefix4, Prefix6};
 use rhai::{
     AST, Dynamic, Engine, EvalAltResult, FnPtr, NativeCallContext, ParseError,
     Scope,
 };
 use slog::{Logger, debug, info};
-use std::collections::HashSet;
-use std::net::IpAddr;
+use std::{collections::HashSet, net::IpAddr};
 
 const UNIT_CHECKER: &str = "checker";
 
@@ -123,11 +123,9 @@ impl ShaperResult {
     ) -> UpdateMessage {
         // anything that was previously being announced that is no longer
         // being announced, must be withdrawn
-        let previous: HashSet<crate::messages::Prefix> =
-            a.nlri.iter().cloned().collect();
+        let previous: HashSet<Prefix4> = a.nlri.iter().cloned().collect();
 
-        let current: HashSet<crate::messages::Prefix> =
-            b.nlri.iter().cloned().collect();
+        let current: HashSet<Prefix4> = b.nlri.iter().cloned().collect();
 
         let mut new = b.clone();
         new.withdrawn = previous.difference(&current).cloned().collect();
@@ -229,7 +227,11 @@ pub fn new_rhai_engine() -> Engine {
 
     engine
         .register_type_with_name::<Prefix>("Prefix")
-        .register_fn("within", prefix_within_rhai);
+        .register_fn("within", prefix_within_rhai)
+        .register_type_with_name::<Prefix4>("Prefix4")
+        .register_fn("within", prefix4_within_rhai)
+        .register_type_with_name::<Prefix6>("Prefix6")
+        .register_fn("within", prefix6_within_rhai);
 
     #[cfg(debug_assertions)]
     {
@@ -422,7 +424,7 @@ mod test {
         // check that open messages without the 4-octet AS capability code get dropped
         let asn = 47;
         let addr = "198.51.100.1".parse().unwrap();
-        let m = OpenMessage::new2(asn, 30, 1701);
+        let m = OpenMessage::new2(asn, 30, 1701, false);
         let source =
             std::fs::read_to_string("../bgp/policy/policy-check0.rhai")
                 .unwrap();
@@ -433,7 +435,7 @@ mod test {
         assert_eq!(result, CheckerResult::Drop);
 
         // check that open messages with the 4-octet AS capability code get accepted
-        let m = OpenMessage::new4(asn.into(), 30, 1701);
+        let m = OpenMessage::new4(asn.into(), 30, 1701, false);
         let result =
             check_incoming_open(m, &ast, asn.into(), addr, init_logger())
                 .unwrap();
@@ -473,7 +475,7 @@ mod test {
         // check that open messages without the 4-octet AS capability code get dropped
         let asn = 100;
         let addr = "198.51.100.1".parse().unwrap();
-        let mut m = OpenMessage::new2(asn, 30, 1701);
+        let mut m = OpenMessage::new2(asn, 30, 1701, false);
         let source =
             std::fs::read_to_string("../bgp/policy/policy-shape0.rhai")
                 .unwrap();
@@ -519,13 +521,13 @@ mod test {
         let addr = "198.51.100.1".parse().unwrap();
         let originated = UpdateMessage {
             nlri: vec![
-                "10.10.0.0/16".parse().unwrap(),
-                "10.128.0.0/16".parse().unwrap(),
+                "10.10.0.0/16".parse::<Prefix4>().unwrap(),
+                "10.128.0.0/16".parse::<Prefix4>().unwrap(),
             ],
             ..Default::default()
         };
         let filtered = UpdateMessage {
-            nlri: vec!["10.128.0.0/16".parse().unwrap()],
+            nlri: vec!["10.128.0.0/16".parse::<Prefix4>().unwrap()],
             ..Default::default()
         };
         let source =

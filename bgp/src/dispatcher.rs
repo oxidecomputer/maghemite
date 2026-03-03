@@ -6,13 +6,14 @@ use crate::{
     IO_TIMEOUT,
     connection::{BgpConnection, BgpListener},
     log::dispatcher_log,
-    session::{FsmEvent, SessionEndpoint, SessionEvent},
+    session::{FsmEvent, PeerId, SessionEndpoint, SessionEvent},
+    unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
 use slog::Logger;
 use std::{
     collections::BTreeMap,
-    net::IpAddr,
+    net::SocketAddr,
     sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
     thread::sleep,
@@ -22,7 +23,15 @@ use std::{
 const UNIT_DISPATCHER: &str = "dispatcher";
 
 pub struct Dispatcher<Cnx: BgpConnection> {
-    pub addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
+    /// Session endpoint map indexed by PeerId (IP or interface name)
+    /// This unified map supports both numbered and unnumbered BGP sessions
+    pub peer_to_session: Arc<Mutex<BTreeMap<PeerId, SessionEndpoint<Cnx>>>>,
+
+    /// Optional unnumbered neighbor manager for link-local connection routing.
+    /// When present, enables routing of IPv6 link-local connections to
+    /// unnumbered sessions based on interface scope_id
+    unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+
     shutdown: AtomicBool,
     listen: String,
     log: Logger,
@@ -30,16 +39,48 @@ pub struct Dispatcher<Cnx: BgpConnection> {
 
 impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
     pub fn new(
-        addr_to_session: Arc<Mutex<BTreeMap<IpAddr, SessionEndpoint<Cnx>>>>,
+        peer_to_session: Arc<Mutex<BTreeMap<PeerId, SessionEndpoint<Cnx>>>>,
         listen: String,
         log: Logger,
+        unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Self {
         Self {
-            addr_to_session,
+            peer_to_session,
+            unnumbered_manager,
             listen,
             log,
             shutdown: AtomicBool::new(false),
         }
+    }
+
+    /// Try to resolve peer address to an unnumbered interface.
+    ///
+    /// Returns `Some(PeerId::Interface)` if:
+    /// - We have an unnumbered manager
+    /// - The peer address is IPv6 link-local
+    /// - We have an interface configured for this scope_id
+    /// - The interface is active on the system
+    fn try_resolve_unnumbered(&self, peer_addr: SocketAddr) -> Option<PeerId> {
+        let mgr = self.unnumbered_manager.as_ref()?;
+        let v6_addr = match peer_addr {
+            SocketAddr::V6(v6) if v6.ip().is_unicast_link_local() => v6,
+            _ => return None,
+        };
+        let interface = mgr.get_interface_by_scope(v6_addr.scope_id())?;
+        if mgr.interface_is_active(&interface) {
+            Some(PeerId::Interface(interface))
+        } else {
+            None
+        }
+    }
+
+    /// Resolve incoming peer address to appropriate PeerId.
+    ///
+    /// For IPv6 link-local addresses, attempts interface-based routing via
+    /// unnumbered manager. Falls back to IP-based routing otherwise.
+    fn resolve_session_key(&self, peer_addr: SocketAddr) -> PeerId {
+        self.try_resolve_unnumbered(peer_addr)
+            .unwrap_or_else(|| PeerId::Ip(peer_addr.ip()))
     }
 
     pub fn run<Listener: BgpListener<Cnx>>(&self) {
@@ -65,7 +106,10 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                 "listener bind: {}", &self.listen;
                 "listen_address" => &self.listen
             );
-            let listener = match Listener::bind(&self.listen) {
+            let listener = match Listener::bind(
+                &self.listen,
+                self.unnumbered_manager.clone(),
+            ) {
                 Ok(l) => l,
                 Err(e) => {
                     dispatcher_log!(self,
@@ -95,7 +139,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
 
                 let accepted = match listener.accept(
                     self.log.clone(),
-                    self.addr_to_session.clone(),
+                    self.peer_to_session.clone(),
                     IO_TIMEOUT,
                 ) {
                     Ok(c) => {
@@ -119,8 +163,11 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                         continue 'listener;
                     }
                 };
-                let addr = accepted.peer().ip();
-                match lock!(self.addr_to_session).get(&addr).cloned() {
+
+                let peer_addr = accepted.peer();
+                let key = self.resolve_session_key(peer_addr);
+
+                match lock!(self.peer_to_session).get(&key).cloned() {
                     Some(session_endpoint) => {
                         // Apply connection policy from the session configuration
                         let min_ttl = lock!(session_endpoint.config).min_ttl;
@@ -132,9 +179,10 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                         {
                             dispatcher_log!(self,
                                 warn,
-                                "failed to apply policy for connection from {addr}: {e}";
+                                "failed to apply policy for connection from {}: {e}", peer_addr;
                                 "listen_address" => &self.listen,
-                                "address" => format!("{addr}"),
+                                "peer" => format!("{}", peer_addr),
+                                "session_key" => format!("{:?}", key),
                                 "error" => format!("{e}")
                             );
                         }
@@ -146,14 +194,24 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
                         {
                             dispatcher_log!(self,
                                 error,
-                                "failed to send connected event to session for {addr}: {e}";
+                                "failed to send connected event to session for {}: {e}", peer_addr;
                                 "listen_address" => &self.listen,
-                                "address" => format!("{addr}")
+                                "peer" => format!("{}", peer_addr),
+                                "session_key" => format!("{:?}", key)
                             );
                             continue 'listener;
                         }
                     }
-                    None => continue 'accept,
+                    None => {
+                        dispatcher_log!(self,
+                            debug,
+                            "no session found for peer, dropping connection";
+                            "peer" => format!("{}", peer_addr),
+                            "resolved_key" => format!("{:?}", key),
+                            "listen_address" => &self.listen
+                        );
+                        continue 'accept;
+                    }
                 }
             }
         }
