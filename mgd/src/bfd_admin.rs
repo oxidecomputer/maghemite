@@ -23,7 +23,7 @@ use std::{
         atomic::AtomicBool,
         mpsc::{Receiver, Sender},
     },
-    thread::{JoinHandle, sleep, spawn},
+    thread::{Builder, JoinHandle, sleep},
     time::Duration,
 };
 
@@ -212,7 +212,7 @@ pub(crate) fn channel(
     // Spawn an egress thread to take packets from the session and send them
     // out a UDP socket.
     let egress_thread =
-        egress(remote.rx, listen, src_port, dst_port, log.clone());
+        egress(remote.rx, listen, peer, src_port, dst_port, log.clone());
 
     Ok((local, egress_thread))
 }
@@ -234,12 +234,15 @@ fn egress_socket(local: IpAddr, src_port: u16) -> std::io::Result<UdpSocket> {
 fn egress(
     rx: Receiver<(IpAddr, packet::Control)>,
     local: IpAddr,
+    peer: IpAddr,
     src_port: u16,
     dst_port: u16,
     log: Logger,
 ) -> Arc<ManagedThread> {
     let thread = Arc::new(ManagedThread::new());
-    let handle = spawn(move || {
+    let handle = Builder::new()
+        .name(format!("bfd-egress-{peer}"))
+        .spawn(move || {
         let log = log.new(slog::o!(
             "local" => format!("{local}"),
             "src_port" => src_port,
@@ -281,7 +284,8 @@ fn egress(
                 }
             }
         }
-    });
+    })
+    .expect("failed to spawn bfd-egress thread");
     thread.start(handle);
     thread
 }
@@ -354,7 +358,10 @@ impl Dispatcher {
                 local,
                 Listener {
                     sk: sk.try_clone()?,
-                    handle: spawn(move || Self::listen(skl, sessions, ks, log)),
+                    handle: Builder::new()
+                        .name(format!("bfd-listen-{local}"))
+                        .spawn(move || Self::listen(skl, sessions, ks, log))
+                        .expect("failed to spawn bfd-listen thread"),
                     peers,
                     kill_switch,
                 },
