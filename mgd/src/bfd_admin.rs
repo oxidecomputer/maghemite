@@ -6,8 +6,8 @@ use crate::{admin::HandlerContext, log::bfd_log};
 use anyhow::Result;
 use bfd::{AddPeerRequest, BfdEndpoint, DEFAULT_BFD_TTL, Daemon, bidi, packet};
 use dropshot::{
-    HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Path,
-    RequestContext, TypedBody,
+    ClientErrorStatusCode, HttpError, HttpResponseOk,
+    HttpResponseUpdatedNoContent, Path, RequestContext, TypedBody,
 };
 use mg_api::{BfdPeerInfo, DeleteBfdPeerPathParams};
 use mg_common::lock;
@@ -105,7 +105,10 @@ pub(crate) fn add_peer(
     let db = ctx.db.clone();
 
     if daemon.sessions.contains_key(&rq.peer) {
-        return Ok(());
+        return Err(HttpError::for_client_error_with_status(
+            Some(format!("BFD peer {} already exists", rq.peer)),
+            ClientErrorStatusCode::CONFLICT,
+        ));
     }
 
     let (src_port, dst_port) = match rq.mode {
@@ -138,17 +141,19 @@ pub(crate) fn add_peer(
         HttpError::for_internal_error(e.to_string())
     })?;
 
-    daemon.add_peer(
-        rq.peer,
-        AddPeerRequest {
-            required_rx: Duration::from_micros(rq.required_rx),
-            detection_multiplier: rq.detection_threshold,
-            mode: rq.mode,
-            endpoint: ch,
-            egress_thread: Some(egress_thread),
-            db,
-        },
-    );
+    daemon
+        .add_peer(
+            rq.peer,
+            AddPeerRequest {
+                required_rx: Duration::from_micros(rq.required_rx),
+                detection_multiplier: rq.detection_threshold,
+                mode: rq.mode,
+                endpoint: ch,
+                egress_thread: Some(egress_thread),
+                db,
+            },
+        )
+        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
 
     Ok(())
 }
@@ -212,7 +217,7 @@ pub(crate) fn channel(
     // Spawn an egress thread to take packets from the session and send them
     // out a UDP socket.
     let egress_thread =
-        egress(remote.rx, listen, peer, src_port, dst_port, log.clone());
+        egress(remote.rx, listen, peer, src_port, dst_port, log.clone())?;
 
     Ok((local, egress_thread))
 }
@@ -238,7 +243,7 @@ fn egress(
     src_port: u16,
     dst_port: u16,
     log: Logger,
-) -> Arc<ManagedThread> {
+) -> Result<Arc<ManagedThread>> {
     let thread = Arc::new(ManagedThread::new());
     let handle = Builder::new()
         .name(format!("bfd-egress-{peer}"))
@@ -285,9 +290,9 @@ fn egress(
             }
         }
     })
-    .expect("failed to spawn bfd-egress thread");
+    ?;
     thread.start(handle);
-    thread
+    Ok(thread)
 }
 
 type Sessions = HashMap<IpAddr, Sender<(IpAddr, packet::Control)>>;
@@ -360,8 +365,7 @@ impl Dispatcher {
                     sk: sk.try_clone()?,
                     handle: Builder::new()
                         .name(format!("bfd-listen-{local}"))
-                        .spawn(move || Self::listen(skl, sessions, ks, log))
-                        .expect("failed to spawn bfd-listen thread"),
+                        .spawn(move || Self::listen(skl, sessions, ks, log))?,
                     peers,
                     kill_switch,
                 },
