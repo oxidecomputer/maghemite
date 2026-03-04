@@ -4,7 +4,7 @@
 
 use crate::{admin::HandlerContext, log::bfd_log};
 use anyhow::Result;
-use bfd::{DEFAULT_BFD_TTL, Daemon, bidi, packet};
+use bfd::{BfdEndpoint, DEFAULT_BFD_TTL, Daemon, bidi, packet};
 use dropshot::{
     HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Path,
     RequestContext, TypedBody,
@@ -191,7 +191,7 @@ pub(crate) fn channel(
     src_port: u16,
     dst_port: u16,
     log: Logger,
-) -> Result<bidi::Endpoint<(IpAddr, packet::Control)>> {
+) -> Result<BfdEndpoint> {
     let (local, remote) = bidi::channel();
 
     // Ensure there is a dispatcher thread for this listening address and a

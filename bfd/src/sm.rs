@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::{
-    BfdPeerState, PeerInfo, SessionCounters, bidi, log::*, packet,
+    BfdEndpoint, BfdPeerState, PeerInfo, SessionCounters, log::*, packet,
     util::update_peer_info,
 };
 use anyhow::{Result, anyhow};
@@ -89,11 +89,7 @@ impl StateMachine {
     /// incoming control packets. Endpoint is a channel from a connection
     /// dispatcher that sends control packets to this state machine based
     /// on peer address and BFD discriminator.
-    pub fn run(
-        &mut self,
-        endpoint: bidi::Endpoint<(IpAddr, packet::Control)>,
-        db: rdb::Db,
-    ) {
+    pub fn run(&mut self, endpoint: BfdEndpoint, db: rdb::Db) {
         let local = PeerInfo::with_random_discriminator(
             self.required_rx,
             self.detection_multiplier,
@@ -121,7 +117,7 @@ impl StateMachine {
     /// packet to that state's handler.
     fn recv_loop(
         &self,
-        mut endpoint: bidi::Endpoint<(IpAddr, packet::Control)>,
+        mut endpoint: BfdEndpoint,
         db: rdb::Db,
         local: PeerInfo,
         remote: Arc<Mutex<PeerInfo>>,
@@ -254,10 +250,6 @@ impl StateMachine {
         self.detection_multiplier
     }
 }
-
-/// A type alias for a bidirectional endpoint transporting BFD control messages
-/// and target IP addresses.
-pub(crate) type BfdEndpoint = bidi::Endpoint<(IpAddr, packet::Control)>;
 
 /// A helper object to make delayed loop implementations less error prone.
 struct DeferredDelay(Duration);
