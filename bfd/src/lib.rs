@@ -52,9 +52,13 @@ impl Daemon {
         }
     }
 
-    /// Add a peer session to the deamon. Peer sessions are started immediately
-    /// when added.
-    pub fn add_peer(&mut self, peer: IpAddr, rq: AddPeerRequest) -> Result<()> {
+    /// Add a peer session to the daemon.
+    /// Peer sessions are started immediately when added.
+    pub fn add_peer(
+        &mut self,
+        peer: IpAddr,
+        rq: AddPeerRequest,
+    ) -> Result<(), AddPeerError> {
         if self.sessions.contains_key(&peer) {
             warn!(self.log, "attempt to add peer that already exists";
                 "component" => COMPONENT_BFD,
@@ -62,7 +66,7 @@ impl Daemon {
                 "unit" => UNIT_PEER,
                 "peer" => format!("{peer}")
             );
-            anyhow::bail!("BFD peer {peer} already exists");
+            return Err(AddPeerError::PeerExists(peer));
         }
         self.sessions
             .insert(peer, Session::new(peer, rq, self.log.clone())?);
@@ -234,6 +238,15 @@ pub enum BfdPeerState {
 }
 
 pub struct Admin {}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AddPeerError {
+    #[error("BFD peer {0} already exists")]
+    PeerExists(IpAddr),
+
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
 #[cfg(test)]
 mod test {

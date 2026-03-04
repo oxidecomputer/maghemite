@@ -20,8 +20,8 @@ use std::{
     net::{IpAddr, SocketAddr, UdpSocket},
     sync::{
         Arc, Mutex, RwLock,
-        atomic::AtomicBool,
-        mpsc::{Receiver, Sender},
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, RecvTimeoutError, Sender},
     },
     thread::{Builder, JoinHandle, sleep},
     time::Duration,
@@ -133,7 +133,7 @@ pub(crate) fn add_peer(
     .map_err(|e| {
         bfd_log!(log, error, "udp channel error: {e}";
             "params" => format!("{rq:?}"),
-            "peer" => format!("rq.peer"),
+            "peer" => format!("{}", rq.peer),
             "src_port" => src_port,
             "dst_port" => dst_port,
             "error" => format!("{e}")
@@ -153,7 +153,17 @@ pub(crate) fn add_peer(
                 db,
             },
         )
-        .map_err(|e| HttpError::for_internal_error(e.to_string()))?;
+        .map_err(|e| match e {
+            bfd::AddPeerError::PeerExists(_) => {
+                HttpError::for_client_error_with_status(
+                    Some(e.to_string()),
+                    ClientErrorStatusCode::CONFLICT,
+                )
+            }
+            bfd::AddPeerError::Other(e) => {
+                HttpError::for_internal_error(e.to_string())
+            }
+        })?;
 
     Ok(())
 }
@@ -245,52 +255,61 @@ fn egress(
     log: Logger,
 ) -> Result<Arc<ManagedThread>> {
     let thread = Arc::new(ManagedThread::new());
-    let handle = Builder::new()
-        .name(format!("bfd-egress-{peer}"))
-        .spawn(move || {
-        let log = log.new(slog::o!(
-            "local" => format!("{local}"),
-            "src_port" => src_port,
-            "dst_port" => dst_port,
-        ));
-        'egress: loop {
-            let sk = match egress_socket(local, src_port) {
-                Err(e) => {
-                    bfd_log!(log, error, "failed to bind egress socket: {e}";
-                        "error" => format!("{e}")
-                    );
-                    // Explicit sleep call here to prevent spin-lock in case
-                    // socket creation/bind failures are persistent.
-                    sleep(Duration::from_secs(5));
-                    continue;
+    let dropped = thread.dropped_flag();
+    let handle = Builder::new().name(format!("bfd-egress-{peer}")).spawn(
+        move || {
+            let log = log.new(slog::o!(
+                "local" => format!("{local}"),
+                "src_port" => src_port,
+                "dst_port" => dst_port,
+            ));
+            'egress: loop {
+                if dropped.load(Ordering::Relaxed) {
+                    break;
                 }
-                Ok(sk) => sk,
-            };
 
-            'socket: loop {
-                let (addr, pkt) = match rx.recv() {
-                    Ok(result) => result,
+                let sk = match egress_socket(local, src_port) {
                     Err(e) => {
-                        bfd_log!(log, warn, "udp egress channel closed: {e}";
+                        bfd_log!(log, error, "failed to bind egress socket: {e}";
                             "error" => format!("{e}")
                         );
-                        break 'egress;
+                        // Explicit sleep call here to prevent spin-lock in case
+                        // socket creation/bind failures are persistent.
+                        sleep(Duration::from_secs(5));
+                        continue;
                     }
+                    Ok(sk) => sk,
                 };
 
-                let sa = SocketAddr::new(addr, dst_port);
-                if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
-                    bfd_log!(log, error, "udp send error: {e}";
-                        "message" => "control",
-                        "message_contents" => format!("{pkt}"),
-                        "error" => format!("{e}")
-                    );
-                    break 'socket;
+                'socket: loop {
+                    let (addr, pkt) =
+                        match rx.recv_timeout(Duration::from_secs(1)) {
+                            Ok(result) => result,
+                            Err(RecvTimeoutError::Timeout) => {
+                                if dropped.load(Ordering::Relaxed) {
+                                    break 'egress;
+                                }
+                                continue;
+                            }
+                            Err(RecvTimeoutError::Disconnected) => {
+                                bfd_log!(log, warn, "udp egress channel closed");
+                                break 'egress;
+                            }
+                        };
+
+                    let sa = SocketAddr::new(addr, dst_port);
+                    if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
+                        bfd_log!(log, error, "udp send error: {e}";
+                            "message" => "control",
+                            "message_contents" => format!("{pkt}"),
+                            "error" => format!("{e}")
+                        );
+                        break 'socket;
+                    }
                 }
             }
-        }
-    })
-    ?;
+        },
+    )?;
     thread.start(handle);
     Ok(thread)
 }
@@ -299,7 +318,6 @@ type Sessions = HashMap<IpAddr, Sender<(IpAddr, packet::Control)>>;
 
 #[derive(Debug)]
 struct Listener {
-    sk: UdpSocket,
     #[allow(dead_code)]
     handle: JoinHandle<()>,
     peers: HashSet<IpAddr>,
@@ -342,11 +360,11 @@ impl Dispatcher {
         sender: Sender<(IpAddr, packet::Control)>,
         port: u16,
         log: Logger,
-    ) -> Result<UdpSocket> {
+    ) -> Result<()> {
         self.sessions.write().unwrap().insert(remote, sender);
         if let Some(ref mut listener) = self.listeners.get_mut(&local) {
             listener.peers.insert(remote);
-            Ok(listener.sk.try_clone()?)
+            Ok(())
         } else {
             let sessions = self.sessions.clone();
             let sa = SocketAddr::new(local, port);
@@ -362,7 +380,6 @@ impl Dispatcher {
             self.listeners.insert(
                 local,
                 Listener {
-                    sk: sk.try_clone()?,
                     handle: Builder::new()
                         .name(format!("bfd-listen-{local}"))
                         .spawn(move || Self::listen(skl, sessions, ks, log))?,
@@ -370,7 +387,7 @@ impl Dispatcher {
                     kill_switch,
                 },
             );
-            Ok(sk)
+            Ok(())
         }
     }
 
@@ -380,9 +397,7 @@ impl Dispatcher {
             if listener.peers.contains(&peer) {
                 listener.peers.remove(&peer);
                 if listener.peers.is_empty() {
-                    listener
-                        .kill_switch
-                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    listener.kill_switch.store(true, Ordering::Relaxed);
                     to_remove.push(*local);
                 }
             }
@@ -401,7 +416,7 @@ impl Dispatcher {
         log: Logger,
     ) {
         loop {
-            if kill_switch.load(std::sync::atomic::Ordering::Relaxed) {
+            if kill_switch.load(Ordering::Relaxed) {
                 bfd_log!(
                     log,
                     warn,
