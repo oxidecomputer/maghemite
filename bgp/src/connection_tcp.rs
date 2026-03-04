@@ -26,7 +26,7 @@ use crate::{
     unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
-use slog::Logger;
+use slog::{Logger, info};
 use std::{
     collections::BTreeMap,
     io::Read,
@@ -103,6 +103,7 @@ impl BgpListenerTcp {
 impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn bind<A: ToSocketAddrs>(
         addr: A,
+        log: Logger,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Self, Error>
     where
@@ -116,6 +117,7 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                 "at least one address required".into(),
             ))?;
         let listener = TcpListener::bind(addr)?;
+        info!(log, "TcpListener created"; "listener" => ?listener);
         listener.set_nonblocking(true)?;
         Ok(Self {
             listener,

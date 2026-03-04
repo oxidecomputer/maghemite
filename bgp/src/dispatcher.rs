@@ -103,11 +103,12 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
             }
             dispatcher_log!(self,
                 debug,
-                "listener bind: {}", &self.listen;
+                "listener bind arg: {}", &self.listen;
                 "listen_address" => &self.listen
             );
             let listener = match Listener::bind(
                 &self.listen,
+                self.log.clone(),
                 self.unnumbered_manager.clone(),
             ) {
                 Ok(l) => l,

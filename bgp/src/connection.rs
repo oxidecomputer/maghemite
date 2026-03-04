@@ -125,6 +125,7 @@ pub trait BgpListener<Cnx: BgpConnection> {
     /// * `unnumbered_manager` - Optional unnumbered manager for resolving scope_id -> interface
     fn bind<A: ToSocketAddrs>(
         addr: A,
+        log: Logger,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Self, Error>
     where

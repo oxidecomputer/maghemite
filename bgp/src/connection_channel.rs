@@ -23,7 +23,7 @@ use crate::{
     unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
-use slog::Logger;
+use slog::{Logger, info};
 use std::{
     collections::{BTreeMap, HashMap},
     net::{SocketAddr, ToSocketAddrs},
@@ -81,6 +81,7 @@ impl std::fmt::Display for Network {
 }
 
 /// A listener that can listen for messages on our simulated network.
+#[derive(Debug)]
 struct Listener {
     rx: Receiver<(SocketAddr, Endpoint<Message>)>,
 }
@@ -206,6 +207,7 @@ impl BgpListenerChannel {
 impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
     fn bind<A: ToSocketAddrs>(
         addr: A,
+        log: Logger,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Self, Error>
     where
@@ -219,6 +221,7 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
                 "at least one address required".into(),
             ))?;
         let listener = NET.bind(addr);
+        info!(log, "BgpConnectionChannel Listener created"; "listener" => ?listener);
         Ok(Self {
             listener,
             bind_addr: addr,
