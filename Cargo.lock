@@ -315,6 +315,7 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-bunyan",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
