@@ -22,7 +22,7 @@ use std::{
         atomic::AtomicBool,
         mpsc::{Receiver, Sender},
     },
-    thread::{JoinHandle, spawn},
+    thread::{JoinHandle, sleep, spawn},
     time::Duration,
 };
 
@@ -206,6 +206,18 @@ pub(crate) fn channel(
     Ok(local)
 }
 
+/// Bind a UDP socket for BFD egress and configure the TTL/Hop Limit to 255
+/// per RFC 5881 (Single-Hop BFD).
+fn egress_socket(local: IpAddr, src_port: u16) -> std::io::Result<UdpSocket> {
+    let sk = UdpSocket::bind(SocketAddr::new(local, src_port))?;
+    let sock = Socket::from(sk);
+    match local {
+        IpAddr::V4(_) => sock.set_ttl(DEFAULT_BFD_TTL)?,
+        IpAddr::V6(_) => sock.set_unicast_hops_v6(DEFAULT_BFD_TTL)?,
+    };
+    Ok(sock.into())
+}
+
 /// Run an egress handler, taking BFD control packets from a session and sending
 /// them out to the peer over UDP.
 fn egress(
@@ -216,64 +228,49 @@ fn egress(
     log: Logger,
 ) {
     spawn(move || {
-        loop {
-            let (addr, pkt) = match rx.recv() {
-                Ok(result) => result,
+        'egress: loop {
+            let sk = match egress_socket(local, src_port) {
                 Err(e) => {
-                    bfd_log!(log, warn, "udp egress channel closed: {e}";
+                    bfd_log!(log, error, "failed to bind egress socket: {e}";
                         "local" => format!("{local}"),
                         "src_port" => format!("{src_port}"),
                         "dst_port" => format!("{dst_port}"),
                         "error" => format!("{e}")
                     );
-                    break;
-                }
-            };
-
-            let sk = match UdpSocket::bind(SocketAddr::new(local, src_port)) {
-                Err(e) => {
-                    bfd_log!(log, error, "failed to create tx socket: {e}";
-                        "local" => format!("{local}"),
-                        "src_port" => format!("{src_port}"),
-                        "dst_port" => format!("{dst_port}"),
-                        "error" => format!("{e}")
-                    );
+                    // Explicit sleep call here to prevent spin-lock in case
+                    // socket creation/bind failures are persistent.
+                    sleep(Duration::from_secs(5));
                     continue;
                 }
                 Ok(sk) => sk,
             };
 
-            // BFD control packets MUST be sent with a TTL/Hop Limit of 255 per
-            // RFC 5881 (Single-Hop BFD). RFC 5883 (Multi-Hop BFD) doesn't state
-            // this as a requirement, but there's no harm in increasing the
-            // default TTL/Hop Limit to make it simpler to establish a session
-            // with fewer nerd knobs.
-            let sock = Socket::from(sk);
-            let ttl_result = match local {
-                IpAddr::V4(_) => sock.set_ttl(DEFAULT_BFD_TTL),
-                IpAddr::V6(_) => sock.set_unicast_hops_v6(DEFAULT_BFD_TTL),
-            };
-            if let Err(e) = ttl_result {
-                bfd_log!(log, error, "failed to set TTL/Hop Limit: {e}";
-                    "local" => format!("{local}"),
-                    "src_port" => format!("{src_port}"),
-                    "dst_port" => format!("{dst_port}"),
-                    "error" => format!("{e}")
-                );
-                continue;
-            }
-            let sk: UdpSocket = sock.into();
+            'socket: loop {
+                let (addr, pkt) = match rx.recv() {
+                    Ok(result) => result,
+                    Err(e) => {
+                        bfd_log!(log, warn, "udp egress channel closed: {e}";
+                            "local" => format!("{local}"),
+                            "src_port" => format!("{src_port}"),
+                            "dst_port" => format!("{dst_port}"),
+                            "error" => format!("{e}")
+                        );
+                        break 'egress;
+                    }
+                };
 
-            let sa = SocketAddr::new(addr, dst_port);
-            if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
-                bfd_log!(log, error, "udp send error: {e}";
-                    "local" => format!("{local}"),
-                    "src_port" => format!("{src_port}"),
-                    "dst_port" => format!("{dst_port}"),
-                    "message" => "control",
-                    "message_contents" => format!("{pkt}"),
-                    "error" => format!("{e}")
-                );
+                let sa = SocketAddr::new(addr, dst_port);
+                if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
+                    bfd_log!(log, error, "udp send error: {e}";
+                        "local" => format!("{local}"),
+                        "src_port" => format!("{src_port}"),
+                        "dst_port" => format!("{dst_port}"),
+                        "message" => "control",
+                        "message_contents" => format!("{pkt}"),
+                        "error" => format!("{e}")
+                    );
+                    break 'socket;
+                }
             }
         }
     });
