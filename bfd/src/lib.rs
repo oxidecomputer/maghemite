@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use anyhow::Result;
 use mg_common::thread::ManagedThread;
 use num_enum::TryFromPrimitive;
 use rdb::SessionMode;
@@ -53,7 +54,7 @@ impl Daemon {
 
     /// Add a peer session to the deamon. Peer sessions are started immediately
     /// when added.
-    pub fn add_peer(&mut self, peer: IpAddr, rq: AddPeerRequest) {
+    pub fn add_peer(&mut self, peer: IpAddr, rq: AddPeerRequest) -> Result<()> {
         if self.sessions.contains_key(&peer) {
             warn!(self.log, "attempt to add peer that already exists";
                 "component" => COMPONENT_BFD,
@@ -61,10 +62,11 @@ impl Daemon {
                 "unit" => UNIT_PEER,
                 "peer" => format!("{peer}")
             );
-            return;
+            anyhow::bail!("BFD peer {peer} already exists");
         }
         self.sessions
-            .insert(peer, Session::new(peer, rq, self.log.clone()));
+            .insert(peer, Session::new(peer, rq, self.log.clone())?);
+        Ok(())
     }
 
     /// Remove a peer from the daemon. The peer will be immediately shut down.
@@ -121,7 +123,7 @@ pub struct Session {
 impl Session {
     /// Create a new session and start running the underlying BFD state machine
     /// immediately.
-    fn new(addr: IpAddr, rq: AddPeerRequest, log: Logger) -> Self {
+    fn new(addr: IpAddr, rq: AddPeerRequest, log: Logger) -> Result<Self> {
         let counters = Arc::new(SessionCounters::default());
         let mut sm = StateMachine::new(
             addr,
@@ -130,13 +132,13 @@ impl Session {
             counters.clone(),
             log,
         );
-        sm.run(rq.endpoint, rq.db);
-        Session {
+        sm.run(rq.endpoint, rq.db)?;
+        Ok(Session {
             sm,
             mode: rq.mode,
             counters,
             _egress_thread: rq.egress_thread,
-        }
+        })
     }
 }
 
@@ -333,7 +335,7 @@ mod test {
                 egress_thread: None,
                 db: db.db().clone(),
             },
-        );
+        )?;
         assert_eq!(daemon.peer_state(v4_addr), Some(BfdPeerState::Down));
 
         // Add an IPv6 peer to the same daemon.
@@ -349,7 +351,7 @@ mod test {
                 egress_thread: None,
                 db: db.db().clone(),
             },
-        );
+        )?;
         assert_eq!(daemon.peer_state(v6_addr), Some(BfdPeerState::Down));
 
         // Both peers coexist.
@@ -387,7 +389,7 @@ mod test {
                 egress_thread: None,
                 db: db.db().clone(),
             },
-        );
+        )?;
         net.register(v4_addr2, b);
 
         let (a, b) = bidi::channel();
@@ -401,7 +403,7 @@ mod test {
                 egress_thread: None,
                 db: db.db().clone(),
             },
-        );
+        )?;
         net.register(v6_addr2, b);
 
         // Daemon 2 peers with both v4 and v6 counterparts.
@@ -417,7 +419,7 @@ mod test {
                 egress_thread: None,
                 db: db.db().clone(),
             },
-        );
+        )?;
         net.register(v4_addr1, b);
 
         let (a, b) = bidi::channel();
@@ -431,7 +433,7 @@ mod test {
                 egress_thread: None,
                 db: db.db().clone(),
             },
-        );
+        )?;
         net.register(v6_addr1, b);
 
         net.run();
