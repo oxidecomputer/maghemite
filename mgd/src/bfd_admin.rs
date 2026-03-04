@@ -4,12 +4,13 @@
 
 use crate::{admin::HandlerContext, log::bfd_log};
 use anyhow::Result;
-use bfd::{BfdEndpoint, DEFAULT_BFD_TTL, Daemon, bidi, packet};
+use bfd::{AddPeerRequest, BfdEndpoint, DEFAULT_BFD_TTL, Daemon, bidi, packet};
 use dropshot::{
     HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Path,
     RequestContext, TypedBody,
 };
 use mg_common::lock;
+use mg_common::thread::ManagedThread;
 use mg_types::bfd::{BfdPeerInfo, DeleteBfdPeerPathParams};
 use rdb::{BfdPeerConfig, SessionMode};
 use slog::Logger;
@@ -118,7 +119,7 @@ pub(crate) fn add_peer(
 
     let log = ctx.log.clone();
 
-    let ch = channel(
+    let (ch, egress_thread) = channel(
         dispatcher,
         rq.listen,
         rq.peer,
@@ -137,8 +138,17 @@ pub(crate) fn add_peer(
         HttpError::for_internal_error(e.to_string())
     })?;
 
-    let timeout = Duration::from_micros(rq.required_rx);
-    daemon.add_peer(rq.peer, timeout, rq.detection_threshold, rq.mode, ch, db);
+    daemon.add_peer(
+        rq.peer,
+        AddPeerRequest {
+            required_rx: Duration::from_micros(rq.required_rx),
+            detection_multiplier: rq.detection_threshold,
+            mode: rq.mode,
+            endpoint: ch,
+            egress_thread: Some(egress_thread),
+            db,
+        },
+    );
 
     Ok(())
 }
@@ -191,7 +201,7 @@ pub(crate) fn channel(
     src_port: u16,
     dst_port: u16,
     log: Logger,
-) -> Result<BfdEndpoint> {
+) -> Result<(BfdEndpoint, Arc<ManagedThread>)> {
     let (local, remote) = bidi::channel();
 
     // Ensure there is a dispatcher thread for this listening address and a
@@ -201,9 +211,10 @@ pub(crate) fn channel(
 
     // Spawn an egress thread to take packets from the session and send them
     // out a UDP socket.
-    egress(remote.rx, listen, src_port, dst_port, log.clone());
+    let egress_thread =
+        egress(remote.rx, listen, src_port, dst_port, log.clone());
 
-    Ok(local)
+    Ok((local, egress_thread))
 }
 
 /// Bind a UDP socket for BFD egress and configure the TTL/Hop Limit to 255
@@ -226,14 +237,14 @@ fn egress(
     src_port: u16,
     dst_port: u16,
     log: Logger,
-) {
-    spawn(move || {
+) -> Arc<ManagedThread> {
+    let thread = Arc::new(ManagedThread::new());
+    let handle = spawn(move || {
         let log = log.new(slog::o!(
             "local" => format!("{local}"),
             "src_port" => src_port,
             "dst_port" => dst_port,
         ));
-
         'egress: loop {
             let sk = match egress_socket(local, src_port) {
                 Err(e) => {
@@ -271,6 +282,8 @@ fn egress(
             }
         }
     });
+    thread.start(handle);
+    thread
 }
 
 type Sessions = HashMap<IpAddr, Sender<(IpAddr, packet::Control)>>;
