@@ -3589,6 +3589,7 @@ dependencies = [
  "rdb",
  "slog",
  "smf 0.10.0 (git+https://github.com/illumos/smf-rs?branch=main)",
+ "socket2 0.5.10",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

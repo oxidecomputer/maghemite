@@ -26,6 +26,8 @@ pub const MOD_SM: &str = "state_machine";
 
 pub const UNIT_PEER: &str = "peer";
 
+pub const DEFAULT_BFD_TTL: u32 = 255;
+
 /// A `Daemon` is a collection of BFD sessions.
 pub struct Daemon {
     /// Sessions keyed by peer IP address.

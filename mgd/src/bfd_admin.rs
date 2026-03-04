@@ -4,31 +4,27 @@
 
 use crate::{admin::HandlerContext, log::bfd_log};
 use anyhow::Result;
-use bfd::{Daemon, bidi, packet};
-use dropshot::HttpError;
-use dropshot::HttpResponseOk;
-use dropshot::HttpResponseUpdatedNoContent;
-use dropshot::Path;
-use dropshot::RequestContext;
-use dropshot::TypedBody;
-use mg_api::BfdPeerInfo;
-use mg_api::DeleteBfdPeerPathParams;
+use bfd::{DEFAULT_BFD_TTL, Daemon, bidi, packet};
+use dropshot::{
+    HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Path,
+    RequestContext, TypedBody,
+};
+use mg_api::{BfdPeerInfo, DeleteBfdPeerPathParams};
 use mg_common::lock;
-use rdb::BfdPeerConfig;
-use rdb::SessionMode;
+use rdb::{BfdPeerConfig, SessionMode};
 use slog::Logger;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::net::UdpSocket;
-use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::RwLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{Receiver, Sender};
-use std::thread::JoinHandle;
-use std::thread::spawn;
-use std::time::Duration;
+use socket2::Socket;
+use std::{
+    collections::{HashMap, HashSet},
+    net::{IpAddr, SocketAddr, UdpSocket},
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::AtomicBool,
+        mpsc::{Receiver, Sender},
+    },
+    thread::{JoinHandle, spawn},
+    time::Duration,
+};
 
 const UNIT_BFD: &str = "bfd";
 
@@ -246,6 +242,27 @@ fn egress(
                 }
                 Ok(sk) => sk,
             };
+
+            // BFD control packets MUST be sent with a TTL/Hop Limit of 255 per
+            // RFC 5881 (Single-Hop BFD). RFC 5883 (Multi-Hop BFD) doesn't state
+            // this as a requirement, but there's no harm in increasing the
+            // default TTL/Hop Limit to make it simpler to establish a session
+            // with fewer nerd knobs.
+            let sock = Socket::from(sk);
+            let ttl_result = match local {
+                IpAddr::V4(_) => sock.set_ttl(DEFAULT_BFD_TTL),
+                IpAddr::V6(_) => sock.set_unicast_hops_v6(DEFAULT_BFD_TTL),
+            };
+            if let Err(e) = ttl_result {
+                bfd_log!(log, error, "failed to set TTL/Hop Limit: {e}";
+                    "local" => format!("{local}"),
+                    "src_port" => format!("{src_port}"),
+                    "dst_port" => format!("{dst_port}"),
+                    "error" => format!("{e}")
+                );
+                continue;
+            }
+            let sk: UdpSocket = sock.into();
 
             let sa = SocketAddr::new(addr, dst_port);
             if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
