@@ -22,7 +22,7 @@ use std::{
         atomic::AtomicBool,
         mpsc::{Receiver, Sender},
     },
-    thread::{JoinHandle, spawn},
+    thread::{JoinHandle, sleep, spawn},
     time::Duration,
 };
 
@@ -216,20 +216,7 @@ fn egress(
     log: Logger,
 ) {
     spawn(move || {
-        loop {
-            let (addr, pkt) = match rx.recv() {
-                Ok(result) => result,
-                Err(e) => {
-                    bfd_log!(log, warn, "udp egress channel closed: {e}";
-                        "local" => format!("{local}"),
-                        "src_port" => format!("{src_port}"),
-                        "dst_port" => format!("{dst_port}"),
-                        "error" => format!("{e}")
-                    );
-                    break;
-                }
-            };
-
+        'egress: loop {
             let sk = match UdpSocket::bind(SocketAddr::new(local, src_port)) {
                 Err(e) => {
                     bfd_log!(log, error, "failed to create tx socket: {e}";
@@ -238,6 +225,9 @@ fn egress(
                         "dst_port" => format!("{dst_port}"),
                         "error" => format!("{e}")
                     );
+                    // Explicit sleep call here to prevent spin-lock in case
+                    // socket creation/bind failures are a persistent.
+                    sleep(Duration::from_secs(5));
                     continue;
                 }
                 Ok(sk) => sk,
@@ -260,20 +250,39 @@ fn egress(
                     "dst_port" => format!("{dst_port}"),
                     "error" => format!("{e}")
                 );
+                // Explicit sleep call here to prevent spin-lock in case TTL
+                // update failures are persistent.
+                sleep(Duration::from_secs(5));
                 continue;
             }
             let sk: UdpSocket = sock.into();
 
-            let sa = SocketAddr::new(addr, dst_port);
-            if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
-                bfd_log!(log, error, "udp send error: {e}";
-                    "local" => format!("{local}"),
-                    "src_port" => format!("{src_port}"),
-                    "dst_port" => format!("{dst_port}"),
-                    "message" => "control",
-                    "message_contents" => format!("{pkt}"),
-                    "error" => format!("{e}")
-                );
+            'socket: loop {
+                let (addr, pkt) = match rx.recv() {
+                    Ok(result) => result,
+                    Err(e) => {
+                        bfd_log!(log, warn, "udp egress channel closed: {e}";
+                            "local" => format!("{local}"),
+                            "src_port" => format!("{src_port}"),
+                            "dst_port" => format!("{dst_port}"),
+                            "error" => format!("{e}")
+                        );
+                        break 'egress;
+                    }
+                };
+
+                let sa = SocketAddr::new(addr, dst_port);
+                if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
+                    bfd_log!(log, error, "udp send error: {e}";
+                        "local" => format!("{local}"),
+                        "src_port" => format!("{src_port}"),
+                        "dst_port" => format!("{dst_port}"),
+                        "message" => "control",
+                        "message_contents" => format!("{pkt}"),
+                        "error" => format!("{e}")
+                    );
+                    break 'socket;
+                }
             }
         }
     });
