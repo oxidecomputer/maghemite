@@ -26,7 +26,7 @@ use crate::{
     unnumbered::UnnumberedManager,
 };
 use mg_common::lock;
-use slog::Logger;
+use slog::{Logger, info};
 use std::{
     collections::BTreeMap,
     io::Read,
@@ -79,6 +79,7 @@ enum RecvError {
 pub struct BgpListenerTcp {
     listener: TcpListener,
     unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
+    bind_addr: SocketAddr,
 }
 
 impl BgpListenerTcp {
@@ -103,6 +104,7 @@ impl BgpListenerTcp {
 impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
     fn bind<A: ToSocketAddrs>(
         addr: A,
+        log: Logger,
         unnumbered_manager: Option<Arc<dyn UnnumberedManager>>,
     ) -> Result<Self, Error>
     where
@@ -116,10 +118,15 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                 "at least one address required".into(),
             ))?;
         let listener = TcpListener::bind(addr)?;
+        let bind_addr = listener.local_addr()?;
+
+        info!(log, "TcpListener created"; "listener" => ?listener);
         listener.set_nonblocking(true)?;
+
         Ok(Self {
             listener,
             unnumbered_manager,
+            bind_addr,
         })
     }
 
@@ -227,6 +234,10 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         }
 
         Ok(())
+    }
+
+    fn bind_addr(&self) -> SocketAddr {
+        self.bind_addr
     }
 }
 

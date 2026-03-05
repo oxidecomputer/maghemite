@@ -96,6 +96,10 @@ struct RunArgs {
     /// SocketAddr the MGS service is listening on.
     #[arg(long, default_value = "[::1]:12225")]
     mgs_addr: SocketAddr,
+
+    /// SocketAddr for the BGP Dispatcher to listen on.
+    #[arg(long, default_value = "[::]:179")]
+    bgp_dispatcher_addr: SocketAddr,
 }
 
 fn main() {
@@ -274,7 +278,7 @@ fn init_bgp(args: &RunArgs, log: &Logger) -> BgpContext {
         let bgp_dispatcher =
             bgp::dispatcher::Dispatcher::<BgpConnectionTcp>::new(
                 peer_to_session.clone(),
-                "[::]:179".into(),
+                args.bgp_dispatcher_addr.to_string(),
                 log.clone(),
                 Some(bgp_context.unnumbered_manager.clone()), // Enable link-local connection routing
             );
