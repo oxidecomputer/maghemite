@@ -33,7 +33,7 @@ pub struct Dispatcher<Cnx: BgpConnection> {
 
     shutdown: AtomicBool,
     listen: String,
-    log: Logger,
+    log: Mutex<Logger>,
 }
 
 impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
@@ -53,7 +53,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
             peer_to_session,
             unnumbered_manager,
             listen,
-            log,
+            log: Mutex::new(log),
             shutdown: AtomicBool::new(false),
         }
     }
@@ -89,41 +89,46 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
     }
 
     pub fn run<Listener: BgpListener<Cnx>>(&self) {
-        let mut log = self.log.clone();
+        let mut log = lock!(self.log).clone();
         info!(log, "dispatcher started");
 
         'listener: loop {
+            info!(log, "starting listener with bind arg: {}", &self.listen);
+
             // We need to check the shutdown flag in the listener loop so we can
             // still return even if bind() keeps failing and we're stuck
             if self.shutdown.load(Ordering::Acquire) {
                 info!(
-                    self.log,
+                    log,
                     "dispatcher caught shutdown flag from listener loop"
                 );
                 self.shutdown.store(false, Ordering::Release);
                 break 'listener;
             }
 
-            // if the user requests port :0, a random port will be generated so we're not
-            // permanently storing this in the logger context yet
-            info!(log, "listener bind arg: {}", &self.listen);
-
-            // TODO return the _real_ listen address so we can put it into the logging context
             let listener = match Listener::bind(
                 &self.listen,
-                self.log.clone(),
+                log.clone(),
                 self.unnumbered_manager.clone(),
             ) {
                 Ok(l) => l,
                 Err(e) => {
-                    error!(self.log, "listener bind error: {e}");
+                    error!(log, "listener bind error: {e}");
                     sleep(Duration::from_secs(1));
                     // XXX: possible death loop?
                     continue 'listener;
                 }
             };
-            log = log.new(slog::o!("bind_addr" => listener.bind_addr()));
 
+            // If the user requested to bind on port 0, a random port will be selected,
+            // so we capture the port in the logger context after the listener has been
+            // started
+            let bound_log =
+                log.new(slog::o!("bind_addr" => listener.bind_addr()));
+            *lock!(self.log) = bound_log.clone();
+            log = bound_log;
+
+            info!(log, "transitioning to accept loop");
             'accept: loop {
                 // We also need to check the shutdown flag inside the accept
                 // loop, because we won't restart the listener loop unless we've
@@ -213,7 +218,7 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
 
     pub fn shutdown(&self) {
         info!(
-            self.log,
+            lock!(self.log),
             "dispatcher received shutdown request, setting shutdown flag"
         );
         self.shutdown.store(true, Ordering::Release);
@@ -222,6 +227,6 @@ impl<Cnx: BgpConnection + 'static> Dispatcher<Cnx> {
 
 impl<Cnx: BgpConnection> Drop for Dispatcher<Cnx> {
     fn drop(&mut self) {
-        debug!(self.log, "dropping dispatcher");
+        debug!(lock!(self.log), "dropping dispatcher");
     }
 }
