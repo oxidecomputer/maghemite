@@ -149,6 +149,9 @@ pub trait BgpListener<Cnx: BgpConnection> {
         min_ttl: Option<u8>,
         md5_key: Option<String>,
     ) -> Result<(), Error>;
+
+    /// `SocketAddr` the listener is receiving connections on
+    fn bind_addr(&self) -> SocketAddr;
 }
 
 /// Implementors of this trait initiate outbound BGP connections to peers.

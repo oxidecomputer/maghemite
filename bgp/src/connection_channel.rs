@@ -274,6 +274,10 @@ impl BgpListener<BgpConnectionChannel> for BgpListenerChannel {
         // Policy application is ignored for test connections
         Ok(())
     }
+
+    fn bind_addr(&self) -> SocketAddr {
+        self.bind_addr
+    }
 }
 
 /// A struct to implement BgpConnection for our simulated test network.
