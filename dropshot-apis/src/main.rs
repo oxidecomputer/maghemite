@@ -60,7 +60,9 @@ pub fn all_apis() -> anyhow::Result<ManagedApis> {
         },
     ];
 
-    let apis = ManagedApis::new(apis).context("error creating ManagedApis")?;
+    let apis = ManagedApis::new(apis)
+        .context("error creating ManagedApis")?
+        .with_git_stub_storage();
     Ok(apis)
 }
 
