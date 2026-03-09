@@ -457,3 +457,25 @@ impl Dispatcher {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use socket2::Socket;
+
+    #[test]
+    fn egress_socket_sets_ttl_v4() {
+        let sk = egress_socket("127.0.0.1".parse().unwrap(), 0)
+            .expect("failed to create v4 egress socket");
+        let sock = Socket::from(sk);
+        assert_eq!(sock.ttl().unwrap(), DEFAULT_BFD_TTL);
+    }
+
+    #[test]
+    fn egress_socket_sets_hop_limit_v6() {
+        let sk = egress_socket("::1".parse().unwrap(), 0)
+            .expect("failed to create v6 egress socket");
+        let sock = Socket::from(sk);
+        assert_eq!(sock.unicast_hops_v6().unwrap(), DEFAULT_BFD_TTL);
+    }
+}
