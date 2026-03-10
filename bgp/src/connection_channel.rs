@@ -307,6 +307,8 @@ pub struct BgpConnectionChannel {
     channel_id: u64,
     // Typestate managing the recv loop thread lifecycle (Ready or Running)
     recv_loop_state: Mutex<ThreadState>,
+    // BGP Extended Message Size is supported for this peer.
+    extended_msg: Arc<AtomicBool>,
 }
 
 impl BgpConnection for BgpConnectionChannel {
@@ -387,6 +389,15 @@ impl BgpConnection for BgpConnectionChannel {
         // Socket options are ignored for test connections
         Ok(())
     }
+
+    fn set_extended_msg(&self, ext_msg_supported: bool) {
+        self.extended_msg
+            .store(ext_msg_supported, Ordering::Relaxed)
+    }
+
+    fn extended_msg(&self) -> bool {
+        self.extended_msg.load(Ordering::Relaxed)
+    }
 }
 
 impl BgpConnectionChannel {
@@ -433,6 +444,7 @@ impl BgpConnectionChannel {
             recv_timeout: timeout,
             channel_id,
             recv_loop_state: Mutex::new(ThreadState::new()),
+            extended_msg: Arc::new(AtomicBool::new(false)),
         }
     }
 

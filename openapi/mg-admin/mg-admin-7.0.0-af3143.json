@@ -2463,7 +2463,7 @@
             "additionalProperties": false
           },
           {
-            "description": "Extended message capability as defined in RFC 8654. Note this capability is not yet implemented.",
+            "description": "Extended message capability as defined in RFC 8654",
             "type": "object",
             "properties": {
               "b_g_p_extended_message": {

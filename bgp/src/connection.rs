@@ -221,6 +221,12 @@ pub trait BgpConnection: Send + Sync + Sized {
 
     /// Update a socket option on a live connection.
     fn update_socket_option(&self, option: &SocketOption) -> Result<(), Error>;
+
+    /// Update the peer's support for BGP Extended Messages
+    fn set_extended_msg(&self, ext_msg_supported: bool);
+
+    /// Indicates the peer's support for BGP Extended Messages
+    fn extended_msg(&self) -> bool;
 }
 
 /// A socket option that can be updated on a live BGP connection.

@@ -14,11 +14,11 @@ use crate::{
     log::{collision_log, session_log, session_log_lite},
     messages::{
         AddPathElement, Afi, BgpNexthop, Capability, CeaseErrorSubcode,
-        Community, ErrorCode, ErrorSubcode, Header, MAX_MESSAGE_SIZE, Message,
-        MessageKind, MessageParseError, MpReachNlri, MpUnreachNlri,
-        NotificationMessage, OpenErrorSubcode, OpenMessage, PathAttribute,
-        PathAttributeValue, RouteRefreshMessage, Safi, UpdateMessage,
-        UpdateParseErrorReason,
+        Community, ErrorCode, ErrorSubcode, Header, MAX_EXTENDED_MESSAGE_SIZE,
+        MAX_MESSAGE_SIZE, Message, MessageKind, MessageParseError, MpReachNlri,
+        MpUnreachNlri, NotificationMessage, OpenErrorSubcode, OpenMessage,
+        PathAttribute, PathAttributeValue, RouteRefreshMessage, Safi,
+        UpdateMessage, UpdateParseErrorReason,
     },
     params::{
         BgpCapability, BgpPeerParameters, BgpPeerParametersV1,
@@ -130,6 +130,12 @@ pub struct PeerConnection<Cnx: BgpConnection> {
     /// encoding. IPv4 Unicast is implicitly negotiated, and is the only
     /// address-family allowed for this peer.
     pub mp_bgp: bool,
+}
+
+impl<Cnx: BgpConnection> PeerConnection<Cnx> {
+    fn extended_msg(&self) -> bool {
+        self.conn.extended_msg()
+    }
 }
 
 impl<Cnx: BgpConnection> Clone for PeerConnection<Cnx> {
@@ -2410,6 +2416,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let mut caps = BTreeSet::from([
             //Capability::EnhancedRouteRefresh{},
             //Capability::GracefulRestart{},
+            Capability::BGPExtendedMessage {},
             Capability::AddPath {
                 elements: BTreeSet::from([AddPathElement {
                     afi: 1,          //IP
@@ -3983,6 +3990,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             let our_caps = lock!(self.caps_tx);
             negotiate_afis(&our_caps, &caps)
         };
+        if caps.contains(&Capability::BGPExtendedMessage {}) {
+            conn.set_extended_msg(true);
+        }
 
         let pc = PeerConnection {
             conn,
@@ -5349,6 +5359,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let our_caps = lock!(self.caps_tx);
                     negotiate_afis(&our_caps, &caps)
                 };
+                if caps.contains(&Capability::BGPExtendedMessage {}) {
+                    new.set_extended_msg(true);
+                }
 
                 let new_pc = PeerConnection {
                     conn: new,
@@ -5667,6 +5680,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     let our_caps = lock!(self.caps_tx);
                                                     negotiate_afis(&our_caps, &caps)
                                                 };
+                                                if caps.contains(&Capability::BGPExtendedMessage {}) {
+                                                    exist.set_extended_msg(true);
+                                                }
 
                                                 let exist_pc = PeerConnection {
                                                     conn: exist.clone(),
@@ -5804,6 +5820,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     let our_caps = lock!(self.caps_tx);
                                                     negotiate_afis(&our_caps, &caps)
                                                 };
+                                                if caps.contains(&Capability::BGPExtendedMessage {}) {
+                                                    new.set_extended_msg(true);
+                                                }
 
                                                 let new_pc = PeerConnection {
                                                     conn: new.clone(),
@@ -7128,6 +7147,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     lock!(self.caps_tx);
                                                 negotiate_afis(&our_caps, &caps)
                                             };
+                                            if caps.contains(&Capability::BGPExtendedMessage {}) {
+                                                incoming_conn.set_extended_msg(true);
+                                            }
 
                                             let new_pc = PeerConnection {
                                                 conn: incoming_conn.clone(),
@@ -8094,7 +8116,12 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             return Ok(());
         }
 
-        let max_body = MAX_MESSAGE_SIZE - Header::WIRE_SIZE;
+        let max_msg_size = if pc.extended_msg() {
+            MAX_EXTENDED_MESSAGE_SIZE
+        } else {
+            MAX_MESSAGE_SIZE
+        };
+        let max_body = max_msg_size - Header::WIRE_SIZE;
 
         match route_update {
             RouteUpdate::V4(RouteUpdate4::Announce(nlri)) => {

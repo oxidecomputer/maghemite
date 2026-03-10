@@ -13,10 +13,10 @@ use crate::{
     log::{connection_log, connection_log_lite},
     messages::{
         ErrorCode, ErrorSubcode, Header, HeaderErrorSubcode, HeaderParseError,
-        MAX_MESSAGE_SIZE, Message, MessageParseError, MessageType,
-        NotificationMessage, NotificationParseError,
-        NotificationParseErrorReason, OpenErrorSubcode, OpenMessage,
-        OpenParseError, OpenParseErrorReason, RouteRefreshMessage,
+        MAX_EXTENDED_MESSAGE_SIZE, MAX_MESSAGE_SIZE, Message,
+        MessageParseError, MessageType, NotificationMessage,
+        NotificationParseError, NotificationParseErrorReason, OpenErrorSubcode,
+        OpenMessage, OpenParseError, OpenParseErrorReason, RouteRefreshMessage,
         RouteRefreshParseError, RouteRefreshParseErrorReason, UpdateMessage,
     },
     session::{
@@ -487,6 +487,8 @@ pub struct BgpConnectionTcp {
     recv_timeout: Duration,
     // Typestate managing the recv loop thread lifecycle (Ready or Running)
     recv_loop_state: Mutex<ThreadState>,
+    // BGP Extended Message Size is supported for this peer.
+    extended_msg: Arc<AtomicBool>,
 }
 
 impl BgpConnection for BgpConnectionTcp {
@@ -494,7 +496,13 @@ impl BgpConnection for BgpConnectionTcp {
 
     fn send(&self, msg: Message) -> Result<(), Error> {
         let mut guard = lock!(self.conn);
-        Self::send_msg(&mut guard, &self.log, self.direction, msg)
+        Self::send_msg(
+            &mut guard,
+            &self.log,
+            self.direction,
+            msg,
+            self.extended_msg(),
+        )
     }
 
     fn peer(&self) -> SocketAddr {
@@ -551,6 +559,15 @@ impl BgpConnection for BgpConnectionTcp {
             SocketOption::Dscp(dscp) => apply_dscp(&guard, dscp, self.peer),
             SocketOption::MinTtl(ttl) => apply_min_ttl(&guard, ttl, self.peer),
         }
+    }
+
+    fn set_extended_msg(&self, ext_msg_supported: bool) {
+        self.extended_msg
+            .store(ext_msg_supported, Ordering::Relaxed)
+    }
+
+    fn extended_msg(&self) -> bool {
+        self.extended_msg.load(Ordering::Relaxed)
     }
 }
 
@@ -616,6 +633,7 @@ impl BgpConnectionTcp {
             event_tx,
             recv_timeout: timeout,
             recv_loop_state: Mutex::new(ThreadState::new()),
+            extended_msg: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -628,6 +646,7 @@ impl BgpConnectionTcp {
         let log = conn_arc.log.clone();
         let direction = conn_arc.direction;
         let conn_id = conn_arc.id;
+        let extended_msg = conn_arc.extended_msg.clone();
 
         // Try to clone the stream before spawning the thread
         // This way we can fail fast if the connection is already broken
@@ -678,7 +697,7 @@ impl BgpConnectionTcp {
                         );
                         break;
                     }
-                    match Self::recv_msg(&mut conn, dropped.clone(), &l, direction)
+                    match Self::recv_msg(&mut conn, dropped.clone(), extended_msg.clone(), &l, direction)
                     {
                         Ok(msg) => {
                             connection_log_lite!(l, trace,
@@ -814,24 +833,16 @@ impl BgpConnectionTcp {
     fn recv_msg(
         stream: &mut TcpStream,
         dropped: Arc<AtomicBool>,
+        extended_msg: Arc<AtomicBool>,
         log: &Logger,
         direction: ConnectionDirection,
     ) -> Result<Message, RecvError> {
         let hdr = Self::recv_header(stream, dropped.clone())?;
+        let hdr_len = usize::from(hdr.length);
+        let extended_msg = extended_msg.load(Ordering::Relaxed);
 
         // RFC 4271 §4.1: length must be between 19 and 4096
-        if usize::from(hdr.length) < Header::WIRE_SIZE {
-            return Err(RecvError::Parse(MessageParseError::Header(
-                HeaderParseError {
-                    error_code: ErrorCode::Header,
-                    error_subcode: ErrorSubcode::Header(
-                        HeaderErrorSubcode::BadMessageLength,
-                    ),
-                    length: hdr.length,
-                },
-            )));
-        }
-        if usize::from(hdr.length) > MAX_MESSAGE_SIZE {
+        if hdr_len < Header::WIRE_SIZE {
             return Err(RecvError::Parse(MessageParseError::Header(
                 HeaderParseError {
                     error_code: ErrorCode::Header,
@@ -843,7 +854,31 @@ impl BgpConnectionTcp {
             )));
         }
 
-        let msg_len = usize::from(hdr.length) - Header::WIRE_SIZE;
+        // Extended Message doesn't apply to Open and Keepalive messages.
+        // Only use Extended Message Size for supported message types if we've
+        // negotiated support for it with the peer.
+        let max_msg_size = if !extended_msg
+            || matches!(hdr.typ, MessageType::Open)
+            || matches!(hdr.typ, MessageType::KeepAlive)
+        {
+            MAX_MESSAGE_SIZE
+        } else {
+            MAX_EXTENDED_MESSAGE_SIZE
+        };
+
+        if hdr_len > max_msg_size {
+            return Err(RecvError::Parse(MessageParseError::Header(
+                HeaderParseError {
+                    error_code: ErrorCode::Header,
+                    error_subcode: ErrorSubcode::Header(
+                        HeaderErrorSubcode::BadMessageLength,
+                    ),
+                    length: hdr.length,
+                },
+            )));
+        }
+
+        let msg_len = hdr_len - Header::WIRE_SIZE;
         let mut msgbuf = vec![0u8; msg_len];
         let mut i = 0;
         while i < msg_len {
@@ -913,6 +948,7 @@ impl BgpConnectionTcp {
                         ErrorCode::Open,
                         ErrorSubcode::Open(subcode),
                         Vec::new(),
+                        extended_msg,
                     ) {
                         connection_log_lite!(log,
                             error,
@@ -1036,6 +1072,7 @@ impl BgpConnectionTcp {
         log: &Logger,
         direction: ConnectionDirection,
         msg: Message,
+        extended_msg: bool,
     ) -> Result<(), Error> {
         connection_log_lite!(log,
             trace,
@@ -1045,17 +1082,13 @@ impl BgpConnectionTcp {
             "message" => msg.title(),
             "message_contents" => format!("{msg}")
         );
-        let msg_buf = msg.to_wire()?;
-        let header = Header {
-            length: (msg_buf.len() + Header::WIRE_SIZE).try_into().map_err(
-                |_| {
-                    Error::TooLarge(
-                        "BGP message being sent is too large".into(),
-                    )
-                },
-            )?,
-            typ: MessageType::from(&msg),
-        };
+        let msg_buf = msg.to_wire(extended_msg)?;
+        let length =
+            u16::try_from(msg_buf.len() + Header::WIRE_SIZE).map_err(|_| {
+                Error::TooLarge("BGP message being sent is too large".into())
+            })?;
+        let header =
+            Header::new(length, MessageType::from(&msg), extended_msg)?;
         let mut buf = header.to_wire().to_vec();
         buf.extend_from_slice(&msg_buf);
         connection_log_lite!(log,
@@ -1076,6 +1109,7 @@ impl BgpConnectionTcp {
         error_code: ErrorCode,
         error_subcode: ErrorSubcode,
         data: Vec<u8>,
+        extended_msg: bool,
     ) -> Result<(), Error> {
         Self::send_msg(
             stream,
@@ -1086,6 +1120,7 @@ impl BgpConnectionTcp {
                 error_subcode,
                 data,
             }),
+            extended_msg,
         )
     }
 
