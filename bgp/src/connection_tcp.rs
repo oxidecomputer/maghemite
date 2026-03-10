@@ -127,6 +127,10 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
                 "at least one address required".into(),
             ))?;
         let listener = TcpListener::bind(addr)?;
+        // We set nonblocking to true on the listener because accept() can block
+        // indefinitely and there isn't a portable way to do so with a timeout.
+        // We would have to start using poll() to accomplish this, which is a
+        // heavier lift that hasn't yet been deemed worthwhile.
         listener.set_nonblocking(true)?;
         set_outgoing_ttl(&listener, DEFAULT_BGP_TTL, addr)?;
         Ok(Self {
@@ -149,6 +153,17 @@ impl BgpListener<BgpConnectionTcp> for BgpListenerTcp {
         loop {
             match self.listener.accept() {
                 Ok((conn, mut peer)) => {
+                    // Override the nonblocking value of the parent TcpListener.
+                    // Reads and Writes use a timeout via the std API, which is
+                    // non-functional on nonblocking sockets.
+                    if let Err(e) = conn.set_nonblocking(false) {
+                        slog::error!(log,
+                            "failed to set accepted connection to blocking: {e}";
+                            "error" => format!("{e}")
+                        );
+                        return Err(e.into());
+                    }
+
                     // Get the actual socket addresses for this accepted
                     // connection. This is critical for dual-stack scenarios
                     // where the listener may bind to an IPv6 address but accept
