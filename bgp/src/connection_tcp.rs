@@ -35,15 +35,17 @@ use std::{
     io::Write,
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     num::NonZeroU8,
-    os::fd::AsFd,
+    os::fd::{AsFd, AsRawFd},
     sync::atomic::AtomicBool,
     sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
     thread::{JoinHandle, sleep},
     time::{Duration, Instant},
 };
 
+use libc::{IPPROTO_IP, IPPROTO_IPV6, c_void};
+
 #[cfg(any(target_os = "linux", target_os = "illumos"))]
-use libc::{IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, c_int, c_void};
+use libc::{IPPROTO_TCP, c_int};
 
 #[cfg(target_os = "linux")]
 use crate::connection::MAX_MD5SIG_KEYLEN;
@@ -53,7 +55,7 @@ use libc::{IP_MINTTL, TCP_MD5SIG, sockaddr_storage};
 #[cfg(target_os = "illumos")]
 use itertools::Itertools;
 #[cfg(target_os = "illumos")]
-use std::{collections::HashSet, net::IpAddr, os::fd::AsRawFd};
+use std::{collections::HashSet, net::IpAddr};
 
 const UNIT_CONNECTION: &str = "connection_tcp";
 
@@ -1255,11 +1257,30 @@ fn apply_dscp(
     peer: SocketAddr,
 ) -> Result<(), Error> {
     let tos = u32::from(dscp.tos_byte());
-    let sock = SockRef::from(conn);
-    if peer.is_ipv4() {
-        sock.set_tos(tos).map_err(Error::Io)?;
-    } else {
-        sock.set_tclass_v6(tos).map_err(Error::Io)?;
+    let fd = conn.as_raw_fd();
+    unsafe {
+        if peer.is_ipv4()
+            && libc::setsockopt(
+                fd,
+                IPPROTO_IP,
+                libc::IP_TOS,
+                &tos as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+        if peer.is_ipv6()
+            && libc::setsockopt(
+                fd,
+                IPPROTO_IPV6,
+                libc::IPV6_TCLASS,
+                &tos as *const u32 as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            ) != 0
+        {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
     }
     Ok(())
 }
@@ -1611,7 +1632,18 @@ mod tests {
         let dscp = Dscp::new(48).unwrap();
         apply_dscp(&stream, dscp, addr).unwrap();
 
-        let readback = SockRef::from(&stream).tos().unwrap();
+        let mut readback: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                IPPROTO_IP,
+                libc::IP_TOS,
+                &mut readback as *mut u32 as *mut c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
         // DSCP 48 → TOS byte = 48 << 2 = 192
         assert_eq!(readback, u32::from(dscp.tos_byte()));
     }
@@ -1625,7 +1657,18 @@ mod tests {
         let dscp = Dscp::new(46).unwrap(); // EF
         apply_dscp(&stream, dscp, addr).unwrap();
 
-        let readback = SockRef::from(&stream).tclass_v6().unwrap();
+        let mut readback: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                IPPROTO_IPV6,
+                libc::IPV6_TCLASS,
+                &mut readback as *mut u32 as *mut c_void,
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "getsockopt failed");
         // DSCP 46 (EF) → TOS byte = 46 << 2 = 184
         assert_eq!(readback, u32::from(dscp.tos_byte()));
     }
