@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 serde.workspace = true
 schemars.workspace = true
+num_enum.workspace = true
 clap = { workspace = true, optional = true }
 oxnet.workspace = true
 

@@ -8,7 +8,7 @@ use crate::{
     session::{FsmStateKind, SessionCounters, SessionInfo},
 };
 use rdb::{
-    ImportExportPolicy4, ImportExportPolicy6, ImportExportPolicyV1,
+    Dscp, ImportExportPolicy4, ImportExportPolicy6, ImportExportPolicyV1,
     PolicyAction, Prefix, Prefix4, Prefix6,
 };
 use schemars::JsonSchema;
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     net::{IpAddr, SocketAddr, SocketAddrV6},
+    num::NonZeroU8,
     sync::atomic::Ordering,
     time::Duration,
 };
@@ -198,19 +199,20 @@ pub struct Neighbor {
     pub name: String,
     pub group: String,
     pub host: SocketAddr,
-    #[serde(flatten)]
     pub parameters: BgpPeerParameters,
 }
 
 impl Neighbor {
     /// Validate that at least one address family is enabled
     pub fn validate_address_families(&self) -> Result<(), String> {
-        if self.parameters.ipv4_unicast.is_none()
-            && self.parameters.ipv6_unicast.is_none()
-        {
-            return Err("at least one address family must be enabled".into());
-        }
-        Ok(())
+        self.parameters.validate_address_families()
+    }
+}
+
+impl UnnumberedNeighbor {
+    /// Validate that at least one address family is enabled
+    pub fn validate_address_families(&self) -> Result<(), String> {
+        self.parameters.validate_address_families()
     }
 }
 
@@ -232,7 +234,6 @@ pub struct UnnumberedNeighbor {
     pub group: String,
     pub interface: String,
     pub act_as_a_default_ipv6_router: u16,
-    #[serde(flatten)]
     pub parameters: BgpPeerParameters,
 }
 
@@ -362,7 +363,7 @@ impl UnnumberedNeighbor {
             act_as_a_default_ipv6_router: rq.router_lifetime,
             parameters: BgpPeerParameters {
                 remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq.parameters.min_ttl,
+                min_ttl: rq.parameters.min_ttl.and_then(NonZeroU8::new),
                 hold_time: rq.parameters.hold_time,
                 idle_hold_time: rq.parameters.idle_hold_time,
                 delay_open: rq.parameters.delay_open,
@@ -396,6 +397,7 @@ impl UnnumberedNeighbor {
                     min: 0.75,
                     max: 1.0,
                 }),
+                dscp: rq.parameters.dscp,
             },
         }
     }
@@ -428,7 +430,7 @@ impl Neighbor {
             group: rq.group.clone(),
             parameters: BgpPeerParameters {
                 remote_asn: rq.parameters.remote_asn,
-                min_ttl: rq.parameters.min_ttl,
+                min_ttl: rq.parameters.min_ttl.and_then(NonZeroU8::new),
                 hold_time: rq.parameters.hold_time,
                 idle_hold_time: rq.parameters.idle_hold_time,
                 delay_open: rq.parameters.delay_open,
@@ -462,6 +464,7 @@ impl Neighbor {
                 }),
                 idle_hold_jitter: None,
                 deterministic_collision_resolution: false,
+                dscp: rq.parameters.dscp,
             },
         }
     }
@@ -573,10 +576,38 @@ pub struct PeerTimers {
     pub delay_open: StaticTimerInfo,
 }
 
-/// Session-level counters that persist across connection changes
-/// These serve as aggregate counters across all connections for the session
+/// Reason for the most recent session reset.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum ResetReason {
+    AdministrativeReset,
+    AdministrativeShutdown,
+    HoldTimerExpired,
+    FsmError,
+    ConnectionRejected,
+    CollisionResolution,
+    IoError,
+    ParseError,
+    NotificationReceived,
+}
+
+/// Information about the most recent session reset.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FsmResetRecord {
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub reason: ResetReason,
+}
+
+/// A record of a BGP notification message with a timestamp.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotificationRecord {
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub notification: crate::messages::NotificationMessage,
+}
+
+/// Session-level counters (v5-v6 API: aggregate NLRI, no reset_count).
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct PeerCounters {
+#[schemars(rename = "PeerCounters")]
+pub struct PeerCountersV1 {
     // FSM Counters
     pub connection_retries: u64,
     pub active_connections_accepted: u64,
@@ -633,7 +664,7 @@ pub struct PeerCounters {
     pub connector_panics: u64,
 }
 
-impl From<&SessionCounters> for PeerCounters {
+impl From<&SessionCounters> for PeerCountersV1 {
     fn from(value: &SessionCounters) -> Self {
         Self {
             connection_retries: value
@@ -682,9 +713,13 @@ impl From<&SessionCounters> for PeerCounters {
                 .idle_hold_timer_expirations
                 .load(Ordering::Relaxed),
             prefixes_advertised: value
-                .prefixes_advertised
-                .load(Ordering::Relaxed),
-            prefixes_imported: value.prefixes_imported.load(Ordering::Relaxed),
+                .ipv4_prefixes_advertised
+                .load(Ordering::Relaxed)
+                + value.ipv6_prefixes_advertised.load(Ordering::Relaxed),
+            prefixes_imported: value
+                .ipv4_prefixes_imported
+                .load(Ordering::Relaxed)
+                + value.ipv6_prefixes_imported.load(Ordering::Relaxed),
             keepalives_sent: value.keepalives_sent.load(Ordering::Relaxed),
             keepalives_received: value
                 .keepalives_received
@@ -796,6 +831,223 @@ impl From<&Capability> for BgpCapability {
     }
 }
 
+/// Peer info for v5-v6 API (aggregate NLRI counters, no reset/notification).
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[schemars(rename = "PeerInfo")]
+pub struct PeerInfoV3 {
+    pub name: String,
+    pub peer_group: String,
+    pub fsm_state: FsmStateKind,
+    pub fsm_state_duration: Duration,
+    pub asn: Option<u32>,
+    pub id: Option<u32>,
+    pub local_ip: IpAddr,
+    pub remote_ip: IpAddr,
+    pub local_tcp_port: u16,
+    pub remote_tcp_port: u16,
+    pub received_capabilities: Vec<BgpCapability>,
+    pub timers: PeerTimers,
+    pub counters: PeerCountersV1,
+    pub ipv4_unicast: Ipv4UnicastConfig,
+    pub ipv6_unicast: Ipv6UnicastConfig,
+}
+
+/// Session-level counters with per-AFI NLRI gauges (v7+ API).
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PeerCounters {
+    // FSM Counters
+    pub connection_retries: u64,
+    pub active_connections_accepted: u64,
+    pub active_connections_declined: u64,
+    pub passive_connections_accepted: u64,
+    pub passive_connections_declined: u64,
+    pub transitions_to_idle: u64,
+    pub transitions_to_connect: u64,
+    pub transitions_to_active: u64,
+    pub transitions_to_open_sent: u64,
+    pub transitions_to_open_confirm: u64,
+    pub transitions_to_connection_collision: u64,
+    pub transitions_to_session_setup: u64,
+    pub transitions_to_established: u64,
+    pub hold_timer_expirations: u64,
+    pub idle_hold_timer_expirations: u64,
+
+    // Per-AFI NLRI gauge counters
+    pub ipv4_prefixes_advertised: u64,
+    pub ipv4_prefixes_imported: u64,
+    pub ipv6_prefixes_advertised: u64,
+    pub ipv6_prefixes_imported: u64,
+
+    // Message counters
+    pub keepalives_sent: u64,
+    pub keepalives_received: u64,
+    pub route_refresh_sent: u64,
+    pub route_refresh_received: u64,
+    pub opens_sent: u64,
+    pub opens_received: u64,
+    pub notifications_sent: u64,
+    pub notifications_received: u64,
+    pub updates_sent: u64,
+    pub updates_received: u64,
+
+    // Message error counters
+    pub unexpected_update_message: u64,
+    pub unexpected_keepalive_message: u64,
+    pub unexpected_open_message: u64,
+    pub unexpected_route_refresh_message: u64,
+    pub unexpected_notification_message: u64,
+    pub update_nexhop_missing: u64,
+    pub open_handle_failures: u64,
+    pub unnegotiated_address_family: u64,
+    pub updates_treated_as_withdraw: u64,
+
+    // Send failure counters
+    pub notification_send_failure: u64,
+    pub open_send_failure: u64,
+    pub keepalive_send_failure: u64,
+    pub route_refresh_send_failure: u64,
+    pub update_send_failure: u64,
+
+    // Connection failure counters
+    pub tcp_connection_failure: u64,
+    pub md5_auth_failures: u64,
+    pub connector_panics: u64,
+
+    // Reset counter
+    pub reset_count: u64,
+}
+
+impl From<&SessionCounters> for PeerCounters {
+    fn from(value: &SessionCounters) -> Self {
+        Self {
+            connection_retries: value
+                .connection_retries
+                .load(Ordering::Relaxed),
+            active_connections_accepted: value
+                .active_connections_accepted
+                .load(Ordering::Relaxed),
+            active_connections_declined: value
+                .active_connections_declined
+                .load(Ordering::Relaxed),
+            passive_connections_accepted: value
+                .passive_connections_accepted
+                .load(Ordering::Relaxed),
+            passive_connections_declined: value
+                .passive_connections_declined
+                .load(Ordering::Relaxed),
+            transitions_to_idle: value
+                .transitions_to_idle
+                .load(Ordering::Relaxed),
+            transitions_to_connect: value
+                .transitions_to_connect
+                .load(Ordering::Relaxed),
+            transitions_to_active: value
+                .transitions_to_active
+                .load(Ordering::Relaxed),
+            transitions_to_open_sent: value
+                .transitions_to_open_sent
+                .load(Ordering::Relaxed),
+            transitions_to_open_confirm: value
+                .transitions_to_open_confirm
+                .load(Ordering::Relaxed),
+            transitions_to_connection_collision: value
+                .transitions_to_connection_collision
+                .load(Ordering::Relaxed),
+            transitions_to_session_setup: value
+                .transitions_to_session_setup
+                .load(Ordering::Relaxed),
+            transitions_to_established: value
+                .transitions_to_established
+                .load(Ordering::Relaxed),
+            hold_timer_expirations: value
+                .hold_timer_expirations
+                .load(Ordering::Relaxed),
+            idle_hold_timer_expirations: value
+                .idle_hold_timer_expirations
+                .load(Ordering::Relaxed),
+            ipv4_prefixes_advertised: value
+                .ipv4_prefixes_advertised
+                .load(Ordering::Relaxed),
+            ipv4_prefixes_imported: value
+                .ipv4_prefixes_imported
+                .load(Ordering::Relaxed),
+            ipv6_prefixes_advertised: value
+                .ipv6_prefixes_advertised
+                .load(Ordering::Relaxed),
+            ipv6_prefixes_imported: value
+                .ipv6_prefixes_imported
+                .load(Ordering::Relaxed),
+            keepalives_sent: value.keepalives_sent.load(Ordering::Relaxed),
+            keepalives_received: value
+                .keepalives_received
+                .load(Ordering::Relaxed),
+            route_refresh_sent: value
+                .route_refresh_sent
+                .load(Ordering::Relaxed),
+            route_refresh_received: value
+                .route_refresh_received
+                .load(Ordering::Relaxed),
+            opens_sent: value.opens_sent.load(Ordering::Relaxed),
+            opens_received: value.opens_received.load(Ordering::Relaxed),
+            notifications_sent: value
+                .notifications_sent
+                .load(Ordering::Relaxed),
+            notifications_received: value
+                .notifications_received
+                .load(Ordering::Relaxed),
+            updates_sent: value.updates_sent.load(Ordering::Relaxed),
+            updates_received: value.updates_received.load(Ordering::Relaxed),
+            unexpected_update_message: value
+                .unexpected_update_message
+                .load(Ordering::Relaxed),
+            unexpected_keepalive_message: value
+                .unexpected_keepalive_message
+                .load(Ordering::Relaxed),
+            unexpected_open_message: value
+                .unexpected_open_message
+                .load(Ordering::Relaxed),
+            unexpected_route_refresh_message: value
+                .unexpected_route_refresh_message
+                .load(Ordering::Relaxed),
+            unexpected_notification_message: value
+                .unexpected_notification_message
+                .load(Ordering::Relaxed),
+            update_nexhop_missing: value
+                .update_nexhop_missing
+                .load(Ordering::Relaxed),
+            open_handle_failures: value
+                .open_handle_failures
+                .load(Ordering::Relaxed),
+            unnegotiated_address_family: value
+                .unnegotiated_address_family
+                .load(Ordering::Relaxed),
+            updates_treated_as_withdraw: value
+                .updates_treated_as_withdraw
+                .load(Ordering::Relaxed),
+            notification_send_failure: value
+                .notification_send_failure
+                .load(Ordering::Relaxed),
+            open_send_failure: value.open_send_failure.load(Ordering::Relaxed),
+            keepalive_send_failure: value
+                .keepalive_send_failure
+                .load(Ordering::Relaxed),
+            route_refresh_send_failure: value
+                .route_refresh_send_failure
+                .load(Ordering::Relaxed),
+            update_send_failure: value
+                .update_send_failure
+                .load(Ordering::Relaxed),
+            tcp_connection_failure: value
+                .tcp_connection_failure
+                .load(Ordering::Relaxed),
+            md5_auth_failures: value.md5_auth_failures.load(Ordering::Relaxed),
+            connector_panics: value.connector_panics.load(Ordering::Relaxed),
+            reset_count: value.reset_count.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Peer info for v7+ API (per-AFI counters, reset/notification tracking).
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PeerInfo {
     pub name: String,
@@ -813,6 +1065,111 @@ pub struct PeerInfo {
     pub counters: PeerCounters,
     pub ipv4_unicast: Ipv4UnicastConfig,
     pub ipv6_unicast: Ipv6UnicastConfig,
+    pub last_reset: Option<FsmResetRecord>,
+    pub last_notification_sent: Option<NotificationRecord>,
+    pub last_notification_received: Option<NotificationRecord>,
+}
+
+impl From<PeerInfo> for PeerInfoV3 {
+    fn from(info: PeerInfo) -> Self {
+        Self {
+            name: info.name,
+            peer_group: info.peer_group,
+            fsm_state: info.fsm_state,
+            fsm_state_duration: info.fsm_state_duration,
+            asn: info.asn,
+            id: info.id,
+            local_ip: info.local_ip,
+            remote_ip: info.remote_ip,
+            local_tcp_port: info.local_tcp_port,
+            remote_tcp_port: info.remote_tcp_port,
+            received_capabilities: info.received_capabilities,
+            timers: info.timers,
+            counters: PeerCountersV1 {
+                connection_retries: info.counters.connection_retries,
+                active_connections_accepted: info
+                    .counters
+                    .active_connections_accepted,
+                active_connections_declined: info
+                    .counters
+                    .active_connections_declined,
+                passive_connections_accepted: info
+                    .counters
+                    .passive_connections_accepted,
+                passive_connections_declined: info
+                    .counters
+                    .passive_connections_declined,
+                transitions_to_idle: info.counters.transitions_to_idle,
+                transitions_to_connect: info.counters.transitions_to_connect,
+                transitions_to_active: info.counters.transitions_to_active,
+                transitions_to_open_sent: info
+                    .counters
+                    .transitions_to_open_sent,
+                transitions_to_open_confirm: info
+                    .counters
+                    .transitions_to_open_confirm,
+                transitions_to_connection_collision: info
+                    .counters
+                    .transitions_to_connection_collision,
+                transitions_to_session_setup: info
+                    .counters
+                    .transitions_to_session_setup,
+                transitions_to_established: info
+                    .counters
+                    .transitions_to_established,
+                hold_timer_expirations: info.counters.hold_timer_expirations,
+                idle_hold_timer_expirations: info
+                    .counters
+                    .idle_hold_timer_expirations,
+                prefixes_advertised: info.counters.ipv4_prefixes_advertised
+                    + info.counters.ipv6_prefixes_advertised,
+                prefixes_imported: info.counters.ipv4_prefixes_imported
+                    + info.counters.ipv6_prefixes_imported,
+                keepalives_sent: info.counters.keepalives_sent,
+                keepalives_received: info.counters.keepalives_received,
+                route_refresh_sent: info.counters.route_refresh_sent,
+                route_refresh_received: info.counters.route_refresh_received,
+                opens_sent: info.counters.opens_sent,
+                opens_received: info.counters.opens_received,
+                notifications_sent: info.counters.notifications_sent,
+                notifications_received: info.counters.notifications_received,
+                updates_sent: info.counters.updates_sent,
+                updates_received: info.counters.updates_received,
+                unexpected_update_message: info
+                    .counters
+                    .unexpected_update_message,
+                unexpected_keepalive_message: info
+                    .counters
+                    .unexpected_keepalive_message,
+                unexpected_open_message: info.counters.unexpected_open_message,
+                unexpected_route_refresh_message: info
+                    .counters
+                    .unexpected_route_refresh_message,
+                unexpected_notification_message: info
+                    .counters
+                    .unexpected_notification_message,
+                update_nexhop_missing: info.counters.update_nexhop_missing,
+                open_handle_failures: info.counters.open_handle_failures,
+                unnegotiated_address_family: info
+                    .counters
+                    .unnegotiated_address_family,
+                notification_send_failure: info
+                    .counters
+                    .notification_send_failure,
+                open_send_failure: info.counters.open_send_failure,
+                keepalive_send_failure: info.counters.keepalive_send_failure,
+                route_refresh_send_failure: info
+                    .counters
+                    .route_refresh_send_failure,
+                update_send_failure: info.counters.update_send_failure,
+                tcp_connection_failure: info.counters.tcp_connection_failure,
+                md5_auth_failures: info.counters.md5_auth_failures,
+                connector_panics: info.counters.connector_panics,
+            },
+            ipv4_unicast: info.ipv4_unicast,
+            ipv6_unicast: info.ipv6_unicast,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
@@ -870,7 +1227,6 @@ pub struct BgpPeerConfigV1 {
 pub struct BgpPeerConfig {
     pub host: SocketAddr,
     pub name: String,
-    #[serde(flatten)]
     pub parameters: BgpPeerParameters,
 }
 
@@ -879,7 +1235,6 @@ pub struct UnnumberedBgpPeerConfig {
     pub interface: String,
     pub name: String,
     pub router_lifetime: u16,
-    #[serde(flatten)]
     pub parameters: BgpPeerParameters,
 }
 
@@ -893,7 +1248,7 @@ pub struct BgpPeerParameters {
     pub resolution: u64,
     pub passive: bool,
     pub remote_asn: Option<u32>,
-    pub min_ttl: Option<u8>,
+    pub min_ttl: Option<NonZeroU8>,
     pub md5_auth_key: Option<String>,
     pub multi_exit_discriminator: Option<u32>,
     pub communities: Vec<u32>,
@@ -919,6 +1274,21 @@ pub struct BgpPeerParameters {
     /// is multiplied by a random value within the (min, max) range supplied.
     /// Useful to help break repeated synchronization of connection collisions.
     pub connect_retry_jitter: Option<JitterRange>,
+    /// DSCP value for BGP TCP connections (0-63).
+    /// RFC 4271 Appendix E recommends CS6 (48) for BGP traffic.
+    /// Default: CS6 (48).
+    #[serde(default)]
+    pub dscp: Dscp,
+}
+
+impl BgpPeerParameters {
+    /// Validate that at least one address family is enabled
+    pub fn validate_address_families(&self) -> Result<(), String> {
+        if self.ipv4_unicast.is_none() && self.ipv6_unicast.is_none() {
+            return Err("at least one address family must be enabled".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
@@ -957,7 +1327,7 @@ impl From<BgpPeerConfigV1> for BgpPeerConfig {
                 resolution: cfg.parameters.resolution,
                 passive: cfg.parameters.passive,
                 remote_asn: cfg.parameters.remote_asn,
-                min_ttl: cfg.parameters.min_ttl,
+                min_ttl: cfg.parameters.min_ttl.and_then(NonZeroU8::new),
                 md5_auth_key: cfg.parameters.md5_auth_key,
                 multi_exit_discriminator: cfg
                     .parameters
@@ -978,6 +1348,7 @@ impl From<BgpPeerConfigV1> for BgpPeerConfig {
                 }),
                 idle_hold_jitter: None,
                 deterministic_collision_resolution: false,
+                dscp: Dscp::default(),
             },
         }
     }
@@ -991,6 +1362,308 @@ pub enum PolicySource {
 pub enum PolicyKind {
     Checker,
     Shaper,
+}
+
+// ============================================================================
+// API Compatibility Types (VERSION_MP_BGP..VERSION_EXTENDED_NH_STATIC)
+// ============================================================================
+// These types represent the v3-v6 API format (per-AF config, no DSCP).
+// Used for API versions between VERSION_MP_BGP and
+// VERSION_EXTENDED_NH_STATIC.
+// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported version.
+
+/// BGP peer parameters for v3-v6 API (per-AF config, no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "BgpPeerParameters")]
+pub struct BgpPeerParametersV2 {
+    pub hold_time: u64,
+    pub idle_hold_time: u64,
+    pub delay_open: u64,
+    pub connect_retry: u64,
+    pub keepalive: u64,
+    pub resolution: u64,
+    pub passive: bool,
+    pub remote_asn: Option<u32>,
+    pub min_ttl: Option<u8>,
+    pub md5_auth_key: Option<String>,
+    pub multi_exit_discriminator: Option<u32>,
+    pub communities: Vec<u32>,
+    pub local_pref: Option<u32>,
+    pub enforce_first_as: bool,
+    pub vlan_id: Option<u16>,
+    pub ipv4_unicast: Option<Ipv4UnicastConfig>,
+    pub ipv6_unicast: Option<Ipv6UnicastConfig>,
+    pub deterministic_collision_resolution: bool,
+    pub idle_hold_jitter: Option<JitterRange>,
+    pub connect_retry_jitter: Option<JitterRange>,
+}
+
+impl From<BgpPeerParameters> for BgpPeerParametersV2 {
+    fn from(p: BgpPeerParameters) -> Self {
+        Self {
+            hold_time: p.hold_time,
+            idle_hold_time: p.idle_hold_time,
+            delay_open: p.delay_open,
+            connect_retry: p.connect_retry,
+            keepalive: p.keepalive,
+            resolution: p.resolution,
+            passive: p.passive,
+            remote_asn: p.remote_asn,
+            min_ttl: p.min_ttl.map(NonZeroU8::get),
+            md5_auth_key: p.md5_auth_key,
+            multi_exit_discriminator: p.multi_exit_discriminator,
+            communities: p.communities,
+            local_pref: p.local_pref,
+            enforce_first_as: p.enforce_first_as,
+            vlan_id: p.vlan_id,
+            ipv4_unicast: p.ipv4_unicast,
+            ipv6_unicast: p.ipv6_unicast,
+            deterministic_collision_resolution: p
+                .deterministic_collision_resolution,
+            idle_hold_jitter: p.idle_hold_jitter,
+            connect_retry_jitter: p.connect_retry_jitter,
+        }
+    }
+}
+
+impl From<BgpPeerParametersV2> for BgpPeerParameters {
+    fn from(p: BgpPeerParametersV2) -> Self {
+        Self {
+            hold_time: p.hold_time,
+            idle_hold_time: p.idle_hold_time,
+            delay_open: p.delay_open,
+            connect_retry: p.connect_retry,
+            keepalive: p.keepalive,
+            resolution: p.resolution,
+            passive: p.passive,
+            remote_asn: p.remote_asn,
+            min_ttl: p.min_ttl.and_then(NonZeroU8::new),
+            md5_auth_key: p.md5_auth_key,
+            multi_exit_discriminator: p.multi_exit_discriminator,
+            communities: p.communities,
+            local_pref: p.local_pref,
+            enforce_first_as: p.enforce_first_as,
+            vlan_id: p.vlan_id,
+            ipv4_unicast: p.ipv4_unicast,
+            ipv6_unicast: p.ipv6_unicast,
+            deterministic_collision_resolution: p
+                .deterministic_collision_resolution,
+            idle_hold_jitter: p.idle_hold_jitter,
+            connect_retry_jitter: p.connect_retry_jitter,
+            dscp: Dscp::default(),
+        }
+    }
+}
+
+/// BGP peer config for v3-v6 API (no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "BgpPeerConfig")]
+pub struct BgpPeerConfigV2 {
+    pub host: SocketAddr,
+    pub name: String,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV2,
+}
+
+impl From<BgpPeerConfig> for BgpPeerConfigV2 {
+    fn from(c: BgpPeerConfig) -> Self {
+        Self {
+            host: c.host,
+            name: c.name,
+            parameters: c.parameters.into(),
+        }
+    }
+}
+
+impl From<BgpPeerConfigV2> for BgpPeerConfig {
+    fn from(c: BgpPeerConfigV2) -> Self {
+        Self {
+            host: c.host,
+            name: c.name,
+            parameters: c.parameters.into(),
+        }
+    }
+}
+
+/// Neighbor configuration for v3-v6 API (no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "Neighbor")]
+pub struct NeighborV2 {
+    pub asn: u32,
+    pub name: String,
+    pub group: String,
+    pub host: SocketAddr,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV2,
+}
+
+impl From<Neighbor> for NeighborV2 {
+    fn from(n: Neighbor) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            host: n.host,
+            parameters: n.parameters.into(),
+        }
+    }
+}
+
+impl From<NeighborV2> for Neighbor {
+    fn from(n: NeighborV2) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            host: n.host,
+            parameters: n.parameters.into(),
+        }
+    }
+}
+
+/// Unnumbered BGP peer config for v5-v6 API (no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "UnnumberedBgpPeerConfig")]
+pub struct UnnumberedBgpPeerConfigV1 {
+    pub interface: String,
+    pub name: String,
+    pub router_lifetime: u16,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV2,
+}
+
+impl From<UnnumberedBgpPeerConfig> for UnnumberedBgpPeerConfigV1 {
+    fn from(c: UnnumberedBgpPeerConfig) -> Self {
+        Self {
+            interface: c.interface,
+            name: c.name,
+            router_lifetime: c.router_lifetime,
+            parameters: c.parameters.into(),
+        }
+    }
+}
+
+impl From<UnnumberedBgpPeerConfigV1> for UnnumberedBgpPeerConfig {
+    fn from(c: UnnumberedBgpPeerConfigV1) -> Self {
+        Self {
+            interface: c.interface,
+            name: c.name,
+            router_lifetime: c.router_lifetime,
+            parameters: c.parameters.into(),
+        }
+    }
+}
+
+/// Unnumbered neighbor configuration for v5-v6 API (no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]
+#[schemars(rename = "UnnumberedNeighbor")]
+pub struct UnnumberedNeighborV1 {
+    pub asn: u32,
+    pub name: String,
+    pub group: String,
+    pub interface: String,
+    pub act_as_a_default_ipv6_router: u16,
+    #[serde(flatten)]
+    pub parameters: BgpPeerParametersV2,
+}
+
+impl From<UnnumberedNeighbor> for UnnumberedNeighborV1 {
+    fn from(n: UnnumberedNeighbor) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            interface: n.interface,
+            act_as_a_default_ipv6_router: n.act_as_a_default_ipv6_router,
+            parameters: n.parameters.into(),
+        }
+    }
+}
+
+impl From<UnnumberedNeighborV1> for UnnumberedNeighbor {
+    fn from(n: UnnumberedNeighborV1) -> Self {
+        Self {
+            asn: n.asn,
+            name: n.name,
+            group: n.group,
+            interface: n.interface,
+            act_as_a_default_ipv6_router: n.act_as_a_default_ipv6_router,
+            parameters: n.parameters.into(),
+        }
+    }
+}
+
+/// Apply request for v3-v6 API (no DSCP).
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+#[schemars(rename = "ApplyRequest")]
+pub struct ApplyRequestV2 {
+    pub asn: u32,
+    pub originate: Vec<Prefix>,
+    pub checker: Option<CheckerSource>,
+    pub shaper: Option<ShaperSource>,
+    pub peers: HashMap<String, Vec<BgpPeerConfigV2>>,
+    #[serde(default)]
+    pub unnumbered_peers: HashMap<String, Vec<UnnumberedBgpPeerConfigV1>>,
+}
+
+impl From<ApplyRequest> for ApplyRequestV2 {
+    fn from(r: ApplyRequest) -> Self {
+        Self {
+            asn: r.asn,
+            originate: r.originate,
+            checker: r.checker,
+            shaper: r.shaper,
+            peers: r
+                .peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (k, v.into_iter().map(BgpPeerConfigV2::from).collect())
+                })
+                .collect(),
+            unnumbered_peers: r
+                .unnumbered_peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k,
+                        v.into_iter()
+                            .map(UnnumberedBgpPeerConfigV1::from)
+                            .collect(),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<ApplyRequestV2> for ApplyRequest {
+    fn from(r: ApplyRequestV2) -> Self {
+        Self {
+            asn: r.asn,
+            originate: r.originate,
+            checker: r.checker,
+            shaper: r.shaper,
+            peers: r
+                .peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (k, v.into_iter().map(BgpPeerConfig::from).collect())
+                })
+                .collect(),
+            unnumbered_peers: r
+                .unnumbered_peers
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k,
+                        v.into_iter()
+                            .map(UnnumberedBgpPeerConfig::from)
+                            .collect(),
+                    )
+                })
+                .collect(),
+        }
+    }
 }
 
 // ============================================================================

@@ -104,7 +104,7 @@ pub async fn run_trio_unnumbered_test(
     .await
     .context("mgd: create router")?;
 
-    mgd.create_unnumbered_neighbor(&basic_unnumbered_neighbor(
+    mgd.create_unnumbered_neighbor_v2(&basic_unnumbered_neighbor(
         "cr1",
         "test",
         "tfportqsfp0_0",
@@ -114,7 +114,7 @@ pub async fn run_trio_unnumbered_test(
     .await
     .context("mgd: create cr1 unnumbered neighbor")?;
 
-    mgd.create_unnumbered_neighbor(&basic_unnumbered_neighbor(
+    mgd.create_unnumbered_neighbor_v2(&basic_unnumbered_neighbor(
         "cr2",
         "test",
         "tfportqsfp1_0",
@@ -139,7 +139,7 @@ pub async fn run_trio_unnumbered_test(
     .context("announce v6 prefix")?;
 
     wait_for_eq!(
-        mgd.get_neighbors_v4(local_asn)
+        mgd.get_neighbors_v5(local_asn)
             .await
             .map(|x| x.into_inner().len())
             .unwrap_or(0),
@@ -148,7 +148,7 @@ pub async fn run_trio_unnumbered_test(
     );
 
     wait_for_eq!(
-        mgd.get_neighbors_v4(local_asn)
+        mgd.get_neighbors_v5(local_asn)
             .await
             .map(|x| x.into_inner().values().nth(0).map(|y| y.fsm_state))
             .unwrap_or(None),
@@ -157,7 +157,7 @@ pub async fn run_trio_unnumbered_test(
     );
 
     wait_for_eq!(
-        mgd.get_rib_imported_v2(Some(&AddressFamily::Ipv4), None)
+        mgd.get_rib_imported_v3(Some(&AddressFamily::Ipv4), None, None)
             .await
             .map(|x| x.len())
             .unwrap_or(0),
@@ -166,7 +166,7 @@ pub async fn run_trio_unnumbered_test(
     );
 
     wait_for_eq!(
-        mgd.get_rib_imported_v2(Some(&AddressFamily::Ipv4), None)
+        mgd.get_rib_imported_v3(Some(&AddressFamily::Ipv4), None, None)
             .await
             .map(|x| x.values().nth(0).map(|x| x.len()))
             .unwrap_or(None),
@@ -184,7 +184,7 @@ pub async fn run_trio_unnumbered_test(
     );
 
     wait_for_eq!(
-        mgd.get_rib_imported_v2(Some(&AddressFamily::Ipv6), None)
+        mgd.get_rib_imported_v3(Some(&AddressFamily::Ipv6), None, None)
             .await
             .map(|x| x.len())
             .unwrap_or(0),
@@ -193,7 +193,7 @@ pub async fn run_trio_unnumbered_test(
     );
 
     wait_for_eq!(
-        mgd.get_rib_imported_v2(Some(&AddressFamily::Ipv6), None)
+        mgd.get_rib_imported_v3(Some(&AddressFamily::Ipv6), None, None)
             .await
             .map(|x| x.values().nth(0).map(|x| x.len()))
             .unwrap_or(None),

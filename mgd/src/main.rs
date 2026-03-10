@@ -21,6 +21,7 @@ use signal::handle_signals;
 use slog::Logger;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::num::NonZeroU8;
 use std::sync::{Arc, Mutex};
 use std::thread::Builder;
 use uuid::Uuid;
@@ -324,7 +325,7 @@ fn start_bgp_routers(
                 host: nbr.host,
                 parameters: BgpPeerParameters {
                     remote_asn: nbr.parameters.remote_asn,
-                    min_ttl: nbr.parameters.min_ttl,
+                    min_ttl: nbr.parameters.min_ttl.and_then(NonZeroU8::new),
                     hold_time: nbr.parameters.hold_time,
                     idle_hold_time: nbr.parameters.idle_hold_time,
                     delay_open: nbr.parameters.delay_open,
@@ -361,6 +362,7 @@ fn start_bgp_routers(
                         None
                     },
                     vlan_id: nbr.parameters.vlan_id,
+                    dscp: nbr.parameters.dscp,
                 },
             },
             true,
@@ -379,7 +381,7 @@ fn start_bgp_routers(
                 act_as_a_default_ipv6_router: nbr.router_lifetime,
                 parameters: BgpPeerParameters {
                     remote_asn: nbr.parameters.remote_asn,
-                    min_ttl: nbr.parameters.min_ttl,
+                    min_ttl: nbr.parameters.min_ttl.and_then(NonZeroU8::new),
                     hold_time: nbr.parameters.hold_time,
                     idle_hold_time: nbr.parameters.idle_hold_time,
                     delay_open: nbr.parameters.delay_open,
@@ -416,6 +418,7 @@ fn start_bgp_routers(
                         None
                     },
                     vlan_id: nbr.parameters.vlan_id,
+                    dscp: nbr.parameters.dscp,
                 },
             },
             true,
@@ -453,7 +456,7 @@ fn initialize_static_routes(db: &rdb::Db, log: &Logger) {
     let normalized: BTreeSet<rdb::StaticRouteKey> = routes
         .iter()
         .map(|srk| {
-            let mut normalized = *srk;
+            let mut normalized = srk.clone();
             normalized.prefix.unset_host_bits();
             normalized
         })
@@ -534,6 +537,7 @@ mod tests {
                     length: 24,
                 }),
                 nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
+                nexthop_interface: None,
                 vlan_id: None,
                 rib_priority: 0,
             },
@@ -543,6 +547,7 @@ mod tests {
                     length: 24,
                 }),
                 nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
+                nexthop_interface: None,
                 vlan_id: None,
                 rib_priority: 0,
             },
@@ -589,6 +594,7 @@ mod tests {
                     length: 24,
                 }),
                 nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
+                nexthop_interface: None,
                 vlan_id: None,
                 rib_priority: 0,
             },
@@ -598,6 +604,7 @@ mod tests {
                     length: 24,
                 }),
                 nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.2").unwrap()),
+                nexthop_interface: None,
                 vlan_id: None,
                 rib_priority: 0,
             },
@@ -640,6 +647,7 @@ mod tests {
                 24,
             )),
             nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
+            nexthop_interface: None,
             vlan_id: None,
             rib_priority: 0,
         }];
@@ -679,6 +687,7 @@ mod tests {
                     length: 64,
                 }),
                 nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
+                nexthop_interface: None,
                 vlan_id: None,
                 rib_priority: 0,
             },
@@ -688,6 +697,7 @@ mod tests {
                     length: 64,
                 }),
                 nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::2").unwrap()),
+                nexthop_interface: None,
                 vlan_id: None,
                 rib_priority: 0,
             },
@@ -724,6 +734,7 @@ mod tests {
                     length: 24,
                 }),
                 nexthop: IpAddr::V4(Ipv4Addr::from_str("192.168.1.1").unwrap()),
+                nexthop_interface: None,
                 vlan_id: None,
                 rib_priority: 0,
             },
@@ -733,6 +744,7 @@ mod tests {
                     length: 64,
                 }),
                 nexthop: IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap()),
+                nexthop_interface: None,
                 vlan_id: None,
                 rib_priority: 0,
             },

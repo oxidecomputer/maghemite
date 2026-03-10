@@ -2,33 +2,24 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use crate::types::Path;
+use crate::types::{Path, PathOrigin};
 use itertools::Itertools;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::IpAddr,
+};
 
 /// The bestpath algorithm chooses the best set of up to `max` paths for a
-/// particular prefix from the RIB. The set of paths chosen will all have
-/// equal RIB priority, MED, local_pref, AS path length and shutdown status.
-/// The bestpath algorithm performs path filtering in the following ordered
-/// sequence of operations.
+/// particular prefix from the RIB. Pre-BGP filtering:
 ///
 /// - partition candidate paths into active and shutdown groups.
 /// - if only shutdown routes exist, select from that group, otherwise
 ///   select from the active group.
 /// - filter the selection group to the set of paths with the smallest
 ///   rib priority
-/// - filter the selection group to the set of paths with the largest
-///   local preference
-/// - filter the selection group to the set of paths with the smallest
-///   AS path length
-/// - filter the selection group to the set of paths with the smallest
-///   multi-exit discriminator (MED) on a per-AS basis.
+/// - prefer static routes over BGP when RIB priority is equal
 ///
-/// Upon completion of these filtering operations, if the selection group
-/// is larger than `max`, return the first `max` entries. This is a set,
-/// so "first" has no semantic meaning, consider it to be random. If the
-/// selection group is smaller than `max`, the entire group is returned.
+/// BGP-specific tie-breaking follows RFC 4271 Section 9.1.2.2
 pub fn bestpaths(paths: &BTreeSet<Path>, max: usize) -> Option<BTreeSet<Path>> {
     // Short-circuit: if there's only 1 candidate, then it is the best
     if paths.len() == 1 {
@@ -72,10 +63,26 @@ pub fn bgp_bestpaths(
     candidates: BTreeSet<&Path>,
     max: usize,
 ) -> BTreeSet<Path> {
+    // Per RFC 4721 Section 9.1.2.2:
+    // """
+    // The tie-breaking algorithm begins by considering all equally
+    // preferable routes to the same destination, and then selects routes to
+    // be removed from consideration.  The algorithm terminates as soon as
+    // only one route remains in consideration.  The criteria MUST be
+    // applied in the order specified.
+    // """
+    //
+    // We should be returning at any point the `candidates` only contains
+    // 1 path. "Multipath" is not a standardized BGP behavior, however Cisco
+    // implements that decision after the IGP metric check and many other
+    // routing stacks have followed their lead. Again, following the principle
+    // of least surprise, our multipath decision is made at the same step.
+    //
+    // XXX: This also gives us the opportunity to add trace points, debugs,
+    // or even a "bestpath reason" specific to each step that can provide
+    // better insight into the bestpath calculation itself.
+
     // Filter down to paths that are not stale (Graceful Restart).
-    // The `min_set_by_key` method allows us to assign "not stale" paths to the
-    // `0` set, and "stale" paths to the `1` set. The method will then return
-    // the `0` set if any "not stale" paths exist.
     let candidates =
         candidates
             .into_iter()
@@ -86,8 +93,12 @@ pub fn bgp_bestpaths(
                 },
                 None => 0,
             });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
 
     // Filter down to paths with the highest local preference
+    // RFC 4271 Section 9.1.2
     let candidates =
         candidates
             .into_iter()
@@ -95,8 +106,12 @@ pub fn bgp_bestpaths(
                 Some(ref bgp) => bgp.local_pref.unwrap_or(0),
                 None => 0,
             });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
 
     // Filter down to paths with the shortest AS-Path length
+    // RFC 4271 Section 9.1.2.2 (a)
     let candidates =
         candidates
             .into_iter()
@@ -104,8 +119,25 @@ pub fn bgp_bestpaths(
                 Some(ref bgp) => bgp.as_path.len(),
                 None => 0,
             });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
 
-    // Group candidates by AS for MED selection.
+    // Filter down to paths with the lowest Origin
+    // RFC 4271 Section 9.1.2.2 (b)
+    let candidates =
+        candidates
+            .into_iter()
+            .min_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => bgp.origin,
+                None => PathOrigin::Incomplete,
+            });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
+
+    // Group candidates by AS for MED selection
+    // RFC 4271 Section 9.1.2.2 (c)
     let mut as_groups: BTreeMap<u32, Vec<&Path>> = BTreeMap::new();
     for path in candidates {
         let origin_as = path.bgp.as_ref().map(|bgp| bgp.origin_as).unwrap_or(0);
@@ -113,29 +145,86 @@ pub fn bgp_bestpaths(
     }
 
     // Filter each AS group to paths with lowest MED
-    let candidates = as_groups.into_values().flat_map(|paths| {
-        paths.into_iter().min_set_by_key(|path| {
-            path.bgp.as_ref().and_then(|bgp| bgp.med).unwrap_or(0)
+    let candidates: Vec<&Path> = as_groups
+        .into_values()
+        .flat_map(|paths| {
+            paths.into_iter().min_set_by_key(|path| {
+                path.bgp.as_ref().and_then(|bgp| bgp.med).unwrap_or(0)
+            })
         })
-    });
+        .collect();
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
 
-    // Return up to max elements
-    candidates.take(max).cloned().collect()
+    // Filter down to eBGP paths when possible (prefer eBGP over
+    // iBGP) RFC 4271 Section 9.1.2.2 (d)
+    let candidates =
+        candidates
+            .into_iter()
+            .min_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => bgp.internal,
+                None => false,
+            });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
+
+    // TODO(OSPF/IS-IS): Filter down to paths with lowest IGP cost
+    // RFC 4271 Section 9.1.2.2 (e)
+    // Note: DDM is currently the only supported IGP and it doesn't
+    //       interface with the external world, so this is N/A.
+
+    // All paths still under consideration at this point have
+    // identical values for the earlier checks. Multipath is now
+    // allowed if `max` permits it.
+    if max > 1 {
+        return candidates.into_iter().take(max).cloned().collect();
+    }
+
+    // Prefer the path with the lowest Router-ID (BGP Identifier)
+    // RFC 4271 Section 9.1.2.2 (f)
+    let candidates =
+        candidates
+            .into_iter()
+            .min_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => bgp.id,
+                None => u32::MAX,
+            });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
+
+    // Prefer the path from the peer with the lowest IP address
+    // RFC 4271 Section 9.1.2.2 (g)
+    let candidates =
+        candidates
+            .into_iter()
+            .min_set_by_key(|path| match path.bgp {
+                Some(ref bgp) => match bgp.peer_ip {
+                    IpAddr::V4(a) => u128::from(a.to_bits()),
+                    IpAddr::V6(a) => a.to_bits(),
+                },
+                None => u128::MAX,
+            });
+    if candidates.len() == 1 {
+        return candidates.into_iter().cloned().collect();
+    }
+
+    // Should be unreachable with distinct peers, but ensure we
+    // never return more than 1 path after the multipath check.
+    candidates.into_iter().take(1).cloned().collect()
 }
 
 #[cfg(test)]
 mod test {
-    use crate::PeerId;
-    use std::collections::BTreeSet;
-    use std::net::IpAddr;
-    use std::str::FromStr;
-
     use super::bestpaths;
     use crate::{
         BgpPathProperties, DEFAULT_RIB_PRIORITY_BGP,
-        DEFAULT_RIB_PRIORITY_STATIC, Path,
+        DEFAULT_RIB_PRIORITY_STATIC, Path, PathOrigin, PeerId,
         types::test_helpers::path_sets_equal,
     };
+    use std::{collections::BTreeSet, net::IpAddr, str::FromStr};
 
     // Bestpaths is purely a function of the path info itself, so we don't
     // need a Rib or Prefix, just a set of candidate paths and a set of
@@ -155,8 +244,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 470,
                 peer: PeerId::Ip(remote_ip1),
+                peer_ip: remote_ip1,
+                internal: false,
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -180,8 +272,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 480,
                 peer: PeerId::Ip(remote_ip2),
+                peer_ip: remote_ip2,
+                internal: false,
                 id: 48,
                 med: Some(75),
                 local_pref: Some(100),
@@ -215,8 +310,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 490,
                 peer: PeerId::Ip(remote_ip3),
+                peer_ip: remote_ip3,
+                internal: false,
                 id: 49,
                 med: Some(100),
                 local_pref: Some(100),
@@ -316,8 +414,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 470,
                 peer: PeerId::Ip(remote_ip1),
+                peer_ip: remote_ip1,
+                internal: false,
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -333,8 +434,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: true, // This path is shutdown
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 480,
                 peer: PeerId::Ip(remote_ip2),
+                peer_ip: remote_ip2,
+                internal: false,
                 id: 48,
                 med: Some(75),
                 local_pref: Some(100),
@@ -378,8 +482,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: true,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 470,
                 peer: PeerId::Ip(remote_ip1),
+                peer_ip: remote_ip1,
+                internal: false,
                 id: 47,
                 med: Some(75),
                 local_pref: Some(100),
@@ -425,8 +532,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 100,
                 peer: PeerId::Ip(ip1),
+                peer_ip: ip1,
+                internal: false,
                 id: 1,
                 med: Some(50),
                 local_pref: Some(100),
@@ -442,8 +552,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 100,
                 peer: PeerId::Ip(ip3),
+                peer_ip: ip3,
+                internal: false,
                 id: 1,
                 med: Some(100), // Higher MED = worse
                 local_pref: Some(100),
@@ -461,8 +574,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 200,
                 peer: PeerId::Ip(ip2),
+                peer_ip: ip2,
+                internal: false,
                 id: 2,
                 med: Some(999), // Very high MED, but irrelevant - different AS
                 local_pref: Some(100),
@@ -479,8 +595,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 300,
                 peer: PeerId::Ip(ip4),
+                peer_ip: ip4,
+                internal: false,
                 id: 3,
                 med: Some(10), // Low MED, but can't "steal" selection from other ASes
                 local_pref: Some(100),
@@ -546,8 +665,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 100,
                 peer: PeerId::Ip(ip1),
+                peer_ip: ip1,
+                internal: false,
                 id: 1,
                 med: Some(50),
                 local_pref: Some(100),
@@ -563,8 +685,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 100,
                 peer: PeerId::Ip(ip2),
+                peer_ip: ip2,
+                internal: false,
                 id: 1,
                 med: Some(50), // Same MED
                 local_pref: Some(100),
@@ -580,8 +705,11 @@ mod test {
             rib_priority: DEFAULT_RIB_PRIORITY_BGP,
             shutdown: false,
             bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
                 origin_as: 100,
                 peer: PeerId::Ip(ip3),
+                peer_ip: ip3,
+                internal: false,
                 id: 1,
                 med: Some(50), // Same MED
                 local_pref: Some(100),
@@ -603,5 +731,330 @@ mod test {
         // With max=2, only 2 should be returned
         let result = bestpaths(&candidates, 2).unwrap();
         assert_eq!(result.len(), 2, "max should limit results");
+    }
+
+    /// Helper: build a BGP path with sensible defaults. Only the
+    /// fields under test need to be overridden after construction.
+    fn bgp_path(ip: IpAddr) -> Path {
+        Path {
+            nexthop: ip,
+            nexthop_interface: None,
+            rib_priority: DEFAULT_RIB_PRIORITY_BGP,
+            shutdown: false,
+            bgp: Some(BgpPathProperties {
+                origin: PathOrigin::Igp,
+                origin_as: 100,
+                peer: PeerId::Ip(ip),
+                peer_ip: ip,
+                internal: false,
+                id: 1,
+                med: None,
+                local_pref: Some(100),
+                as_path: vec![100],
+                stale: None,
+            }),
+            vlan_id: None,
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Origin preference (RFC 4271 Section 9.1.2.2 (b))
+    // ----------------------------------------------------------------
+
+    /// IGP origin is preferred over EGP and Incomplete.
+    #[test]
+    fn test_bestpath_origin_igp_preferred() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+        let ip3 = IpAddr::from_str("10.0.0.3").unwrap();
+
+        let mut igp = bgp_path(ip1);
+        igp.bgp.as_mut().unwrap().origin = PathOrigin::Igp;
+
+        let mut egp = bgp_path(ip2);
+        egp.bgp.as_mut().unwrap().origin = PathOrigin::Egp;
+
+        let mut incomplete = bgp_path(ip3);
+        incomplete.bgp.as_mut().unwrap().origin = PathOrigin::Incomplete;
+
+        let candidates =
+            BTreeSet::from([igp.clone(), egp.clone(), incomplete.clone()]);
+        let result = bestpaths(&candidates, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(&result, &BTreeSet::from([igp.clone()])));
+
+        // EGP beats Incomplete when IGP is absent
+        let candidates = BTreeSet::from([egp.clone(), incomplete]);
+        let result = bestpaths(&candidates, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(&result, &BTreeSet::from([egp.clone()])));
+    }
+
+    /// When all paths share the same origin, they all survive
+    /// the origin filter.
+    #[test]
+    fn test_bestpath_origin_equal_passes_all() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+
+        let mut p1 = bgp_path(ip1);
+        p1.bgp.as_mut().unwrap().origin = PathOrigin::Egp;
+        let mut p2 = bgp_path(ip2);
+        p2.bgp.as_mut().unwrap().origin = PathOrigin::Egp;
+
+        let candidates = BTreeSet::from([p1.clone(), p2.clone()]);
+        let result = bestpaths(&candidates, 10).unwrap();
+        assert_eq!(result.len(), 2, "equal origin should not eliminate paths");
+    }
+
+    // ----------------------------------------------------------------
+    // eBGP over iBGP preference (RFC 4271 Section 9.1.2.2 (d))
+    // ----------------------------------------------------------------
+
+    /// eBGP paths are preferred over iBGP paths.
+    #[test]
+    fn test_bestpath_ebgp_over_ibgp() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+
+        let ebgp = bgp_path(ip1); // internal: false by default
+
+        let mut ibgp = bgp_path(ip2);
+        ibgp.bgp.as_mut().unwrap().internal = true;
+
+        let candidates = BTreeSet::from([ebgp.clone(), ibgp]);
+        let result = bestpaths(&candidates, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(&result, &BTreeSet::from([ebgp.clone()])));
+    }
+
+    /// When all paths are iBGP, they all survive the eBGP filter.
+    #[test]
+    fn test_bestpath_all_ibgp_passes_all() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+
+        let mut p1 = bgp_path(ip1);
+        p1.bgp.as_mut().unwrap().internal = true;
+        let mut p2 = bgp_path(ip2);
+        p2.bgp.as_mut().unwrap().internal = true;
+
+        let candidates = BTreeSet::from([p1.clone(), p2.clone()]);
+        let result = bestpaths(&candidates, 10).unwrap();
+        assert_eq!(result.len(), 2, "all-iBGP should not eliminate paths");
+    }
+
+    /// When all paths are eBGP, they all survive the eBGP filter.
+    #[test]
+    fn test_bestpath_all_ebgp_passes_all() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+
+        let p1 = bgp_path(ip1); // internal: false by default
+        let p2 = bgp_path(ip2);
+
+        let candidates = BTreeSet::from([p1.clone(), p2.clone()]);
+        let result = bestpaths(&candidates, 10).unwrap();
+        assert_eq!(result.len(), 2, "all-eBGP should not eliminate paths");
+    }
+
+    // ----------------------------------------------------------------
+    // Multipath decision point (after step (d), before (f))
+    // ----------------------------------------------------------------
+
+    /// When max > 1 and multiple paths survive through eBGP/iBGP,
+    /// all are returned (up to max) without router-id or peer-ip
+    /// tie-breaking.
+    #[test]
+    fn test_bestpath_multipath_returns_multiple() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+        let ip3 = IpAddr::from_str("10.0.0.3").unwrap();
+
+        // Three equivalent eBGP paths with different router-ids
+        let mut p1 = bgp_path(ip1);
+        p1.bgp.as_mut().unwrap().id = 10;
+        let mut p2 = bgp_path(ip2);
+        p2.bgp.as_mut().unwrap().id = 20;
+        let mut p3 = bgp_path(ip3);
+        p3.bgp.as_mut().unwrap().id = 30;
+
+        let candidates = BTreeSet::from([p1.clone(), p2.clone(), p3.clone()]);
+
+        // max=3: all should be returned
+        let result = bestpaths(&candidates, 3).unwrap();
+        assert_eq!(result.len(), 3);
+
+        // max=2: only 2 returned
+        let result = bestpaths(&candidates, 2).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    // ----------------------------------------------------------------
+    // Router-ID tie-breaking (RFC 4271 Section 9.1.2.2 (f))
+    // ----------------------------------------------------------------
+
+    /// Lowest Router-ID wins when max=1, which also means multipath
+    /// is disabled and the algorithm falls through to tie-breaking.
+    #[test]
+    fn test_bestpath_router_id_tiebreak() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+
+        let mut low_id = bgp_path(ip1);
+        low_id.bgp.as_mut().unwrap().id = 1;
+        let mut high_id = bgp_path(ip2);
+        high_id.bgp.as_mut().unwrap().id = 999;
+
+        let candidates = BTreeSet::from([high_id.clone(), low_id.clone()]);
+        let result = bestpaths(&candidates, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(&result, &BTreeSet::from([low_id])));
+    }
+
+    // ----------------------------------------------------------------
+    // Peer IP tie-breaking (RFC 4271 Section 9.1.2.2 (g))
+    // ----------------------------------------------------------------
+
+    /// Lowest peer IPv4 address wins when router-ids are equal.
+    #[test]
+    fn test_bestpath_peer_ip_tiebreak_v4() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+
+        let low_peer = bgp_path(ip1);
+        let high_peer = bgp_path(ip2);
+
+        let candidates = BTreeSet::from([high_peer.clone(), low_peer.clone()]);
+        let result = bestpaths(&candidates, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(&result, &BTreeSet::from([low_peer])));
+    }
+
+    /// Lowest peer IPv6 address wins when router-ids are equal.
+    #[test]
+    fn test_bestpath_peer_ip_tiebreak_v6() {
+        let ip1 = IpAddr::from_str("2001:db8::1").unwrap();
+        let ip2 = IpAddr::from_str("2001:db8::2").unwrap();
+
+        let low_peer = bgp_path(ip1);
+        let high_peer = bgp_path(ip2);
+
+        let candidates = BTreeSet::from([high_peer.clone(), low_peer.clone()]);
+        let result = bestpaths(&candidates, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(&result, &BTreeSet::from([low_peer])));
+    }
+
+    /// When candidates have a mix of IPv4 and IPv6 peer IPs,
+    /// the IPv4 peer wins because its u128 representation is
+    /// smaller than any non-trivial IPv6 address.
+    #[test]
+    fn test_bestpath_peer_ip_tiebreak_v4_vs_v6() {
+        let v4 = IpAddr::from_str("203.0.113.1").unwrap();
+        let v6 = IpAddr::from_str("2001:db8::1").unwrap();
+
+        let v4_path = bgp_path(v4);
+        let v6_path = bgp_path(v6);
+
+        let candidates = BTreeSet::from([v6_path.clone(), v4_path.clone()]);
+        let result = bestpaths(&candidates, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(&result, &BTreeSet::from([v4_path])));
+    }
+
+    // ----------------------------------------------------------------
+    // Stale path preference (Graceful Restart)
+    // ----------------------------------------------------------------
+
+    /// Non-stale paths are preferred over stale paths.
+    #[test]
+    fn test_bestpath_stale_preference() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+
+        let fresh = bgp_path(ip1);
+
+        let mut stale = bgp_path(ip2);
+        stale.bgp.as_mut().unwrap().stale = Some(chrono::Utc::now());
+
+        let candidates = BTreeSet::from([fresh.clone(), stale]);
+        let result = bestpaths(&candidates, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(&result, &BTreeSet::from([fresh])));
+    }
+
+    // ----------------------------------------------------------------
+    // Full pipeline: exercise multiple tie-breaking steps in one test
+    // ----------------------------------------------------------------
+
+    /// Walk the entire BGP bestpath pipeline from local_pref through
+    /// peer-ip, confirming each step eliminates the right candidate.
+    #[test]
+    fn test_bestpath_full_pipeline() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+        let ip3 = IpAddr::from_str("10.0.0.3").unwrap();
+        let ip4 = IpAddr::from_str("10.0.0.4").unwrap();
+        let ip5 = IpAddr::from_str("10.0.0.5").unwrap();
+        let ip6 = IpAddr::from_str("10.0.0.6").unwrap();
+        let ip7 = IpAddr::from_str("10.0.0.7").unwrap();
+
+        // p1: eliminated by local_pref (lower than others)
+        let mut p1 = bgp_path(ip1);
+        p1.bgp.as_mut().unwrap().local_pref = Some(50);
+
+        // p2: eliminated by AS path length (longer)
+        let mut p2 = bgp_path(ip2);
+        p2.bgp.as_mut().unwrap().as_path = vec![100, 200, 300];
+
+        // p3: eliminated by origin (Incomplete vs Igp)
+        let mut p3 = bgp_path(ip3);
+        p3.bgp.as_mut().unwrap().origin = PathOrigin::Incomplete;
+
+        // p4: eliminated by MED (higher than p5-p7)
+        let mut p4 = bgp_path(ip4);
+        p4.bgp.as_mut().unwrap().med = Some(999);
+
+        // p5: eliminated by eBGP/iBGP (internal)
+        let mut p5 = bgp_path(ip5);
+        p5.bgp.as_mut().unwrap().internal = true;
+
+        // p6: eliminated by router-id (higher than p7)
+        let mut p6 = bgp_path(ip6);
+        p6.bgp.as_mut().unwrap().id = 999;
+
+        // p7: survives — best at every step
+        let p7 = bgp_path(ip7);
+        // id=1, peer_ip=10.0.0.7, internal=false, origin=Igp,
+        // local_pref=100, as_path=[100], med=None
+
+        let candidates = BTreeSet::from([p1, p2, p3, p4, p5, p6, p7.clone()]);
+        let result = bestpaths(&candidates, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(&result, &BTreeSet::from([p7])));
+    }
+
+    /// Verify that the AS path length filter uses element count,
+    /// not the raw AS numbers.
+    #[test]
+    fn test_bestpath_as_path_length_not_values() {
+        let ip1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let ip2 = IpAddr::from_str("10.0.0.2").unwrap();
+
+        // Short path with large AS numbers
+        let mut short = bgp_path(ip1);
+        short.bgp.as_mut().unwrap().as_path = vec![65000];
+        short.bgp.as_mut().unwrap().origin_as = 65000;
+
+        // Long path with small AS numbers
+        let mut long = bgp_path(ip2);
+        long.bgp.as_mut().unwrap().as_path = vec![1, 2, 3];
+        long.bgp.as_mut().unwrap().origin_as = 1;
+
+        let candidates = BTreeSet::from([short.clone(), long]);
+        let result = bestpaths(&candidates, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(path_sets_equal(&result, &BTreeSet::from([short])));
     }
 }
