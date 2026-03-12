@@ -2514,11 +2514,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
         if self.use_extended_nexthop() {
             caps.insert(Capability::ExtendedNextHopEncoding {
-                elements: vec![ExtendedNexthopElement {
-                    afi: Afi::Ipv4.into(),
-                    safi: u8::from(Safi::Unicast).into(),
-                    nh_afi: Afi::Ipv6.into(),
-                }],
+                elements: vec![ExtendedNexthopElement::v4_over_v6()],
             });
         }
         *lock!(self.caps_tx) = caps;
@@ -10440,6 +10436,243 @@ mod tests {
             result.unwrap(),
             BgpNexthop::Ipv6Single("::ffff:10.0.0.1".parse().unwrap()),
         );
+    }
+
+    // ================================================================
+    // select_nexthop: configured nexthop + ENHE
+    // ================================================================
+
+    #[test]
+    fn test_select_nexthop_configured_v6_nexthop_ipv4_route_enhe() {
+        // Configured IPv6 nexthop for IPv4 routes with ENHE negotiated
+        let configured_nh = ip!("2001:db8::1");
+        let local_ip = ip!("2001:db8::2");
+        let caps = NegotiatedCaps {
+            enhe: CapabilityState::Negotiated,
+            ..Default::default()
+        };
+
+        let result =
+            select_nexthop(Afi::Ipv4, local_ip, Some(configured_nh), &caps);
+        assert_eq!(
+            result.unwrap(),
+            BgpNexthop::Ipv6Single("2001:db8::1".parse().unwrap()),
+        );
+    }
+
+    #[test]
+    fn test_select_nexthop_configured_v6_nexthop_ipv4_route_no_enhe() {
+        // Configured IPv6 nexthop for IPv4 routes without ENHE = error
+        let configured_nh = ip!("2001:db8::1");
+        let local_ip = ip!("2001:db8::2");
+
+        let result = select_nexthop(
+            Afi::Ipv4,
+            local_ip,
+            Some(configured_nh),
+            &NegotiatedCaps::default(),
+        );
+        assert!(result.is_err());
+    }
+
+    // ================================================================
+    // negotiate_capabilities unit tests
+    // ================================================================
+
+    use crate::messages::ExtendedNexthopElement;
+
+    fn enhe_v4_over_v6() -> Capability {
+        Capability::ExtendedNextHopEncoding {
+            elements: vec![ExtendedNexthopElement::v4_over_v6()],
+        }
+    }
+
+    fn enhe_v6_over_v4() -> Capability {
+        Capability::ExtendedNextHopEncoding {
+            elements: vec![ExtendedNexthopElement::v6_over_v4()],
+        }
+    }
+
+    #[test]
+    fn negotiate_both_ipv4_ipv6() {
+        let ours = BTreeSet::from([
+            Capability::ipv4_unicast(),
+            Capability::ipv6_unicast(),
+        ]);
+        let theirs = BTreeSet::from([
+            Capability::ipv4_unicast(),
+            Capability::ipv6_unicast(),
+        ]);
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.ipv4, CapabilityState::Negotiated);
+        assert_eq!(caps.ipv6, CapabilityState::Negotiated);
+    }
+
+    #[test]
+    fn negotiate_ipv4_only_we_advertise_ipv6() {
+        let ours = BTreeSet::from([
+            Capability::ipv4_unicast(),
+            Capability::ipv6_unicast(),
+        ]);
+        let theirs = BTreeSet::from([Capability::ipv4_unicast()]);
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.ipv4, CapabilityState::Negotiated);
+        assert_eq!(caps.ipv6, CapabilityState::Advertised);
+    }
+
+    #[test]
+    fn negotiate_ipv6_received_not_advertised() {
+        let ours = BTreeSet::from([Capability::ipv4_unicast()]);
+        let theirs = BTreeSet::from([
+            Capability::ipv4_unicast(),
+            Capability::ipv6_unicast(),
+        ]);
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.ipv4, CapabilityState::Negotiated);
+        assert_eq!(caps.ipv6, CapabilityState::Received);
+    }
+
+    #[test]
+    fn negotiate_legacy_peer_implicit_ipv4() {
+        // A peer with no MP-BGP caps implicitly negotiates IPv4
+        // Unicast per RFC 4271.
+        let ours = BTreeSet::from([Capability::ipv4_unicast()]);
+        let theirs = BTreeSet::from([Capability::FourOctetAs { asn: 65000 }]);
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.ipv4, CapabilityState::Negotiated);
+        assert_eq!(caps.ipv6, CapabilityState::Unconfigured);
+    }
+
+    #[test]
+    fn negotiate_legacy_peer_we_dont_advertise_ipv4() {
+        // Legacy peer but we didn't advertise IPv4 either
+        let ours = BTreeSet::from([Capability::ipv6_unicast()]);
+        let theirs = BTreeSet::from([Capability::FourOctetAs { asn: 65000 }]);
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.ipv4, CapabilityState::Unconfigured);
+    }
+
+    #[test]
+    fn negotiate_ext_msg_both() {
+        let ours = BTreeSet::from([Capability::BGPExtendedMessage {}]);
+        let theirs = BTreeSet::from([Capability::BGPExtendedMessage {}]);
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.ext_msg, CapabilityState::Negotiated);
+    }
+
+    #[test]
+    fn negotiate_ext_msg_one_sided() {
+        let ours = BTreeSet::from([Capability::BGPExtendedMessage {}]);
+        let theirs = BTreeSet::new();
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.ext_msg, CapabilityState::Advertised);
+
+        let caps = negotiate_capabilities(&theirs, &ours);
+        assert_eq!(caps.ext_msg, CapabilityState::Received);
+    }
+
+    #[test]
+    fn negotiate_route_refresh() {
+        let ours = BTreeSet::from([Capability::RouteRefresh {}]);
+        let theirs = BTreeSet::from([Capability::RouteRefresh {}]);
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.route_refresh, CapabilityState::Negotiated);
+
+        let caps = negotiate_capabilities(&ours, &BTreeSet::new());
+        assert_eq!(caps.route_refresh, CapabilityState::Advertised);
+    }
+
+    #[test]
+    fn negotiate_enhe_v4_over_v6_both() {
+        let ours = BTreeSet::from([enhe_v4_over_v6()]);
+        let theirs = BTreeSet::from([enhe_v4_over_v6()]);
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.enhe, CapabilityState::Negotiated);
+    }
+
+    #[test]
+    fn negotiate_enhe_v4_over_v6_one_sided() {
+        let ours = BTreeSet::from([enhe_v4_over_v6()]);
+        let theirs = BTreeSet::new();
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.enhe, CapabilityState::Advertised);
+
+        let caps = negotiate_capabilities(&theirs, &ours);
+        assert_eq!(caps.enhe, CapabilityState::Received);
+    }
+
+    #[test]
+    fn negotiate_enhe_mismatched_elements() {
+        // We send v4-over-v6, they send v6-over-v4. The v4-over-v6
+        // predicate doesn't match on their side, so ENHE should not
+        // be negotiated.
+        let ours = BTreeSet::from([enhe_v4_over_v6()]);
+        let theirs = BTreeSet::from([enhe_v6_over_v4()]);
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.enhe, CapabilityState::Advertised);
+    }
+
+    #[test]
+    fn negotiate_enhe_neither() {
+        let caps = negotiate_capabilities(&BTreeSet::new(), &BTreeSet::new());
+        assert_eq!(caps.enhe, CapabilityState::Unconfigured);
+    }
+
+    #[test]
+    fn negotiate_empty_caps() {
+        let caps = negotiate_capabilities(&BTreeSet::new(), &BTreeSet::new());
+        assert_eq!(caps.ipv4, CapabilityState::Unconfigured);
+        assert_eq!(caps.ipv6, CapabilityState::Unconfigured);
+        assert_eq!(caps.ext_msg, CapabilityState::Unconfigured);
+        assert_eq!(caps.route_refresh, CapabilityState::Unconfigured);
+        assert_eq!(caps.enhe, CapabilityState::Unconfigured);
+    }
+
+    #[test]
+    fn negotiate_full_realistic_session() {
+        // Simulate a realistic IPv6 peer exchanging IPv4+IPv6 with ENHE
+        let ours = BTreeSet::from([
+            Capability::ipv4_unicast(),
+            Capability::ipv6_unicast(),
+            Capability::BGPExtendedMessage {},
+            Capability::RouteRefresh {},
+            enhe_v4_over_v6(),
+        ]);
+        let theirs = BTreeSet::from([
+            Capability::ipv4_unicast(),
+            Capability::ipv6_unicast(),
+            Capability::BGPExtendedMessage {},
+            Capability::RouteRefresh {},
+            enhe_v4_over_v6(),
+        ]);
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.ipv4, CapabilityState::Negotiated);
+        assert_eq!(caps.ipv6, CapabilityState::Negotiated);
+        assert_eq!(caps.ext_msg, CapabilityState::Negotiated);
+        assert_eq!(caps.route_refresh, CapabilityState::Negotiated);
+        assert_eq!(caps.enhe, CapabilityState::Negotiated);
+    }
+
+    #[test]
+    fn negotiate_peer_subset_of_ours() {
+        // We advertise everything, peer only supports IPv4 + route refresh
+        let ours = BTreeSet::from([
+            Capability::ipv4_unicast(),
+            Capability::ipv6_unicast(),
+            Capability::BGPExtendedMessage {},
+            Capability::RouteRefresh {},
+            enhe_v4_over_v6(),
+        ]);
+        let theirs = BTreeSet::from([
+            Capability::ipv4_unicast(),
+            Capability::RouteRefresh {},
+        ]);
+        let caps = negotiate_capabilities(&ours, &theirs);
+        assert_eq!(caps.ipv4, CapabilityState::Negotiated);
+        assert_eq!(caps.ipv6, CapabilityState::Advertised);
+        assert_eq!(caps.ext_msg, CapabilityState::Advertised);
+        assert_eq!(caps.route_refresh, CapabilityState::Negotiated);
+        assert_eq!(caps.enhe, CapabilityState::Advertised);
     }
 
     // ================================================================

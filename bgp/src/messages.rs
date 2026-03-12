@@ -589,11 +589,7 @@ impl OpenMessage {
     ) -> OpenMessage {
         let parameters = if extended_nexthop {
             let caps = BTreeSet::from([Capability::ExtendedNextHopEncoding {
-                elements: vec![ExtendedNexthopElement {
-                    afi: Afi::Ipv4.into(),
-                    safi: u8::from(Safi::Unicast).into(),
-                    nh_afi: Afi::Ipv6.into(),
-                }],
+                elements: vec![ExtendedNexthopElement::v4_over_v6()],
             }]);
             vec![OptionalParameter::Capabilities(caps)]
         } else {
@@ -618,11 +614,7 @@ impl OpenMessage {
         let mut params = BTreeSet::from([Capability::FourOctetAs { asn }]);
         if extended_nexthop {
             params.insert(Capability::ExtendedNextHopEncoding {
-                elements: vec![ExtendedNexthopElement {
-                    afi: Afi::Ipv4.into(),
-                    safi: u8::from(Safi::Unicast).into(),
-                    nh_afi: Afi::Ipv6.into(),
-                }],
+                elements: vec![ExtendedNexthopElement::v4_over_v6()],
             });
         }
         OpenMessage {
@@ -4352,19 +4344,32 @@ pub struct ExtendedNexthopElement {
 }
 
 impl ExtendedNexthopElement {
-    pub fn is_v4_over_v6(&self) -> bool {
-        self == &ExtendedNexthopElement {
+    /// IPv4 Unicast NLRI with IPv6 nexthops (RFC 8950).
+    pub fn v4_over_v6() -> Self {
+        Self {
             afi: Afi::Ipv4.into(),
             safi: u8::from(Safi::Unicast).into(),
             nh_afi: Afi::Ipv6.into(),
         }
     }
-    pub fn is_v6_over_v4(&self) -> bool {
-        self == &ExtendedNexthopElement {
+
+    /// IPv6 Unicast NLRI with IPv4 nexthops.
+    #[cfg(test)]
+    pub fn v6_over_v4() -> Self {
+        Self {
             afi: Afi::Ipv6.into(),
             safi: u8::from(Safi::Unicast).into(),
             nh_afi: Afi::Ipv4.into(),
         }
+    }
+
+    pub fn is_v4_over_v6(&self) -> bool {
+        self == &Self::v4_over_v6()
+    }
+
+    #[cfg(test)]
+    pub fn is_v6_over_v4(&self) -> bool {
+        self == &Self::v6_over_v4()
     }
 }
 
@@ -5015,6 +5020,7 @@ impl Capability {
         }
     }
 
+    #[cfg(test)]
     pub fn extended_nh_v6_over_v4(&self) -> bool {
         if let Self::ExtendedNextHopEncoding { elements } = self {
             elements.iter().any(|x| x.is_v6_over_v4())

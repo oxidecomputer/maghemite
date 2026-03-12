@@ -2285,10 +2285,8 @@ fn test_ipv6_routes_ipv4_peer_success() {
 /// wire. The receiver canonicalizes this to IPv4 before RIB installation.
 #[test]
 fn test_ipv6_routes_ipv4_peer_mapped_nexthop() {
-    let r1_addr: SocketAddr =
-        sockaddr!(&format!("10.0.0.9:{TEST_BGP_PORT}"));
-    let r2_addr: SocketAddr =
-        sockaddr!(&format!("10.0.0.10:{TEST_BGP_PORT}"));
+    let r1_addr: SocketAddr = sockaddr!(&format!("10.0.0.9:{TEST_BGP_PORT}"));
+    let r2_addr: SocketAddr = sockaddr!(&format!("10.0.0.10:{TEST_BGP_PORT}"));
 
     let routers = vec![
         LogicalRouter {
@@ -2353,9 +2351,7 @@ fn test_ipv6_routes_ipv4_peer_mapped_nexthop() {
     wait_for!(
         prefixes_v6
             .iter()
-            .filter(|p| {
-                !r2.router.db.get_prefix_paths(p).is_empty()
-            })
+            .filter(|p| { !r2.router.db.get_prefix_paths(p).is_empty() })
             .count()
             == TEST_ROUTE_COUNT,
         "all IPv6 routes should arrive at R2"
