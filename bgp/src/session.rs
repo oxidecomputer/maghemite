@@ -118,14 +118,16 @@ impl Display for CapabilityState {
 /// The result of comparing our OPEN capabilities with the peer's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NegotiatedCaps {
+    /// IPv4 Unicast address-family
     pub ipv4: CapabilityState,
+    /// IPv6 Unicast address-family
     pub ipv6: CapabilityState,
+    /// BGP Extended Message Size (RFC 8654)
     pub ext_msg: CapabilityState,
+    /// Route Refresh (RFC 2918)
     pub route_refresh: CapabilityState,
     /// Extended nexthop: IPv4 routes carried over IPv6 nexthops (RFC 8950)
-    pub enhe_v4: CapabilityState,
-    /// Extended nexthop: IPv6 routes carried over IPv4 nexthops (RFC 8950)
-    pub enhe_v6: CapabilityState,
+    pub enhe: CapabilityState,
 }
 
 impl NegotiatedCaps {
@@ -281,7 +283,7 @@ fn select_nexthop(
                 v4_over_v6_nexthop(cap_state, ipv6)
             }
             (Afi::Ipv6, IpAddr::V4(ipv4)) => {
-                v6_over_v4_nexthop(cap_state, ipv4)
+                Ok(BgpNexthop::Ipv6Single(ipv4.to_ipv6_mapped()))
             }
         };
     }
@@ -291,7 +293,9 @@ fn select_nexthop(
         (Afi::Ipv4, IpAddr::V4(ipv4)) => Ok(BgpNexthop::Ipv4(ipv4)),
         (Afi::Ipv6, IpAddr::V6(ipv6)) => Ok(BgpNexthop::Ipv6Single(ipv6)),
         (Afi::Ipv4, IpAddr::V6(ipv6)) => v4_over_v6_nexthop(cap_state, ipv6),
-        (Afi::Ipv6, IpAddr::V4(ipv4)) => v6_over_v4_nexthop(cap_state, ipv4),
+        (Afi::Ipv6, IpAddr::V4(ipv4)) => {
+            Ok(BgpNexthop::Ipv6Single(ipv4.to_ipv6_mapped()))
+        }
     }
 }
 
@@ -320,24 +324,11 @@ pub fn v4_over_v6_nexthop(
     cap_state: &NegotiatedCaps,
     nexthop: Ipv6Addr,
 ) -> Result<BgpNexthop, Error> {
-    if cap_state.enhe_v4.negotiated() {
+    if cap_state.enhe.negotiated() {
         Ok(BgpNexthop::Ipv6Single(nexthop))
     } else {
         Err(Error::InvalidAddress(format!(
             "Ipv6 nexthop {nexthop} without extended NH v4 over v6"
-        )))
-    }
-}
-
-pub fn v6_over_v4_nexthop(
-    cap_state: &NegotiatedCaps,
-    nexthop: Ipv4Addr,
-) -> Result<BgpNexthop, Error> {
-    if cap_state.enhe_v6.negotiated() {
-        Ok(BgpNexthop::Ipv4(nexthop))
-    } else {
-        Err(Error::InvalidAddress(format!(
-            "Ipv4 nexthop {nexthop} without extended NH v6 over v4"
         )))
     }
 }
@@ -1452,16 +1443,14 @@ pub(crate) fn negotiate_capabilities(
     let route_refresh =
         negotiate_cap(our_caps, their_caps, &Capability::RouteRefresh {});
 
-    let enhe_v4 = negotiate_enhe(our_caps, their_caps, |e| e.is_v4_over_v6());
-    let enhe_v6 = negotiate_enhe(our_caps, their_caps, |e| e.is_v6_over_v4());
+    let enhe = negotiate_enhe(our_caps, their_caps, |e| e.is_v4_over_v6());
 
     NegotiatedCaps {
         ipv4,
         ipv6,
         ext_msg,
         route_refresh,
-        enhe_v4,
-        enhe_v6,
+        enhe,
     }
 }
 
@@ -9169,17 +9158,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             mp_withdrawn4.len() as u64,
                         );
                     } else {
-                        let mp_nexthop = match &reach4.nexthop {
-                            BgpNexthop::Ipv4(ip4) => IpAddr::V4(*ip4),
-                            BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
-                            BgpNexthop::Ipv6Double(addrs) => {
-                                if self.is_unnumbered() {
-                                    IpAddr::V6(addrs.link_local)
-                                } else {
-                                    IpAddr::V6(addrs.global)
-                                }
-                            }
-                        };
+                        let mp_nexthop =
+                            reach4.nexthop.to_ip(self.is_unnumbered());
 
                         let mp_nlri4: Vec<Prefix> = reach4
                             .nlri
@@ -9253,28 +9233,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                             withdrawn6.len() as u64,
                         );
                     } else {
-                        let nexthop6 = match &reach6.nexthop {
-                            BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
-                            BgpNexthop::Ipv6Double(addrs) => {
-                                if self.is_unnumbered() {
-                                    IpAddr::V6(addrs.link_local)
-                                } else {
-                                    IpAddr::V6(addrs.global)
-                                }
-                            }
-                            BgpNexthop::Ipv4(ip4) => {
-                                // IPv4 nexthop for IPv6 routes is unusual but possible
-                                // in some configurations (e.g., IPv4-mapped IPv6)
-                                session_log!(
-                                    self,
-                                    warn,
-                                    pc.conn,
-                                    "IPv4 nexthop in IPv6 MP_REACH_NLRI";
-                                    "nexthop" => format!("{ip4}")
-                                );
-                                IpAddr::V4(*ip4)
-                            }
-                        };
+                        let nexthop6 =
+                            reach6.nexthop.to_ip(self.is_unnumbered());
 
                         let nlri6: Vec<Prefix> = reach6
                             .nlri
@@ -10369,8 +10329,8 @@ mod tests {
     }
 
     #[test]
-    fn test_select_nexthop_wrong_af_ipv6_route_ipv4_nexthop() {
-        // IPv6 route with IPv4 nexthop configured is a mismatch (error)
+    fn test_select_nexthop_ipv6_route_ipv4_nexthop_mapped() {
+        // IPv6 route with configured IPv4 nexthop uses v4-mapped v6
         let nexthop = ip!("10.0.0.1");
         let local_ip = ip!("2001:db8::1");
 
@@ -10380,8 +10340,10 @@ mod tests {
             Some(nexthop),
             &NegotiatedCaps::default(),
         );
-        // Should error because IPv6 route needs IPv6 nexthop
-        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap(),
+            BgpNexthop::Ipv6Single("::ffff:10.0.0.1".parse().unwrap()),
+        );
     }
 
     #[test]
@@ -10400,8 +10362,8 @@ mod tests {
     }
 
     #[test]
-    fn test_select_nexthop_cross_af_ipv6_routes_ipv4_local_ip_error() {
-        // IPv6 route with pure IPv4 local_ip and no configured nexthop = error
+    fn test_select_nexthop_cross_af_ipv6_routes_ipv4_local_ip_mapped() {
+        // IPv6 route with IPv4 local_ip uses v4-mapped v6 nexthop
         let local_ip = ip!("10.0.0.1");
 
         let result = select_nexthop(
@@ -10410,8 +10372,10 @@ mod tests {
             None,
             &NegotiatedCaps::default(),
         );
-        // Should error because cannot derive IPv6 nexthop from IPv4 connection
-        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap(),
+            BgpNexthop::Ipv6Single("::ffff:10.0.0.1".parse().unwrap()),
+        );
     }
 
     // ================================================================

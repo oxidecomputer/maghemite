@@ -3031,6 +3031,23 @@ impl BgpNexthop {
         }
     }
 
+    /// Resolve to a canonical IpAddr for RIB installation.
+    pub fn to_ip(&self, unnumbered: bool) -> IpAddr {
+        let ip = match self {
+            BgpNexthop::Ipv4(ip4) => IpAddr::V4(*ip4),
+            BgpNexthop::Ipv6Single(ip6) => IpAddr::V6(*ip6),
+            BgpNexthop::Ipv6Double(addrs) => {
+                if unnumbered {
+                    IpAddr::V6(addrs.link_local)
+                } else {
+                    IpAddr::V6(addrs.global)
+                }
+            }
+        };
+
+        ip.to_canonical()
+    }
+
     /// Get byte length of this next-hop
     pub fn byte_len(&self) -> u8 {
         match self {
