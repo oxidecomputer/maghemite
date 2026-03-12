@@ -320,7 +320,7 @@ pub fn v4_over_v6_nexthop(
     cap_state: &NegotiatedCaps,
     nexthop: Ipv6Addr,
 ) -> Result<BgpNexthop, Error> {
-    if cap_state.enhe_v4.received() {
+    if cap_state.enhe_v4.negotiated() {
         Ok(BgpNexthop::Ipv6Single(nexthop))
     } else {
         Err(Error::InvalidAddress(format!(
@@ -333,7 +333,7 @@ pub fn v6_over_v4_nexthop(
     cap_state: &NegotiatedCaps,
     nexthop: Ipv4Addr,
 ) -> Result<BgpNexthop, Error> {
-    if cap_state.enhe_v6.received() {
+    if cap_state.enhe_v6.negotiated() {
         Ok(BgpNexthop::Ipv4(nexthop))
     } else {
         Err(Error::InvalidAddress(format!(
@@ -2512,6 +2512,15 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
         if lock!(self.session).ipv6_unicast.is_some() {
             caps.insert(Capability::ipv6_unicast());
+        }
+        if self.use_extended_nexthop() {
+            caps.insert(Capability::ExtendedNextHopEncoding {
+                elements: vec![ExtendedNexthopElement {
+                    afi: Afi::Ipv4.into(),
+                    safi: u8::from(Safi::Unicast).into(),
+                    nh_afi: Afi::Ipv6.into(),
+                }],
+            });
         }
         *lock!(self.caps_tx) = caps;
     }
@@ -7899,7 +7908,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         let capabilities = lock!(self.caps_tx).clone();
         // pull hold_time from config, not the clock
         let hold_time = lock!(self.session).hold_time;
-        let extended_nexthop = self.v4_over_v6_nexthop();
+        let extended_nexthop = self.use_extended_nexthop();
         let mut msg = match self.asn {
             Asn::FourOctet(asn) => OpenMessage::new4(
                 asn,
@@ -7974,10 +7983,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
     }
 
-    fn v4_over_v6_nexthop(&self) -> bool {
-        let v4_enabled = lock!(self.session).ipv4_unicast.is_some();
-        let v6_peer = self.get_peer_info().remote_ip.is_ipv6();
-        v4_enabled && v6_peer
+    fn use_extended_nexthop(&self) -> bool {
+        self.is_unnumbered()
     }
 
     fn is_ebgp(&self) -> Option<bool> {
