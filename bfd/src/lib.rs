@@ -26,6 +26,12 @@ pub const MOD_SM: &str = "state_machine";
 
 pub const UNIT_PEER: &str = "peer";
 
+pub const DEFAULT_BFD_TTL: u32 = 255;
+
+/// A type alias for a bidirectional endpoint transporting BFD control messages
+/// and target IP addresses.
+pub type BfdEndpoint = bidi::Endpoint<(IpAddr, packet::Control)>;
+
 /// A `Daemon` is a collection of BFD sessions.
 pub struct Daemon {
     /// Sessions keyed by peer IP address.
@@ -51,7 +57,7 @@ impl Daemon {
         required_rx: Duration,
         detection_multiplier: u8,
         mode: SessionMode,
-        endpoint: bidi::Endpoint<(IpAddr, packet::Control)>,
+        endpoint: BfdEndpoint,
         db: rdb::Db,
     ) {
         if self.sessions.contains_key(&peer) {
@@ -118,7 +124,7 @@ impl Session {
     /// immediately.
     fn new(
         addr: IpAddr,
-        ep: bidi::Endpoint<(IpAddr, packet::Control)>,
+        ep: BfdEndpoint,
         required_rx: Duration,
         detection_multiplier: u8,
         mode: SessionMode,
@@ -241,8 +247,7 @@ mod test {
     use std::thread::{sleep, spawn};
 
     struct Network {
-        endpoints:
-            Option<HashMap<IpAddr, bidi::Endpoint<(IpAddr, packet::Control)>>>,
+        endpoints: Option<HashMap<IpAddr, BfdEndpoint>>,
     }
 
     impl Default for Network {
@@ -254,11 +259,7 @@ mod test {
     }
 
     impl Network {
-        fn register(
-            &mut self,
-            addr: IpAddr,
-            endpoint: bidi::Endpoint<(IpAddr, packet::Control)>,
-        ) {
+        fn register(&mut self, addr: IpAddr, endpoint: BfdEndpoint) {
             self.endpoints
                 .as_mut()
                 .expect("network already running, cannot register endpoint")
@@ -266,10 +267,7 @@ mod test {
         }
 
         fn run(&mut self) {
-            let mut endpoints: Vec<(
-                IpAddr,
-                bidi::Endpoint<(IpAddr, packet::Control)>,
-            )> = self
+            let mut endpoints: Vec<(IpAddr, BfdEndpoint)> = self
                 .endpoints
                 .take()
                 .expect("network running")
@@ -291,7 +289,7 @@ mod test {
         }
 
         fn run_message_handler(
-            ep: bidi::Endpoint<(IpAddr, packet::Control)>,
+            ep: BfdEndpoint,
             egress: HashMap<IpAddr, Sender<(IpAddr, packet::Control)>>,
         ) {
             spawn(move || {
