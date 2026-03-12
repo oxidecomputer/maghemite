@@ -4335,14 +4335,14 @@ pub struct ExtendedNexthopElement {
 }
 
 impl ExtendedNexthopElement {
-    fn is_v4_over_v6(&self) -> bool {
+    pub fn is_v4_over_v6(&self) -> bool {
         self == &ExtendedNexthopElement {
             afi: Afi::Ipv4.into(),
             safi: u8::from(Safi::Unicast).into(),
             nh_afi: Afi::Ipv6.into(),
         }
     }
-    fn is_v6_over_v4(&self) -> bool {
+    pub fn is_v6_over_v4(&self) -> bool {
         self == &ExtendedNexthopElement {
             afi: Afi::Ipv6.into(),
             safi: u8::from(Safi::Unicast).into(),

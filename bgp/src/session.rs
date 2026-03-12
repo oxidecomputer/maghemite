@@ -14,11 +14,11 @@ use crate::{
     log::{collision_log, session_log, session_log_lite},
     messages::{
         AddPathElement, Afi, BgpNexthop, Capability, CeaseErrorSubcode,
-        Community, ErrorCode, ErrorSubcode, Header, MAX_EXTENDED_MESSAGE_SIZE,
-        MAX_MESSAGE_SIZE, Message, MessageKind, MessageParseError, MpReachNlri,
-        MpUnreachNlri, NotificationMessage, OpenErrorSubcode, OpenMessage,
-        PathAttribute, PathAttributeValue, RouteRefreshMessage, Safi,
-        UpdateMessage, UpdateParseErrorReason,
+        Community, ErrorCode, ErrorSubcode, ExtendedNexthopElement, Header,
+        MAX_EXTENDED_MESSAGE_SIZE, MAX_MESSAGE_SIZE, Message, MessageKind,
+        MessageParseError, MpReachNlri, MpUnreachNlri, NotificationMessage,
+        OpenErrorSubcode, OpenMessage, PathAttribute, PathAttributeValue,
+        RouteRefreshMessage, Safi, UpdateMessage, UpdateParseErrorReason,
     },
     params::{
         BgpCapability, BgpPeerParameters, BgpPeerParametersV1,
@@ -58,8 +58,7 @@ use std::{
 
 const UNIT_SESSION_RUNNER: &str = "session_runner";
 
-/// The runtime state of an address-family for a given peer.
-/// This is instantiated after capability negotiation has completed.
+/// The negotiation state of a capability for a given peer.
 #[derive(
     Debug,
     Clone,
@@ -71,34 +70,69 @@ const UNIT_SESSION_RUNNER: &str = "session_runner";
     Deserialize,
     JsonSchema,
 )]
-pub enum AfiSafiState {
-    /// Not configured for this session. We did not advertise this capability
-    /// in our OPEN message, so the peer's support is irrelevant.
+pub enum CapabilityState {
+    /// We have not configured or advertised this capability, and the peer did
+    /// not send it.
     #[default]
     Unconfigured,
 
-    /// We advertised this capability but the peer did not. Routes for this
-    /// AFI/SAFI will be ignored.
+    /// We advertised this capability but the peer did not send it.
     Advertised,
 
-    /// Successfully negotiated with peer. Routes for this AFI/SAFI will be
-    /// processed.
+    /// The peer sent this capability but we did not advertise it.
+    Received,
+
+    /// Both sides advertised this capability.
     Negotiated,
 }
 
-impl AfiSafiState {
+impl CapabilityState {
+    pub fn configured(&self) -> bool {
+        matches!(self, Self::Advertised | Self::Negotiated)
+    }
+
+    pub fn advertised(&self) -> bool {
+        matches!(self, Self::Advertised | Self::Negotiated)
+    }
+
+    pub fn received(&self) -> bool {
+        matches!(self, Self::Received | Self::Negotiated)
+    }
+
     pub fn negotiated(&self) -> bool {
         matches!(self, Self::Negotiated)
     }
 }
 
-impl Display for AfiSafiState {
+impl Display for CapabilityState {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unconfigured => write!(f, "Unconfigured"),
             Self::Advertised => write!(f, "Advertised"),
+            Self::Received => write!(f, "Received"),
             Self::Negotiated => write!(f, "Negotiated"),
         }
+    }
+}
+
+/// The result of comparing our OPEN capabilities with the peer's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NegotiatedCaps {
+    pub ipv4: CapabilityState,
+    pub ipv6: CapabilityState,
+    pub ext_msg: CapabilityState,
+    pub route_refresh: CapabilityState,
+    /// Extended nexthop: IPv4 routes carried over IPv6 nexthops (RFC 8950)
+    pub enhe_v4: CapabilityState,
+    /// Extended nexthop: IPv6 routes carried over IPv4 nexthops (RFC 8950)
+    pub enhe_v6: CapabilityState,
+}
+
+impl NegotiatedCaps {
+    /// The peer is an MP-BGP speaker (advertised at least one
+    /// MultiprotocolExtensions capability).
+    pub fn mp_bgp(&self) -> bool {
+        self.ipv4.received() || self.ipv6.received()
     }
 }
 
@@ -117,19 +151,12 @@ pub struct PeerConnection<Cnx: BgpConnection> {
     pub id: u32,
     /// The actual ASN learned from the peer (runtime state)
     pub asn: u32,
-    /// The actual capabilities received from the peer (runtime state)
-    pub caps: BTreeSet<Capability>,
-    /// This peer's AFI/SAFI state for IPv4 Unicast
-    pub ipv4_unicast: AfiSafiState,
-    /// This peer's AFI/SAFI state for IPv6 Unicast
-    pub ipv6_unicast: AfiSafiState,
-    /// Indicates the peer supports MP-BGP, i.e. they advertised
-    /// Multiprotocol Extensions capabilities in their OPEN message.
-    /// True: the peer supports MP-BGP encoding.
-    /// False: the peer is a legacy BGP-4 speaker that does not support MP-BGP
-    /// encoding. IPv4 Unicast is implicitly negotiated, and is the only
-    /// address-family allowed for this peer.
-    pub mp_bgp: bool,
+    /// Negotiated capability state derived from both OPEN messages.
+    pub cap_state: NegotiatedCaps,
+    /// Capabilities we sent in our OPEN message.
+    pub tx_caps: BTreeSet<Capability>,
+    /// Capabilities received from the peer's OPEN message.
+    pub rx_caps: BTreeSet<Capability>,
 }
 
 impl<Cnx: BgpConnection> PeerConnection<Cnx> {
@@ -144,10 +171,9 @@ impl<Cnx: BgpConnection> Clone for PeerConnection<Cnx> {
             conn: Arc::clone(&self.conn),
             id: self.id,
             asn: self.asn,
-            caps: self.caps.clone(),
-            ipv4_unicast: self.ipv4_unicast,
-            ipv6_unicast: self.ipv6_unicast,
-            mp_bgp: self.mp_bgp,
+            cap_state: self.cap_state,
+            tx_caps: self.tx_caps.clone(),
+            rx_caps: self.rx_caps.clone(),
         }
     }
 }
@@ -241,7 +267,7 @@ fn select_nexthop(
     nlri_afi: Afi,
     local_ip: IpAddr,
     configured_nexthop: Option<IpAddr>,
-    caps: &BTreeSet<Capability>,
+    cap_state: &NegotiatedCaps,
 ) -> Result<BgpNexthop, Error> {
     // Canonicalize the local_ip to handle IPv4-mapped IPv6 addresses
     let local_ip = local_ip.to_canonical();
@@ -251,8 +277,12 @@ fn select_nexthop(
         return match (nlri_afi, nexthop) {
             (Afi::Ipv4, IpAddr::V4(ipv4)) => Ok(BgpNexthop::Ipv4(ipv4)),
             (Afi::Ipv6, IpAddr::V6(ipv6)) => Ok(BgpNexthop::Ipv6Single(ipv6)),
-            (Afi::Ipv4, IpAddr::V6(ipv6)) => v4_over_v6_nexthop(caps, ipv6),
-            (Afi::Ipv6, IpAddr::V4(ipv4)) => v6_over_v4_nexthop(caps, ipv4),
+            (Afi::Ipv4, IpAddr::V6(ipv6)) => {
+                v4_over_v6_nexthop(cap_state, ipv6)
+            }
+            (Afi::Ipv6, IpAddr::V4(ipv4)) => {
+                v6_over_v4_nexthop(cap_state, ipv4)
+            }
         };
     }
 
@@ -260,8 +290,8 @@ fn select_nexthop(
     match (nlri_afi, local_ip) {
         (Afi::Ipv4, IpAddr::V4(ipv4)) => Ok(BgpNexthop::Ipv4(ipv4)),
         (Afi::Ipv6, IpAddr::V6(ipv6)) => Ok(BgpNexthop::Ipv6Single(ipv6)),
-        (Afi::Ipv4, IpAddr::V6(ipv6)) => v4_over_v6_nexthop(caps, ipv6),
-        (Afi::Ipv6, IpAddr::V4(ipv4)) => v6_over_v4_nexthop(caps, ipv4),
+        (Afi::Ipv4, IpAddr::V6(ipv6)) => v4_over_v6_nexthop(cap_state, ipv6),
+        (Afi::Ipv6, IpAddr::V4(ipv4)) => v6_over_v4_nexthop(cap_state, ipv4),
     }
 }
 
@@ -287,29 +317,27 @@ fn derive_nexthop_interface(
 }
 
 pub fn v4_over_v6_nexthop(
-    caps: &BTreeSet<Capability>,
+    cap_state: &NegotiatedCaps,
     nexthop: Ipv6Addr,
 ) -> Result<BgpNexthop, Error> {
-    let v4_over_v6 = caps.iter().any(|x| x.extended_nh_v4_over_v6());
-    if v4_over_v6 {
+    if cap_state.enhe_v4.received() {
         Ok(BgpNexthop::Ipv6Single(nexthop))
     } else {
         Err(Error::InvalidAddress(format!(
-            "Ipv6 nexthop {nexthop} without extended NH v4 over v6 negotiated"
+            "Ipv6 nexthop {nexthop} without extended NH v4 over v6"
         )))
     }
 }
 
 pub fn v6_over_v4_nexthop(
-    caps: &BTreeSet<Capability>,
+    cap_state: &NegotiatedCaps,
     nexthop: Ipv4Addr,
 ) -> Result<BgpNexthop, Error> {
-    let v6_over_v4 = caps.iter().any(|x| x.extended_nh_v6_over_v4());
-    if v6_over_v4 {
+    if cap_state.enhe_v6.received() {
         Ok(BgpNexthop::Ipv4(nexthop))
     } else {
         Err(Error::InvalidAddress(format!(
-            "Ipv4 nexthop {nexthop} without extended NH v6 over v4 negotiated"
+            "Ipv4 nexthop {nexthop} without extended NH v6 over v4"
         )))
     }
 }
@@ -1372,20 +1400,13 @@ macro_rules! connect_timeout {
     };
 }
 
-/// Determine AFI/SAFI negotiation state from two capability sets.
-///
-/// Returns `(ipv4_unicast, ipv6_unicast, mp_bgp)`:
-/// - `Negotiated`: Both sides advertised the capability, **or** the peer
-///   is a legacy (non-MP-BGP) speaker and we configured IPv4 Unicast
-///   (implicit negotiation per RFC 4271).
-/// - `Advertised`: We advertised but peer did not (and no implicit grant).
-/// - `Unconfigured`: We did not advertise (not configured).
-/// - `mp_bgp`: `true` if the peer advertised any
-///   `MultiprotocolExtensions` capabilities.
-pub(crate) fn negotiate_afis(
+/// Compare our OPEN capabilities with the peer's and produce a
+/// [`NegotiatedCaps`] describing the resulting state of each
+/// capability we care about.
+pub(crate) fn negotiate_capabilities(
     our_caps: &BTreeSet<Capability>,
     their_caps: &BTreeSet<Capability>,
-) -> (AfiSafiState, AfiSafiState, bool) {
+) -> NegotiatedCaps {
     let cap4 = Capability::ipv4_unicast();
     let cap6 = Capability::ipv6_unicast();
 
@@ -1395,35 +1416,95 @@ pub(crate) fn negotiate_afis(
         .iter()
         .any(|c| matches!(c, Capability::MultiprotocolExtensions { .. }));
 
-    let ipv4_state = if our_caps.contains(&cap4) {
+    let ipv4 = if our_caps.contains(&cap4) {
         if mp_bgp {
-            // Peer sent MP-BGP caps: check for explicit v4
             if their_caps.contains(&cap4) {
-                AfiSafiState::Negotiated
+                CapabilityState::Negotiated
             } else {
-                AfiSafiState::Advertised
+                CapabilityState::Advertised
             }
         } else {
             // Legacy peer (no MP-BGP caps): implicitly
             // negotiates IPv4 Unicast per RFC 4271.
-            AfiSafiState::Negotiated
+            CapabilityState::Negotiated
         }
+    } else if their_caps.contains(&cap4) {
+        CapabilityState::Received
     } else {
-        AfiSafiState::Unconfigured
+        CapabilityState::Unconfigured
     };
 
-    let ipv6_state = if our_caps.contains(&cap6) {
+    let ipv6 = if our_caps.contains(&cap6) {
         if their_caps.contains(&cap6) {
-            AfiSafiState::Negotiated
+            CapabilityState::Negotiated
         } else {
-            // Legacy peers never get implicit IPv6.
-            AfiSafiState::Advertised
+            CapabilityState::Advertised
         }
+    } else if their_caps.contains(&cap6) {
+        CapabilityState::Received
     } else {
-        AfiSafiState::Unconfigured
+        CapabilityState::Unconfigured
     };
 
-    (ipv4_state, ipv6_state, mp_bgp)
+    let ext_msg =
+        negotiate_cap(our_caps, their_caps, &Capability::BGPExtendedMessage {});
+
+    let route_refresh =
+        negotiate_cap(our_caps, their_caps, &Capability::RouteRefresh {});
+
+    let enhe_v4 = negotiate_enhe(our_caps, their_caps, |e| e.is_v4_over_v6());
+    let enhe_v6 = negotiate_enhe(our_caps, their_caps, |e| e.is_v6_over_v4());
+
+    NegotiatedCaps {
+        ipv4,
+        ipv6,
+        ext_msg,
+        route_refresh,
+        enhe_v4,
+        enhe_v6,
+    }
+}
+
+/// Determine the negotiation state of a single capability.
+fn negotiate_cap(
+    our_caps: &BTreeSet<Capability>,
+    their_caps: &BTreeSet<Capability>,
+    cap: &Capability,
+) -> CapabilityState {
+    match (our_caps.contains(cap), their_caps.contains(cap)) {
+        (true, true) => CapabilityState::Negotiated,
+        (true, false) => CapabilityState::Advertised,
+        (false, true) => CapabilityState::Received,
+        (false, false) => CapabilityState::Unconfigured,
+    }
+}
+
+/// Determine the negotiation state of a specific ENHE element.
+fn negotiate_enhe(
+    our_caps: &BTreeSet<Capability>,
+    their_caps: &BTreeSet<Capability>,
+    predicate: fn(&ExtendedNexthopElement) -> bool,
+) -> CapabilityState {
+    let we_have = has_enhe_element(our_caps, predicate);
+    let they_have = has_enhe_element(their_caps, predicate);
+    match (we_have, they_have) {
+        (true, true) => CapabilityState::Negotiated,
+        (true, false) => CapabilityState::Advertised,
+        (false, true) => CapabilityState::Received,
+        (false, false) => CapabilityState::Unconfigured,
+    }
+}
+
+fn has_enhe_element(
+    caps: &BTreeSet<Capability>,
+    predicate: fn(&ExtendedNexthopElement) -> bool,
+) -> bool {
+    caps.iter().any(|c| match c {
+        Capability::ExtendedNextHopEncoding { elements } => {
+            elements.iter().any(predicate)
+        }
+        _ => false,
+    })
 }
 
 /// Registry for tracking active connections
@@ -3985,12 +4066,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // hold_timer set in handle_open(), enable it here
         conn_timer!(conn, hold).enable();
 
-        let caps = om.get_capabilities();
-        let (ipv4_unicast, ipv6_unicast, mp_bgp) = {
+        let rx_caps = om.get_capabilities();
+        let (cap_state, tx_caps) = {
             let our_caps = lock!(self.caps_tx);
-            negotiate_afis(&our_caps, &caps)
+            let neg = negotiate_capabilities(&our_caps, &rx_caps);
+            (neg, our_caps.clone())
         };
-        if caps.contains(&Capability::BGPExtendedMessage {}) {
+        if cap_state.ext_msg.negotiated() {
             conn.set_extended_msg(true);
         }
 
@@ -3998,10 +4080,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             conn,
             id: om.id,
             asn: om.asn(),
-            caps,
-            ipv4_unicast,
-            ipv6_unicast,
-            mp_bgp,
+            cap_state,
+            tx_caps,
+            rx_caps,
         };
 
         // Upgrade this connection from Partial to Full in the registry
@@ -5354,12 +5435,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     .connection_retries
                     .fetch_add(1, Ordering::Relaxed);
 
-                let caps = om.get_capabilities();
-                let (ipv4_unicast, ipv6_unicast, mp_bgp) = {
+                let rx_caps = om.get_capabilities();
+                let (cap_state, tx_caps) = {
                     let our_caps = lock!(self.caps_tx);
-                    negotiate_afis(&our_caps, &caps)
+                    let neg = negotiate_capabilities(&our_caps, &rx_caps);
+                    (neg, our_caps.clone())
                 };
-                if caps.contains(&Capability::BGPExtendedMessage {}) {
+                if cap_state.ext_msg.negotiated() {
                     new.set_extended_msg(true);
                 }
 
@@ -5367,10 +5449,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     conn: new,
                     id: om.id,
                     asn: om.asn(),
-                    caps,
-                    ipv4_unicast,
-                    ipv6_unicast,
-                    mp_bgp,
+                    cap_state,
+                    tx_caps,
+                    rx_caps,
                 };
 
                 conn_timer!(new_pc.conn, hold).restart();
@@ -5675,12 +5756,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 conn_timer!(exist, hold).restart();
                                                 conn_timer!(exist, keepalive).restart();
 
-                                                let caps = om.get_capabilities();
-                                                let (ipv4_unicast, ipv6_unicast, mp_bgp) = {
+                                                let rx_caps = om.get_capabilities();
+                                                let (cap_state, tx_caps) = {
                                                     let our_caps = lock!(self.caps_tx);
-                                                    negotiate_afis(&our_caps, &caps)
+                                                    let neg = negotiate_capabilities(&our_caps, &rx_caps);
+                                                    (neg, our_caps.clone())
                                                 };
-                                                if caps.contains(&Capability::BGPExtendedMessage {}) {
+                                                if cap_state.ext_msg.negotiated() {
                                                     exist.set_extended_msg(true);
                                                 }
 
@@ -5688,10 +5770,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     conn: exist.clone(),
                                                     id: om.id,
                                                     asn: om.asn(),
-                                                    caps,
-                                                    ipv4_unicast,
-                                                    ipv6_unicast,
-                                                    mp_bgp,
+                                                    cap_state,
+                                                    tx_caps,
+                                                    rx_caps,
                                                 };
 
                                                 // Upgrade existing connection from Partial to Full in the registry
@@ -5815,12 +5896,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                                                 self.stop(Some(&exist), None, StopReason::CollisionResolution);
 
-                                                let caps = om.get_capabilities();
-                                                let (ipv4_unicast, ipv6_unicast, mp_bgp) = {
+                                                let rx_caps = om.get_capabilities();
+                                                let (cap_state, tx_caps) = {
                                                     let our_caps = lock!(self.caps_tx);
-                                                    negotiate_afis(&our_caps, &caps)
+                                                    let neg = negotiate_capabilities(&our_caps, &rx_caps);
+                                                    (neg, our_caps.clone())
                                                 };
-                                                if caps.contains(&Capability::BGPExtendedMessage {}) {
+                                                if cap_state.ext_msg.negotiated() {
                                                     new.set_extended_msg(true);
                                                 }
 
@@ -5828,10 +5910,9 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                     conn: new.clone(),
                                                     id: om.id,
                                                     asn: om.asn(),
-                                                    caps,
-                                                    ipv4_unicast,
-                                                    ipv6_unicast,
-                                                    mp_bgp,
+                                                    cap_state,
+                                                    tx_caps,
+                                                    rx_caps,
                                                 };
 
                                                 conn_timer!(new, hold).restart();
@@ -6224,7 +6305,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         // Collect the prefixes this router is originating.
-        let originated4 = if pc.ipv4_unicast.negotiated() {
+        let originated4 = if pc.cap_state.ipv4.negotiated() {
             match self.db.get_origin(Some(AddressFamily::Ipv4)) {
                 Ok(value) => value,
                 Err(e) => {
@@ -6243,7 +6324,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             Vec::new()
         };
 
-        let originated6 = if pc.ipv6_unicast.negotiated() {
+        let originated6 = if pc.cap_state.ipv6.negotiated() {
             match self.db.get_origin(Some(AddressFamily::Ipv6)) {
                 Ok(value) => value,
                 Err(e) => {
@@ -6264,7 +6345,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // Ensure the router has a fanout entry for this peer.
         let peer_id = self.peer_id();
-        if pc.ipv4_unicast.negotiated() {
+        if pc.cap_state.ipv4.negotiated() {
             write_lock!(self.fanout4).add_egress(
                 peer_id.clone(),
                 crate::fanout::Egress {
@@ -6273,7 +6354,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                 },
             );
         }
-        if pc.ipv6_unicast.negotiated() {
+        if pc.cap_state.ipv6.negotiated() {
             write_lock!(self.fanout6).add_egress(
                 peer_id,
                 crate::fanout::Egress {
@@ -6765,13 +6846,13 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                 AdminEvent::EnforceFirstAsEnabled => {
                     let peer_id = self.peer_id();
-                    if pc.ipv4_unicast.negotiated() {
+                    if pc.cap_state.ipv4.negotiated() {
                         self.db.enforce_first_as(
                             &peer_id,
                             Some(AddressFamily::Ipv4),
                         );
                     }
-                    if pc.ipv6_unicast.negotiated() {
+                    if pc.cap_state.ipv6.negotiated() {
                         self.db.enforce_first_as(
                             &peer_id,
                             Some(AddressFamily::Ipv6),
@@ -7137,28 +7218,28 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                                                 msg_kind, false,
                                             );
 
-                                            let caps = om.get_capabilities();
-                                            let (
-                                                ipv4_unicast,
-                                                ipv6_unicast,
-                                                mp_bgp,
-                                            ) = {
+                                            let rx_caps = om.get_capabilities();
+                                            let (cap_state, tx_caps) = {
                                                 let our_caps =
                                                     lock!(self.caps_tx);
-                                                negotiate_afis(&our_caps, &caps)
+                                                let neg =
+                                                    negotiate_capabilities(
+                                                        &our_caps, &rx_caps,
+                                                    );
+                                                (neg, our_caps.clone())
                                             };
-                                            if caps.contains(&Capability::BGPExtendedMessage {}) {
-                                                incoming_conn.set_extended_msg(true);
+                                            if cap_state.ext_msg.negotiated() {
+                                                incoming_conn
+                                                    .set_extended_msg(true);
                                             }
 
                                             let new_pc = PeerConnection {
                                                 conn: incoming_conn.clone(),
                                                 id: om.id,
                                                 asn: om.asn(),
-                                                caps,
-                                                ipv4_unicast,
-                                                ipv6_unicast,
-                                                mp_bgp,
+                                                cap_state,
+                                                tx_caps,
+                                                rx_caps,
                                             };
 
                                             // Clean up the old established connection
@@ -7548,10 +7629,10 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // (non-MP-BGP) peers when we don't have IPv4 configured.
         let their_caps = om.get_capabilities();
         let our_caps = lock!(self.caps_tx);
-        let (ipv4, ipv6, _mp_bgp) = negotiate_afis(&our_caps, &their_caps);
+        let neg = negotiate_capabilities(&our_caps, &their_caps);
         drop(our_caps);
 
-        if !ipv4.negotiated() && !ipv6.negotiated() {
+        if !neg.ipv4.negotiated() && !neg.ipv6.negotiated() {
             session_log!(
                 self,
                 warn,
@@ -8012,7 +8093,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
             nlri_afi,
             pc.conn.local().ip(),
             configured_nexthop,
-            &pc.caps,
+            &pc.cap_state,
         )
     }
 
@@ -8342,14 +8423,14 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         session_timer!(self, connect_retry).stop();
 
         let peer_id = self.peer_id();
-        if pc.ipv4_unicast.negotiated() {
+        if pc.cap_state.ipv4.negotiated() {
             write_lock!(self.fanout4).remove_egress(&peer_id);
             self.db.remove_all_prefixes_from_bgp_peer(
                 &peer_id,
                 Some(AddressFamily::Ipv4),
             );
         }
-        if pc.ipv6_unicast.negotiated() {
+        if pc.cap_state.ipv6.negotiated() {
             write_lock!(self.fanout6).remove_egress(&peer_id);
             self.db.remove_all_prefixes_from_bgp_peer(
                 &peer_id,
@@ -8691,7 +8772,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         // A legacy peer must only use traditional encoding.
         // Strip any MP-BGP attributes they send -- they have no
         // business using multiprotocol extensions.
-        if !pc.mp_bgp {
+        if !pc.cap_state.mp_bgp() {
             let has_mp_attrs = update.path_attributes.iter().any(|a| {
                 matches!(
                     a.value,
@@ -8750,8 +8831,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     // Check if AFI/SAFI was negotiated
                     let afi_state = match (afi, safi) {
-                        (Afi::Ipv4, Safi::Unicast) => pc.ipv4_unicast,
-                        (Afi::Ipv6, Safi::Unicast) => pc.ipv6_unicast,
+                        (Afi::Ipv4, Safi::Unicast) => pc.cap_state.ipv4,
+                        (Afi::Ipv6, Safi::Unicast) => pc.cap_state.ipv6,
                     };
 
                     if !afi_state.negotiated() {
@@ -8785,8 +8866,8 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
                     // Check if AFI/SAFI was negotiated
                     let afi_state = match (afi, safi) {
-                        (Afi::Ipv4, Safi::Unicast) => pc.ipv4_unicast,
-                        (Afi::Ipv6, Safi::Unicast) => pc.ipv6_unicast,
+                        (Afi::Ipv4, Safi::Unicast) => pc.cap_state.ipv4,
+                        (Afi::Ipv6, Safi::Unicast) => pc.cap_state.ipv6,
                     };
 
                     if !afi_state.negotiated() {
@@ -8825,7 +8906,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         &self,
         pc: &PeerConnection<Cnx>,
     ) -> Result<(), Error> {
-        if !pc.ipv4_unicast.negotiated() {
+        if !pc.cap_state.ipv4.negotiated() {
             return Ok(());
         }
 
@@ -8866,7 +8947,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         &self,
         pc: &PeerConnection<Cnx>,
     ) -> Result<(), Error> {
-        if !pc.ipv6_unicast.negotiated() {
+        if !pc.cap_state.ipv6.negotiated() {
             return Ok(());
         }
 
@@ -8939,7 +9020,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
 
         // Traditional NLRI / withdrawn routes fields are IPv4 Unicast
         // only. Only process them if IPv4 Unicast was negotiated.
-        if pc.ipv4_unicast.negotiated() {
+        if pc.cap_state.ipv4.negotiated() {
             let withdrawn: Vec<Prefix> = update
                 .withdrawn
                 .iter()
@@ -9055,7 +9136,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
         }
 
         // Non-MP-BGP peers only use traditional NLRI (handled above).
-        if !pc.mp_bgp {
+        if !pc.cap_state.mp_bgp() {
             return;
         }
 
@@ -9756,7 +9837,7 @@ impl<Cnx: BgpConnection + 'static> SessionRunner<Cnx> {
                     let local = pc.conn.local();
                     let remote = pc.conn.peer();
                     let received_capabilities =
-                        pc.caps.iter().map(BgpCapability::from).collect();
+                        pc.rx_caps.iter().map(BgpCapability::from).collect();
                     PeerInfo {
                         name,
                         peer_group: peer_group.clone(),
@@ -10169,7 +10250,7 @@ mod tests {
             Afi::Ipv4,
             local_ip,
             Some(configured_nh),
-            &BTreeSet::default(),
+            &NegotiatedCaps::default(),
         );
         assert!(result.is_ok());
         match result.unwrap() {
@@ -10191,7 +10272,7 @@ mod tests {
             Afi::Ipv6,
             local_ip,
             Some(configured_nh),
-            &BTreeSet::default(),
+            &NegotiatedCaps::default(),
         );
         assert!(result.is_ok());
         match result.unwrap() {
@@ -10208,8 +10289,12 @@ mod tests {
         // No nexthop configured, pure IPv4 local_ip should be used for IPv4 routes
         let local_ip = ip!("10.0.0.1");
 
-        let result =
-            select_nexthop(Afi::Ipv4, local_ip, None, &BTreeSet::default());
+        let result = select_nexthop(
+            Afi::Ipv4,
+            local_ip,
+            None,
+            &NegotiatedCaps::default(),
+        );
         assert!(result.is_ok());
         match result.unwrap() {
             BgpNexthop::Ipv4(addr) => {
@@ -10228,7 +10313,7 @@ mod tests {
         let mapped = ip!("::ffff:10.0.0.1");
 
         let result =
-            select_nexthop(Afi::Ipv4, mapped, None, &BTreeSet::default());
+            select_nexthop(Afi::Ipv4, mapped, None, &NegotiatedCaps::default());
         assert!(result.is_ok());
         match result.unwrap() {
             BgpNexthop::Ipv4(addr) => {
@@ -10244,8 +10329,12 @@ mod tests {
         // No nexthop configured, pure IPv6 local_ip should be used for IPv6 routes
         let local_ip = ip!("2001:db8::1");
 
-        let result =
-            select_nexthop(Afi::Ipv6, local_ip, None, &BTreeSet::default());
+        let result = select_nexthop(
+            Afi::Ipv6,
+            local_ip,
+            None,
+            &NegotiatedCaps::default(),
+        );
         assert!(result.is_ok());
         match result.unwrap() {
             BgpNexthop::Ipv6Single(addr) => {
@@ -10266,7 +10355,7 @@ mod tests {
             Afi::Ipv4,
             local_ip,
             Some(nexthop),
-            &BTreeSet::default(),
+            &NegotiatedCaps::default(),
         );
         // Should error because IPv4 route needs IPv4 nexthop
         assert!(result.is_err());
@@ -10282,7 +10371,7 @@ mod tests {
             Afi::Ipv6,
             local_ip,
             Some(nexthop),
-            &BTreeSet::default(),
+            &NegotiatedCaps::default(),
         );
         // Should error because IPv6 route needs IPv6 nexthop
         assert!(result.is_err());
@@ -10293,8 +10382,12 @@ mod tests {
         // IPv4 route with pure IPv6 local_ip and no configured nexthop = error
         let local_ip = ip!("2001:db8::1");
 
-        let result =
-            select_nexthop(Afi::Ipv4, local_ip, None, &BTreeSet::default());
+        let result = select_nexthop(
+            Afi::Ipv4,
+            local_ip,
+            None,
+            &NegotiatedCaps::default(),
+        );
         // Should error because cannot derive IPv4 nexthop from IPv6 connection
         assert!(result.is_err());
     }
@@ -10304,8 +10397,12 @@ mod tests {
         // IPv6 route with pure IPv4 local_ip and no configured nexthop = error
         let local_ip = ip!("10.0.0.1");
 
-        let result =
-            select_nexthop(Afi::Ipv6, local_ip, None, &BTreeSet::default());
+        let result = select_nexthop(
+            Afi::Ipv6,
+            local_ip,
+            None,
+            &NegotiatedCaps::default(),
+        );
         // Should error because cannot derive IPv6 nexthop from IPv4 connection
         assert!(result.is_err());
     }

@@ -2840,8 +2840,8 @@ pub(crate) mod helpers {
         // Extract negotiated AFI/SAFI states from the connection
         let (ipv4_negotiated, ipv6_negotiated) = match primary {
             ConnectionKind::Full(ref peer_conn) => (
-                peer_conn.ipv4_unicast.negotiated(),
-                peer_conn.ipv6_unicast.negotiated(),
+                peer_conn.cap_state.ipv4.negotiated(),
+                peer_conn.cap_state.ipv6.negotiated(),
             ),
             ConnectionKind::Partial(_) => return None,
         };
