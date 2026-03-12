@@ -17,7 +17,7 @@ use mg_api::{
 use rdb::{AddressFamily, Prefix, StaticRouteKey};
 use std::{collections::BTreeMap, sync::Arc};
 
-// V1 handlers (pre-EXTENDED_NH_STATIC): typed nexthop per AF
+// V1 handlers (pre-SPRING_CLEANING): typed nexthop per AF
 
 pub async fn static_add_v4_route(
     ctx: RequestContext<Arc<HandlerContext>>,
@@ -139,7 +139,7 @@ pub async fn static_list_v6_routes(
     Ok(HttpResponseOk(static_rib))
 }
 
-// V2 handlers (VERSION_EXTENDED_NH_STATIC+): IpAddr nexthop
+// V2 handlers (VERSION_SPRING_CLEANING+): IpAddr nexthop
 
 pub async fn static_add_v4_route_v2(
     ctx: RequestContext<Arc<HandlerContext>>,

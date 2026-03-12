@@ -3658,7 +3658,7 @@
         ]
       },
       "MessageHistoryRequestV5": {
-        "description": "V4 message history request (VERSION_EXTENDED_NH_STATIC..)",
+        "description": "V4 message history request (VERSION_SPRING_CLEANING..)",
         "type": "object",
         "properties": {
           "asn": {
@@ -3700,7 +3700,7 @@
         ]
       },
       "MessageHistoryResponseV5": {
-        "description": "V4 message history response (VERSION_EXTENDED_NH_STATIC..) Flat list of entries per peer, each entry carries its own direction.",
+        "description": "V4 message history response (VERSION_SPRING_CLEANING..) Flat list of entries per peer, each entry carries its own direction.",
         "type": "object",
         "properties": {
           "by_peer": {

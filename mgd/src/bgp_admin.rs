@@ -1916,7 +1916,7 @@ pub async fn message_history_v2(
     Ok(HttpResponseOk(MessageHistoryResponseV4 { by_peer }))
 }
 
-// V3 API endpoint (VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC)
+// V3 API endpoint (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING)
 pub async fn message_history_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MessageHistoryRequest>,
@@ -1938,7 +1938,7 @@ pub async fn message_history_v3(
     Ok(HttpResponseOk(MessageHistoryResponse { by_peer }))
 }
 
-// V4 API endpoint (VERSION_EXTENDED_NH_STATIC..)
+// V4 API endpoint (VERSION_SPRING_CLEANING..)
 pub async fn message_history_v4(
     ctx: RequestContext<Arc<HandlerContext>>,
     request: TypedBody<MessageHistoryRequestV5>,

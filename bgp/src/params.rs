@@ -840,8 +840,8 @@ impl From<&Capability> for BgpCapability {
 }
 
 /// Previous version of BgpCapability.
-/// Used for API versions before VERSION_EXTENDED_NH_STATIC.
-/// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported version.
+/// Used for API versions before VERSION_SPRING_CLEANING.
+/// Delete when VERSION_SPRING_CLEANING is the minimum supported version.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[schemars(rename = "BgpCapability")]
 pub enum BgpCapabilityV1 {
@@ -1414,12 +1414,12 @@ pub enum PolicyKind {
 }
 
 // ============================================================================
-// API Compatibility Types (VERSION_MP_BGP..VERSION_EXTENDED_NH_STATIC)
+// API Compatibility Types (VERSION_MP_BGP..VERSION_SPRING_CLEANING)
 // ============================================================================
 // These types represent the v3-v6 API format (per-AF config, no DSCP).
 // Used for API versions between VERSION_MP_BGP and
-// VERSION_EXTENDED_NH_STATIC.
-// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported version.
+// VERSION_SPRING_CLEANING.
+// Delete when VERSION_SPRING_CLEANING is the minimum supported version.
 
 /// BGP peer parameters for v3-v6 API (per-AF config, no DSCP).
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq)]

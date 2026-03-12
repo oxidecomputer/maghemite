@@ -211,8 +211,8 @@ impl From<BgpPathProperties> for BgpPathPropertiesV1 {
 
 /// Pre-BESTPATH version of BgpPathProperties (no origin/internal).
 /// Used for API versions VERSION_UNNUMBERED through
-/// VERSION_EXTENDED_NH_STATIC (5.0.0 - 6.0.0).
-/// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported
+/// VERSION_SPRING_CLEANING (5.0.0 - 6.0.0).
+/// Delete when VERSION_SPRING_CLEANING is the minimum supported
 /// version.
 #[derive(
     Debug,
@@ -252,8 +252,8 @@ impl From<BgpPathProperties> for BgpPathPropertiesV2 {
 
 /// Pre-BESTPATH version of Path (no origin/internal in BgpPathProperties).
 /// Used for API versions VERSION_UNNUMBERED through
-/// VERSION_EXTENDED_NH_STATIC (5.0.0 - 6.0.0).
-/// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported
+/// VERSION_SPRING_CLEANING (5.0.0 - 6.0.0).
+/// Delete when VERSION_SPRING_CLEANING is the minimum supported
 /// version.
 #[derive(
     Debug,

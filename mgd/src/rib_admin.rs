@@ -38,7 +38,7 @@ pub async fn get_rib_selected(
     Ok(HttpResponseOk(filtered.into()))
 }
 
-// VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC (PeerId, no origin/internal)
+// VERSION_UNNUMBERED..VERSION_SPRING_CLEANING (PeerId, no origin/internal)
 pub async fn get_rib_imported_v2(
     ctx: RequestContext<Arc<HandlerContext>>,
     query: Query<RibQueryV1>,
@@ -61,7 +61,7 @@ pub async fn get_rib_selected_v2(
     Ok(HttpResponseOk(filtered.into()))
 }
 
-// VERSION_EXTENDED_NH_STATIC+ (BgpPathProperties with origin/internal)
+// VERSION_SPRING_CLEANING+ (BgpPathProperties with origin/internal)
 pub async fn get_rib_imported_v3(
     ctx: RequestContext<Arc<HandlerContext>>,
     query: Query<RibQuery>,

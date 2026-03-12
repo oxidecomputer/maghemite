@@ -697,7 +697,7 @@ impl MgAdminApi for MgAdminApiImpl {
         rib_admin::update_rib_bestpath_fanout(rqctx, request).await
     }
 
-    // V1 static route methods (pre-EXTENDED_NH_STATIC)
+    // V1 static route methods (pre-SPRING_CLEANING)
     async fn static_add_v4_route(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<AddStaticRoute4V1Request>,
@@ -738,7 +738,7 @@ impl MgAdminApi for MgAdminApiImpl {
         static_admin::static_list_v6_routes(ctx).await
     }
 
-    // V2 static route methods (VERSION_EXTENDED_NH_STATIC+)
+    // V2 static route methods (VERSION_SPRING_CLEANING+)
     async fn static_add_v4_route_v2(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<AddStaticRoute4Request>,

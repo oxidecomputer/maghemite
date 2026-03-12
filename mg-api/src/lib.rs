@@ -48,7 +48,7 @@ api_versions!([
     // |  example for the next person.
     // v
     // (next_int, IDENT),
-    (7, EXTENDED_NH_STATIC),
+    (7, SPRING_CLEANING),
     (6, RIB_EXPORTED_STRING_KEY),
     (5, UNNUMBERED),
     (4, MP_BGP),
@@ -190,64 +190,64 @@ pub trait MgAdminApi {
         request: Query<NeighborSelectorV1>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    // Unified API (VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC)
+    // Unified API (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING)
     // Per-AF config, no DSCP. PeerId in path parameters.
-    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING }]
     async fn create_neighbor_v3(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<NeighborV2>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING }]
     async fn read_neighbor_v3(
         rqctx: RequestContext<Self::Context>,
         path: Path<NeighborSelector>,
     ) -> Result<HttpResponseOk<NeighborV2>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING }]
     async fn read_neighbors_v3(
         rqctx: RequestContext<Self::Context>,
         path: Path<AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<NeighborV2>>, HttpError>;
 
-    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING }]
     async fn update_neighbor_v3(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<NeighborV2>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING }]
     async fn delete_neighbor_v3(
         rqctx: RequestContext<Self::Context>,
         path: Path<NeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    // Unified API (VERSION_EXTENDED_NH_STATIC..) - with DSCP support
-    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    // Unified API (VERSION_SPRING_CLEANING..) - with DSCP support
+    #[endpoint { method = PUT, path = "/bgp/config/neighbor", versions = VERSION_SPRING_CLEANING.. }]
     async fn create_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_SPRING_CLEANING.. }]
     async fn read_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         path: Path<NeighborSelector>,
     ) -> Result<HttpResponseOk<Neighbor>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = GET, path = "/bgp/config/neighbors/{asn}", versions = VERSION_SPRING_CLEANING.. }]
     async fn read_neighbors_v4(
         rqctx: RequestContext<Self::Context>,
         path: Path<AsnSelector>,
     ) -> Result<HttpResponseOk<Vec<Neighbor>>, HttpError>;
 
-    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = POST, path = "/bgp/config/neighbor", versions = VERSION_SPRING_CLEANING.. }]
     async fn update_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<Neighbor>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = DELETE, path = "/bgp/config/neighbor/{asn}/{peer}", versions = VERSION_SPRING_CLEANING.. }]
     async fn delete_neighbor_v4(
         rqctx: RequestContext<Self::Context>,
         path: Path<NeighborSelector>,
@@ -269,12 +269,12 @@ pub trait MgAdminApi {
 
     // Unnumbered neighbors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    // Unnumbered neighbors (VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC)
+    // Unnumbered neighbors (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING)
     // No DSCP support.
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbors",
-        versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC,
+        versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING,
     }]
     async fn read_unnumbered_neighbors(
         rqctx: RequestContext<Self::Context>,
@@ -284,7 +284,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = PUT,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC,
+        versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING,
     }]
     async fn create_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -294,7 +294,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC,
+        versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING,
     }]
     async fn read_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -304,7 +304,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = POST,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC,
+        versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING,
     }]
     async fn update_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
@@ -314,18 +314,18 @@ pub trait MgAdminApi {
     #[endpoint {
         method = DELETE,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC,
+        versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING,
     }]
     async fn delete_unnumbered_neighbor(
         rqctx: RequestContext<Self::Context>,
         request: Query<UnnumberedNeighborSelector>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    // Unnumbered neighbors (VERSION_EXTENDED_NH_STATIC..) - with DSCP
+    // Unnumbered neighbors (VERSION_SPRING_CLEANING..) - with DSCP
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbors",
-        versions = VERSION_EXTENDED_NH_STATIC..,
+        versions = VERSION_SPRING_CLEANING..,
     }]
     async fn read_unnumbered_neighbors_v2(
         rqctx: RequestContext<Self::Context>,
@@ -335,7 +335,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = PUT,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_EXTENDED_NH_STATIC..,
+        versions = VERSION_SPRING_CLEANING..,
     }]
     async fn create_unnumbered_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
@@ -345,7 +345,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = GET,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_EXTENDED_NH_STATIC..,
+        versions = VERSION_SPRING_CLEANING..,
     }]
     async fn read_unnumbered_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
@@ -355,7 +355,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = POST,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_EXTENDED_NH_STATIC..,
+        versions = VERSION_SPRING_CLEANING..,
     }]
     async fn update_unnumbered_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
@@ -365,7 +365,7 @@ pub trait MgAdminApi {
     #[endpoint {
         method = DELETE,
         path = "/bgp/config/unnumbered-neighbor",
-        versions = VERSION_EXTENDED_NH_STATIC..,
+        versions = VERSION_SPRING_CLEANING..,
     }]
     async fn delete_unnumbered_neighbor_v2(
         rqctx: RequestContext<Self::Context>,
@@ -482,29 +482,29 @@ pub trait MgAdminApi {
         request: Query<RibQueryV1>,
     ) -> Result<HttpResponseOk<RibV1>, HttpError>;
 
-    // VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC: PeerId but no origin/internal
-    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    // VERSION_UNNUMBERED..VERSION_SPRING_CLEANING: PeerId but no origin/internal
+    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING }]
     async fn get_rib_imported_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<RibQueryV1>,
     ) -> Result<HttpResponseOk<RibV2>, HttpError>;
 
-    // VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC: PeerId but no origin/internal
-    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    // VERSION_UNNUMBERED..VERSION_SPRING_CLEANING: PeerId but no origin/internal
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING }]
     async fn get_rib_selected_v2(
         rqctx: RequestContext<Self::Context>,
         request: Query<RibQueryV1>,
     ) -> Result<HttpResponseOk<RibV2>, HttpError>;
 
-    // VERSION_EXTENDED_NH_STATIC+: BgpPathProperties with origin/internal
-    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    // VERSION_SPRING_CLEANING+: BgpPathProperties with origin/internal
+    #[endpoint { method = GET, path = "/rib/status/imported", versions = VERSION_SPRING_CLEANING.. }]
     async fn get_rib_imported_v3(
         rqctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
     ) -> Result<HttpResponseOk<Rib>, HttpError>;
 
-    // VERSION_EXTENDED_NH_STATIC+: BgpPathProperties with origin/internal
-    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    // VERSION_SPRING_CLEANING+: BgpPathProperties with origin/internal
+    #[endpoint { method = GET, path = "/rib/status/selected", versions = VERSION_SPRING_CLEANING.. }]
     async fn get_rib_selected_v3(
         rqctx: RequestContext<Self::Context>,
         request: Query<RibQuery>,
@@ -528,13 +528,13 @@ pub trait MgAdminApi {
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<IpAddr, PeerInfoV3>>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING }]
     async fn get_neighbors_v4(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
     ) -> Result<HttpResponseOk<HashMap<String, PeerInfoV3>>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = GET, path = "/bgp/status/neighbors", versions = VERSION_SPRING_CLEANING.. }]
     async fn get_neighbors_v5(
         rqctx: RequestContext<Self::Context>,
         request: Query<AsnSelector>,
@@ -548,14 +548,14 @@ pub trait MgAdminApi {
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     // V3 API - ApplyRequest with per-AF policies (no DSCP)
-    #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = VERSION_MP_BGP..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = VERSION_MP_BGP..VERSION_SPRING_CLEANING }]
     async fn bgp_apply_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<ApplyRequestV2>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
     // V4 API - ApplyRequest with DSCP support
-    #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = POST, path = "/bgp/omicron/apply", versions = VERSION_SPRING_CLEANING.. }]
     async fn bgp_apply_v3(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<ApplyRequest>,
@@ -573,13 +573,13 @@ pub trait MgAdminApi {
         request: TypedBody<MessageHistoryRequestV4>,
     ) -> Result<HttpResponseOk<MessageHistoryResponseV4>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_UNNUMBERED..VERSION_SPRING_CLEANING }]
     async fn message_history_v3(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequest>,
     ) -> Result<HttpResponseOk<MessageHistoryResponse>, HttpError>;
 
-    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = GET, path = "/bgp/history/message", versions = VERSION_SPRING_CLEANING.. }]
     async fn message_history_v4(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<MessageHistoryRequestV5>,
@@ -668,72 +668,72 @@ pub trait MgAdminApi {
         request: TypedBody<BestpathFanoutRequest>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    // V1 static route endpoints (pre-EXTENDED_NH_STATIC): typed nexthop per AF
-    #[endpoint { method = PUT, path = "/static/route4", versions = ..VERSION_EXTENDED_NH_STATIC }]
+    // V1 static route endpoints (pre-SPRING_CLEANING): typed nexthop per AF
+    #[endpoint { method = PUT, path = "/static/route4", versions = ..VERSION_SPRING_CLEANING }]
     async fn static_add_v4_route(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<AddStaticRoute4V1Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = DELETE, path = "/static/route4", versions = ..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = DELETE, path = "/static/route4", versions = ..VERSION_SPRING_CLEANING }]
     async fn static_remove_v4_route(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<DeleteStaticRoute4V1Request>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = GET, path = "/static/route4", versions = ..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = GET, path = "/static/route4", versions = ..VERSION_SPRING_CLEANING }]
     async fn static_list_v4_routes(
         rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
 
-    #[endpoint { method = PUT, path = "/static/route6", versions = VERSION_IPV6_BASIC..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = PUT, path = "/static/route6", versions = VERSION_IPV6_BASIC..VERSION_SPRING_CLEANING }]
     async fn static_add_v6_route(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<AddStaticRoute6V1Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = DELETE, path = "/static/route6", versions = VERSION_IPV6_BASIC..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = DELETE, path = "/static/route6", versions = VERSION_IPV6_BASIC..VERSION_SPRING_CLEANING }]
     async fn static_remove_v6_route(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<DeleteStaticRoute6V1Request>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = GET, path = "/static/route6", versions = VERSION_IPV6_BASIC..VERSION_EXTENDED_NH_STATIC }]
+    #[endpoint { method = GET, path = "/static/route6", versions = VERSION_IPV6_BASIC..VERSION_SPRING_CLEANING }]
     async fn static_list_v6_routes(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
 
-    // V2 static route endpoints (VERSION_EXTENDED_NH_STATIC+): IpAddr nexthop
-    #[endpoint { method = PUT, path = "/static/route4", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    // V2 static route endpoints (VERSION_SPRING_CLEANING+): IpAddr nexthop
+    #[endpoint { method = PUT, path = "/static/route4", versions = VERSION_SPRING_CLEANING.. }]
     async fn static_add_v4_route_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<AddStaticRoute4Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = DELETE, path = "/static/route4", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = DELETE, path = "/static/route4", versions = VERSION_SPRING_CLEANING.. }]
     async fn static_remove_v4_route_v2(
         rqctx: RequestContext<Self::Context>,
         request: TypedBody<DeleteStaticRoute4Request>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = GET, path = "/static/route4", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = GET, path = "/static/route4", versions = VERSION_SPRING_CLEANING.. }]
     async fn static_list_v4_routes_v2(
         rqctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
 
-    #[endpoint { method = PUT, path = "/static/route6", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = PUT, path = "/static/route6", versions = VERSION_SPRING_CLEANING.. }]
     async fn static_add_v6_route_v2(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<AddStaticRoute6Request>,
     ) -> Result<HttpResponseUpdatedNoContent, HttpError>;
 
-    #[endpoint { method = DELETE, path = "/static/route6", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = DELETE, path = "/static/route6", versions = VERSION_SPRING_CLEANING.. }]
     async fn static_remove_v6_route_v2(
         ctx: RequestContext<Self::Context>,
         request: TypedBody<DeleteStaticRoute6Request>,
     ) -> Result<HttpResponseDeleted, HttpError>;
 
-    #[endpoint { method = GET, path = "/static/route6", versions = VERSION_EXTENDED_NH_STATIC.. }]
+    #[endpoint { method = GET, path = "/static/route6", versions = VERSION_SPRING_CLEANING.. }]
     async fn static_list_v6_routes_v2(
         ctx: RequestContext<Self::Context>,
     ) -> Result<HttpResponseOk<GetRibResult>, HttpError>;
@@ -843,8 +843,8 @@ impl From<rdb::db::Rib> for RibV1 {
 }
 
 /// V2 Rib with PathV2 (no origin/internal in BgpPathProperties).
-/// Used for VERSION_UNNUMBERED through VERSION_EXTENDED_NH_STATIC.
-/// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported
+/// Used for VERSION_UNNUMBERED through VERSION_SPRING_CLEANING.
+/// Delete when VERSION_SPRING_CLEANING is the minimum supported
 /// version.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 #[schemars(rename = "Rib")]
@@ -978,7 +978,7 @@ pub struct MessageHistoryResponseV4 {
     pub by_peer: HashMap<IpAddr, MessageHistorySentReceived>,
 }
 
-/// V3 message history request (VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC)
+/// V3 message history request (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING)
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
 pub struct MessageHistoryRequest {
     /// ASN of the BGP router
@@ -992,7 +992,7 @@ pub struct MessageHistoryRequest {
     pub direction: Option<MessageDirection>,
 }
 
-/// V3 message history response (VERSION_UNNUMBERED..VERSION_EXTENDED_NH_STATIC)
+/// V3 message history response (VERSION_UNNUMBERED..VERSION_SPRING_CLEANING)
 #[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct MessageHistoryResponse {
     pub by_peer: HashMap<String, MessageHistorySentReceived>,
@@ -1008,7 +1008,7 @@ pub enum MessageBuffer {
     Major,
 }
 
-/// V4 message history request (VERSION_EXTENDED_NH_STATIC..)
+/// V4 message history request (VERSION_SPRING_CLEANING..)
 #[derive(Debug, Deserialize, JsonSchema, Clone)]
 pub struct MessageHistoryRequestV5 {
     /// ASN of the BGP router
@@ -1024,7 +1024,7 @@ pub struct MessageHistoryRequestV5 {
     pub buffer: Option<MessageBuffer>,
 }
 
-/// V4 message history response (VERSION_EXTENDED_NH_STATIC..)
+/// V4 message history response (VERSION_SPRING_CLEANING..)
 /// Flat list of entries per peer, each entry carries its own direction.
 #[derive(Debug, Serialize, JsonSchema, Clone)]
 pub struct MessageHistoryResponseV5 {
@@ -1096,7 +1096,7 @@ pub struct BestpathFanoutResponse {
 pub type GetRibResult = BTreeMap<String, BTreeSet<rdb::Path>>;
 
 // ============================================================================
-// Archived Static Route Types (Pre-VERSION_EXTENDED_NH_STATIC)
+// Archived Static Route Types (Pre-VERSION_SPRING_CLEANING)
 // ============================================================================
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -1178,7 +1178,7 @@ impl From<StaticRoute6V1> for StaticRouteKey {
 }
 
 // ============================================================================
-// Current Static Route Types (VERSION_EXTENDED_NH_STATIC and later)
+// Current Static Route Types (VERSION_SPRING_CLEANING and later)
 // ============================================================================
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -1254,8 +1254,8 @@ impl From<StaticRoute6> for StaticRouteKey {
 }
 
 /// Previous version of RibQuery.
-/// Used for API versions before VERSION_EXTENDED_NH_STATIC.
-/// Delete when VERSION_EXTENDED_NH_STATIC is the minimum supported
+/// Used for API versions before VERSION_SPRING_CLEANING.
+/// Delete when VERSION_SPRING_CLEANING is the minimum supported
 /// version.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[schemars(rename = "RibQuery")]
