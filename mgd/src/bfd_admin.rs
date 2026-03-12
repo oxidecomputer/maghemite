@@ -4,31 +4,27 @@
 
 use crate::{admin::HandlerContext, log::bfd_log};
 use anyhow::Result;
-use bfd::{Daemon, bidi, packet};
-use dropshot::HttpError;
-use dropshot::HttpResponseOk;
-use dropshot::HttpResponseUpdatedNoContent;
-use dropshot::Path;
-use dropshot::RequestContext;
-use dropshot::TypedBody;
-use mg_api::BfdPeerInfo;
-use mg_api::DeleteBfdPeerPathParams;
+use bfd::{BfdEndpoint, DEFAULT_BFD_TTL, Daemon, bidi, packet};
+use dropshot::{
+    HttpError, HttpResponseOk, HttpResponseUpdatedNoContent, Path,
+    RequestContext, TypedBody,
+};
+use mg_api::{BfdPeerInfo, DeleteBfdPeerPathParams};
 use mg_common::lock;
-use rdb::BfdPeerConfig;
-use rdb::SessionMode;
+use rdb::{BfdPeerConfig, SessionMode};
 use slog::Logger;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::net::UdpSocket;
-use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::RwLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{Receiver, Sender};
-use std::thread::JoinHandle;
-use std::thread::spawn;
-use std::time::Duration;
+use socket2::Socket;
+use std::{
+    collections::{HashMap, HashSet},
+    net::{IpAddr, SocketAddr, UdpSocket},
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::AtomicBool,
+        mpsc::{Receiver, Sender},
+    },
+    thread::{JoinHandle, sleep, spawn},
+    time::Duration,
+};
 
 const UNIT_BFD: &str = "bfd";
 
@@ -195,7 +191,7 @@ pub(crate) fn channel(
     src_port: u16,
     dst_port: u16,
     log: Logger,
-) -> Result<bidi::Endpoint<(IpAddr, packet::Control)>> {
+) -> Result<BfdEndpoint> {
     let (local, remote) = bidi::channel();
 
     // Ensure there is a dispatcher thread for this listening address and a
@@ -210,6 +206,18 @@ pub(crate) fn channel(
     Ok(local)
 }
 
+/// Bind a UDP socket for BFD egress and configure the TTL/Hop Limit to 255
+/// per RFC 5881 (Single-Hop BFD).
+fn egress_socket(local: IpAddr, src_port: u16) -> std::io::Result<UdpSocket> {
+    let sk = UdpSocket::bind(SocketAddr::new(local, src_port))?;
+    let sock = Socket::from(sk);
+    match local {
+        IpAddr::V4(_) => sock.set_ttl(DEFAULT_BFD_TTL)?,
+        IpAddr::V6(_) => sock.set_unicast_hops_v6(DEFAULT_BFD_TTL)?,
+    };
+    Ok(sock.into())
+}
+
 /// Run an egress handler, taking BFD control packets from a session and sending
 /// them out to the peer over UDP.
 fn egress(
@@ -220,43 +228,46 @@ fn egress(
     log: Logger,
 ) {
     spawn(move || {
-        loop {
-            let (addr, pkt) = match rx.recv() {
-                Ok(result) => result,
-                Err(e) => {
-                    bfd_log!(log, warn, "udp egress channel closed: {e}";
-                        "local" => format!("{local}"),
-                        "src_port" => format!("{src_port}"),
-                        "dst_port" => format!("{dst_port}"),
-                        "error" => format!("{e}")
-                    );
-                    break;
-                }
-            };
+        let log = log.new(slog::o!(
+            "local" => format!("{local}"),
+            "src_port" => src_port,
+            "dst_port" => dst_port,
+        ));
 
-            let sk = match UdpSocket::bind(SocketAddr::new(local, src_port)) {
+        'egress: loop {
+            let sk = match egress_socket(local, src_port) {
                 Err(e) => {
-                    bfd_log!(log, error, "failed to create tx socket: {e}";
-                        "local" => format!("{local}"),
-                        "src_port" => format!("{src_port}"),
-                        "dst_port" => format!("{dst_port}"),
+                    bfd_log!(log, error, "failed to bind egress socket: {e}";
                         "error" => format!("{e}")
                     );
+                    // Explicit sleep call here to prevent spin-lock in case
+                    // socket creation/bind failures are persistent.
+                    sleep(Duration::from_secs(5));
                     continue;
                 }
                 Ok(sk) => sk,
             };
 
-            let sa = SocketAddr::new(addr, dst_port);
-            if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
-                bfd_log!(log, error, "udp send error: {e}";
-                    "local" => format!("{local}"),
-                    "src_port" => format!("{src_port}"),
-                    "dst_port" => format!("{dst_port}"),
-                    "message" => "control",
-                    "message_contents" => format!("{pkt}"),
-                    "error" => format!("{e}")
-                );
+            'socket: loop {
+                let (addr, pkt) = match rx.recv() {
+                    Ok(result) => result,
+                    Err(e) => {
+                        bfd_log!(log, warn, "udp egress channel closed: {e}";
+                            "error" => format!("{e}")
+                        );
+                        break 'egress;
+                    }
+                };
+
+                let sa = SocketAddr::new(addr, dst_port);
+                if let Err(e) = sk.send_to(&pkt.to_bytes(), sa) {
+                    bfd_log!(log, error, "udp send error: {e}";
+                        "message" => "control",
+                        "message_contents" => format!("{pkt}"),
+                        "error" => format!("{e}")
+                    );
+                    break 'socket;
+                }
             }
         }
     });
@@ -441,5 +452,27 @@ impl Dispatcher {
                 continue;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use socket2::Socket;
+
+    #[test]
+    fn egress_socket_sets_ttl_v4() {
+        let sk = egress_socket("127.0.0.1".parse().unwrap(), 0)
+            .expect("failed to create v4 egress socket");
+        let sock = Socket::from(sk);
+        assert_eq!(sock.ttl().unwrap(), DEFAULT_BFD_TTL);
+    }
+
+    #[test]
+    fn egress_socket_sets_hop_limit_v6() {
+        let sk = egress_socket("::1".parse().unwrap(), 0)
+            .expect("failed to create v6 egress socket");
+        let sock = Socket::from(sk);
+        assert_eq!(sock.unicast_hops_v6().unwrap(), DEFAULT_BFD_TTL);
     }
 }
